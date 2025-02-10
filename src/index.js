@@ -124,60 +124,65 @@ bot.on("message", async (msg) => {
 
 // 修改消息处理函数以使用 chatState
 async function processMessage(msg, processedMsg, responseDecision, chatState) {
-	chatState.isProcessing = true;
-	chatState.retryCount = 0; // 初始化重试计数
-	chatState.processingStartTime = Date.now(); // 记录开始处理的时间
-	if (!chatState.abortController) chatState.abortController = new AbortController();
+	try {
+		chatState.isProcessing = true;
+		chatState.retryCount = 0; // 初始化重试计数
+		chatState.processingStartTime = Date.now(); // 记录开始处理的时间
+		if (!chatState.abortController) chatState.abortController = new AbortController();
 
-	while (true) {
-		try {
-			// 获取上下文
-			const [similarMessage, messageContext] = await Promise.all([
-				ragHelper.searchSimilarContent(msg.chat.id, processedMsg.text, {
-					limit: 10,
-					contentTypes: ["note"],
-					timeWindow: "7 days",
-				}),
-				ragHelper.getMessageContext(msg.chat.id, msg.message_id, 25),
-			]);
+		while (true) {
+			try {
+				// 获取上下文
+				const [similarMessage, messageContext] = await Promise.all([
+					ragHelper.searchSimilarContent(msg.chat.id, processedMsg.text, {
+						limit: 10,
+						contentTypes: ["note"],
+						timeWindow: "7 days",
+					}),
+					ragHelper.getMessageContext(msg.chat.id, msg.message_id, 25),
+				]);
 
-			await chatState.llmHandler.generateAction(
-				{
-					similarMessage,
-					messageContext,
-					chatId: msg.chat.id,
-					responseDecision,
-				},
+				await chatState.llmHandler.generateAction(
+					{
+						similarMessage,
+						messageContext,
+						chatId: msg.chat.id,
+						responseDecision,
+					},
+					chatState
+				);
+				break; // 成功完成，退出循环
+			} catch (error) {
+				if (
+					error.message === "AbortError" &&
+					chatState.retryCount < config.base.actionGenerator.maxRetryCount
+				) {
+					chatState.retryCount++;
+					chatState.abortController = null;
+					console.log(`处理被中断，开始第 ${chatState.retryCount} 次重试`);
+					continue;
+				}
+				throw error; // 其他错误或超过重试次数，抛出错误
+			} finally {
+				// 确保每次循环都会清理控制器
+				chatState.abortController = null;
+			}
+		}
+	} finally {
+		chatState.isProcessing = false;
+		chatState.processingStartTime = null;
+
+		// 处理完成后，如果还有待处理的消息，则处理该消息
+		if (chatState.pendingAction) {
+			const { chatId, messageId, processedMsg, responseDecision } = chatState.pendingAction;
+			chatState.pendingAction = null;
+			await processMessage(
+				{ chat: { id: chatId }, message_id: messageId },
+				processedMsg,
+				responseDecision,
 				chatState
 			);
-			break; // 成功完成，退出循环
-		} catch (error) {
-			if (
-				error.message === "AbortError" &&
-				chatState.retryCount < config.base.actionGenerator.maxRetryCount
-			) {
-				chatState.retryCount++;
-				chatState.abortController = null;
-				console.log(`处理被中断，开始第 ${chatState.retryCount} 次重试`);
-				continue;
-			}
-			throw error; // 其他错误或超过重试次数，抛出错误
 		}
-	}
-	chatState.isProcessing = false;
-	chatState.abortController = null;
-	chatState.processingStartTime = null;
-
-	// 处理完成后，如果还有待处理的消息，则处理该消息
-	if (chatState.pendingAction) {
-		const { chatId, messageId, processedMsg, responseDecision } = chatState.pendingAction;
-		chatState.pendingAction = null;
-		await processMessage(
-			{ chat: { id: chatId }, message_id: messageId },
-			processedMsg,
-			responseDecision,
-			chatState
-		);
 	}
 }
 
