@@ -3,13 +3,13 @@ export class KuukiyomiHandler {
 		// 初始化基础配置
 		this.chatConfig = chatConfig;
 		this.config = chatConfig.kuukiyomi;
-		
+
 		// 初始化状态追踪
 		this.initializeStateTracking();
-		
+
 		// 初始化响应率调整参数
 		this.initializeRateAdjustment();
-		
+
 		// 启动衰减计时器
 		this.startDecayTimer();
 	}
@@ -17,28 +17,24 @@ export class KuukiyomiHandler {
 	initializeStateTracking() {
 		// 初始化响应概率
 		this.currentResponseRate = this.config.initialResponseRate;
-		
+
 		// 初始化响应时间和消息频率追踪
 		this.lastResponseTime = new Map();
-		this.messageRates = {
-			groups: new Map(),
-			users: new Map(),
-		};
-		
+
 		// 初始化统计数据
 		this.stats = {
-			mentionCount: 0,        // 被提及次数
-			triggerWordCount: 0,    // 触发词出现次数
-			lastInteractionTime: Date.now(),  // 上次交互时间
+			mentionCount: 0, // 被提及次数
+			triggerWordCount: 0, // 触发词出现次数
+			lastInteractionTime: Date.now(), // 上次交互时间
 		};
 	}
 
 	initializeRateAdjustment() {
 		this.rateAdjustment = {
-			mentionMultiplier: 0.2,      // 每次被提及增加的基础值
-			triggerWordMultiplier: 0.2,  // 每次触发词出现增加的基础值
-			decayRate: 0.1,              // 每分钟衰减率
-			decayInterval: 20000,         // 衰减检查间隔（毫秒）
+			mentionMultiplier: 0.2, // 每次被提及增加的基础值
+			triggerWordMultiplier: 0.2, // 每次触发词出现增加的基础值
+			decayRate: 0.1, // 每分钟衰减率
+			decayInterval: 20000, // 衰减检查间隔（毫秒）
 		};
 	}
 
@@ -55,7 +51,7 @@ export class KuukiyomiHandler {
 		try {
 			if (this.chatConfig.debug) console.log("当前响应概率为：" + this.currentResponseRate);
 
-			if(processedMsg.metadata.chat.type == "private") {
+			if (processedMsg.metadata.chat.type == "private") {
 				this.stats.mentionCount++;
 				this.stats.lastInteractionTime = Date.now(); // 更新主动交互时间
 				result.shouldAct = true;
@@ -66,8 +62,11 @@ export class KuukiyomiHandler {
 			}
 
 			// 优先 检查是否被提及或回复
-			if (processedMsg.metadata.reply_to_message?.from?.id == this.chatConfig.telegram.botToken.split(":")[0] || 
-				processedMsg.text?.includes(`@${this.chatConfig.telegram.botUsername}`)) {
+			if (
+				processedMsg.metadata.reply_to_message?.from?.id ==
+					this.chatConfig.telegram.botToken.split(":")[0] ||
+				processedMsg.text?.includes(`@${this.chatConfig.telegram.botUsername}`)
+			) {
 				this.stats.mentionCount++;
 				this.stats.lastInteractionTime = Date.now(); // 更新主动交互时间
 				result.shouldAct = true;
@@ -89,29 +88,24 @@ export class KuukiyomiHandler {
 				return result;
 			}
 
-			// 1. 检查冷却时间
+			// 检查冷却时间
 			if (!this.checkCooldown(processedMsg.chat_id)) {
 				result.scene = "冷却时间内";
 				return result;
 			}
 
-			// 2. 检查频率限制
-			if (!this.checkRateLimit(processedMsg)) {
-				result.scene = "超过频率限制";
-				return result;
-			}
-
-			// 5. 检查忽略词
+			// 检查忽略词
 			if (this.checkIgnoreWords(processedMsg.text)) {
 				result.scene = "忽略词匹配";
 				return result;
 			}
 
-			// 6. 随机响应判断
+			// 随机响应判断
 			if (Math.random() < this.currentResponseRate) {
 				result.shouldAct = true;
 				result.decisionType = "random";
-				result.scene = "随机触发，请谨慎发言。对于已经有人在讨论的话题，不要乱接话，避免反感。";
+				result.scene =
+					"随机触发，请谨慎发言。对于已经有人在讨论的话题，不要乱接话，避免反感。";
 				return result;
 			}
 
@@ -140,35 +134,6 @@ export class KuukiyomiHandler {
 	}
 
 	/**
-	 * 检查消息频率
-	 */
-	checkRateLimit(msg) {
-		const now = Date.now();
-		const oneMinute = 60000;
-
-		// 检查群组频率
-		if (msg.metadata.chat.type !== "private") {
-			const groupRates = this.messageRates.groups.get(msg.chat_id) || [];
-			groupRates.push(now);
-			// 只保留最近一分钟的消息
-			const recentGroupRates = groupRates.filter((time) => now - time < oneMinute);
-			this.messageRates.groups.set(msg.chat_id, recentGroupRates);
-
-			if (recentGroupRates.length > this.config.groupRateLimit) {
-				return false;
-			}
-		}
-
-		// 检查用户频率
-		const userRates = this.messageRates.users.get(msg.metadata.from.id) || [];
-		userRates.push(now);
-		const recentUserRates = userRates.filter((time) => now - time < oneMinute);
-		this.messageRates.users.set(msg.metadata.from.id, recentUserRates);
-
-		return recentUserRates.length <= this.config.userRateLimit;
-	}
-
-	/**
 	 * 检查触发词
 	 */
 	checkTriggerWords(text) {
@@ -192,32 +157,6 @@ export class KuukiyomiHandler {
 		this.lastResponseTime.delete(chatId);
 	}
 
-	/**
-	 * 清理过期的频率记录
-	 */
-	cleanupRates() {
-		const now = Date.now();
-		const oneMinute = 60000;
-
-		for (const [chatId, rates] of this.messageRates.groups) {
-			const recentRates = rates.filter((time) => now - time < oneMinute);
-			if (recentRates.length === 0) {
-				this.messageRates.groups.delete(chatId);
-			} else {
-				this.messageRates.groups.set(chatId, recentRates);
-			}
-		}
-
-		for (const [userId, rates] of this.messageRates.users) {
-			const recentRates = rates.filter((time) => now - time < oneMinute);
-			if (recentRates.length === 0) {
-				this.messageRates.users.delete(userId);
-			} else {
-				this.messageRates.users.set(userId, recentRates);
-			}
-		}
-	}
-
 	// 添加新方法：启动衰减计时器
 	startDecayTimer() {
 		setInterval(() => {
@@ -228,31 +167,39 @@ export class KuukiyomiHandler {
 	// 添加新方法：计算响应率
 	calculateNewResponseRate() {
 		const timeSinceLastInteraction = (Date.now() - this.stats.lastInteractionTime) / 60000; // 转换为分钟
-		const decayFactor = Math.max(0, 1 - (timeSinceLastInteraction * this.rateAdjustment.decayRate));
-		
+		const decayFactor = Math.max(
+			0,
+			1 - timeSinceLastInteraction * this.rateAdjustment.decayRate
+		);
+
 		// 如果当前响应率已经降到最低，并且有新的主动交互，直接提升到最高响应率
-		if (this.currentResponseRate <= this.config.responseRateMin && 
-			(this.stats.mentionCount > 0 || this.stats.triggerWordCount > 0)) {
+		if (
+			this.currentResponseRate <= this.config.responseRateMin &&
+			(this.stats.mentionCount > 0 || this.stats.triggerWordCount > 0)
+		) {
 			return this.config.responseRateMax;
 		}
-		
+
 		let newRate = this.currentResponseRate;
-		
+
 		// 根据统计数据调整响应率
 		newRate += this.stats.mentionCount * this.rateAdjustment.mentionMultiplier;
 		newRate += this.stats.triggerWordCount * this.rateAdjustment.triggerWordMultiplier;
-		
+
 		// 应用衰减
 		newRate *= decayFactor;
-		
+
 		// 确保在允许范围内
-		return Math.min(Math.max(newRate, this.config.responseRateMin), this.config.responseRateMax);
+		return Math.min(
+			Math.max(newRate, this.config.responseRateMin),
+			this.config.responseRateMax
+		);
 	}
 
 	// 添加新方法：调整响应率
 	adjustResponseRate() {
 		this.currentResponseRate = this.calculateNewResponseRate();
-		
+
 		// 重置计数器
 		this.stats.mentionCount = 0;
 		this.stats.triggerWordCount = 0;
