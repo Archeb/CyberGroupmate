@@ -21,6 +21,7 @@ const config = {
 			jailbreakPrompt: "",
 			interruptTimeout: 5000, // 允许打断时间（在这段时间内收到新消息将会打断思考重新生成），单位ms，不可覆盖属性
 			maxRetryCount: 2, // 最大允许打断次数，不可覆盖属性
+			maxAllowedDiff: 2, // 防重复配置，有多少个字差异的两句话会被视为相同。
 		},
 		vision: {
 			// 视觉识别模型

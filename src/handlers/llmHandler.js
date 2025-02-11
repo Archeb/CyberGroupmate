@@ -5,6 +5,7 @@ import * as path from "path";
 export class LLMHandler {
 	constructor(chatConfig = {}, botActionHelper, ragHelper, kuukiyomiHandler, stickerHelper) {
 		this.chatConfig = chatConfig;
+		this.currentBackendIndex = 0; // 轮询索引
 
 		this.botActionHelper = botActionHelper;
 		this.ragHelper = ragHelper;
@@ -85,7 +86,7 @@ export class LLMHandler {
 				if (metadata.reply_to_message) {
 					let replyMeta = metadata.reply_to_message;
 					let replyUserIdentifier = `${replyMeta.from.first_name || ""}${replyMeta.from.last_name || ""}`;
-					return `<message id="${item.message_id}" user="${userIdentifier}"${timeStr}><reply_to user="${replyUserIdentifier}">${replyMeta.text}</reply_to>${item.text}</message>`;
+					return `<message id="${item.message_id}" user="${userIdentifier}"${timeStr}><reply_to user="${replyUserIdentifier}">${replyMeta.text || "[媒体内容]"}</reply_to>${item.text}</message>`;
 				} else {
 					return `<message id="${item.message_id}" user="${userIdentifier}"${timeStr}>${item.text}</message>`;
 				}
@@ -227,11 +228,10 @@ ${this.stickerHelper.getAvailableEmojis().join(",")}
 	async callLLM(messages, context, signal) {
 		this.chatState = context;
 
-		// 随机选择一个backend配置
-		const backendConfig =
-			this.chatConfig.actionGenerator.backend[
-				Math.floor(Math.random() * this.chatConfig.actionGenerator.backend.length)
-			];
+		// 轮询选择backend配置
+		const backends = this.chatConfig.actionGenerator.backend;
+		const backendConfig = backends[this.currentBackendIndex % backends.length];
+		this.currentBackendIndex++; // 递增索引
 
 		// 使用选中的backend配置初始化OpenAI客户端
 		let openai = new OpenAI({
@@ -333,18 +333,27 @@ ${this.stickerHelper.getAvailableEmojis().join(",")}
 							console.warn("回复消息缺少必要参数");
 							continue;
 						}
+						// 使用新方法检查重复
+						if (this._checkMessageDuplicate(params.message, context)) {
+							if (this.chatConfig.debug) console.log("跳过相似回复:", params.message);
+							continue;
+						}
 						await this.botActionHelper.sendReply(
 							context.chatId,
 							params.message,
 							params.message_id
 						);
-						// 增加响应率
-						this.kuukiyomiHandler.increaseResponseRate(0.05);
+						this.kuukiyomiHandler.increaseResponseRate(0.1);
 						break;
 
 					case "chat____text":
 						if (!params.message) {
 							console.warn("发送消息缺少内容参数");
+							continue;
+						}
+						// 使用新方法检查重复
+						if (this._checkMessageDuplicate(params.message, context)) {
+							if (this.chatConfig.debug) console.log("跳过相似消息:", params.message);
 							continue;
 						}
 						await this.botActionHelper.sendText(context.chatId, params.message);
@@ -534,5 +543,47 @@ ${JSON.stringify(searchResults)}
 		let messages = await this.prepareMessages(context, multiShotPrompt);
 		let newResponse = await this.callLLM(messages, context);
 		return this.processResponse(newResponse, context);
+	}
+
+	/**
+	 * 检查消息是否重复（新增方法）
+	 * @param {string} message 待检查的消息内容
+	 * @param {object} context 上下文对象
+	 * @param {number} maxAllowedDiff 允许的最大差异字符数（从配置读取）
+	 * @returns {boolean} 是否重复
+	 */
+	_checkMessageDuplicate(message, context) {
+		const maxAllowedDiff = this.chatConfig.actionGenerator?.maxAllowedDiff || 0;
+		if (message.length < 2) return false; //一个字的比如emoji或者简单的是否回答可以重复
+
+		return context.messageContext.some((item) => {
+			if (item.content_type === "reply") {
+				// 完全匹配直接返回true
+				if (item.text === message) return true;
+
+				// 计算相似度差异
+				const diff = this._getStringDifference(item.text, message);
+				return diff <= maxAllowedDiff;
+			}
+			return false;
+		});
+	}
+
+	/**
+	 * 计算字符串差异（新增辅助方法）
+	 * @param {string} str1 字符串1
+	 * @param {string} str2 字符串2
+	 * @returns {number} 差异字符数量
+	 */
+	_getStringDifference(str1 = "", str2 = "") {
+		const longer = str1.length > str2.length ? str1 : str2;
+		const shorter = str1.length > str2.length ? str2 : str1;
+
+		// 基础差异计算（按字符位置比较）
+		let diff = Math.abs(longer.length - shorter.length);
+		for (let i = 0; i < shorter.length; i++) {
+			if (longer[i] !== shorter[i]) diff++;
+		}
+		return diff;
 	}
 }
