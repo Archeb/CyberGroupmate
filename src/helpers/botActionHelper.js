@@ -1,4 +1,6 @@
 import OpenAI from "openai";
+import { Readability } from "@mozilla/readability";
+import { JSDOM } from "jsdom";
 
 export class BotActionHelper {
 	constructor(chatConfig, bot, ragHelper, stickerHelper, visionHelper) {
@@ -239,5 +241,59 @@ export class BotActionHelper {
 		}
 
 		return segments;
+	}
+
+	async openURL(url) {
+		try {
+			const controller = new AbortController();
+			const timeoutId = setTimeout(() => controller.abort(), 10000); // 10秒超时
+			const response = await fetch(url, { signal: controller.signal });
+			clearTimeout(timeoutId);
+
+			if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+
+			let html = await response.text();
+
+			try {
+				// 使用Readability解析
+				const dom = new JSDOM(html, { url });
+				const reader = new Readability(dom.window.document);
+				const article = reader.parse();
+
+				if (article && article.textContent) {
+					return {
+						success: true,
+						title: article.title || "无标题",
+						content: article.textContent.replace(/\s+/g, " ").trim(),
+						truncated: false,
+						isFallback: false,
+					};
+				}
+			} catch (e) {
+				console.log("Readability解析失败，使用回退方法:", e);
+			}
+
+			// 回退方法：提取所有文本
+			const dom = new JSDOM(html);
+			const elements = dom.window.document.getElementsByTagName("*");
+			const textContents = Array.from(elements)
+				.map((el) => el.textContent?.trim())
+				.filter(Boolean);
+
+			return {
+				success: true,
+				title: "网页内容",
+				content: textContents.join("\n").slice(0, 30000),
+				truncated: textContents.join("\n").length > 30000,
+				isFallback: true,
+			};
+		} catch (error) {
+			console.error("网页解析失败:", error);
+			return {
+				success: false,
+				error: error.message,
+				url,
+			};
+		}
 	}
 }

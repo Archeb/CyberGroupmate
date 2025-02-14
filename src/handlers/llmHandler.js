@@ -56,7 +56,6 @@ export class LLMHandler {
 			let timeStr = "";
 			if (withDate && item.created_at) {
 				const now = Date.now();
-				// 将 "2025-01-30 03:38:50.683000" 格式的UTC时间转换为时间戳
 				const createdAt = new Date(item.created_at + "Z"); // 添加Z表示这是UTC时间
 				const diff = (now - createdAt.getTime()) / 1000; // 转换为秒
 
@@ -162,13 +161,15 @@ export class LLMHandler {
 		}
 
 		// 添加可用函数
-		userRoleMessages.push(`<function>
-你可以使用以下函数和参数，一次可以调用多个函数，列表如下：
-
-# 跳过（无参数）
+		userRoleMessages.push(
+			`<function>你可以使用以下函数和参数，一次可以调用多个函数，列表如下：`
+		);
+		if (context.responseDecision.decisionType == "trigger") {
+			userRoleMessages.push(`# 跳过（无参数）
 <chat____skip>
-</chat____skip>
-
+</chat____skip>`);
+		}
+		userRoleMessages.push(`
 # 直接向群内发送消息
 <chat____text>
 <message>要发送的内容</message>
@@ -197,9 +198,15 @@ export class LLMHandler {
 </user____memories>
 
 # 使用谷歌搜索互联网
-<web_____search>
+<web____search>
 <keyword>要搜索的多个关键词</keyword>
-</web_____search>
+</web____search>
+</function>
+
+# 访问网页或进一步了解搜索结果
+<web____open>
+<url>要访问的url</url>
+</web____open>
 </function>
 `);
 		userRoleMessages.push(`<available_stickers>
@@ -231,7 +238,6 @@ ${this.stickerHelper.getAvailableEmojis().join(",")}
 		// 轮询选择backend配置
 		const backends = this.chatConfig.actionGenerator.backend;
 		const backendConfig = backends[this.currentBackendIndex % backends.length];
-		this.currentBackendIndex++; // 递增索引
 
 		// 使用选中的backend配置初始化OpenAI客户端
 		let openai = new OpenAI({
@@ -240,17 +246,34 @@ ${this.stickerHelper.getAvailableEmojis().join(",")}
 		});
 
 		try {
+			// o3/o1 兼容
+			const maxTokensParam =
+				backendConfig.model.startsWith("o3") || backendConfig.model.startsWith("o1")
+					? "max_completion_tokens"
+					: "max_tokens";
+
+			const completionParams = {
+				model: backendConfig.model,
+				messages: messages,
+				[maxTokensParam]: backendConfig.maxTokens, // 使用动态参数名
+			};
+
+			if (!(backendConfig.model.startsWith("o3") || backendConfig.model.startsWith("o1"))) {
+				completionParams.temperature = backendConfig.temperature;
+			}
+
 			let completion = await openai.chat.completions.create(
 				{
 					model: backendConfig.model,
 					messages: messages,
-					temperature: backendConfig.temperature,
-					max_tokens: backendConfig.maxTokens,
+					[maxTokensParam]: backendConfig.maxTokens, // 使用动态参数名
 				},
 				{
 					signal: signal,
 				}
 			);
+
+			this.currentBackendIndex++; // 递增索引
 
 			// 合并reasoning和content
 			let response =
@@ -287,6 +310,8 @@ ${this.stickerHelper.getAvailableEmojis().join(",")}
 					false
 				);
 			}
+
+			if (this.chatConfig.debug) console.log(response);
 
 			return response;
 		} catch (error) {
@@ -383,7 +408,7 @@ ${this.stickerHelper.getAvailableEmojis().join(",")}
 						if (this.chatConfig.debug) console.log("history搜索结果：", result);
 						await this.handleRAGSearchResults(result, response, context);
 						break;
-					case "web_____search":
+					case "web____search":
 						if (!params.keyword) {
 							console.warn("搜索缺少关键词参数");
 							continue;
@@ -395,6 +420,20 @@ ${this.stickerHelper.getAvailableEmojis().join(",")}
 						let webResult = await this.botActionHelper.googleSearch(params.keyword);
 						if (this.chatConfig.debug) console.log("web搜索结果：", webResult);
 						await this.handleGoogleSearchResults(webResult, response, context);
+						break;
+
+					case "web____open":
+						if (!params.url) {
+							console.warn("访问网页缺少URL参数");
+							continue;
+						}
+						if (context.StackDepth > this.chatConfig.actionGenerator.maxStackDepth) {
+							console.warn("StackDepth超过最大深度，禁止调用可能嵌套的函数");
+							continue;
+						}
+						let webContent = await this.botActionHelper.openURL(params.url);
+						if (this.chatConfig.debug) console.log("打开网页结果", webContent);
+						await this.handleWebContent(webContent, response, context);
 						break;
 
 					case "user____memories":
@@ -433,7 +472,7 @@ ${this.stickerHelper.getAvailableEmojis().join(",")}
 		let functionCalls = [];
 
 		// 定义multiShot函数列表
-		const multiShotFunctions = ["chat____search", "web_____search"];
+		const multiShotFunctions = ["chat____search", "web____search", "web____open"];
 
 		// 创建匹配所有支持函数的统一正则表达式
 		let supportedFunctions = [
@@ -442,7 +481,8 @@ ${this.stickerHelper.getAvailableEmojis().join(",")}
 			"chat____reply",
 			"chat____note",
 			"chat____skip",
-			"web_____search",
+			"web____search",
+			"web____open",
 			"user____memories",
 		];
 		let combinedRegex = new RegExp(
@@ -518,13 +558,15 @@ ${this.stickerHelper.getAvailableEmojis().join(",")}
 	 */
 	async handleRAGSearchResults(searchResults, previousResponse, context) {
 		context.similarMessage = "";
-		let multiShotPrompt = `<previous_action>${previousResponse}</previous_action>
-以上是你之前的行动，下面是搜索结果，请根据搜索结果进行行动，不要重复。
-<history_search_results>
+		let botActionResult = `<history_search_results>
 ${this.processMessageHistoryForLLM(searchResults, true)}
 </history_search_results>
 `;
-		let messages = await this.prepareMessages(context, multiShotPrompt);
+		context.messageContext.push({
+			content_type: "chat_search",
+			text: botActionResult,
+		});
+		let messages = await this.prepareMessages(context);
 		let newResponse = await this.callLLM(messages, context);
 		return this.processResponse(newResponse, context);
 	}
@@ -534,13 +576,46 @@ ${this.processMessageHistoryForLLM(searchResults, true)}
 	 */
 	async handleGoogleSearchResults(searchResults, previousResponse, context) {
 		context.similarMessage = "";
-		let multiShotPrompt = `<previous_action>${previousResponse}</previous_action>
-以上是你之前的行动，下面是搜索结果，请根据搜索结果进行行动，不要重复。
-<web_search_results>
-${JSON.stringify(searchResults)}
-</web_search_results>
+		let botActionResult = "<web_search_results>\n";
+		for (let item of searchResults) {
+			botActionResult += `<title>${item.title}</title>
+<url>${item.link}</url>
+<snippet>${item.snippet}</snippet>
 `;
+		}
+
+		botActionResult += "</web_search_results>";
+		context.messageContext.push({
+			content_type: "web_search",
+			text: botActionResult,
+		});
+		let multiShotPrompt = "<tips>可以考虑是否需要进一步打开谷歌搜索结果URL</tips>";
 		let messages = await this.prepareMessages(context, multiShotPrompt);
+		let newResponse = await this.callLLM(messages, context);
+		return this.processResponse(newResponse, context);
+	}
+
+	/**
+	 * 处理网页打开结果
+	 */
+	async handleWebContent(webContent, previousResponse, context) {
+		context.similarMessage = "";
+		let botActionResult;
+		if (webContent.success) {
+			botActionResult = `
+<url_content title="${webContent.title}">
+${webContent.content}
+${webContent.truncated ? "网页内容超长被截断" : ""}
+</url_content>
+`;
+		} else {
+			botActionResult = `URL打开失败`;
+		}
+		context.messageContext.push({
+			content_type: "web_open",
+			text: botActionResult,
+		});
+		let messages = await this.prepareMessages(context);
 		let newResponse = await this.callLLM(messages, context);
 		return this.processResponse(newResponse, context);
 	}
