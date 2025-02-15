@@ -203,10 +203,10 @@ export class LLMHandler {
 </web____search>
 </function>
 
-# 访问网页或进一步了解搜索结果
-<web____open>
+# 根据URL获取内容
+<web____getcontent>
 <url>要访问的url</url>
-</web____open>
+</web____getcontent>
 </function>
 `);
 		userRoleMessages.push(`<available_stickers>
@@ -422,7 +422,7 @@ ${this.stickerHelper.getAvailableEmojis().join(",")}
 						await this.handleGoogleSearchResults(webResult, response, context);
 						break;
 
-					case "web____open":
+					case "web____getcontent":
 						if (!params.url) {
 							console.warn("访问网页缺少URL参数");
 							continue;
@@ -472,7 +472,7 @@ ${this.stickerHelper.getAvailableEmojis().join(",")}
 		let functionCalls = [];
 
 		// 定义multiShot函数列表
-		const multiShotFunctions = ["chat____search", "web____search", "web____open"];
+		const multiShotFunctions = ["chat____search", "web____search", "web____getcontent"];
 
 		// 创建匹配所有支持函数的统一正则表达式
 		let supportedFunctions = [
@@ -482,7 +482,7 @@ ${this.stickerHelper.getAvailableEmojis().join(",")}
 			"chat____note",
 			"chat____skip",
 			"web____search",
-			"web____open",
+			"web____getcontent",
 			"user____memories",
 		];
 		let combinedRegex = new RegExp(
