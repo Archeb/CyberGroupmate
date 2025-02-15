@@ -215,9 +215,8 @@ ${this.stickerHelper.getAvailableEmojis().join(",")}
 </available_stickers>`);
 
 		// 添加任务
-		if (!multiShotPrompt) {
-			userRoleMessages.push(this.chatConfig.actionGenerator.taskPrompt);
-		} else {
+		userRoleMessages.push(this.chatConfig.actionGenerator.taskPrompt);
+		if (multiShotPrompt) {
 			userRoleMessages.push(multiShotPrompt);
 		}
 		// 添加越狱
