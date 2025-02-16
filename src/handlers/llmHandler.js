@@ -166,47 +166,47 @@ export class LLMHandler {
 		);
 		if (context.responseDecision.decisionType == "trigger") {
 			userRoleMessages.push(`# 跳过（无参数）
-<chat____skip>
-</chat____skip>`);
+<chat_skip>
+</chat_skip>`);
 		}
 		userRoleMessages.push(`
 # 直接向群内发送消息
-<chat____text>
+<chat_text>
 <message>要发送的内容</message>
-</chat____text>
+</chat_text>
 
 # 回复某一条消息
-<chat____reply>
+<chat_reply>
 <message_id>要回复的消息ID</message_id>
 <message>要发送的内容</message>
-</chat____reply>
+</chat_reply>
 
 # 群聊笔记，用符合心情的语气记录
-<chat____note>
+<chat_note>
 <note>要记录的内容</note>
-</chat____note> 
+</chat_note> 
 
 # 使用语义检索聊天历史
-<chat____search>
+<chat_search>
 <keyword>要搜索的多个关键词</keyword>
-</chat____search>
+</chat_search>
 
 # 更新用户记忆
-<user____memories>
+<user_memories>
 <message_id>该用户的相关消息ID</message_id>
 <memories>要更新或者添加的长期记忆内容</memories>
-</user____memories>
+</user_memories>
 
 # 使用谷歌搜索互联网
-<web____search>
+<web_search>
 <keyword>要搜索的多个关键词</keyword>
-</web____search>
+</web_search>
 </function>
 
 # 根据URL获取内容
-<web____getcontent>
+<web_getcontent>
 <url>要访问的url</url>
-</web____getcontent>
+</web_getcontent>
 </function>
 `);
 		userRoleMessages.push(`<available_stickers>
@@ -344,14 +344,14 @@ ${this.stickerHelper.getAvailableEmojis().join(",")}
 				}
 
 				switch (funcName) {
-					case "chat____skip":
+					case "chat_skip":
 						if (this.chatConfig.debug) console.log("跳过");
 						await this.botActionHelper.saveAction(context.chatId, "", "skip");
 						// 减少响应率
 						this.kuukiyomiHandler.decreaseResponseRate(0.2);
 						break;
 
-					case "chat____reply":
+					case "chat_reply":
 						if (!params.message_id || !params.message) {
 							console.warn(params);
 							console.warn("回复消息缺少必要参数");
@@ -370,7 +370,7 @@ ${this.stickerHelper.getAvailableEmojis().join(",")}
 						this.kuukiyomiHandler.increaseResponseRate(0.1);
 						break;
 
-					case "chat____text":
+					case "chat_text":
 						if (!params.message) {
 							console.warn("发送消息缺少内容参数");
 							continue;
@@ -383,7 +383,7 @@ ${this.stickerHelper.getAvailableEmojis().join(",")}
 						await this.botActionHelper.sendText(context.chatId, params.message);
 						break;
 
-					case "chat____note":
+					case "chat_note":
 						if (!params.note) {
 							console.warn("记录笔记缺少必要参数");
 							continue;
@@ -391,7 +391,7 @@ ${this.stickerHelper.getAvailableEmojis().join(",")}
 						await this.botActionHelper.saveAction(context.chatId, params.note, "note");
 						break;
 
-					case "chat____search":
+					case "chat_search":
 						if (!params.keyword) {
 							console.warn("搜索缺少关键词参数");
 							continue;
@@ -407,7 +407,7 @@ ${this.stickerHelper.getAvailableEmojis().join(",")}
 						if (this.chatConfig.debug) console.log("history搜索结果：", result);
 						await this.handleRAGSearchResults(result, response, context);
 						break;
-					case "web____search":
+					case "web_search":
 						if (!params.keyword) {
 							console.warn("搜索缺少关键词参数");
 							continue;
@@ -421,7 +421,7 @@ ${this.stickerHelper.getAvailableEmojis().join(",")}
 						await this.handleGoogleSearchResults(webResult, response, context);
 						break;
 
-					case "web____getcontent":
+					case "web_getcontent":
 						if (!params.url) {
 							console.warn("访问网页缺少URL参数");
 							continue;
@@ -435,7 +435,7 @@ ${this.stickerHelper.getAvailableEmojis().join(",")}
 						await this.handleWebContent(webContent, response, context);
 						break;
 
-					case "user____memories":
+					case "user_memories":
 						if (!params.message_id || !params.memories) {
 							console.warn("更新用户记忆缺少必要参数");
 							continue;
@@ -471,18 +471,18 @@ ${this.stickerHelper.getAvailableEmojis().join(",")}
 		let functionCalls = [];
 
 		// 定义multiShot函数列表
-		const multiShotFunctions = ["chat____search", "web____search", "web____getcontent"];
+		const multiShotFunctions = ["chat_search", "web_search", "web_getcontent"];
 
 		// 创建匹配所有支持函数的统一正则表达式
 		let supportedFunctions = [
-			"chat____search",
-			"chat____text",
-			"chat____reply",
-			"chat____note",
-			"chat____skip",
-			"web____search",
-			"web____getcontent",
-			"user____memories",
+			"chat_search",
+			"chat_text",
+			"chat_reply",
+			"chat_note",
+			"chat_skip",
+			"web_search",
+			"web_getcontent",
+			"user_memories",
 		];
 		let combinedRegex = new RegExp(
 			`<(${supportedFunctions.join("|")})>([\\s\\S]*?)<\\/\\1>`,
@@ -510,7 +510,7 @@ ${this.stickerHelper.getAvailableEmojis().join(",")}
 				}
 
 				// 对于skip函数，不需要参数
-				if (funcName === "chat____skip") {
+				if (funcName === "chat_skip") {
 					functionCalls.push({
 						function: funcName,
 						params: {},
@@ -631,7 +631,7 @@ ${webContent.truncated ? "网页内容超长被截断" : ""}
 		if (message.length < 2) return false; //一个字的比如emoji或者简单的是否回答可以重复
 
 		return context.messageContext.some((item) => {
-			if (item.content_type === "reply") {
+			if (item.content_type === "reply" || item.content_type === "text") {
 				// 完全匹配直接返回true
 				if (item.text === message) return true;
 
