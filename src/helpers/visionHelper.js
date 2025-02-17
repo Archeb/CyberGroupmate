@@ -83,7 +83,7 @@ export class VisionHelper {
 			}
 
 			// 6. 返回生成的描述
-			return response.messages[response.messages.length-1]?.content || "无法生成图片描述";
+			return response.messages.at(-1)?.content || "无法生成图片描述";
 		} catch (error) {
 			console.error("图片分析失败:", error);
 			throw new Error(`图片分析失败: ${error.message}`);
