@@ -36,6 +36,7 @@ pids
 *.pid
 *.seed
 *.pid.lock
+.postgres
 
 # 测试覆盖率
 coverage/
