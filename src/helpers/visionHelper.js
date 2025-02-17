@@ -1,4 +1,6 @@
-import OpenAI from "openai";
+import { generateText } from "@xsai/generate-text";
+import { createOpenAI } from '@xsai/providers'
+import { message } from '@xsai/utils-chat'
 import ffmpeg from "fluent-ffmpeg";
 import ffmpegInstaller from "@ffmpeg-installer/ffmpeg";
 import ffprobeInstaller from "@ffprobe-installer/ffprobe";
@@ -12,7 +14,7 @@ export class VisionHelper {
 		this.ragHelper = ragHelper;
 
 		// 初始化 OpenAI 客户端
-		this.openai = new OpenAI({
+		this.openai = createOpenAI({
 			baseURL: this.chatConfig.vision.backend.baseURL,
 			apiKey: this.chatConfig.vision.backend.apiKey,
 		});
@@ -67,26 +69,12 @@ export class VisionHelper {
 			}
 
 			// 5. 调用 OpenAI Vision API
-			const response = await this.openai.chat.completions.create({
-				model: this.model,
-				messages: [
-					{
-						role: "system",
-						content: systemPrompt,
-					},
-					{
-						role: "user",
-						content: [
-							{ type: "text", text: userPrompt },
-							{
-								type: "image_url",
-								image_url: {
-									url: fileUrl,
-								},
-							},
-						],
-					},
-				],
+			const response = await generateText({
+				...this.openai.chat(this.model),
+				messages: message.messages(
+					message.system(systemPrompt),
+					message.user([message.imagePart(userPrompt), message.imagePart(fileUrl)]),
+				),
 				max_tokens: 300,
 			});
 
@@ -95,7 +83,7 @@ export class VisionHelper {
 			}
 
 			// 6. 返回生成的描述
-			return response.choices[0]?.message?.content || "无法生成图片描述";
+			return response.messages[response.messages.length-1]?.content || "无法生成图片描述";
 		} catch (error) {
 			console.error("图片分析失败:", error);
 			throw new Error(`图片分析失败: ${error.message}`);
@@ -144,45 +132,26 @@ export class VisionHelper {
 				try {
 					// 对于动画贴纸，我们需要抽取帧
 					const frames = await this.extractStickerFrames(fileUrl);
-					imageContents = frames.slice(0, 2).map((frameUrl) => ({
-						type: "image_url",
-						image_url: { url: frameUrl },
-					}));
+					imageContents = frames.slice(0, 2).map((frameUrl) => (message.imagePart(frameUrl)));
 					userPrompt += "\n这是一个动态贴纸的两个关键帧，请综合描述其动态效果。";
 				} catch (error) {
 					console.error("提取贴纸帧失败，将使用原始贴纸:", error);
 					// 如果提取帧失败，回退到使用原始贴纸
-					imageContents = [
-						{
-							type: "image_url",
-							image_url: { url: fileUrl },
-						},
-					];
+					imageContents = [ message.imagePart(fileUrl) ];
 					userPrompt += "\n这是一个动态贴纸，但无法提取帧画面。";
 				}
 			} else {
 				// 静态贴纸直接使用原图
-				imageContents = [
-					{
-						type: "image_url",
-						image_url: { url: fileUrl },
-					},
-				];
+				imageContents = [ message.imagePart(fileUrl) ];
 			}
 
 			// 4. 调用 OpenAI Vision API
-			const response = await this.openai.chat.completions.create({
-				model: this.model,
-				messages: [
-					{
-						role: "system",
-						content: systemPrompt,
-					},
-					{
-						role: "user",
-						content: [{ type: "text", text: userPrompt }, ...imageContents],
-					},
-				],
+			const response = await generateText({
+				...this.openai.chat(this.model),
+				messages: message.messages(
+					message.system(systemPrompt),
+					message.user([message.textPart(userPrompt), ...imageContents])
+				),
 				max_tokens: 150,
 			});
 
@@ -191,7 +160,7 @@ export class VisionHelper {
 			}
 
 			// 5. 返回生成的描述
-			const description = response.choices[0]?.message?.content || "无法生成贴纸描述";
+			const description = response.messages[response.messages.length-1]?.content || "无法生成贴纸描述";
 			return stickerSetTitle ? `[${stickerSetTitle}]\n${description}` : description;
 		} catch (error) {
 			console.error("贴纸分析失败:", error);
