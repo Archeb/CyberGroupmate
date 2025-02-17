@@ -160,7 +160,7 @@ export class VisionHelper {
 			}
 
 			// 5. 返回生成的描述
-			const description = response.messages[response.messages.length-1]?.content || "无法生成贴纸描述";
+			const description = response.messages.at(-1)?.content || "无法生成贴纸描述";
 			return stickerSetTitle ? `[${stickerSetTitle}]\n${description}` : description;
 		} catch (error) {
 			console.error("贴纸分析失败:", error);
