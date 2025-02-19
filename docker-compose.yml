@@ -1,15 +1,50 @@
 services:
     pgvector:
         image: pgvector/pgvector:pg17
-        ports:
-            - 5432:5432
         environment:
+            POSTGRES_USER: postgres
             POSTGRES_DATABASE: postgres
             POSTGRES_PASSWORD: "123456"
         volumes:
             - ./.postgres/data:/var/lib/postgresql/data
+        restart: unless-stopped
         healthcheck:
             test: ["CMD-SHELL", "pg_isready -d $$POSTGRES_DB -U $$POSTGRES_USER"]
             interval: 10s
             timeout: 5s
             retries: 5
+    bot:
+        build: .
+        depends_on:
+            - pgvector
+        restart: unless-stopped
+        environment:
+            BOT_TOKEN: ""
+            BOT_USERNAME: ""
+            OPEN_AI_API_KEY: ""
+            OPEN_AI_API_BASE_URL: "https://ark.cn-beijing.volces.com/api/v3/"
+            MAIN_MODEL: ""
+            VISION_AI_API_KEY: ""
+            VISION_AI_API_BASE_URL: "https://ark.cn-beijing.volces.com/api/v3/"
+            VISION_MODEL: ""
+            RAG_API_KEY: ""
+            RAG_API_BASE_URL: "https://ark.cn-beijing.volces.com/api/v3/"
+            SECONDARY_MODEL: ""
+            SECONDARY_API_KEY: ""
+            SECONDARY_API_BASE_URL: "https://ark.cn-beijing.volces.com/api/v3/"
+            GOOGLE_API_KEY: ""
+            GOOGLE_CSE_ID: ""
+            AVAILABLE_STICKER_SETS: "[\"SuicaMemes\"]"
+            MEMO_CHANNEL_ID: -1919810
+            EMBEDDING_TINY_SIZE: 2560
+            EMBEDDING_TINY_MODEL: ""
+            EMBEDDING_LARGE_SIZE: 4096
+            EMBEDDING_LARGE_MODEL: ""
+            EMBEDDING_ENDPOINT: ""
+            CHAT_ID: -114514
+            CHAT_NAME: ""
+            TEMPERATURE: 0.6
+            INITIAL_RESPONSE_RATE: 0.2
+            RESPONSE_RATE_MIN: 0.1
+            RESPONSE_RATE_MAX: 1
+

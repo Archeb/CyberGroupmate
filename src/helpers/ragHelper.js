@@ -57,7 +57,7 @@ export class RAGHelper {
                     content_type TEXT NOT NULL,  -- 'message', 'search_result', 'reply', 'note' 等
                     text TEXT NOT NULL,
                     metadata JSONB NOT NULL,
-                    embedding vector(1536),
+                    embedding vector(${process.env.EMBEDDING_TINY_SIZE ? process.env.EMBEDDING_TINY_SIZE : 1536}), -- 这里用的是text-embedding-3-tiny
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
                 
@@ -77,7 +77,7 @@ export class RAGHelper {
                     content_type TEXT NOT NULL,
                     text TEXT NOT NULL,
                     metadata JSONB NOT NULL DEFAULT '{}',
-                    embedding vector(3072), -- 这里用的是text-embedding-3-large
+                    embedding vector(${process.env.EMBEDDING_LARGE_SIZE ? env.EMBEDDING_LARGE_SIZE : 3072}), -- 这里用的是text-embedding-3-large
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     UNIQUE(user_id, content_type)  -- 添加组合唯一约束
@@ -97,7 +97,7 @@ export class RAGHelper {
 		}
 	}
 
-	async getEmbedding(text, model = "text-embedding-3-small") {
+	async getEmbedding(text, model = (process.env.EMBEDDING_TINY_MODEL ? process.env.EMBEDDING_TINY_MODEL : "text-embedding-3-small")) {
 		try {
 			const response = await this.openai.embeddings.create({
 				model: model,
@@ -394,7 +394,7 @@ export class RAGHelper {
 
 	async updateUserMemory(userId, text, contentType = "memory") {
 		try {
-			const embedding = await this.getEmbedding(text, "text-embedding-3-large");
+			const embedding = await this.getEmbedding(text, process.env.EMBEDDING_LARGE_MODEL ? process.env.EMBEDDING_LARGE_MODEL : "text-embedding-3-large");
 			if (!embedding) return false;
 
 			const client = await this.pool.connect();
