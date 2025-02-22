@@ -1,6 +1,7 @@
 import OpenAI from "openai";
 import * as fs from "fs/promises";
 import * as path from "path";
+import { type } from "os";
 
 export class LLMHandler {
 	constructor(chatConfig = {}, botActionHelper, ragHelper, kuukiyomiHandler, stickerHelper) {
@@ -273,6 +274,8 @@ ${this.stickerHelper.getAvailableEmojis().join(",")}
 			);
 
 			this.currentBackendIndex++; // 递增索引
+
+			if (typeof completion === "string") completion = JSON.parse(completion);
 
 			// 合并reasoning和content
 			let response =
