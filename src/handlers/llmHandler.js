@@ -405,6 +405,10 @@ ${this.stickerHelper.getAvailableEmojis().join(",")}
 							params.keyword
 						);
 						if (this.chatConfig.debug) console.log("history搜索结果：", result);
+						context.messageContext.push({
+							content_type: "chat_search_called",
+							text: `<keyword>${params.keyword}</keyword>`,
+						});
 						await this.handleRAGSearchResults(result, response, context);
 						break;
 					case "web_search":
@@ -418,6 +422,10 @@ ${this.stickerHelper.getAvailableEmojis().join(",")}
 						}
 						let webResult = await this.botActionHelper.googleSearch(params.keyword);
 						if (this.chatConfig.debug) console.log("web搜索结果：", webResult);
+						context.messageContext.push({
+							content_type: "web_search_called",
+							text: `<keyword>${params.keyword}</keyword>`,
+						});
 						await this.handleGoogleSearchResults(webResult, response, context);
 						break;
 
@@ -432,6 +440,10 @@ ${this.stickerHelper.getAvailableEmojis().join(",")}
 						}
 						let webContent = await this.botActionHelper.openURL(params.url);
 						if (this.chatConfig.debug) console.log("打开网页结果", webContent);
+						context.messageContext.push({
+							content_type: "web_getcontent_called",
+							text: `<url>${params.url}</url>`,
+						});
 						await this.handleWebContent(webContent, response, context);
 						break;
 
@@ -557,12 +569,9 @@ ${this.stickerHelper.getAvailableEmojis().join(",")}
 	 */
 	async handleRAGSearchResults(searchResults, previousResponse, context) {
 		context.similarMessage = "";
-		let botActionResult = `<history_search_results>
-${this.processMessageHistoryForLLM(searchResults, true)}
-</history_search_results>
-`;
+		let botActionResult = this.processMessageHistoryForLLM(searchResults, true);
 		context.messageContext.push({
-			content_type: "chat_search",
+			content_type: "chat_search_result",
 			text: botActionResult,
 		});
 		let messages = await this.prepareMessages(context);
@@ -575,7 +584,7 @@ ${this.processMessageHistoryForLLM(searchResults, true)}
 	 */
 	async handleGoogleSearchResults(searchResults, previousResponse, context) {
 		context.similarMessage = "";
-		let botActionResult = "<web_search_results>\n";
+		let botActionResult;
 		for (let item of searchResults) {
 			botActionResult += `<title>${item.title}</title>
 <url>${item.link}</url>
@@ -583,9 +592,8 @@ ${this.processMessageHistoryForLLM(searchResults, true)}
 `;
 		}
 
-		botActionResult += "</web_search_results>";
 		context.messageContext.push({
-			content_type: "web_search",
+			content_type: "web_search_result",
 			text: botActionResult,
 		});
 		let multiShotPrompt = "<tips>可以考虑是否需要进一步打开谷歌搜索结果URL</tips>";
@@ -602,16 +610,17 @@ ${this.processMessageHistoryForLLM(searchResults, true)}
 		let botActionResult;
 		if (webContent.success) {
 			botActionResult = `
-<url_content title="${webContent.title}">
+<title>${webContent.title}</title>
+<content>
 ${webContent.content}
 ${webContent.truncated ? "网页内容超长被截断" : ""}
-</url_content>
+</content>
 `;
 		} else {
 			botActionResult = `URL打开失败`;
 		}
 		context.messageContext.push({
-			content_type: "web_open",
+			content_type: "web_open_result",
 			text: botActionResult,
 		});
 		let messages = await this.prepareMessages(context);
