@@ -165,7 +165,7 @@ export class LLMHandler {
 		userRoleMessages.push(
 			`<function>你可以使用以下函数和参数，一次可以调用多个函数，列表如下：`
 		);
-		if (context.responseDecision.decisionType == "trigger") {
+		if (context.responseDecision.decisionType != "trigger") {
 			userRoleMessages.push(`# 跳过（无参数）
 <chat_skip>
 </chat_skip>`);
