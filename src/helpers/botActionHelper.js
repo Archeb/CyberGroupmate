@@ -140,11 +140,12 @@ export class BotActionHelper {
 	async updateMemory(messageId, updatePrompt) {
 		try {
 			// 构建系统提示词
-			const systemPrompt = `你是一个记忆管理助手。你的任务是根据用户的指示来更新或创建记忆。
+			const systemPromptWhenCreate = `你是一个记忆管理助手。你的任务是根据用户的指示来创建记忆。
+记忆应该简洁、客观，避免主观评价。直接输出记忆的内容，不需要其他解释。`;
+			const systemPromptWhenEdit = `你是一个记忆管理助手。你的任务是根据用户的指示来更新记忆。
+请根据\`记忆相关聊天记录\`，结合\`更新记忆要求\`：在\`现有记忆\`的基础上\`完善\`、\`补充\`以及处理\`现有记忆\` vs. \`记忆相关聊天记录\`、\`更新记忆要求\`中矛盾的内容。
 记忆应该是简洁、客观的描述，避免主观评价。
-如果是创建新记忆，请直接输出新的记忆内容。
-如果是更新现有记忆，请基于现有记忆进行修改。
-直接输出最终的记忆内容，不需要其他解释。`;
+直接输出最终的记忆内容，不需要其他解释。"`;
 
 			// 根据messageId从ragHelper中获取用户相关信息，从而获取用户ID
 			const message = await this.ragHelper.getMessage(messageId);
@@ -157,10 +158,13 @@ export class BotActionHelper {
 			let currentMemory = memoryRecord ? memoryRecord.text : null;
 
 			// 准备提示词
+			let systemPrompt;
 			let prompt;
 			if (currentMemory) {
+				systemPrompt = systemPromptWhenEdit;
 				prompt = `现有记忆：${currentMemory}\n\n记忆相关聊天记录：${message.text}\n\n更新记忆要求：${updatePrompt}`;
 			} else {
+				systemPrompt = systemPromptWhenCreate;
 				prompt = `记忆相关聊天记录：${message.text}\n\n创建记忆要求：${updatePrompt}`;
 			}
 
