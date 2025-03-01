@@ -1,7 +1,7 @@
 import TelegramBot from "node-telegram-bot-api";
 import { TelegramHandler } from "./handlers/telegramHandler.js";
 import { KuukiyomiHandler } from "./handlers/kuukiyomi.js";
-import { LLMHandler } from "./handlers/llmHandler.js";
+import { ActionGenerator } from "./handlers/actionGenerator.js";
 import { RAGHelper } from "./helpers/ragHelper.js";
 import { BotActionHelper } from "./helpers/botActionHelper.js";
 import { VisionHelper } from "./helpers/visionHelper.js";
@@ -26,7 +26,7 @@ function getChatState(chatId) {
 		if (!chatConfig) return null;
 
 		let kuukiyomiHandler = new KuukiyomiHandler(chatConfig);
-		let llmHandler = new LLMHandler(
+		let actionGenerator = new ActionGenerator(
 			chatConfig,
 			botActionHelper,
 			ragHelper,
@@ -40,7 +40,7 @@ function getChatState(chatId) {
 			pendingAction: null,
 			// 为每个聊天创建独立的处理器实例
 			telegramHandler: telegramHandler,
-			llmHandler: llmHandler,
+			actionGenerator: actionGenerator,
 			kuukiyomi: kuukiyomiHandler,
 		});
 	}
@@ -142,7 +142,7 @@ async function processMessage(msg, processedMsg, responseDecision, chatState) {
 					ragHelper.getMessageContext(msg.chat.id, msg.message_id, 25),
 				]);
 
-				await chatState.llmHandler.generateAction(
+				await chatState.actionGenerator.generateAction(
 					{
 						similarMessage,
 						messageContext,

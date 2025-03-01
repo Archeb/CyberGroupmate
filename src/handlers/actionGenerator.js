@@ -1,11 +1,11 @@
-import { backendHelper } from "../helpers/backendHelper.js";
+import { LLMHelper } from "../helpers/llmHelper.js";
 
-export class LLMHandler {
+export class ActionGenerator {
 	constructor(chatConfig = {}, botActionHelper, ragHelper, kuukiyomiHandler, stickerHelper) {
 		this.chatConfig = chatConfig;
 
 		this.botActionHelper = botActionHelper;
-		this.backendHelper = new backendHelper(chatConfig, botActionHelper);
+		this.llmHelper = new LLMHelper(chatConfig, botActionHelper);
 		this.ragHelper = ragHelper;
 		this.kuukiyomiHandler = kuukiyomiHandler;
 		this.stickerHelper = stickerHelper;
@@ -20,7 +20,7 @@ export class LLMHandler {
 			let messages = await this.prepareMessages(context);
 
 			// 调用API（传递signal）
-			let response = await this.backendHelper.callLLM(
+			let response = await this.llmHelper.callLLM(
 				messages,
 				chatState?.abortController?.signal
 			);
@@ -41,66 +41,6 @@ export class LLMHandler {
 			console.error("生成行动出错:", error);
 			throw error;
 		}
-	}
-
-	/**
-	 * 获取消息历史并格式化为LLM消息格式
-	 */
-	processMessageHistoryForLLM(messageContext, withDate = false, emphasizeLastReply = false) {
-		let history = messageContext;
-		let textHistory = history.map((item) => {
-			// 计算时间差
-			let timeStr = "";
-			if (withDate && item.created_at) {
-				const now = Date.now();
-				const createdAt = new Date(item.created_at + "Z"); // 添加Z表示这是UTC时间
-				const diff = (now - createdAt.getTime()) / 1000; // 转换为秒
-
-				if (diff < 60) {
-					timeStr = "刚刚";
-				} else if (diff < 3600) {
-					timeStr = `${Math.floor(diff / 60)}分钟前`;
-				} else if (diff < 86400) {
-					timeStr = `${Math.floor(diff / 3600)}小时前`;
-				} else {
-					timeStr = `${Math.floor(diff / 86400)}天前`;
-				}
-				timeStr = ` (${timeStr})`;
-			}
-
-			// 根据内容类型处理不同的格式
-			if (item.content_type === "message") {
-				let metadata = item.metadata || {};
-				let userIdentifier = `${metadata.from.first_name || ""}${metadata.from.last_name || ""}`;
-
-				// 检查用户是否在黑名单中
-				if (this.chatConfig.blacklistUsers?.includes(metadata.from.id)) {
-					return "";
-				}
-
-				// 处理回复消息
-				if (metadata.reply_to_message) {
-					let replyMeta = metadata.reply_to_message;
-					let replyUserIdentifier = `${replyMeta.from.first_name || ""}${replyMeta.from.last_name || ""}`;
-					return `<message id="${item.message_id}" user="${userIdentifier}"${timeStr}><reply_to user="${replyUserIdentifier}">${replyMeta.text || "[媒体内容]"}</reply_to>${item.text}</message>`;
-				} else {
-					return `<message id="${item.message_id}" user="${userIdentifier}"${timeStr}>${item.text}</message>`;
-				}
-			} else {
-				// 处理bot的actions (note, reply, search等)
-				// 如果是最后一条消息且是bot reply,则改为bot_latest_reply
-				if (
-					item.content_type === "reply" &&
-					history.indexOf(item) === history.length - 1 &&
-					emphasizeLastReply
-				) {
-					return `<bot_latest_reply${timeStr}>${item.text}</bot_latest_reply>`;
-				}
-				return `<bot_${item.content_type}${timeStr}>${item.text}</bot_${item.content_type}>`;
-			}
-		});
-
-		return textHistory.join("\n");
 	}
 
 	/**
@@ -127,7 +67,7 @@ export class LLMHandler {
 		if (context.similarMessage) {
 			userRoleMessages.push(
 				"<related_notes>\n" +
-					this.processMessageHistoryForLLM(context.similarMessage, true) +
+					this.llmHelper.processMessageHistory(context.similarMessage, true) +
 					"\n</related_notes>"
 			);
 		}
@@ -135,7 +75,7 @@ export class LLMHandler {
 		// 添加历史消息
 		userRoleMessages.push(
 			"<chat_history>\n" +
-				this.processMessageHistoryForLLM(context.messageContext, true, true) +
+				this.llmHelper.processMessageHistory(context.messageContext, true, true) +
 				"\n</chat_history>"
 		);
 
@@ -198,7 +138,6 @@ export class LLMHandler {
 <web_search>
 <keyword>要搜索的多个关键词</keyword>
 </web_search>
-</function>
 
 # 根据URL获取内容
 <web_getcontent>
@@ -235,7 +174,20 @@ ${this.stickerHelper.getAvailableEmojis().join(",")}
 		if (!response) return;
 
 		try {
-			let extractResult = this.extractFunctionCalls(response);
+			let extractResult = this.llmHelper.extractFunctionCalls(
+				response,
+				[
+					"chat_search",
+					"chat_text",
+					"chat_reply",
+					"chat_note",
+					"chat_skip",
+					"web_search",
+					"web_getcontent",
+					"user_memories",
+				],
+				["chat_search", "web_search", "web_getcontent"]
+			);
 			let functionCalls = extractResult.functionCalls;
 			response = extractResult.response;
 
@@ -376,110 +328,17 @@ ${this.stickerHelper.getAvailableEmojis().join(",")}
 	}
 
 	/**
-	 * 从LLM响应中提取函数调用
-	 */
-	extractFunctionCalls(response) {
-		// 如果内容为空，返回空数组
-		if (!response) {
-			return { functionCalls: [], response: "" };
-		}
-
-		let functionCalls = [];
-
-		// 定义multiShot函数列表
-		const multiShotFunctions = ["chat_search", "web_search", "web_getcontent"];
-
-		// 创建匹配所有支持函数的统一正则表达式
-		let supportedFunctions = [
-			"chat_search",
-			"chat_text",
-			"chat_reply",
-			"chat_note",
-			"chat_skip",
-			"web_search",
-			"web_getcontent",
-			"user_memories",
-		];
-		let combinedRegex = new RegExp(
-			`<(${supportedFunctions.join("|")})>([\\s\\S]*?)<\\/\\1>`,
-			"g"
-		);
-
-		let match;
-		let lastIndex = 0;
-		let foundMultiShot = false;
-
-		while ((match = combinedRegex.exec(response)) !== null) {
-			let funcName = match[1];
-			let params = match[2].trim();
-
-			try {
-				// 检查是否是multiShot函数
-				if (multiShotFunctions.includes(funcName)) {
-					foundMultiShot = true;
-					lastIndex = match.index + match[0].length;
-				}
-
-				// 如果已经找到multiShot函数，则不再处理后续函数
-				if (foundMultiShot && !multiShotFunctions.includes(funcName)) {
-					continue;
-				}
-
-				// 对于skip函数，不需要参数
-				if (funcName === "chat_skip") {
-					functionCalls.push({
-						function: funcName,
-						params: {},
-					});
-					continue;
-				}
-
-				// 解析其他函数的参数
-				let parsedParams = {};
-				// 使用正则表达式匹配HTML标签
-				const tagRegex = /<(\w+)>([\s\S]*?)<\/\1>/g;
-				let paramMatch;
-
-				while ((paramMatch = tagRegex.exec(params)) !== null) {
-					const [_, key, value] = paramMatch;
-					// 移除多余的空白字符
-					parsedParams[key] = value.trim();
-				}
-
-				functionCalls.push({
-					function: funcName,
-					params: parsedParams,
-				});
-
-				// 如果是multiShot函数，立即停止处理后续内容
-				if (multiShotFunctions.includes(funcName)) {
-					break;
-				}
-			} catch (error) {
-				console.error(`处理函数 ${funcName} 时出错:`, error);
-			}
-		}
-
-		// 如果找到了multiShot函数，清空该函数后的所有内容
-		if (foundMultiShot && lastIndex > 0) {
-			response = response.substring(0, lastIndex);
-		}
-
-		return { functionCalls, response };
-	}
-
-	/**
 	 * 处理历史搜索结果
 	 */
 	async handleRAGSearchResults(searchResults, previousResponse, context) {
 		context.similarMessage = "";
-		let botActionResult = this.processMessageHistoryForLLM(searchResults, true);
+		let botActionResult = this.llmHelper.processMessageHistory(searchResults, true);
 		context.messageContext.push({
 			content_type: "chat_search_result",
 			text: botActionResult,
 		});
 		let messages = await this.prepareMessages(context);
-		let newResponse = await this.backendHelper.callLLM(messages, context);
+		let newResponse = await this.llmHelper.callLLM(messages, context);
 		return this.processResponse(newResponse, context);
 	}
 
@@ -502,7 +361,7 @@ ${this.stickerHelper.getAvailableEmojis().join(",")}
 		});
 		let multiShotPrompt = "<tips>可以考虑是否需要进一步打开谷歌搜索结果URL</tips>";
 		let messages = await this.prepareMessages(context, multiShotPrompt);
-		let newResponse = await this.backendHelper.callLLM(messages, context);
+		let newResponse = await this.llmHelper.callLLM(messages, context);
 		return this.processResponse(newResponse, context);
 	}
 
@@ -528,7 +387,7 @@ ${webContent.truncated ? "网页内容超长被截断" : ""}
 			text: botActionResult,
 		});
 		let messages = await this.prepareMessages(context);
-		let newResponse = await this.backendHelper.callLLM(messages, context);
+		let newResponse = await this.llmHelper.callLLM(messages, context);
 		return this.processResponse(newResponse, context);
 	}
 
