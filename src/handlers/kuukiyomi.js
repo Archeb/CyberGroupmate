@@ -113,7 +113,7 @@ export class KuukiyomiHandler {
 			`<function>
 你可以使用以下函数和参数，一次可以调用多个函数，列表如下：`
 		);
-		if (decision.decisionType == "trigger") {
+		if (decision.decisionType == "random") {
 			userRoleMessages.push(`# 跳过（与用户无关，不回复）
 <chat_skip>
 </chat_skip>`);

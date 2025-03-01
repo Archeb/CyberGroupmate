@@ -130,7 +130,7 @@ export class ActionGenerator {
 			`<function>
 你可以使用以下函数和参数，一次可以调用多个函数，列表如下：`
 		);
-		if (context.responseDecision.decisionType != "trigger") {
+		if (context.responseDecision.decisionType == "random") {
 			userRoleMessages.push(`# 跳过（不回复，无参数）
 <chat_skip>
 </chat_skip>`);
@@ -289,7 +289,7 @@ ${this.stickerHelper.getAvailableEmojis().join(",")}
 							content_type: "chat_search_called",
 							text: `<keyword>${params.keyword}</keyword>`,
 						});
-						await this.handleRAGSearchResults(result, response, context);
+						await this.handleRAGSearchResults(result, context);
 						break;
 					case "web_search":
 						if (!params.keyword) {
@@ -306,7 +306,7 @@ ${this.stickerHelper.getAvailableEmojis().join(",")}
 							content_type: "web_search_called",
 							text: `<keyword>${params.keyword}</keyword>`,
 						});
-						await this.handleGoogleSearchResults(webResult, response, context);
+						await this.handleGoogleSearchResults(webResult, context);
 						break;
 
 					case "web_getcontent":
@@ -324,7 +324,7 @@ ${this.stickerHelper.getAvailableEmojis().join(",")}
 							content_type: "web_getcontent_called",
 							text: `<url>${params.url}</url>`,
 						});
-						await this.handleWebContent(webContent, response, context);
+						await this.handleWebContent(webContent, context);
 						break;
 
 					case "user_memories":
