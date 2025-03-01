@@ -106,7 +106,7 @@ bot.on("message", async (msg) => {
 					new Date(processedMsg.metadata.date || Date.now()) -
 						chatState.processingStartTime <
 						config.base.actionGenerator.interruptTimeout &&
-					chatState.retryCount < config.base.actionGenerator.maxRetryCount &&
+					chatState.interruptCount < config.base.actionGenerator.maxInterruptions &&
 					chatState.abortController
 				) {
 					// 触发中断
@@ -126,7 +126,7 @@ bot.on("message", async (msg) => {
 async function processMessage(msg, processedMsg, responseDecision, chatState) {
 	try {
 		chatState.isProcessing = true;
-		chatState.retryCount = 0; // 初始化重试计数
+		chatState.interruptCount = 0; // 初始化重试计数
 		chatState.processingStartTime = Date.now(); // 记录开始处理的时间
 		if (!chatState.abortController) chatState.abortController = new AbortController();
 
@@ -155,11 +155,11 @@ async function processMessage(msg, processedMsg, responseDecision, chatState) {
 			} catch (error) {
 				if (
 					error.message === "AbortError" &&
-					chatState.retryCount < config.base.actionGenerator.maxRetryCount
+					chatState.interruptCount < config.base.actionGenerator.maxInterruptions
 				) {
-					chatState.retryCount++;
+					chatState.interruptCount++;
 					chatState.abortController = null;
-					console.log(`处理被中断，开始第 ${chatState.retryCount} 次重试`);
+					console.log(`处理被中断，开始第 ${chatState.interruptCount} 次重试`);
 					continue;
 				}
 				throw error; // 其他错误或超过重试次数，抛出错误

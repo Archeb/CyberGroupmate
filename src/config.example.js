@@ -20,7 +20,8 @@ const config = {
 			systemPrompt: "你是一个群友",
 			jailbreakPrompt: "",
 			interruptTimeout: 5000, // 允许打断时间（在这段时间内收到新消息将会打断思考重新生成），单位ms，不可覆盖属性
-			maxRetryCount: 2, // 最大允许打断次数，不可覆盖属性
+			maxRetries: 3, // 最大LLM重试次数，不可覆盖属性
+			maxInterruptions: 2, // 最大允许打断次数，不可覆盖属性
 			maxAllowedDiff: 2, // 防重复配置，有多少个字差异的两句话会被视为相同。
 			maxStackDepth: 1, // 函数调用深度
 		},
