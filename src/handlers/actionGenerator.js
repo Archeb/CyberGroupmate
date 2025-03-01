@@ -22,7 +22,9 @@ export class ActionGenerator {
 			// 调用API（传递signal）
 			let response = await this.llmHelper.callLLM(
 				messages,
-				chatState?.abortController?.signal
+				chatState?.abortController?.signal,
+				this.chatConfig.actionGenerator.backend,
+				this.chatConfig.actionGenerator.maxRetries
 			);
 
 			// 如果已经被中断，直接返回
@@ -64,6 +66,7 @@ export class ActionGenerator {
 		let userRoleMessages = [];
 
 		// 添加近似RAG搜索结果，
+		/*
 		if (context.similarMessage) {
 			userRoleMessages.push(
 				"<related_notes>\n" +
@@ -71,6 +74,7 @@ export class ActionGenerator {
 					"\n</related_notes>"
 			);
 		}
+		*/
 
 		// 添加历史消息
 		userRoleMessages.push(
@@ -79,17 +83,41 @@ export class ActionGenerator {
 				"\n</chat_history>"
 		);
 
-		// 在添加历史消息之后，添加用户记忆
+		// 添加关联上下文(如果存在)
+		if (context.responseDecision?.relatedContext?.length > 0) {
+			userRoleMessages.push(
+				"<related_context>\n" +
+					context.responseDecision.relatedContext
+						.map((item) => `<${item.content_type}>${item.text}</${item.content_type}>`)
+						.join("\n") +
+					"\n</related_context>"
+			);
+		}
+
+		// 添加所有相关用户的记忆
 		if (["private", "mention", "trigger"].includes(context.responseDecision.decisionType)) {
-			// 获取最后一条消息的用户信息
-			const lastMessage = context.messageContext[context.messageContext.length - 1];
-			if (lastMessage?.metadata?.from?.id && lastMessage.content_type === "message") {
-				const userMemories = await this.ragHelper.getUserMemory(
-					lastMessage.metadata.from.id
-				);
+			// 从消息历史中收集所有唯一用户ID
+			const userIds = new Set();
+			context.messageContext.forEach((message) => {
+				if (message?.metadata?.from?.id && message.content_type === "message") {
+					userIds.add(message.metadata.from.id);
+				}
+			});
+
+			// 获取并添加每个用户的记忆
+			for (const userId of userIds) {
+				const userMemories = await this.ragHelper.getUserMemory(userId);
 				if (userMemories) {
+					// 找到该用户的最后一条消息以获取用户名信息
+					const userLastMessage = [...context.messageContext]
+						.reverse()
+						.find((msg) => msg?.metadata?.from?.id === userId);
+
+					const firstName = userLastMessage?.metadata?.from?.first_name || "";
+					const lastName = userLastMessage?.metadata?.from?.last_name || "";
+
 					userRoleMessages.push(
-						`<user_memories for="${lastMessage.metadata.from.first_name || ""}${lastMessage.metadata.from.last_name || ""}">` +
+						`<user_memories for="${firstName}${lastName}" userid="${userId}">` +
 							userMemories.text +
 							"\n</user_memories>"
 					);
@@ -99,7 +127,8 @@ export class ActionGenerator {
 
 		// 添加可用函数
 		userRoleMessages.push(
-			`<function>你可以使用以下函数和参数，一次可以调用多个函数，列表如下：`
+			`<function>
+你可以使用以下函数和参数，一次可以调用多个函数，列表如下：`
 		);
 		if (context.responseDecision.decisionType != "trigger") {
 			userRoleMessages.push(`# 跳过（不回复，无参数）
@@ -123,20 +152,20 @@ export class ActionGenerator {
 <note>要记录的内容</note>
 </chat_note> 
 
-# 使用语义检索聊天历史
+# 检索聊天记录
 <chat_search>
-<keyword>要搜索的多个关键词</keyword>
+<keyword>一个陈述句来描述你要搜索的内容</keyword>
 </chat_search>
 
 # 更新用户记忆
 <user_memories>
-<message_id>该用户的相关消息ID</message_id>
+<userid>该用户的UID</userid>
 <memories>要更新或者添加的长期记忆内容</memories>
 </user_memories>
 
 # 使用谷歌搜索互联网
 <web_search>
-<keyword>要搜索的多个关键词</keyword>
+<keyword>搜索关键词</keyword>
 </web_search>
 
 # 根据URL获取内容
@@ -193,11 +222,6 @@ ${this.stickerHelper.getAvailableEmojis().join(",")}
 
 			for (let call of functionCalls) {
 				let { function: funcName, params } = call;
-
-				// 检查是否已被中断
-				if (context.signal?.aborted) {
-					throw new Error("AbortError");
-				}
 
 				switch (funcName) {
 					case "chat_skip":
@@ -304,12 +328,12 @@ ${this.stickerHelper.getAvailableEmojis().join(",")}
 						break;
 
 					case "user_memories":
-						if (!params.message_id || !params.memories) {
+						if (!params.userid || !params.memories) {
 							console.warn("更新用户记忆缺少必要参数");
 							continue;
 						}
 						let memoryResult = await this.botActionHelper.updateMemory(
-							params.message_id,
+							params.userid,
 							params.memories
 						);
 						if (this.chatConfig.debug) {
@@ -330,7 +354,7 @@ ${this.stickerHelper.getAvailableEmojis().join(",")}
 	/**
 	 * 处理历史搜索结果
 	 */
-	async handleRAGSearchResults(searchResults, previousResponse, context) {
+	async handleRAGSearchResults(searchResults, context) {
 		context.similarMessage = "";
 		let botActionResult = this.llmHelper.processMessageHistory(searchResults, true);
 		context.messageContext.push({
@@ -338,14 +362,19 @@ ${this.stickerHelper.getAvailableEmojis().join(",")}
 			text: botActionResult,
 		});
 		let messages = await this.prepareMessages(context);
-		let newResponse = await this.llmHelper.callLLM(messages, context);
+		let newResponse = await this.llmHelper.callLLM(
+			messages,
+			context,
+			this.chatConfig.actionGenerator.backend,
+			this.chatConfig.actionGenerator.maxRetries
+		);
 		return this.processResponse(newResponse, context);
 	}
 
 	/**
 	 * 处理谷歌搜索结果
 	 */
-	async handleGoogleSearchResults(searchResults, previousResponse, context) {
+	async handleGoogleSearchResults(searchResults, context) {
 		context.similarMessage = "";
 		let botActionResult;
 		for (let item of searchResults) {
@@ -361,14 +390,19 @@ ${this.stickerHelper.getAvailableEmojis().join(",")}
 		});
 		let multiShotPrompt = "<tips>可以考虑是否需要进一步打开谷歌搜索结果URL</tips>";
 		let messages = await this.prepareMessages(context, multiShotPrompt);
-		let newResponse = await this.llmHelper.callLLM(messages, context);
+		let newResponse = await this.llmHelper.callLLM(
+			messages,
+			context,
+			this.chatConfig.actionGenerator.backend,
+			this.chatConfig.actionGenerator.maxRetries
+		);
 		return this.processResponse(newResponse, context);
 	}
 
 	/**
 	 * 处理网页打开结果
 	 */
-	async handleWebContent(webContent, previousResponse, context) {
+	async handleWebContent(webContent, context) {
 		context.similarMessage = "";
 		let botActionResult;
 		if (webContent.success) {
@@ -387,7 +421,12 @@ ${webContent.truncated ? "网页内容超长被截断" : ""}
 			text: botActionResult,
 		});
 		let messages = await this.prepareMessages(context);
-		let newResponse = await this.llmHelper.callLLM(messages, context);
+		let newResponse = await this.llmHelper.callLLM(
+			messages,
+			context,
+			this.chatConfig.actionGenerator.backend,
+			this.chatConfig.actionGenerator.maxRetries
+		);
 		return this.processResponse(newResponse, context);
 	}
 

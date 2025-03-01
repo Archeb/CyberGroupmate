@@ -6,26 +6,19 @@
 
 目前只支持 Telegram
 
-## 预览
-
-| ![image](https://github.com/user-attachments/assets/2910ab4c-7e89-4703-848b-ae649ce14eaf) | ![image](https://github.com/user-attachments/assets/77a27811-5269-42f0-9028-b98bc35f7917) |
-| ------------- | ------------- |
-
-https://github.com/user-attachments/assets/627ddc6e-7ce5-41e5-9ef3-d1aee0c30c8b 
-
 ## 功能特点
 
--   对每个群友的记忆
--   图像识别和分析
--   发表情包
--   读空气（智能的对话管理和响应机制）
--   可配置的响应策略
--   消息历史记录搜索、联网搜索，以及更多tool use
+- 对每个群友的记忆
+- 图像识别和分析
+- 发表情包
+- 读空气（智能的对话管理和响应机制）
+- 可配置的响应策略
+- 消息历史记录搜索、联网搜索，以及更多tool use
 
 ## 技术栈
 
--   Node.js
--   PostgreSQL + pgvector
+- Node.js
+- PostgreSQL + pgvector
 
 ## 安装
 
@@ -53,9 +46,9 @@ cp src/config.example.js src/config.js
 
 主要配置文件位于`src/config.example.js`，分为三层配置项：
 
--   基础配置（base）
--   聊天集配置（collections）
--   聊天配置（chats）
+- 基础配置（base）
+- 聊天集配置（collections）
+- 聊天配置（chats）
 
 请先复制一份为 config.js 然后再编辑。collections/chats 配置可以覆盖基础配置
 
@@ -70,6 +63,13 @@ src/
 ├── helpers/               # 辅助功能
 └── managers/              # 管理器
 ```
+
+## 群聊效果
+
+| ![image](https://github.com/user-attachments/assets/2910ab4c-7e89-4703-848b-ae649ce14eaf) | ![image](https://github.com/user-attachments/assets/77a27811-5269-42f0-9028-b98bc35f7917) |
+| ----------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+
+https://github.com/user-attachments/assets/627ddc6e-7ce5-41e5-9ef3-d1aee0c30c8b
 
 ## 许可证
 

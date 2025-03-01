@@ -105,10 +105,10 @@ export class BotActionHelper {
 		await this.ragHelper.saveAction(chatId, content, type, additionalMetadata);
 	}
 
-	async search(chatId, keyword) {
+	async search(chatId, keyword, contentTypes = ["message", "reply", "note"]) {
 		const searchResults = await this.ragHelper.searchSimilarContent(chatId, keyword, {
 			limit: 5,
-			contentTypes: ["message", "reply"],
+			contentTypes: contentTypes,
 			withContext: 3,
 		});
 		return searchResults;
@@ -137,7 +137,7 @@ export class BotActionHelper {
 		}
 	}
 
-	async updateMemory(messageId, updatePrompt) {
+	async updateMemory(userId, message, updatePrompt) {
 		try {
 			// 构建系统提示词
 			const systemPromptWhenCreate = `你是一个记忆管理助手。你的任务是根据用户的指示来创建记忆。
@@ -147,11 +147,8 @@ export class BotActionHelper {
 记忆应该是简洁、客观的描述，避免主观评价。
 直接输出最终的记忆内容，不需要其他解释。"`;
 
-			// 根据messageId从ragHelper中获取用户相关信息，从而获取用户ID
-			const message = await this.ragHelper.getMessage(messageId);
-			const userId = message.metadata?.from?.id;
 			if (!userId) {
-				throw new Error("无法获取用户ID");
+				throw new Error("用户ID为空");
 			}
 			// 获取现有记忆
 			const memoryRecord = await this.ragHelper.getUserMemory(userId);
@@ -162,10 +159,10 @@ export class BotActionHelper {
 			let prompt;
 			if (currentMemory) {
 				systemPrompt = systemPromptWhenEdit;
-				prompt = `现有记忆：${currentMemory}\n\n记忆相关聊天记录：${message.text}\n\n更新记忆要求：${updatePrompt}`;
+				prompt = `现有记忆：${currentMemory}\n\n更新记忆要求：${updatePrompt}`;
 			} else {
 				systemPrompt = systemPromptWhenCreate;
-				prompt = `记忆相关聊天记录：${message.text}\n\n创建记忆要求：${updatePrompt}`;
+				prompt = `创建记忆要求：${updatePrompt}`;
 			}
 
 			// 调用 GPT-4 生成新记忆

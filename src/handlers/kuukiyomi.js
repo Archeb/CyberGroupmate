@@ -1,8 +1,14 @@
+import { LLMHelper } from "../helpers/llmHelper.js";
+
 export class KuukiyomiHandler {
-	constructor(chatConfig = {}) {
+	constructor(chatConfig, ragHelper, botActionHelper) {
 		// 初始化基础配置
 		this.chatConfig = chatConfig;
 		this.config = chatConfig.kuukiyomi;
+
+		this.llmHelper = new LLMHelper(chatConfig, botActionHelper);
+		this.botActionHelper = botActionHelper;
+		this.ragHelper = ragHelper;
 
 		// 初始化状态追踪
 		this.initializeStateTracking();
@@ -39,7 +45,206 @@ export class KuukiyomiHandler {
 	}
 
 	/**
-	 * 判断是否应该响应消息
+	 * 前置思考
+	 */
+	async consider(processedMsg) {
+		const decision = this.shouldAct(processedMsg);
+		if (this.chatConfig.debug) console.log("响应决策：", decision);
+		if (!decision.shouldAct) return decision;
+
+		try {
+			// 如果满足机械响应条件，进一步思考
+
+			// 提取上下文
+			let msgHistory = await this.ragHelper.getMessageContext(
+				processedMsg.metadata.chat.id,
+				processedMsg.message_id,
+				25
+			);
+
+			// 准备prompt
+			let messages = await this.prepareMessages(msgHistory, decision);
+
+			// 调用API（传递signal）
+			let response = await this.llmHelper.callLLM(
+				messages,
+				null,
+				this.chatConfig.kuukiyomi.backend,
+				3
+			);
+
+			// 处理响应
+			return await this.processResponse(processedMsg, response, decision);
+		} catch (error) {
+			console.error("读空气思考失败:", error);
+			throw error;
+		}
+	}
+
+	/**
+	 * 准备发送给LLM的消息
+	 */
+	async prepareMessages(msgHistory, decision) {
+		// 添加系统提示词，这里用system role
+		let messages = [
+			{
+				role: "system",
+				content:
+					this.chatConfig.kuukiyomi.analyzeSystemPrompt +
+					`<facts>
+现在的时间是${new Date().toLocaleString("zh-CN", { timeZone: this.chatConfig.actionGenerator.timeZone })}
+当前唤起场景为${decision.scene}。
+</facts>`,
+			},
+		];
+
+		//从这里开始用 user role，所有消息先用回车分隔，最后再合并到 user role message 里
+		let userRoleMessages = [];
+
+		// 添加历史消息
+		userRoleMessages.push(
+			"<chat_history>\n" +
+				this.llmHelper.processMessageHistory(msgHistory, true, true) +
+				"\n</chat_history>"
+		);
+
+		// 添加可用函数
+		userRoleMessages.push(
+			`<function>
+你可以使用以下函数和参数，一次可以调用多个函数，列表如下：`
+		);
+		if (decision.decisionType == "trigger") {
+			userRoleMessages.push(`# 跳过（与用户无关，不回复）
+<chat_skip>
+</chat_skip>`);
+		}
+		userRoleMessages.push(`
+# 检索聊天记录
+<chat_search>
+<keyword>一个陈述句来描述你要搜索的内容</keyword>
+</chat_search>
+
+# 使用谷歌搜索互联网
+<web_search>
+<keyword>搜索关键词</keyword>
+</web_search>
+
+# 根据URL获取内容
+<web_getcontent>
+<url>要访问的url</url>
+</web_getcontent>
+</function>
+`);
+
+		// 添加任务
+		userRoleMessages.push(this.chatConfig.kuukiyomi.analyzeTaskPrompt);
+
+		// 将所有用户消息合并
+		messages.push({ role: "user", content: userRoleMessages.join("\n") });
+
+		return messages;
+	}
+
+	/**
+	 * 处理LLM的响应
+	 */
+	async processResponse(processedMsg, response, decision) {
+		if (!response) return;
+
+		try {
+			let extractResult = this.llmHelper.extractFunctionCalls(
+				response,
+				["chat_skip", "chat_search", "web_search", "web_getcontent"],
+				[]
+			);
+			let functionCalls = extractResult.functionCalls;
+			response = extractResult.response;
+
+			decision.relatedContext = []; // 相关信息
+
+			for (let call of functionCalls) {
+				let { function: funcName, params } = call;
+
+				switch (funcName) {
+					case "chat_skip":
+						decision.shouldAct = false;
+						decision.decisionType = "skip";
+						break;
+					case "chat_search":
+						if (!params.keyword) {
+							console.warn("搜索缺少关键词参数");
+							continue;
+						}
+						let result = await this.botActionHelper.search(
+							processedMsg.metadata.chat.id,
+							params.keyword
+						);
+						if (this.chatConfig.debug) console.log("history搜索结果：", result);
+						decision.relatedContext.push({
+							content_type: "chat_search_result",
+							text: this.llmHelper.processMessageHistory(result, true),
+						});
+						break;
+
+					case "web_search":
+						if (!params.keyword) {
+							console.warn("搜索缺少关键词参数");
+							continue;
+						}
+						let webResult = await this.botActionHelper.googleSearch(params.keyword);
+						if (this.chatConfig.debug) console.log("web搜索结果：", webResult);
+						let searchResultText = `Web搜索关键词：${params.keyword}。搜索结果：`;
+						for (let item of webResult) {
+							searchResultText += `<title>${item.title}</title>
+<url>${item.link}</url>
+<snippet>${item.snippet}</snippet>
+`;
+						}
+
+						decision.relatedContext.push({
+							content_type: "web_search_result",
+							text: searchResultText,
+						});
+
+						break;
+
+					case "web_getcontent":
+						if (!params.url) {
+							console.warn("访问网页缺少URL参数");
+							continue;
+						}
+						let webContent = await this.botActionHelper.openURL(params.url);
+						if (this.chatConfig.debug) console.log("打开网页结果", webContent);
+						let webContentText = "打开了URL " + params.url + " 结果：";
+						if (webContent.success) {
+							webContentText = `
+<title>${webContent.title}</title>
+<content>
+${webContent.content}
+${webContent.truncated ? "网页内容超长被截断" : ""}
+</content>
+`;
+						} else {
+							webContentText = `URL打开失败`;
+						}
+						decision.relatedContext.push({
+							content_type: "web_getcontent_result",
+							text: webContentText,
+						});
+
+						break;
+				}
+			}
+
+			return decision;
+		} catch (error) {
+			console.error("处理读空气思考响应出错:", error);
+			throw error;
+		}
+	}
+
+	/**
+	 * 判断是否应该响应（机械响应条件）
 	 */
 	shouldAct(processedMsg) {
 		const result = {
@@ -150,21 +355,14 @@ export class KuukiyomiHandler {
 		return this.config.ignoreWords.some((word) => text.includes(word));
 	}
 
-	/**
-	 * 重置特定聊天的冷却时间
-	 */
-	resetCooldown(chatId) {
-		this.lastResponseTime.delete(chatId);
-	}
-
-	// 添加新方法：启动衰减计时器
+	// 衰减计时器
 	startDecayTimer() {
 		setInterval(() => {
 			this.adjustResponseRate();
 		}, this.rateAdjustment.decayInterval);
 	}
 
-	// 添加新方法：计算响应率
+	// 计算响应率
 	calculateNewResponseRate() {
 		const timeSinceLastInteraction = (Date.now() - this.stats.lastInteractionTime) / 60000; // 转换为分钟
 		const decayFactor = Math.max(
@@ -196,7 +394,7 @@ export class KuukiyomiHandler {
 		);
 	}
 
-	// 添加新方法：调整响应率
+	// 调整响应率
 	adjustResponseRate() {
 		this.currentResponseRate = this.calculateNewResponseRate();
 

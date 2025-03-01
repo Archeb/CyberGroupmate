@@ -12,14 +12,13 @@ export class LLMHelper {
 	/**
 	 * 调用LLM API
 	 */
-	async callLLM(messages, signal) {
+	async callLLM(messages, signal, backend, maxRetries = 3) {
 		let lastError;
 
-		for (let attempt = 0; attempt < this.chatConfig.actionGenerator.maxRetries; attempt++) {
+		for (let attempt = 0; attempt < maxRetries; attempt++) {
 			try {
 				// 轮询选择backend配置
-				const backends = this.chatConfig.actionGenerator.backend;
-				const backendConfig = backends[this.currentBackendIndex % backends.length];
+				const backendConfig = backend[this.currentBackendIndex % backend.length];
 
 				// 使用选中的backend配置初始化OpenAI客户端
 				let openai = new OpenAI({
@@ -46,7 +45,7 @@ export class LLMHelper {
 				}
 
 				let completion = await openai.chat.completions.create(completionParams, {
-					signal: signal,
+					signal: signal || undefined,
 				});
 
 				this.currentBackendIndex++; // 递增索引
@@ -101,7 +100,7 @@ export class LLMHelper {
 				this.currentBackendIndex++; // 失败时也递增索引，切换到下一个后端
 
 				// 如果这是最后一次尝试，则抛出错误
-				if (attempt === this.chatConfig.actionGenerator.maxRetries - 1) {
+				if (attempt === maxRetries - 1) {
 					throw new Error(`所有重试都失败。最后一次错误: ${lastError.message}`);
 				}
 
@@ -235,9 +234,9 @@ export class LLMHelper {
 				if (metadata.reply_to_message) {
 					let replyMeta = metadata.reply_to_message;
 					let replyUserIdentifier = `${replyMeta.from.first_name || ""}${replyMeta.from.last_name || ""}`;
-					return `<message id="${item.message_id}" user="${userIdentifier}"${timeStr}><reply_to user="${replyUserIdentifier}">${replyMeta.text || "[媒体内容]"}</reply_to>${item.text}</message>`;
+					return `<message id="${item.message_id}" user="${userIdentifier}" userid="${replyMeta.from.id}"${timeStr}><reply_to user="${replyUserIdentifier}">${replyMeta.text || "[媒体内容]"}</reply_to>${item.text}</message>`;
 				} else {
-					return `<message id="${item.message_id}" user="${userIdentifier}"${timeStr}>${item.text}</message>`;
+					return `<message id="${item.message_id}" user="${userIdentifier}" userid="${metadata.from.id}"${timeStr}>${item.text}</message>`;
 				}
 			} else {
 				// 处理bot的actions (note, reply, search等)

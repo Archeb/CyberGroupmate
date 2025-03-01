@@ -17,6 +17,18 @@ const bot = new TelegramBot(config.base.telegram.botToken, {
 	polling: true,
 });
 
+// 创建全局辅助实例
+const ragHelper = new RAGHelper(config.base);
+const visionHelper = new VisionHelper(config.base, bot, ragHelper);
+const stickerHelper = new StickerHelper(config.base, bot);
+const botActionHelper = new BotActionHelper(
+	config.base,
+	bot,
+	ragHelper,
+	stickerHelper,
+	visionHelper
+);
+
 // 聊天状态管理
 const chatStates = new Map();
 
@@ -25,7 +37,7 @@ function getChatState(chatId) {
 		const chatConfig = configManager.getChatConfig(chatId);
 		if (!chatConfig) return null;
 
-		let kuukiyomiHandler = new KuukiyomiHandler(chatConfig);
+		let kuukiyomiHandler = new KuukiyomiHandler(chatConfig, ragHelper, botActionHelper);
 		let actionGenerator = new ActionGenerator(
 			chatConfig,
 			botActionHelper,
@@ -46,18 +58,6 @@ function getChatState(chatId) {
 	}
 	return chatStates.get(chatId);
 }
-
-// 创建全局辅助实例
-const ragHelper = new RAGHelper(config.base);
-const visionHelper = new VisionHelper(config.base, bot, ragHelper);
-const stickerHelper = new StickerHelper(config.base, bot);
-const botActionHelper = new BotActionHelper(
-	config.base,
-	bot,
-	ragHelper,
-	stickerHelper,
-	visionHelper
-);
 
 // 错误处理
 bot.on("polling_error", (error) => {
@@ -87,9 +87,7 @@ bot.on("message", async (msg) => {
 		await ragHelper.saveMessage(processedMsg);
 
 		// 获取响应决策
-		const responseDecision = chatState.kuukiyomi.shouldAct(processedMsg);
-
-		if (config.base.debug) console.log("响应决策：", responseDecision);
+		const responseDecision = await chatState.kuukiyomi.consider(processedMsg);
 
 		if (responseDecision.shouldAct) {
 			if (chatState.isProcessing) {
