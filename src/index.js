@@ -87,7 +87,9 @@ bot.on("message", async (msg) => {
 		await ragHelper.saveMessage(processedMsg);
 
 		// 获取响应决策
-		const responseDecision = await chatState.kuukiyomi.consider(processedMsg);
+		const responseDecision = await chatState.kuukiyomi.shouldAct(processedMsg);
+
+		if (config.base.debug) console.log("响应决策：", responseDecision);
 
 		if (responseDecision.shouldAct) {
 			if (chatState.isProcessing) {
@@ -120,7 +122,6 @@ bot.on("message", async (msg) => {
 	}
 });
 
-// 修改消息处理函数以使用 chatState
 async function processMessage(msg, processedMsg, responseDecision, chatState) {
 	try {
 		chatState.isProcessing = true;
@@ -139,6 +140,13 @@ async function processMessage(msg, processedMsg, responseDecision, chatState) {
 					}),
 					ragHelper.getMessageContext(msg.chat.id, msg.message_id, 25),
 				]);
+
+				// 读空气思考
+				responseDecision = await chatState.kuukiyomi.consider(
+					responseDecision,
+					processedMsg
+				);
+				if (!responseDecision.shouldAct) break;
 
 				await chatState.actionGenerator.generateAction(
 					{
