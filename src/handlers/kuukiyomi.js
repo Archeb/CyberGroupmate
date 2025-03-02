@@ -198,7 +198,8 @@ export class KuukiyomiHandler {
 						}
 						let webResult = await this.botActionHelper.googleSearch(params.keyword);
 						if (this.chatConfig.debug) console.log("web搜索结果：", webResult);
-						let searchResultText = `Web搜索关键词：${params.keyword}。搜索结果：`;
+						let searchResultText =
+							"Web搜索关键词：" + params.keyword + "。搜索结果：\n";
 						for (let item of webResult) {
 							searchResultText += `<title>${item.title}</title>
 <url>${item.link}</url>
