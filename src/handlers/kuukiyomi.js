@@ -45,16 +45,12 @@ export class KuukiyomiHandler {
 	}
 
 	/**
-	 * 前置思考
+	 * 读空气思考
 	 */
-	async consider(processedMsg) {
-		const decision = this.shouldAct(processedMsg);
-		if (this.chatConfig.debug) console.log("响应决策：", decision);
+	async consider(decision, processedMsg) {
 		if (!decision.shouldAct) return decision;
 
 		try {
-			// 如果满足机械响应条件，进一步思考
-
 			// 提取上下文
 			let msgHistory = await this.ragHelper.getMessageContext(
 				processedMsg.metadata.chat.id,
@@ -111,7 +107,7 @@ export class KuukiyomiHandler {
 		// 添加可用函数
 		userRoleMessages.push(
 			`<function>
-你可以使用以下函数和参数，一次可以调用多个函数，列表如下：`
+你可以使用以下函数和参数，一次调用多个函数，列表如下：`
 		);
 		if (decision.decisionType == "random") {
 			userRoleMessages.push(`# 跳过（与用户无关，不回复）
@@ -119,7 +115,7 @@ export class KuukiyomiHandler {
 </chat_skip>`);
 		}
 		userRoleMessages.push(`
-# 检索聊天记录
+# 检索聊天回忆
 <chat_search>
 <keyword>一个陈述句来描述你要搜索的内容</keyword>
 </chat_search>
@@ -175,11 +171,20 @@ export class KuukiyomiHandler {
 							console.warn("搜索缺少关键词参数");
 							continue;
 						}
-						let result = await this.botActionHelper.search(
+						let result = await this.ragHelper.searchSimilarContent(
 							processedMsg.metadata.chat.id,
-							params.keyword
+							params.keyword,
+							{
+								limit: 10,
+								contentTypes: ["note"],
+								timeWindow: "99 years",
+							}
 						);
 						if (this.chatConfig.debug) console.log("history搜索结果：", result);
+						decision.relatedContext.push({
+							content_type: "chat_search_called",
+							text: `<keyword>${params.keyword}</keyword>`,
+						});
 						decision.relatedContext.push({
 							content_type: "chat_search_result",
 							text: this.llmHelper.processMessageHistory(result, true),
@@ -263,6 +268,7 @@ ${webContent.truncated ? "网页内容超长被截断" : ""}
 				result.decisionType = "private";
 				result.scene = "当前唤起场景为私聊";
 				this.adjustResponseRate(); // 调整响应率
+				this.lastResponseTime.set(processedMsg.chat_id, Date.now());
 				return result;
 			}
 
@@ -278,6 +284,7 @@ ${webContent.truncated ? "网页内容超长被截断" : ""}
 				result.decisionType = "mention";
 				result.scene = "当前唤起场景为被提及或回复";
 				this.adjustResponseRate(); // 调整响应率
+				this.lastResponseTime.set(processedMsg.chat_id, Date.now());
 				return result;
 			}
 
@@ -290,6 +297,7 @@ ${webContent.truncated ? "网页内容超长被截断" : ""}
 				result.decisionType = "trigger";
 				result.scene = `当前唤起场景为触发词匹配："${matchedTriggerWord}"`;
 				this.adjustResponseRate(); // 调整响应率
+				this.lastResponseTime.set(processedMsg.chat_id, Date.now());
 				return result;
 			}
 
@@ -311,6 +319,8 @@ ${webContent.truncated ? "网页内容超长被截断" : ""}
 				result.decisionType = "random";
 				result.scene =
 					"随机触发，请谨慎发言。对于已经有人在讨论的话题，不要乱接话，避免反感。";
+
+				this.lastResponseTime.set(processedMsg.chat_id, Date.now());
 				return result;
 			}
 
@@ -334,7 +344,6 @@ ${webContent.truncated ? "网页内容超长被截断" : ""}
 			return false;
 		}
 
-		this.lastResponseTime.set(chatId, now);
 		return true;
 	}
 

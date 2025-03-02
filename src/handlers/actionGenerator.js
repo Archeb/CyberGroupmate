@@ -65,7 +65,7 @@ export class ActionGenerator {
 		//从这里开始用 user role，所有消息先用回车分隔，最后再合并到 user role message 里
 		let userRoleMessages = [];
 
-		// 添加近似RAG搜索结果，
+		// 添加近似RAG搜索结果
 		/*
 		if (context.similarMessage) {
 			userRoleMessages.push(
@@ -149,7 +149,7 @@ export class ActionGenerator {
 
 # 群聊笔记，用符合心情的语气记录
 <chat_note>
-<note>要记录的内容</note>
+<note>要记录的事件、参与者和你的想法</note>
 </chat_note> 
 
 # 检索聊天记录
@@ -175,7 +175,7 @@ export class ActionGenerator {
 </function>
 `);
 		userRoleMessages.push(`<available_stickers>
-偶尔可以在你的回复中包含以下 emoji 来发送贴纸（最多1个，不能用其它的）：
+偶尔可以在你的回复末尾中包含以下 emoji 来发送贴纸（最多1个，不能用其它的）：
 ${this.stickerHelper.getAvailableEmojis().join(",")}
 </available_stickers>`);
 
@@ -364,7 +364,7 @@ ${this.stickerHelper.getAvailableEmojis().join(",")}
 		let messages = await this.prepareMessages(context);
 		let newResponse = await this.llmHelper.callLLM(
 			messages,
-			context,
+			null,
 			this.chatConfig.actionGenerator.backend,
 			this.chatConfig.actionGenerator.maxRetries
 		);
@@ -392,7 +392,7 @@ ${this.stickerHelper.getAvailableEmojis().join(",")}
 		let messages = await this.prepareMessages(context, multiShotPrompt);
 		let newResponse = await this.llmHelper.callLLM(
 			messages,
-			context,
+			null,
 			this.chatConfig.actionGenerator.backend,
 			this.chatConfig.actionGenerator.maxRetries
 		);
@@ -423,7 +423,7 @@ ${webContent.truncated ? "网页内容超长被截断" : ""}
 		let messages = await this.prepareMessages(context);
 		let newResponse = await this.llmHelper.callLLM(
 			messages,
-			context,
+			null,
 			this.chatConfig.actionGenerator.backend,
 			this.chatConfig.actionGenerator.maxRetries
 		);

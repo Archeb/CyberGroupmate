@@ -106,6 +106,7 @@ export class LLMHelper {
 
 				// 如果还有重试机会，则继续下一次循环
 				if (this.chatConfig.debug) {
+					console.log(error);
 					console.log(`第 ${attempt + 1} 次调用失败，切换后端重试...`);
 				}
 
