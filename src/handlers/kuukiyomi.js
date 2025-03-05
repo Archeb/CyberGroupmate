@@ -117,13 +117,13 @@ export class KuukiyomiHandler {
 		userRoleMessages.push(`
 # 检索聊天回忆
 <chat_search>
-<keyword>一个陈述句来描述你要搜索的内容</keyword>
+<keyword>搜索关键词</keyword>
 </chat_search>
 
-# 使用谷歌搜索互联网
-<web_search>
-<keyword>搜索关键词</keyword>
-</web_search>
+# 联网获取答案
+<get_quick_answer>
+<keyword>陈述句描述你要提问的内容</keyword>
+</get_quick_answer>
 
 # 根据URL获取内容
 <web_getcontent>
@@ -150,7 +150,7 @@ export class KuukiyomiHandler {
 		try {
 			let extractResult = this.llmHelper.extractFunctionCalls(
 				response,
-				["chat_skip", "chat_search", "web_search", "web_getcontent"],
+				["chat_skip", "chat_search", "get_quick_answer", "web_getcontent"],
 				[]
 			);
 			let functionCalls = extractResult.functionCalls;
@@ -191,26 +191,19 @@ export class KuukiyomiHandler {
 						});
 						break;
 
-					case "web_search":
+					case "get_quick_answer":
 						if (!params.keyword) {
 							console.warn("搜索缺少关键词参数");
 							continue;
 						}
-						let webResult = await this.botActionHelper.googleSearch(params.keyword);
-						if (this.chatConfig.debug) console.log("web搜索结果：", webResult);
-						let searchResultText =
-							"Web搜索关键词：" + params.keyword + "。搜索结果：\n";
-						for (let item of webResult) {
-							searchResultText += `<title>${item.title}</title>
-<url>${item.link}</url>
-<snippet>${item.snippet}</snippet>
-`;
+						let answerResult = await this.botActionHelper.quickAnswer(params.keyword);
+						if (this.chatConfig.debug) console.log("联网获取答案结果：", answerResult);
+						if (answerResult.success) {
+							decision.relatedContext.push({
+								content_type: "get_quick_answer_result",
+								text: answerResult.answer,
+							});
 						}
-
-						decision.relatedContext.push({
-							content_type: "web_search_result",
-							text: searchResultText,
-						});
 
 						break;
 

@@ -1,4 +1,5 @@
 import OpenAI from "openai";
+import { DynamicRetrievalMode, GoogleGenerativeAI } from "@google/generative-ai";
 import { Readability } from "@mozilla/readability";
 import { JSDOM } from "jsdom";
 
@@ -134,6 +135,44 @@ export class BotActionHelper {
 		} catch (error) {
 			console.error("搜索出错:", error);
 			return [];
+		}
+	}
+
+	async quickAnswer(query, dynamicThreshold = 0.4) {
+		try {
+			// 1. 初始化 Gemini
+			const genAI = new GoogleGenerativeAI(this.chatConfig.gemini.apiKey);
+			const model = genAI.getGenerativeModel(
+				{
+					model: this.chatConfig.gemini.model,
+					tools: [
+						{
+							googleSearch: {},
+						},
+					],
+				},
+				{ apiVersion: "v1beta" }
+			);
+
+			// 2. 生成回答
+			const result = await model.generateContent(query);
+			console.log(result.response.candidates[0]);
+
+			// 3. 提取回答
+			const answer = result.response.candidates[0].content.parts
+				.map((part) => part.text)
+				.join(" ");
+
+			return {
+				success: true,
+				answer: answer,
+			};
+		} catch (error) {
+			console.error("快速回答生成失败:", error);
+			return {
+				success: false,
+				error: error.message,
+			};
 		}
 	}
 

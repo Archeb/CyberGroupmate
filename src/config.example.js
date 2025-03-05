@@ -74,9 +74,13 @@ const config = {
 			},
 		},
 		google: {
-			// Google Custom Search JSON API
-			apiKey: "YOUR_GOOGLE_API_KEY",
-			cseId: "YOUR_GOOGLE_CSE_ID",
+			apiKey: "GOOELE_SEARCH_API_KEY",
+			cseId: "GOOGLE_CSE_ID",
+		},
+		gemini: {
+			// 基于 gemini grounding with google search 快速联网获取答案
+			apiKey: "GEMINI_API_KEY",
+			model: "models/gemini-2.0-flash",
 		},
 		kuukiyomi: {
 			analyzeSystemPrompt: `<personality>
