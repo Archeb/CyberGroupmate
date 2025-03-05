@@ -66,14 +66,15 @@ export class KuukiyomiHandler {
 				messages,
 				null,
 				this.chatConfig.kuukiyomi.backend,
-				3
+				1
 			);
 
 			// 处理响应
 			return await this.processResponse(processedMsg, response, decision);
 		} catch (error) {
 			console.error("读空气思考失败:", error);
-			throw error;
+			// 读空气失败就让主模型读
+			return decision;
 		}
 	}
 

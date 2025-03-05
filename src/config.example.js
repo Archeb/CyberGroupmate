@@ -49,6 +49,7 @@ const config = {
 				apiKey: "YOUR_OPENAI_API_KEY",
 				baseURL: "https://api.openai.com/v1",
 				model: "gpt-4o", // 需要能识别图片的模型
+				type: "openai", // 可以是 "openai" 或者 "google"，google的默认禁用安全过滤器，无需baseURL。
 			},
 		},
 		postgres: {
