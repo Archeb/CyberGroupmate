@@ -116,9 +116,9 @@ export class KuukiyomiHandler {
 		}
 		userRoleMessages.push(`
 # 检索聊天回忆
-<chat_search>
-<keyword>搜索关键词</keyword>
-</chat_search>
+<chat_history>
+<keyword>回忆关键词</keyword>
+</chat_history>
 
 # 联网获取答案
 <get_quick_answer>
@@ -150,7 +150,7 @@ export class KuukiyomiHandler {
 		try {
 			let extractResult = this.llmHelper.extractFunctionCalls(
 				response,
-				["chat_skip", "chat_search", "get_quick_answer", "web_getcontent"],
+				["chat_skip", "chat_history", "get_quick_answer", "web_getcontent"],
 				[]
 			);
 			let functionCalls = extractResult.functionCalls;
@@ -166,9 +166,9 @@ export class KuukiyomiHandler {
 						decision.shouldAct = false;
 						decision.decisionType = "skip";
 						break;
-					case "chat_search":
+					case "chat_history":
 						if (!params.keyword) {
-							console.warn("搜索缺少关键词参数");
+							console.warn("回忆缺少关键词参数");
 							continue;
 						}
 						let result = await this.ragHelper.searchSimilarContent(
@@ -182,11 +182,11 @@ export class KuukiyomiHandler {
 						);
 						if (this.chatConfig.debug) console.log("history搜索结果：", result);
 						decision.relatedContext.push({
-							content_type: "chat_search_called",
+							content_type: "chat_history_called",
 							text: `<keyword>${params.keyword}</keyword>`,
 						});
 						decision.relatedContext.push({
-							content_type: "chat_search_result",
+							content_type: "chat_history_result",
 							text: this.llmHelper.processMessageHistory(result, true),
 						});
 						break;
