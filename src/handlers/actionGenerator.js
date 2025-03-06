@@ -95,33 +95,32 @@ export class ActionGenerator {
 		}
 
 		// 添加所有相关用户的记忆
-		if (["private", "mention", "trigger"].includes(context.responseDecision.decisionType)) {
-			// 从消息历史中收集所有唯一用户ID
-			const userIds = new Set();
-			context.messageContext.forEach((message) => {
-				if (message?.metadata?.from?.id && message.content_type === "message") {
-					userIds.add(message.metadata.from.id);
-				}
-			});
 
-			// 获取并添加每个用户的记忆
-			for (const userId of userIds) {
-				const userMemories = await this.ragHelper.getUserMemory(userId);
-				if (userMemories) {
-					// 找到该用户的最后一条消息以获取用户名信息
-					const userLastMessage = [...context.messageContext]
-						.reverse()
-						.find((msg) => msg?.metadata?.from?.id === userId);
+		// 从消息历史中收集所有唯一用户ID
+		const userIds = new Set();
+		context.messageContext.forEach((message) => {
+			if (message?.metadata?.from?.id && message.content_type === "message") {
+				userIds.add(message.metadata.from.id);
+			}
+		});
 
-					const firstName = userLastMessage?.metadata?.from?.first_name || "";
-					const lastName = userLastMessage?.metadata?.from?.last_name || "";
+		// 获取并添加每个用户的记忆
+		for (const userId of userIds) {
+			const userMemories = await this.ragHelper.getUserMemory(userId);
+			if (userMemories) {
+				// 找到该用户的最后一条消息以获取用户名信息
+				const userLastMessage = [...context.messageContext]
+					.reverse()
+					.find((msg) => msg?.metadata?.from?.id === userId);
 
-					userRoleMessages.push(
-						`<user_memories for="${firstName}${lastName}" userid="${userId}">` +
-							userMemories.text +
-							"\n</user_memories>"
-					);
-				}
+				const firstName = userLastMessage?.metadata?.from?.first_name || "";
+				const lastName = userLastMessage?.metadata?.from?.last_name || "";
+
+				userRoleMessages.push(
+					`<user_memories for="${firstName}${lastName}" userid="${userId}">` +
+						userMemories.text +
+						"\n</user_memories>"
+				);
 			}
 		}
 
