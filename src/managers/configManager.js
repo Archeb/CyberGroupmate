@@ -26,6 +26,10 @@ export class ConfigManager {
 		return this.chatConfigs.get(chatId) || null;
 	}
 
+	getBaseConfig() {
+		return this.baseConfig.base;
+	}
+
 	/**
 	 *判断对象是否是一个纯粹的对象
 	 */

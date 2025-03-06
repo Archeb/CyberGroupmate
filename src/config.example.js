@@ -121,6 +121,7 @@ const config = {
 		memoChannelId: -1001234567890, // 碎碎念频道，会把思考过程发送到这里
 		enableMemo: false,
 		blacklistUsers: [], // telegram uid, 看不到黑名单用户的消息
+		privateChatMode: 1, // 0: 禁止私聊（可以手动添加用户id到下面chats配置中允许） 1: 仅限有记忆的用户 2: 允许所有私聊
 	},
 	collections: [
 		{

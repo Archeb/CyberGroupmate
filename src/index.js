@@ -32,9 +32,19 @@ const botActionHelper = new BotActionHelper(
 // 聊天状态管理
 const chatStates = new Map();
 
-function getChatState(chatId) {
+async function getChatState(chatId) {
 	if (!chatStates.has(chatId)) {
-		const chatConfig = configManager.getChatConfig(chatId);
+		let chatConfig = configManager.getChatConfig(chatId);
+
+		if (!chatConfig && config.base.privateChatMode == 2)
+			chatConfig = configManager.getBaseConfig(); // 允许所有私聊
+		if (
+			!chatConfig &&
+			config.base.privateChatMode == 1 &&
+			(await ragHelper.getUserMemory(chatId))
+		)
+			chatConfig = configManager.getBaseConfig(); // 允许有记忆的私聊
+
 		if (!chatConfig) return null;
 
 		let kuukiyomiHandler = new KuukiyomiHandler(chatConfig, ragHelper, botActionHelper);
@@ -71,11 +81,13 @@ bot.on("error", (error) => {
 // 处理消息
 bot.on("message", async (msg) => {
 	try {
-		const chatState = getChatState(msg.chat.id);
+		const chatState = await getChatState(msg.chat.id);
 		if (!chatState) {
 			if (config.base.debug) {
 				console.log(`未配置的聊天，忽略消息: ${msg.chat.id}`);
 			}
+			if (msg.chat.type === "private" && config.base.privateChatMode === 1)
+				bot.sendMessage(msg.chat.id, "我们还不熟哦，先在群里多聊聊看？");
 			return;
 		}
 
@@ -195,7 +207,7 @@ async function processMessage(msg, processedMsg, responseDecision, chatState) {
 // 处理消息编辑
 bot.on("edited_message", async (msg) => {
 	try {
-		const chatState = getChatState(msg.chat.id);
+		const chatState = await getChatState(msg.chat.id);
 		if (!chatState) {
 			if (config.base.debug) {
 				console.log(`未配置的聊天，忽略编辑消息: ${msg.chat.id}`);
