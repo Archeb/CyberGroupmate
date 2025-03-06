@@ -130,6 +130,10 @@ export class KuukiyomiHandler {
 <web_getcontent>
 <url>要访问的url</url>
 </web_getcontent>
+
+# 参与话题
+<chat_join>
+</chat_join>
 </function>
 `);
 

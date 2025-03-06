@@ -176,7 +176,7 @@ export class BotActionHelper {
 		}
 	}
 
-	async updateMemory(userId, message, updatePrompt) {
+	async updateMemory(userId, updatePrompt) {
 		try {
 			// 构建系统提示词
 			const systemPromptWhenCreate = `你是一个记忆管理助手。你的任务是根据用户的指示来创建记忆。
@@ -204,7 +204,7 @@ export class BotActionHelper {
 				prompt = `创建记忆要求：${updatePrompt}`;
 			}
 
-			// 调用 GPT-4 生成新记忆
+			// 生成新记忆
 			const openai = new OpenAI({
 				apiKey: this.chatConfig.secondaryLLM.backend.apiKey,
 				baseURL: this.chatConfig.secondaryLLM.backend.baseURL,
