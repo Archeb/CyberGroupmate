@@ -231,6 +231,9 @@ export class LLMHelper {
 					return "";
 				}
 
+				// 转义 < 和 > 字符
+				item.text = item.text.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
 				// 处理回复消息
 				if (metadata.reply_to_message) {
 					let replyMeta = metadata.reply_to_message;
