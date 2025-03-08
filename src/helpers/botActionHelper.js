@@ -26,6 +26,9 @@ export class BotActionHelper {
 		if (!processEmoji || !this.stickerHelper.getAvailableEmojis().length) {
 			// 如果不处理emoji或没有可用的emoji，直接发送完整文本
 			await this.bot.sendMessage(chatId, content, messageOptions);
+			const type = replyToMessageId ? "reply" : "text";
+			const metadata = replyToMessageId ? { reply_to_message_id: replyToMessageId } : {};
+			await this.ragHelper.saveAction(chatId, content, type, metadata);
 		} else {
 			// 分割文本和emoji
 			const segments = this.splitContentIntoSegments(content);
