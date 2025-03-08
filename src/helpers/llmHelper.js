@@ -164,14 +164,14 @@ export class LLMHelper {
 
 				// 解析其他函数的参数
 				let parsedParams = {};
-				// 使用正则表达式匹配HTML标签
+				// 使用正则表达式匹配XML标签
 				const tagRegex = /<(\w+)>([\s\S]*?)<\/\1>/g;
 				let paramMatch;
 
 				while ((paramMatch = tagRegex.exec(params)) !== null) {
 					const [_, key, value] = paramMatch;
-					// 移除多余的空白字符
-					parsedParams[key] = value.trim();
+					// 移除多余的空白字符+XML转义
+					parsedParams[key] = value.trim().replace(/&lt;/g, "<").replace(/&gt;/g, ">");
 				}
 
 				functionCalls.push({
@@ -199,26 +199,40 @@ export class LLMHelper {
 	/**
 	 * 获取消息历史并格式化为LLM消息格式
 	 */
-	processMessageHistory(messageContext, withDate = false, emphasizeLastReply = false) {
+	processMessageHistory(messageContext, withDate = false, emphasizeRepliedMessage = false) {
 		let history = messageContext;
+
+		// 寻找出历史消息里面所有content_type为reply的消息并且添加到bot_replied_message_id中
+		let repliedMessageIds = [];
+		history.forEach((item) => {
+			if (item.content_type === "reply" && item.metadata?.reply_to_message_id) {
+				repliedMessageIds.push(item.metadata.reply_to_message_id);
+			}
+		});
+
 		let textHistory = history.map((item) => {
 			// 计算时间差
-			let timeStr = "";
+			let msgSuffix = "";
 			if (withDate && item.created_at) {
 				const now = Date.now();
 				const createdAt = new Date(item.created_at + "Z"); // 添加Z表示这是UTC时间
 				const diff = (now - createdAt.getTime()) / 1000; // 转换为秒
 
 				if (diff < 60) {
-					timeStr = "刚刚";
+					msgSuffix = "刚刚";
 				} else if (diff < 3600) {
-					timeStr = `${Math.floor(diff / 60)}分钟前`;
+					msgSuffix = `${Math.floor(diff / 60)}分钟前`;
 				} else if (diff < 86400) {
-					timeStr = `${Math.floor(diff / 3600)}小时前`;
+					msgSuffix = `${Math.floor(diff / 3600)}小时前`;
 				} else {
-					timeStr = `${Math.floor(diff / 86400)}天前`;
+					msgSuffix = `${Math.floor(diff / 86400)}天前`;
 				}
-				timeStr = ` (${timeStr})`;
+				msgSuffix = ` (${msgSuffix})`;
+			}
+
+			// 如果是回复消息，强调回复的消息
+			if (emphasizeRepliedMessage && repliedMessageIds.includes(item.message_id)) {
+				msgSuffix += " (已回复过)";
 			}
 
 			// 根据内容类型处理不同的格式
@@ -238,21 +252,22 @@ export class LLMHelper {
 				if (metadata.reply_to_message) {
 					let replyMeta = metadata.reply_to_message;
 					let replyUserIdentifier = `${replyMeta.from.first_name || ""}${replyMeta.from.last_name || ""}`;
-					return `<message id="${item.message_id}" user="${userIdentifier}" userid="${replyMeta.from.id}"${timeStr}><reply_to user="${replyUserIdentifier}">${replyMeta.text || "[媒体内容]"}</reply_to>${item.text}</message>`;
+
+					// 检查回复的消息ID是否在当前上下文中
+					const isReplyInContext = history.some(
+						(msg) => msg.message_id == replyMeta.message_id
+					);
+
+					const replyContent = isReplyInContext
+						? ""
+						: `${replyMeta.text || "[媒体内容]"}`;
+
+					return `<message id="${item.message_id}" user="${userIdentifier}" userid="${replyMeta.from.id}"${msgSuffix}><reply_to user="${replyUserIdentifier}">${replyContent}</reply_to>${item.text}</message>`;
 				} else {
-					return `<message id="${item.message_id}" user="${userIdentifier}" userid="${metadata.from.id}"${timeStr}>${item.text}</message>`;
+					return `<message id="${item.message_id}" user="${userIdentifier}" userid="${metadata.from.id}"${msgSuffix}>${item.text}</message>`;
 				}
 			} else {
-				// 处理bot的actions (note, reply, search等)
-				// 如果是最后一条消息且是bot reply,则改为bot_latest_reply
-				if (
-					item.content_type === "reply" &&
-					history.indexOf(item) === history.length - 1 &&
-					emphasizeLastReply
-				) {
-					return `<bot_latest_reply${timeStr}>${item.text}</bot_latest_reply>`;
-				}
-				return `<bot_${item.content_type}${timeStr}>${item.text}</bot_${item.content_type}>`;
+				return `<bot_${item.content_type}${msgSuffix}>${item.text}</bot_${item.content_type}>`;
 			}
 		});
 
