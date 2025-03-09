@@ -153,14 +153,11 @@ async function processMessage(msg, processedMsg, responseDecision, chatState) {
 					ragHelper.getMessageContext(msg.chat.id, msg.message_id, 25),
 				]);
 
-				// 如果不是私聊、是随机触发则要再次读空气思考
-				if (responseDecision.decisionType === "random") {
-					responseDecision = await chatState.kuukiyomi.consider(
-						responseDecision,
-						processedMsg
-					);
-					if (!responseDecision.shouldAct) break;
-				}
+				responseDecision = await chatState.kuukiyomi.consider(
+					responseDecision,
+					processedMsg
+				);
+				if (!responseDecision.shouldAct) break;
 
 				await chatState.actionGenerator.generateAction(
 					{

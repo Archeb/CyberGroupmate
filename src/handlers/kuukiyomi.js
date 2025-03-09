@@ -100,9 +100,9 @@ export class KuukiyomiHandler {
 
 		// 添加历史消息
 		userRoleMessages.push(
-			"<chat_history>\n" +
+			"<chat_recall>\n" +
 				this.llmHelper.processMessageHistory(msgHistory, true, true) +
-				"\n</chat_history>"
+				"\n</chat_recall>"
 		);
 
 		// 添加可用函数
@@ -117,14 +117,14 @@ export class KuukiyomiHandler {
 		}
 		userRoleMessages.push(`
 # 检索聊天回忆
-<chat_history>
+<chat_recall>
 <keyword>回忆关键词</keyword>
-</chat_history>
+</chat_recall>
 
 # 联网获取答案
-<get_quick_answer>
+<web_getanswer>
 <keyword>陈述句描述你要提问的内容</keyword>
-</get_quick_answer>
+</web_getanswer>
 
 # 根据URL获取内容
 <web_getcontent>
@@ -155,7 +155,7 @@ export class KuukiyomiHandler {
 		try {
 			let extractResult = this.llmHelper.extractFunctionCalls(
 				response,
-				["chat_skip", "chat_history", "get_quick_answer", "web_getcontent"],
+				["chat_skip", "chat_recall", "web_getanswer", "web_getcontent"],
 				[]
 			);
 			let functionCalls = extractResult.functionCalls;
@@ -171,7 +171,7 @@ export class KuukiyomiHandler {
 						decision.shouldAct = false;
 						decision.decisionType = "skip";
 						break;
-					case "chat_history":
+					case "chat_recall":
 						if (!params.keyword) {
 							console.warn("回忆缺少关键词参数");
 							continue;
@@ -187,16 +187,16 @@ export class KuukiyomiHandler {
 						);
 						if (this.chatConfig.debug) console.log("history搜索结果：", result);
 						decision.relatedContext.push({
-							content_type: "chat_history_called",
+							content_type: "chat_recall_called",
 							text: `<keyword>${params.keyword}</keyword>`,
 						});
 						decision.relatedContext.push({
-							content_type: "chat_history_result",
+							content_type: "chat_recall_result",
 							text: this.llmHelper.processMessageHistory(result, true),
 						});
 						break;
 
-					case "get_quick_answer":
+					case "web_getanswer":
 						if (!params.keyword) {
 							console.warn("搜索缺少关键词参数");
 							continue;
@@ -205,7 +205,7 @@ export class KuukiyomiHandler {
 						if (this.chatConfig.debug) console.log("联网获取答案结果：", answerResult);
 						if (answerResult.success) {
 							decision.relatedContext.push({
-								content_type: "get_quick_answer_result",
+								content_type: "web_getanswer_result",
 								text: answerResult.answer,
 							});
 						}
