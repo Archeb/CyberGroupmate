@@ -236,11 +236,12 @@ ${this.stickerHelper.getAvailableEmojis().join(",")}
 							console.warn("回复消息缺少必要参数");
 							continue;
 						}
-						// 使用新方法检查重复
+						// 检查重复
 						if (this._checkMessageDuplicate(params.message, context)) {
 							if (this.chatConfig.debug) console.log("跳过相似回复:", params.message);
 							continue;
 						}
+						params.message = this.processSendMessage(params.message);
 						await this.botActionHelper.sendReply(
 							context.chatId,
 							params.message,
@@ -254,11 +255,12 @@ ${this.stickerHelper.getAvailableEmojis().join(",")}
 							console.warn("发送消息缺少内容参数");
 							continue;
 						}
-						// 使用新方法检查重复
+						// 检查重复
 						if (this._checkMessageDuplicate(params.message, context)) {
 							if (this.chatConfig.debug) console.log("跳过相似消息:", params.message);
 							continue;
 						}
+						params.message = this.processSendMessage(params.message);
 						await this.botActionHelper.sendText(context.chatId, params.message);
 						break;
 
@@ -370,6 +372,26 @@ ${this.stickerHelper.getAvailableEmojis().join(",")}
 		return this.processResponse(newResponse, context);
 	}
 
+	/*
+	 * 发送消息前处理
+	 * 把句子中的英文逗号替换为中文逗号，vertical quote换成curved quote
+	 */
+	processSendMessage(message) {
+		if (!message) return message;
+
+		// 替换英文逗号为中文逗号
+		let processed = message.replace(/,/g, "，");
+
+		// 把所有vertical quotes替换成curved quotes
+		processed = processed
+			// 处理双引号
+			.replace(/"([^"]*?)"/g, "“$1”")
+			// 处理单引号
+			.replace(/'([^']*?)'/g, "‘$1’");
+
+		return processed;
+	}
+
 	/**
 	 * 处理谷歌搜索结果
 	 */
@@ -430,7 +452,7 @@ ${webContent.truncated ? "网页内容超长被截断" : ""}
 	}
 
 	/**
-	 * 检查消息是否重复（新增方法）
+	 * 检查消息是否重复
 	 * @param {string} message 待检查的消息内容
 	 * @param {object} context 上下文对象
 	 * @param {number} maxAllowedDiff 允许的最大差异字符数（从配置读取）
