@@ -76,13 +76,6 @@ export class ActionGenerator {
 		}
 		*/
 
-		// 添加历史消息
-		userRoleMessages.push(
-			"<chat_history>\n" +
-				this.llmHelper.processMessageHistory(context.messageContext, true, true) +
-				"\n</chat_history>"
-		);
-
 		// 添加关联上下文(如果存在)
 		if (context.responseDecision?.relatedContext?.length > 0) {
 			userRoleMessages.push(
@@ -177,6 +170,13 @@ export class ActionGenerator {
 偶尔可以在你的回复末尾中包含以下 emoji 来发送贴纸（最多1个，不能用其它的）：
 ${this.stickerHelper.getAvailableEmojis().join(",")}
 </available_stickers>`);
+
+		// 添加历史消息
+		userRoleMessages.push(
+			"<chat_history>\n" +
+				this.llmHelper.processMessageHistory(context.messageContext, true, true) +
+				"\n</chat_history>"
+		);
 
 		// 添加任务
 		userRoleMessages.push(this.chatConfig.actionGenerator.taskPrompt);
