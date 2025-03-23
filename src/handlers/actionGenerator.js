@@ -66,7 +66,6 @@ export class ActionGenerator {
 		let userRoleMessages = [];
 
 		// 添加近似RAG搜索结果
-		/*
 		if (context.similarMessage) {
 			userRoleMessages.push(
 				"<related_notes>\n" +
@@ -74,7 +73,6 @@ export class ActionGenerator {
 					"\n</related_notes>"
 			);
 		}
-		*/
 
 		// 添加关联上下文(如果存在)
 		if (context.responseDecision?.relatedContext?.length > 0) {
