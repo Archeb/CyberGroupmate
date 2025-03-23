@@ -250,7 +250,7 @@ ${webContent.truncated ? "网页内容超长被截断" : ""}
 	/**
 	 * 判断是否应该响应（机械响应条件）
 	 */
-	shouldAct(processedMsg) {
+	async shouldAct(processedMsg) {
 		const result = {
 			shouldAct: false,
 			reason: "",
@@ -285,6 +285,50 @@ ${webContent.truncated ? "网页内容超长被截断" : ""}
 				this.adjustResponseRate(); // 调整响应率
 				this.lastResponseTime.set(processedMsg.chat_id, Date.now());
 				return result;
+			}
+
+			// 检查是否是上一条bot回复对象的发言
+			try {
+				const msgHistory = await this.ragHelper.getMessageContext(
+					processedMsg.metadata.chat.id,
+					processedMsg.message_id,
+					25
+				);
+
+				// 从历史消息中找到所有bot的回复
+				const botMessages = msgHistory.filter((msg) => msg.content_type === "reply");
+
+				if (botMessages.length > 0) {
+					// 提取所有被回复的用户ID列表
+					const repliedUserIds = new Set();
+
+					// 遍历所有bot回复，收集被回复的用户
+					for (const botMessage of botMessages) {
+						// 检查直接回复
+						if (botMessage.metadata.reply_to_message_id) {
+							const repliedUser = msgHistory.find(
+								(msg) => msg.message_id === botMessage.metadata.reply_to_message_id
+							);
+							if (repliedUser) {
+								repliedUserIds.add(repliedUser.metadata.from.id);
+							}
+						}
+					}
+
+					// 如果当前消息发送者在被回复用户列表中
+					if (repliedUserIds.has(processedMsg.metadata.from?.id)) {
+						this.stats.mentionCount++;
+						this.stats.lastInteractionTime = Date.now();
+						result.shouldAct = true;
+						result.decisionType = "follow-up";
+						result.scene = "当前唤起场景为回复对象的后续发言";
+						this.adjustResponseRate();
+						this.lastResponseTime.set(processedMsg.chat_id, Date.now());
+						return result;
+					}
+				}
+			} catch (error) {
+				console.error("检查follow-up时出错:", error);
 			}
 
 			// 优先 触发词
