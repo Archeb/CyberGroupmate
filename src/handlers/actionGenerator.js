@@ -1,7 +1,15 @@
 import { LLMHelper } from "../helpers/llmHelper.js";
 
 export class ActionGenerator {
-	constructor(chatConfig = {}, botActionHelper, ragHelper, kuukiyomiHandler, stickerHelper) {
+	constructor(
+		chatConfig = {},
+		botActionHelper,
+		ragHelper,
+		kuukiyomiHandler,
+		stickerHelper,
+		mcpHelper,
+		mcpTools = []
+	) {
 		this.chatConfig = chatConfig;
 
 		this.botActionHelper = botActionHelper;
@@ -9,6 +17,8 @@ export class ActionGenerator {
 		this.ragHelper = ragHelper;
 		this.kuukiyomiHandler = kuukiyomiHandler;
 		this.stickerHelper = stickerHelper;
+		this.mcpHelper = mcpHelper;
+		this.mcpTools = mcpTools;
 	}
 
 	/**
@@ -230,15 +240,22 @@ ${this.stickerHelper.getAvailableEmojis().join(",")}
 	 * @returns {boolean} 是否需要后续对话
 	 */
 	_isFollowUpTool(toolName) {
-		// 定义需要后续对话的工具列表
-		const followUpTools = new Set(["chat_search", "web_search", "web_getcontent"]);
-		return followUpTools.has(toolName);
+		// 定义不需要后续对话的工具列表
+		const followUpTools = new Set(["chat_skip", "chat_reply", "chat_text", "chat_note"]);
+		return !followUpTools.has(toolName);
 	}
 
 	/**
 	 * 执行单个工具调用
 	 */
 	async executeToolCall(name, params, context) {
+		// 检查是否是 MCP 工具
+		const mcpTool = this.mcpTools.find((tool) => tool.function.name === name);
+		if (mcpTool) {
+			return await this.mcpHelper.executeToolCall(name, params);
+		}
+
+		// 否则执行基础工具调用
 		switch (name) {
 			case "chat_skip":
 				if (this.chatConfig.debug) console.log("跳过");
@@ -386,7 +403,8 @@ ${this.stickerHelper.getAvailableEmojis().join(",")}
 	 * 获取工具定义
 	 */
 	getTools() {
-		return [
+		// 基础工具列表
+		const baseTools = [
 			{
 				type: "function",
 				function: {
@@ -527,6 +545,9 @@ ${this.stickerHelper.getAvailableEmojis().join(",")}
 				},
 			},
 		];
+
+		// 合并 MCP 工具和基础工具
+		return [...baseTools, ...this.mcpTools];
 	}
 
 	/*

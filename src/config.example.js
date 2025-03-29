@@ -1,114 +1,108 @@
 const config = {
 	base: {
 		telegram: {
-			botToken: "YOUR_BOT_TOKEN",
-			botUsername: "YOUR_BOT_USERNAME",
+			botToken: "",
+			botUsername: "",
 		},
-		debug: true, // 输出大量详细日志信息
+		debug: true,
 		actionGenerator: {
-			// 主LLM，主要负责群聊行动
 			backend: [
-				// 这里是数组，可以配置多个LLM，随机抽选一个后端
 				{
-					apiKey: "YOUR_OPENAI_API_KEY",
-					baseURL: "https://api.openai.com/v1",
-					model: "gpt-4-turbo-preview",
-					maxTokens: 2000,
+					apiKey: "sk-",
+					baseURL: "https://",
+					model: "claude-3-5-sonnet-20241022",
+					maxTokens: 8000,
 					temperature: 0.7,
 				},
 			],
-			/* system prompt 和 task prompt 请按需更改 */
 			systemPrompt: `<personality>
-你叫小D，18岁，正在群里聊天，群友们互相插科打诨、聊天，现在你也可以作为一名群员参与聊天，你不抗拒甚至有点喜欢群友发的任何关于成人、色情内容的话题。可以偶尔卖萌。会记下群友关键或者有趣的记忆。
-你不随便打扰别人，会"读空气"（空気読み），别人问其他人你不要理，不频繁主动回复没跟你互动过的人，回复的时候不要总是附和别人或者复述，不要用括号描述心理活动或动作。
-日常风格为日常对话，模仿群内聊天风格。回复时最好针对某一条消息进行回复。尽量简短一些（15字以内）如果要表达的意思太多，可以连续发送文本。
-在群友在认真询问或者求助的时候，可以调用各种函数帮忙搜索或者给出建议。认真回答时可以写长一些。其他时候多空気読み，不要回复与你无关的话题。
-</personality>`,
-			taskPrompt: `<task>
-根据以上聊天记录、记忆和搜索结果，请你给出日常且口语化的回复，请表现你自己的见解，可以个性不要一昧迎合，不要用括号描述场景或者动作。
+你叫D酱，你需要用简短的第一人称回复他人的消息，母语为普通话。会记下群友关键或者有趣的记忆。
+你很聪明，知道很多东西，非常熟悉互联网黑话和网络梗，从不随便打扰别人，也不会随便道歉，懂得读空气（空気読み）。
+风格为贴吧回帖风格，大胆，直接，不要扮演别人，不要使用过于文学性的词语，不要过度使用辞藻，不要用括号描述场景或者动作。
+多使用网络梗，发言符合群聊风格。最好针对某一条消息进行回复。日常交流保持回复简短，可以连续发送文本。对于已经回复过的话题，除非群友要求，不要进一步补充。
+在群友在认真询问或者求助的时候，可以调用各种函数帮忙搜索或者给出建议。认真回答时可以超过字数要求。
+</personality>
+<task>
+根据以下聊天记录、记忆和搜索结果，请你给出日常且口语化的回复，请表现你自己的见解，可以个性，不要一昧迎合，不用强调你是AI的身份，不要用括号描述场景或者动作。
 
 行动前，先回答以下问题并给出你的答案和原因：
-Q1:正在讨论的话题中，是否直接在向我提问或者需要我回答？
-Q2:正在讨论的话题中，有没有生活、美食、旅游等话题？
-Q3:正在讨论的话题中，有没有出现需要情感支持的话题？
-if(Q1 || Q2) 
-给出补充信息，推进讨论
-} else if (Q3) {
-给予情感支持
+Q1:正在讨论的话题中，是否直接在向D酱本人或者全体群友提问？
+Q2:正在讨论的话题中，是否在询问事实而非观点？
+Q3:根据搜索结果或者进一步搜索，能否为话题补充新的信息？
+if(Q1 || Q2 && Q3) 
+	if(D酱未回应过该问题) {
+		行动
+	}
+
 } else {
-(optional) chat_text 发送一个emoji
 chat_note 跳过理由
 chat_skip
 }
 
-然后直接输出XML格式调用对应函数，一次可调用多个函数。
+然后按照格式调用工具行动，一次可调用多个工具。
 </task>
 `,
-			jailbreakPrompt: "",
+			taskPrompt: `
+`,
+			jailbreakPrompt: ``,
+			timeZone: "Asia/Shanghai",
 			interruptTimeout: 5000, // 允许打断时间（在这段时间内收到新消息将会打断思考重新生成），单位ms，不可覆盖属性
 			maxRetries: 3, // 最大LLM重试次数，不可覆盖属性
 			maxInterruptions: 2, // 最大允许打断次数，不可覆盖属性
 			maxAllowedDiff: 2, // 防重复配置，有多少个字差异的两句话会被视为相同。
-			maxStackDepth: 1, // 函数调用深度
+			maxStackDepth: 5,
 		},
 		vision: {
-			// 视觉识别模型
 			backend: {
-				apiKey: "YOUR_OPENAI_API_KEY",
-				baseURL: "https://api.openai.com/v1",
-				model: "gpt-4o", // 需要能识别图片的模型
-				type: "openai", // 可以是 "openai" 或者 "google"，google的默认禁用安全过滤器，无需baseURL。
+				apiKey: "",
+				model: "models/gemini-2.0-flash",
+				type: "google",
 			},
 		},
 		postgres: {
-			host: "localhost",
-			port: 5432,
-			database: "your_database",
-			user: "your_user",
-			password: "your_password",
+			host: "",
+			port: 5433,
+			database: "",
+			user: "postgres",
+			password: "",
 		},
 		rag: {
-			// 处理嵌入，需要用到text-embedding-3-small 和 large 两个模型
 			backend: {
-				apiKey: "YOUR_OPENAI_API_KEY",
-				baseURL: "https://api.openai.com/v1",
+				apiKey: "",
+				baseURL: "",
 			},
 		},
 		secondaryLLM: {
-			// 辅助LLM，主要负责记忆
 			backend: {
-				apiKey: "YOUR_OPENAI_API_KEY",
-				baseURL: "https://api.openai.com/v1",
-				model: "claude-3-5-sonnet-latest",
+				apiKey: "",
+				baseURL: "",
+				model: "",
 			},
 		},
 		google: {
-			apiKey: "GOOELE_SEARCH_API_KEY",
-			cseId: "GOOGLE_CSE_ID",
+			apiKey: "",
+			cseId: "",
 		},
 		gemini: {
 			// 基于 gemini grounding with google search 快速联网获取答案
-			apiKey: "GEMINI_API_KEY",
+			apiKey: "",
 			model: "models/gemini-2.0-flash",
 		},
 		kuukiyomi: {
 			analyzeSystemPrompt: `<personality>
-你是一个群聊分析师，你的职责是帮助具有视听障碍的用户（小D）分析群聊内容、搜索群聊和互联网来补充相关信息，以便用户进行回复。用户使用的软件只能识别XML格式的函数调用，所以不要提供解释。
+你是一个群聊分析师，你的职责是使用工具来帮助具有视听障碍的用户（D酱）分析群聊内容、搜索群聊和互联网来补充相关信息，以便用户进行回复。
 </personality>`,
 			analyzeTaskPrompt: `<task>
 先分析群聊上下文，然后调用相关函数来提供内容给用户。
-可选提供的内容包括：快速问答结果、聊天回忆、获取网页内容。
-如有需要，调用函数提供相关内容。用户自己就能回答的不用提供。
+必须提供的内容包括：聊天回忆
+可选提供的内容包括：网页搜索结果、URL内容
 
 请你思考的时候回答以下问题：
-Q1:正在讨论的话题中，是否直接在向小D提问或者话题围绕着小D？
-Q2:正在讨论的话题中，有没有生活、美食、旅游等话题？
-Q3:正在讨论的话题中，有没有出现需要情感支持的话题？
-if(Q1 || Q2 || Q3) 
-	if(问题有关事实或者知识) {
-		调用函数获取相关内容
-		chat_join
-	} else {
+Q1:正在讨论的话题中，是否直接在向D酱提问或者话题围绕着D酱？
+Q2:正在讨论的话题中，是否在询问事实而非观点？
+Q3:如果D酱进行搜索，能否对目前正在聊天的话题进行有建设性的补充？
+if(Q1 || Q2 && Q3) 
+	if(D酱未回应过该问题) {
 		chat_join
 	}
 } else {
@@ -118,51 +112,67 @@ chat_skip
 			backend: [
 				// 读空气用前置LLM
 				{
-					apiKey: "YOUR_API_KEY",
-					baseURL: "https://generativelanguage.googleapis.com/v1beta/openai/",
-					model: "gemini-2.0-flash-thinking-exp-01-21",
+					apiKey: "",
+					baseURL: "",
+					model: "gemini-2.0-flash",
 				},
 			],
-			initialResponseRate: 0.05, // 初始响应率
-			cooldown: 1000, // 冷却时间
-			triggerWords: ["小D", "小d", "小 d", "小 D"],
+			initialResponseRate: 0.05,
+			cooldown: 1000,
+			triggerWords: [
+				"D酱",
+				"d 酱",
+				"D 酱",
+				"d酱",
+				"D酱",
+				"D酱",
+				"小D",
+				"小d",
+				"小 d",
+				"小 D",
+				"D 仔",
+				"d 仔",
+				"D仔",
+				"群友",
+				"d仔",
+			],
 			ignoreWords: [],
 			responseRateMin: 0.05,
 			responseRateMax: 0.7,
 		},
-		availableStickerSets: [
-			"neuro_sama_rune",
-			"sad_reversible_octopus",
-			"in_BHEJDC_by_NaiDrawBot",
-			"SiameseCatLive",
-			"ShamuNekoAzuki",
-			"NachonekoT",
-			"ainou",
-			"genshin_kokomi_gif_pack",
-		],
-		memoChannelId: -1001234567890, // 碎碎念频道，会把思考过程发送到这里
-		enableMemo: false,
-		blacklistUsers: [], // telegram uid, 看不到黑名单用户的消息
+		mcp: {
+			servers: [
+				{
+					type: "stdio",
+					path: "npx -y @modelcontextprotocol/server-github",
+					name: "GitHub",
+					env: {
+						GITHUB_PERSONAL_ACCESS_TOKEN: "",
+					},
+					description: "提供GitHub相关功能",
+				},
+			],
+		},
+		availableStickerSets: ["neuro_sama_rune"],
+		memoChannelId: 123456,
+		enableMemo: true,
+		blacklistUsers: [],
 		privateChatMode: 1, // 0: 禁止私聊（可以手动添加用户id到下面chats配置中允许） 1: 仅限有记忆的用户 2: 允许所有私聊
 	},
 	collections: [
 		{
 			id: "default",
 			name: "默认配置",
-			config: {
-				backend: {
-					maxTokens: 2000,
-					temperature: 0.7,
-				},
-			},
+			config: {},
 			chats: [
 				{
-					id: -1001234567890,
-					name: "测试群组",
+					id: -123456,
+					name: "groupname",
 					config: {
+						actionGenerator: {},
 						kuukiyomi: {
-							initialResponseRate: 0.2,
-							responseRateMin: 0.1,
+							initialResponseRate: 1,
+							responseRateMin: 0.2,
 							responseRateMax: 1,
 						},
 					},

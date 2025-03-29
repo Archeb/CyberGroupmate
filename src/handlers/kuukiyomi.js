@@ -208,7 +208,6 @@ export class KuukiyomiHandler {
 			// 处理工具调用
 			if (response.message?.tool_calls) {
 				let messages = [];
-				let needsFollowUp = false;
 
 				// 添加原始对话历史
 				messages = [
@@ -226,9 +225,6 @@ export class KuukiyomiHandler {
 				for (const toolCall of response.message.tool_calls) {
 					const { name, arguments: args } = toolCall.function;
 					const params = JSON.parse(args);
-
-					// 判断是否需要后续对话的工具
-					needsFollowUp = needsFollowUp || this._isFollowUpTool(name);
 
 					// 添加 Assistant 的工具调用请求
 					messages.push({
@@ -260,23 +256,7 @@ export class KuukiyomiHandler {
 							tool_call_id: toolCall.id,
 						});
 						console.error(`工具 ${name} 调用失败:`, error);
-						// 如果是需要后续对话的工具调用失败，也需要继续对话
-						needsFollowUp = needsFollowUp || this._isFollowUpTool(name);
 					}
-				}
-
-				// 只有在需要后续对话时才继续对话
-				if (needsFollowUp) {
-					// 调用 LLM 继续对话
-					let newResponse = await this.llmHelper.callLLM(
-						messages,
-						null,
-						this.chatConfig.kuukiyomi.backend,
-						1,
-						this.getTools()
-					);
-
-					return this.processResponse(processedMsg, newResponse, decision);
 				}
 			}
 
@@ -285,17 +265,6 @@ export class KuukiyomiHandler {
 			console.error("处理读空气思考响应出错:", error);
 			throw error;
 		}
-	}
-
-	/**
-	 * 判断工具是否需要后续对话
-	 * @param {string} toolName 工具名称
-	 * @returns {boolean} 是否需要后续对话
-	 */
-	_isFollowUpTool(toolName) {
-		// 定义需要后续对话的工具列表
-		const followUpTools = new Set([]); // 读空气不需要后续对话
-		return followUpTools.has(toolName);
 	}
 
 	/**

@@ -6,8 +6,10 @@ import { RAGHelper } from "./helpers/ragHelper.js";
 import { BotActionHelper } from "./helpers/botActionHelper.js";
 import { VisionHelper } from "./helpers/visionHelper.js";
 import { ConfigManager } from "./managers/configManager.js";
+import { MCPHelper } from "./helpers/mcpHelper.js";
 import config from "./config.js";
 import { StickerHelper } from "./helpers/stickerHelper.js";
+import { McpZodTypeKind } from "@modelcontextprotocol/sdk/server/completable.js";
 
 // 创建配置管理器
 const configManager = new ConfigManager(config);
@@ -28,6 +30,34 @@ const botActionHelper = new BotActionHelper(
 	stickerHelper,
 	visionHelper
 );
+
+// 初始化 MCP Helper
+const mcpHelper = new MCPHelper();
+let mcpTools = [];
+
+// 如果配置了 MCP 服务器，则连接并获取工具列表
+if (config.base.mcp?.servers && Array.isArray(config.base.mcp.servers)) {
+	for (const serverConfig of config.base.mcp.servers) {
+		try {
+			const serverTools = await mcpHelper.connectToServer(serverConfig);
+			mcpTools = [...mcpTools, ...serverTools];
+		} catch (error) {
+			console.error(`Failed to initialize MCP server ${serverConfig.name}:`, error);
+		}
+	}
+
+	if (mcpTools.length > 0) {
+		// 按服务器打印加载的工具
+		const toolsByServer = mcpHelper.getToolsByServer();
+		console.log("\nLoaded MCP tools by server:");
+		for (const [serverName, tools] of Object.entries(toolsByServer)) {
+			console.log(`\n${serverName}:`);
+			tools.forEach((tool) => {
+				console.log(`  - ${tool.function.name}: ${tool.function.description}`);
+			});
+		}
+	}
+}
 
 // 聊天状态管理
 const chatStates = new Map();
@@ -53,7 +83,9 @@ async function getChatState(chatId) {
 			botActionHelper,
 			ragHelper,
 			kuukiyomiHandler,
-			stickerHelper
+			stickerHelper,
+			mcpHelper,
+			mcpTools // 传入已初始化的 MCP 工具列表
 		);
 		let telegramHandler = new TelegramHandler(chatConfig, ragHelper, visionHelper);
 
@@ -223,9 +255,10 @@ bot.on("edited_message", async (msg) => {
 	}
 });
 
-// 优雅退出
-process.on("SIGINT", () => {
+// 优雅退出时断开 MCP 连接
+process.on("SIGINT", async () => {
 	console.log("正在关闭机器人...");
+	await mcpHelper.disconnect();
 	bot.stopPolling();
 	process.exit(0);
 });
