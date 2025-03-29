@@ -34,7 +34,7 @@ export class ActionGenerator {
 			}
 
 			// 处理响应
-			await this.processResponse(response, context);
+			await this.processResponse(response, context, messages);
 
 			return response;
 		} catch (error) {
@@ -49,7 +49,7 @@ export class ActionGenerator {
 	/**
 	 * 准备发送给LLM的消息
 	 */
-	async prepareMessages(context, multiShotPrompt = "") {
+	async prepareMessages(context) {
 		// 添加系统提示词，这里用system role
 		let messages = [
 			{
@@ -129,9 +129,6 @@ ${this.stickerHelper.getAvailableEmojis().join(",")}
 
 		// 添加任务
 		userRoleMessages.push(this.chatConfig.actionGenerator.taskPrompt);
-		if (multiShotPrompt) {
-			userRoleMessages.push(multiShotPrompt);
-		}
 		// 添加越狱
 		userRoleMessages.push(this.chatConfig.actionGenerator.jailbreakPrompt);
 
@@ -144,7 +141,7 @@ ${this.stickerHelper.getAvailableEmojis().join(",")}
 	/**
 	 * 处理LLM的响应
 	 */
-	async processResponse(response, context) {
+	async processResponse(response, context, messages = []) {
 		// 计算当前调用深度
 		context.StackDepth = context?.StackDepth + 1 || 0;
 
@@ -153,11 +150,7 @@ ${this.stickerHelper.getAvailableEmojis().join(",")}
 		try {
 			// 处理工具调用
 			if (response.message?.tool_calls) {
-				let messages = [];
 				let needsFollowUp = false;
-
-				// 添加原始对话历史
-				messages = [...(await this.prepareMessages(context))];
 
 				// 为每个工具调用创建一个新的消息
 				for (const toolCall of response.message.tool_calls) {
@@ -219,7 +212,7 @@ ${this.stickerHelper.getAvailableEmojis().join(",")}
 						this.getTools()
 					);
 
-					return this.processResponse(newResponse, context);
+					return this.processResponse(newResponse, context, messages);
 				}
 			}
 		} catch (error) {
@@ -308,10 +301,6 @@ ${this.stickerHelper.getAvailableEmojis().join(",")}
 					throw new Error("搜索缺少关键词参数");
 				}
 				let webResult = await this.botActionHelper.googleSearch(params.keyword);
-				context.messageContext.push({
-					content_type: "web_search_called",
-					text: `<keyword>${params.keyword}</keyword>`,
-				});
 				return {
 					status: "success",
 					action: "web_search",
@@ -324,10 +313,6 @@ ${this.stickerHelper.getAvailableEmojis().join(",")}
 					throw new Error("访问网页缺少URL参数");
 				}
 				let webContent = await this.botActionHelper.openURL(params.url);
-				context.messageContext.push({
-					content_type: "web_getcontent_called",
-					text: `<url>${params.url}</url>`,
-				});
 				return {
 					status: "success",
 					action: "web_getcontent",
