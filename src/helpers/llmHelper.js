@@ -12,7 +12,7 @@ export class LLMHelper {
 	/**
 	 * 调用LLM API
 	 */
-	async callLLM(messages, signal, backend, maxRetries = 3) {
+	async callLLM(messages, signal, backend, maxRetries = 3, tools = null) {
 		let lastError;
 
 		for (let attempt = 0; attempt < maxRetries; attempt++) {
@@ -35,8 +35,14 @@ export class LLMHelper {
 				const completionParams = {
 					model: backendConfig.model,
 					messages: messages,
-					[maxTokensParam]: backendConfig.maxTokens, // 使用动态参数名
+					[maxTokensParam]: backendConfig.maxTokens,
 				};
+
+				// 如果提供了tools，添加tools相关参数
+				if (tools) {
+					completionParams.tools = tools;
+					completionParams.tool_choice = "auto";
+				}
 
 				if (
 					!(backendConfig.model.startsWith("o3") || backendConfig.model.startsWith("o1"))
@@ -52,12 +58,6 @@ export class LLMHelper {
 
 				if (typeof completion === "string") completion = JSON.parse(completion);
 
-				// 合并reasoning和content
-				let response =
-					(completion.choices[0].message?.reasoning ||
-						completion.choices[0].message?.reasoning_content ||
-						"") + completion.choices[0].message?.content || "";
-
 				if (this.chatConfig.debug) {
 					// 保存日志到文件
 					let timestamp = new Date().toISOString().replace(/[:.]/g, "-");
@@ -67,7 +67,7 @@ export class LLMHelper {
 						// 分隔线
 						"\n=== Response ===\n",
 						// 响应内容
-						response,
+						JSON.stringify(completion.choices[0], null, 2),
 						// 模型
 						`model: ${backendConfig.model}`,
 					].join("\n");
@@ -78,19 +78,25 @@ export class LLMHelper {
 					// 写入日志文件
 					await fs.writeFile(path.join("logs", `${timestamp}.txt`), logContent, "utf-8");
 				}
+
 				// 保存碎碎念
 				if (this.chatConfig.memoChannelId && this.chatConfig.enableMemo) {
 					this.botActionHelper.sendText(
 						this.chatConfig.memoChannelId,
-						["response:", response, "model:", backendConfig.model].join("\n"),
+						[
+							"response:",
+							JSON.stringify(completion.choices[0], null, 2),
+							"model:",
+							backendConfig.model,
+						].join("\n"),
 						false,
 						false
 					);
 				}
 
-				if (this.chatConfig.debug) console.log(response);
+				if (this.chatConfig.debug) console.log(completion.choices[0]);
 
-				return response;
+				return completion.choices[0];
 			} catch (error) {
 				if (error.message === "Request was aborted.") {
 					throw new Error("AbortError");
@@ -114,86 +120,6 @@ export class LLMHelper {
 				await new Promise((resolve) => setTimeout(resolve, 1000));
 			}
 		}
-	}
-
-	/**
-	 * 从LLM响应中提取函数调用
-	 */
-	extractFunctionCalls(response, supportedFunctions, multiShotFunctions) {
-		// 如果内容为空，返回空数组
-		if (!response) {
-			return { functionCalls: [], response: "" };
-		}
-
-		let functionCalls = [];
-
-		// 创建匹配所有支持函数的统一正则表达式
-		let combinedRegex = new RegExp(
-			`<(${supportedFunctions.join("|")})>([\\s\\S]*?)<\\/\\1>`,
-			"g"
-		);
-
-		let match;
-		let lastIndex = 0;
-		let foundMultiShot = false;
-
-		while ((match = combinedRegex.exec(response)) !== null) {
-			let funcName = match[1];
-			let params = match[2].trim();
-
-			try {
-				// 检查是否是multiShot函数
-				if (multiShotFunctions.includes(funcName)) {
-					foundMultiShot = true;
-					lastIndex = match.index + match[0].length;
-				}
-
-				// 如果已经找到multiShot函数，则不再处理后续函数
-				if (foundMultiShot && !multiShotFunctions.includes(funcName)) {
-					continue;
-				}
-
-				// 对于skip函数，不需要参数
-				if (funcName === "chat_skip") {
-					functionCalls.push({
-						function: funcName,
-						params: {},
-					});
-					continue;
-				}
-
-				// 解析其他函数的参数
-				let parsedParams = {};
-				// 使用正则表达式匹配XML标签
-				const tagRegex = /<(\w+)>([\s\S]*?)<\/\1>/g;
-				let paramMatch;
-
-				while ((paramMatch = tagRegex.exec(params)) !== null) {
-					const [_, key, value] = paramMatch;
-					// 移除多余的空白字符+XML转义
-					parsedParams[key] = value.trim().replace(/&lt;/g, "<").replace(/&gt;/g, ">");
-				}
-
-				functionCalls.push({
-					function: funcName,
-					params: parsedParams,
-				});
-
-				// 如果是multiShot函数，立即停止处理后续内容
-				if (multiShotFunctions.includes(funcName)) {
-					break;
-				}
-			} catch (error) {
-				console.error(`处理函数 ${funcName} 时出错:`, error);
-			}
-		}
-
-		// 如果找到了multiShot函数，清空该函数后的所有内容
-		if (foundMultiShot && lastIndex > 0) {
-			response = response.substring(0, lastIndex);
-		}
-
-		return { functionCalls, response };
 	}
 
 	/**

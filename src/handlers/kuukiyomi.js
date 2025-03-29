@@ -20,6 +20,89 @@ export class KuukiyomiHandler {
 		this.startDecayTimer();
 	}
 
+	/**
+	 * 获取工具定义
+	 */
+	getTools() {
+		return [
+			{
+				type: "function",
+				function: {
+					name: "chat_skip",
+					description: "跳过当前消息，不进行回复",
+					parameters: {
+						type: "object",
+						properties: {},
+						required: [],
+					},
+				},
+			},
+			{
+				type: "function",
+				function: {
+					name: "chat_recall",
+					description: "检索聊天回忆",
+					parameters: {
+						type: "object",
+						properties: {
+							keyword: {
+								type: "string",
+								description: "回忆关键词",
+							},
+						},
+						required: ["keyword"],
+					},
+				},
+			},
+			{
+				type: "function",
+				function: {
+					name: "web_getanswer",
+					description: "联网获取答案",
+					parameters: {
+						type: "object",
+						properties: {
+							keyword: {
+								type: "string",
+								description: "陈述句描述你要提问的内容",
+							},
+						},
+						required: ["keyword"],
+					},
+				},
+			},
+			{
+				type: "function",
+				function: {
+					name: "web_getcontent",
+					description: "根据URL获取内容",
+					parameters: {
+						type: "object",
+						properties: {
+							url: {
+								type: "string",
+								description: "要访问的url",
+							},
+						},
+						required: ["url"],
+					},
+				},
+			},
+			{
+				type: "function",
+				function: {
+					name: "chat_join",
+					description: "参与话题",
+					parameters: {
+						type: "object",
+						properties: {},
+						required: [],
+					},
+				},
+			},
+		];
+	}
+
 	initializeStateTracking() {
 		// 初始化响应概率
 		this.currentResponseRate = this.config.initialResponseRate;
@@ -66,7 +149,8 @@ export class KuukiyomiHandler {
 				messages,
 				null,
 				this.chatConfig.kuukiyomi.backend,
-				1
+				1,
+				this.getTools()
 			);
 
 			// 处理响应
@@ -105,38 +189,6 @@ export class KuukiyomiHandler {
 				"\n</chat_recall>"
 		);
 
-		// 添加可用函数
-		userRoleMessages.push(
-			`<function>
-你可以使用以下函数和参数，一次调用多个函数，列表如下：`
-		);
-		if (decision.decisionType == "random") {
-			userRoleMessages.push(`# 跳过（与用户无关，不回复）
-<chat_skip>
-</chat_skip>`);
-		}
-		userRoleMessages.push(`
-# 检索聊天回忆
-<chat_recall>
-<keyword>回忆关键词</keyword>
-</chat_recall>
-
-# 联网获取答案
-<web_getanswer>
-<keyword>陈述句描述你要提问的内容</keyword>
-</web_getanswer>
-
-# 根据URL获取内容
-<web_getcontent>
-<url>要访问的url</url>
-</web_getcontent>
-
-# 参与话题
-<chat_join>
-</chat_join>
-</function>
-`);
-
 		// 添加任务
 		userRoleMessages.push(this.chatConfig.kuukiyomi.analyzeTaskPrompt);
 
@@ -153,90 +205,78 @@ export class KuukiyomiHandler {
 		if (!response) return;
 
 		try {
-			let extractResult = this.llmHelper.extractFunctionCalls(
-				response,
-				["chat_skip", "chat_recall", "web_getanswer", "web_getcontent"],
-				[]
-			);
-			let functionCalls = extractResult.functionCalls;
-			response = extractResult.response;
+			// 处理工具调用
+			if (response.message?.tool_calls) {
+				let messages = [];
+				let needsFollowUp = false;
 
-			decision.relatedContext = []; // 相关信息
-
-			for (let call of functionCalls) {
-				let { function: funcName, params } = call;
-
-				switch (funcName) {
-					case "chat_skip":
-						decision.shouldAct = false;
-						decision.decisionType = "skip";
-						break;
-					case "chat_recall":
-						if (!params.keyword) {
-							console.warn("回忆缺少关键词参数");
-							continue;
-						}
-						let result = await this.ragHelper.searchSimilarContent(
+				// 添加原始对话历史
+				messages = [
+					...(await this.prepareMessages(
+						await this.ragHelper.getMessageContext(
 							processedMsg.metadata.chat.id,
-							params.keyword,
-							{
-								limit: 10,
-								contentTypes: ["note"],
-								timeWindow: "99 years",
-							}
+							processedMsg.message_id,
+							25
+						),
+						decision
+					)),
+				];
+
+				// 为每个工具调用创建一个新的消息
+				for (const toolCall of response.message.tool_calls) {
+					const { name, arguments: args } = toolCall.function;
+					const params = JSON.parse(args);
+
+					// 判断是否需要后续对话的工具
+					needsFollowUp = needsFollowUp || this._isFollowUpTool(name);
+
+					// 添加 Assistant 的工具调用请求
+					messages.push({
+						role: "assistant",
+						content: response.message.content,
+						tool_calls: [toolCall],
+					});
+
+					let toolResult;
+					try {
+						toolResult = await this.executeToolCall(
+							processedMsg,
+							params,
+							decision,
+							name
 						);
-						if (this.chatConfig.debug) console.log("history搜索结果：", result);
-						decision.relatedContext.push({
-							content_type: "chat_recall_called",
-							text: `<keyword>${params.keyword}</keyword>`,
+
+						// 添加工具调用结果
+						messages.push({
+							role: "tool",
+							content: JSON.stringify(toolResult),
+							tool_call_id: toolCall.id,
 						});
-						decision.relatedContext.push({
-							content_type: "chat_recall_result",
-							text: this.llmHelper.processMessageHistory(result, true),
+					} catch (error) {
+						// 如果工具调用失败，添加错误信息
+						messages.push({
+							role: "tool",
+							content: JSON.stringify({ error: error.message }),
+							tool_call_id: toolCall.id,
 						});
-						break;
+						console.error(`工具 ${name} 调用失败:`, error);
+						// 如果是需要后续对话的工具调用失败，也需要继续对话
+						needsFollowUp = needsFollowUp || this._isFollowUpTool(name);
+					}
+				}
 
-					case "web_getanswer":
-						if (!params.keyword) {
-							console.warn("搜索缺少关键词参数");
-							continue;
-						}
-						let answerResult = await this.botActionHelper.quickAnswer(params.keyword);
-						if (this.chatConfig.debug) console.log("联网获取答案结果：", answerResult);
-						if (answerResult.success) {
-							decision.relatedContext.push({
-								content_type: "web_getanswer_result",
-								text: answerResult.answer,
-							});
-						}
+				// 只有在需要后续对话时才继续对话
+				if (needsFollowUp) {
+					// 调用 LLM 继续对话
+					let newResponse = await this.llmHelper.callLLM(
+						messages,
+						null,
+						this.chatConfig.kuukiyomi.backend,
+						1,
+						this.getTools()
+					);
 
-						break;
-
-					case "web_getcontent":
-						if (!params.url) {
-							console.warn("访问网页缺少URL参数");
-							continue;
-						}
-						let webContent = await this.botActionHelper.openURL(params.url);
-						if (this.chatConfig.debug) console.log("打开网页结果", webContent);
-						let webContentText = "打开了URL " + params.url + " 结果：";
-						if (webContent.success) {
-							webContentText = `
-<title>${webContent.title}</title>
-<content>
-${webContent.content}
-${webContent.truncated ? "网页内容超长被截断" : ""}
-</content>
-`;
-						} else {
-							webContentText = `URL打开失败`;
-						}
-						decision.relatedContext.push({
-							content_type: "web_getcontent_result",
-							text: webContentText,
-						});
-
-						break;
+					return this.processResponse(processedMsg, newResponse, decision);
 				}
 			}
 
@@ -244,6 +284,98 @@ ${webContent.truncated ? "网页内容超长被截断" : ""}
 		} catch (error) {
 			console.error("处理读空气思考响应出错:", error);
 			throw error;
+		}
+	}
+
+	/**
+	 * 判断工具是否需要后续对话
+	 * @param {string} toolName 工具名称
+	 * @returns {boolean} 是否需要后续对话
+	 */
+	_isFollowUpTool(toolName) {
+		// 定义需要后续对话的工具列表
+		const followUpTools = new Set([]); // 读空气不需要后续对话
+		return followUpTools.has(toolName);
+	}
+
+	/**
+	 * 执行单个工具调用
+	 */
+	async executeToolCall(processedMsg, params, decision, name) {
+		decision.relatedContext = [];
+		switch (name) {
+			case "chat_skip":
+				decision.shouldAct = false;
+				decision.decisionType = "skip";
+				return { status: "success", action: "skip" };
+
+			case "chat_recall":
+				if (!params.keyword) {
+					throw new Error("回忆缺少关键词参数");
+				}
+				let result = await this.ragHelper.searchSimilarContent(
+					processedMsg.metadata.chat.id,
+					params.keyword,
+					{
+						limit: 10,
+						contentTypes: ["note"],
+						timeWindow: "99 years",
+					}
+				);
+				decision.relatedContext.push({
+					content_type: "chat_recall_called",
+					text: `<keyword>${params.keyword}</keyword>`,
+				});
+				return {
+					status: "success",
+					action: "recall",
+					keyword: params.keyword,
+					results: this.llmHelper.processMessageHistory(result, true),
+				};
+
+			case "web_getanswer":
+				if (!params.keyword) {
+					throw new Error("搜索缺少关键词参数");
+				}
+				let answerResult = await this.botActionHelper.quickAnswer(params.keyword);
+				if (answerResult.success) {
+					decision.relatedContext.push({
+						content_type: "web_getanswer_result",
+						text: answerResult.answer,
+					});
+				}
+				return {
+					status: "success",
+					action: "web_answer",
+					keyword: params.keyword,
+					answer: answerResult.success ? answerResult.answer : "获取答案失败",
+				};
+
+			case "web_getcontent":
+				if (!params.url) {
+					throw new Error("访问网页缺少URL参数");
+				}
+				let webContent = await this.botActionHelper.openURL(params.url);
+				let webContentText = webContent.success
+					? `<title>${webContent.title}</title>\n<content>\n${webContent.content}\n${webContent.truncated ? "网页内容超长被截断" : ""}\n</content>`
+					: "URL打开失败";
+
+				decision.relatedContext.push({
+					content_type: "web_getcontent_result",
+					text: webContentText,
+				});
+				return {
+					status: "success",
+					action: "web_content",
+					url: params.url,
+					content: webContentText,
+				};
+
+			case "chat_join":
+				return { status: "success", action: "join" };
+
+			default:
+				throw new Error(`未知的工具调用: ${name}`);
 		}
 	}
 

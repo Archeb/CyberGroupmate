@@ -24,7 +24,8 @@ export class ActionGenerator {
 				messages,
 				chatState?.abortController?.signal,
 				this.chatConfig.actionGenerator.backend,
-				this.chatConfig.actionGenerator.maxRetries
+				this.chatConfig.actionGenerator.maxRetries,
+				this.getTools()
 			);
 
 			// 如果已经被中断，直接返回
@@ -86,8 +87,6 @@ export class ActionGenerator {
 		}
 
 		// 添加所有相关用户的记忆
-
-		// 从消息历史中收集所有唯一用户ID
 		const userIds = new Set();
 		context.messageContext.forEach((message) => {
 			if (message?.metadata?.from?.id && message.content_type === "message") {
@@ -115,55 +114,7 @@ export class ActionGenerator {
 			}
 		}
 
-		// 添加可用函数
-		userRoleMessages.push(
-			`<function>
-你可以使用以下函数和参数，一次可以调用多个函数，列表如下：`
-		);
-		if (context.responseDecision.decisionType == "random") {
-			userRoleMessages.push(`# 跳过（不回复，无参数）
-<chat_skip>
-</chat_skip>`);
-		}
-		userRoleMessages.push(`
-# 直接向群内发送消息
-<chat_text>
-<message>要发送的内容</message>
-</chat_text>
-
-# 回复某一条消息
-<chat_reply>
-<message_id>要回复的消息ID</message_id>
-<message>要发送的内容</message>
-</chat_reply>
-
-# 群聊笔记，用符合心情的语气记录
-<chat_note>
-<note>要记录的事件、参与者和你的想法</note>
-</chat_note> 
-
-# 检索聊天记录
-<chat_search>
-<keyword>一个陈述句来描述你要搜索的内容</keyword>
-</chat_search>
-
-# 更新用户记忆
-<user_memories>
-<userid>该用户的UID</userid>
-<memories>要更新或者添加的长期记忆内容</memories>
-</user_memories>
-
-# 使用谷歌搜索互联网
-<web_search>
-<keyword>搜索关键词</keyword>
-</web_search>
-
-# 根据URL获取内容
-<web_getcontent>
-<url>要访问的url</url>
-</web_getcontent>
-</function>
-`);
+		// 添加可用贴纸
 		userRoleMessages.push(`<available_stickers>
 偶尔可以在你的回复末尾中包含以下 emoji 来发送贴纸（最多1个，不能用其它的）：
 ${this.stickerHelper.getAvailableEmojis().join(",")}
@@ -200,145 +151,75 @@ ${this.stickerHelper.getAvailableEmojis().join(",")}
 		if (!response) return;
 
 		try {
-			let extractResult = this.llmHelper.extractFunctionCalls(
-				response,
-				[
-					"chat_search",
-					"chat_text",
-					"chat_reply",
-					"chat_note",
-					"chat_skip",
-					"web_search",
-					"web_getcontent",
-					"user_memories",
-				],
-				["chat_search", "web_search", "web_getcontent"]
-			);
-			let functionCalls = extractResult.functionCalls;
-			response = extractResult.response;
+			// 处理工具调用
+			if (response.message?.tool_calls) {
+				let messages = [];
+				let needsFollowUp = false;
 
-			for (let call of functionCalls) {
-				let { function: funcName, params } = call;
+				// 添加原始对话历史
+				messages = [...(await this.prepareMessages(context))];
 
-				switch (funcName) {
-					case "chat_skip":
-						if (this.chatConfig.debug) console.log("跳过");
-						await this.botActionHelper.saveAction(context.chatId, "", "skip");
-						// 减少响应率
-						this.kuukiyomiHandler.decreaseResponseRate(0.2);
-						break;
+				// 为每个工具调用创建一个新的消息
+				for (const toolCall of response.message.tool_calls) {
+					const { name, arguments: args } = toolCall.function;
+					const params = JSON.parse(args);
 
-					case "chat_reply":
-						if (!params.message_id || !params.message) {
-							console.warn(params);
-							console.warn("回复消息缺少必要参数");
-							continue;
-						}
-						// 检查重复
-						if (this._checkMessageDuplicate(params.message, context)) {
-							if (this.chatConfig.debug) console.log("跳过相似回复:", params.message);
-							continue;
-						}
-						params.message = this.processSendMessage(params.message);
-						await this.botActionHelper.sendReply(
-							context.chatId,
-							params.message,
-							params.message_id
-						);
-						this.kuukiyomiHandler.increaseResponseRate(0.1);
-						break;
+					// 判断是否需要后续对话的工具
+					needsFollowUp = needsFollowUp || this._isFollowUpTool(name);
 
-					case "chat_text":
-						if (!params.message) {
-							console.warn("发送消息缺少内容参数");
-							continue;
-						}
-						// 检查重复
-						if (this._checkMessageDuplicate(params.message, context)) {
-							if (this.chatConfig.debug) console.log("跳过相似消息:", params.message);
-							continue;
-						}
-						params.message = this.processSendMessage(params.message);
-						await this.botActionHelper.sendText(context.chatId, params.message);
-						break;
+					// 添加 Assistant 的工具调用请求
+					messages.push({
+						role: "assistant",
+						content: response.message.content,
+						tool_calls: [toolCall],
+					});
 
-					case "chat_note":
-						if (!params.note) {
-							console.warn("记录笔记缺少必要参数");
-							continue;
-						}
-						await this.botActionHelper.saveAction(context.chatId, params.note, "note");
-						break;
+					let toolResult;
+					try {
+						toolResult = await this.executeToolCall(name, params, context);
 
-					case "chat_search":
-						if (!params.keyword) {
-							console.warn("搜索缺少关键词参数");
-							continue;
-						}
-						if (context.StackDepth > this.chatConfig.actionGenerator.maxStackDepth) {
-							console.warn("StackDepth超过最大深度，禁止调用可能嵌套的函数");
-							continue;
-						}
-						let result = await this.botActionHelper.search(
-							context.chatId,
-							params.keyword
-						);
-						if (this.chatConfig.debug) console.log("history搜索结果：", result);
-						context.messageContext.push({
-							content_type: "chat_search_called",
-							text: `<keyword>${params.keyword}</keyword>`,
+						// 添加工具调用结果
+						messages.push({
+							role: "tool",
+							content: JSON.stringify(toolResult),
+							tool_call_id: toolCall.id,
 						});
-						await this.handleRAGSearchResults(result, context);
-						break;
-					case "web_search":
-						if (!params.keyword) {
-							console.warn("搜索缺少关键词参数");
-							continue;
-						}
-						if (context.StackDepth > this.chatConfig.actionGenerator.maxStackDepth) {
-							console.warn("StackDepth超过最大深度，禁止调用可能嵌套的函数");
-							continue;
-						}
-						let webResult = await this.botActionHelper.googleSearch(params.keyword);
-						if (this.chatConfig.debug) console.log("web搜索结果：", webResult);
-						context.messageContext.push({
-							content_type: "web_search_called",
-							text: `<keyword>${params.keyword}</keyword>`,
+					} catch (error) {
+						// 如果工具调用失败，添加错误信息
+						messages.push({
+							role: "tool",
+							content: JSON.stringify({ error: error.message }),
+							tool_call_id: toolCall.id,
 						});
-						await this.handleGoogleSearchResults(webResult, context);
-						break;
+						console.error(`工具 ${name} 调用失败:`, error);
+						// 如果是需要后续对话的工具调用失败，也需要继续对话
+						needsFollowUp = needsFollowUp || this._isFollowUpTool(name);
+					}
+				}
 
-					case "web_getcontent":
-						if (!params.url) {
-							console.warn("访问网页缺少URL参数");
-							continue;
-						}
-						if (context.StackDepth > this.chatConfig.actionGenerator.maxStackDepth) {
-							console.warn("StackDepth超过最大深度，禁止调用可能嵌套的函数");
-							continue;
-						}
-						let webContent = await this.botActionHelper.openURL(params.url);
-						if (this.chatConfig.debug) console.log("打开网页结果", webContent);
-						context.messageContext.push({
-							content_type: "web_getcontent_called",
-							text: `<url>${params.url}</url>`,
+				// 只有在需要后续对话且未达到最大深度时才继续对话
+				if (
+					needsFollowUp &&
+					context.StackDepth < this.chatConfig.actionGenerator.maxStackDepth
+				) {
+					// 如果接近最大调用深度，添加提示信息
+					if (context.StackDepth >= this.chatConfig.actionGenerator.maxStackDepth - 1) {
+						messages.push({
+							role: "system",
+							content: "即将达到最大对话深度，请尽快总结当前结果并结束对话。",
 						});
-						await this.handleWebContent(webContent, context);
-						break;
+					}
 
-					case "user_memories":
-						if (!params.userid || !params.memories) {
-							console.warn("更新用户记忆缺少必要参数");
-							continue;
-						}
-						let memoryResult = await this.botActionHelper.updateMemory(
-							params.userid,
-							params.memories
-						);
-						if (this.chatConfig.debug) {
-							console.log("更新用户记忆结果：", memoryResult);
-						}
-						break;
+					// 调用 LLM 继续对话
+					let newResponse = await this.llmHelper.callLLM(
+						messages,
+						context?.abortController?.signal,
+						this.chatConfig.actionGenerator.backend,
+						this.chatConfig.actionGenerator.maxRetries,
+						this.getTools()
+					);
+
+					return this.processResponse(newResponse, context);
 				}
 			}
 		} catch (error) {
@@ -351,102 +232,127 @@ ${this.stickerHelper.getAvailableEmojis().join(",")}
 	}
 
 	/**
-	 * 处理历史搜索结果
+	 * 判断工具是否需要后续对话
+	 * @param {string} toolName 工具名称
+	 * @returns {boolean} 是否需要后续对话
 	 */
-	async handleRAGSearchResults(searchResults, context) {
-		context.similarMessage = "";
-		let botActionResult = this.llmHelper.processMessageHistory(searchResults, true);
-		context.messageContext.push({
-			content_type: "chat_search_result",
-			text: botActionResult,
-		});
-		let messages = await this.prepareMessages(context);
-		let newResponse = await this.llmHelper.callLLM(
-			messages,
-			null,
-			this.chatConfig.actionGenerator.backend,
-			this.chatConfig.actionGenerator.maxRetries
-		);
-		return this.processResponse(newResponse, context);
-	}
-
-	/*
-	 * 发送消息前处理
-	 * 把句子中的英文逗号替换为中文逗号，vertical quote换成curved quote
-	 */
-	processSendMessage(message) {
-		if (!message) return message;
-
-		// 替换英文逗号为中文逗号
-		let processed = message.replace(/,/g, "，");
-
-		// 把所有vertical quotes替换成curved quotes
-		processed = processed
-			// 处理双引号
-			.replace(/"([^"]*?)"/g, "“$1”")
-			// 处理单引号
-			.replace(/'([^']*?)'/g, "‘$1’");
-
-		return processed;
+	_isFollowUpTool(toolName) {
+		// 定义需要后续对话的工具列表
+		const followUpTools = new Set(["chat_search", "web_search", "web_getcontent"]);
+		return followUpTools.has(toolName);
 	}
 
 	/**
-	 * 处理谷歌搜索结果
+	 * 执行单个工具调用
 	 */
-	async handleGoogleSearchResults(searchResults, context) {
-		context.similarMessage = "";
-		let botActionResult;
-		for (let item of searchResults) {
-			botActionResult += `<title>${item.title}</title>
-<url>${item.link}</url>
-<snippet>${item.snippet}</snippet>
-`;
-		}
+	async executeToolCall(name, params, context) {
+		switch (name) {
+			case "chat_skip":
+				if (this.chatConfig.debug) console.log("跳过");
+				await this.botActionHelper.saveAction(context.chatId, "", "skip");
+				this.kuukiyomiHandler.decreaseResponseRate(0.2);
+				return { status: "success", action: "skip" };
 
-		context.messageContext.push({
-			content_type: "web_search_result",
-			text: botActionResult,
-		});
-		let multiShotPrompt = "<tips>可以考虑是否需要进一步打开谷歌搜索结果URL</tips>";
-		let messages = await this.prepareMessages(context, multiShotPrompt);
-		let newResponse = await this.llmHelper.callLLM(
-			messages,
-			null,
-			this.chatConfig.actionGenerator.backend,
-			this.chatConfig.actionGenerator.maxRetries
-		);
-		return this.processResponse(newResponse, context);
-	}
+			case "chat_reply":
+				if (!params.message_id || !params.message) {
+					throw new Error("回复消息缺少必要参数");
+				}
+				if (this._checkMessageDuplicate(params.message, context)) {
+					throw new Error("检测到重复消息");
+				}
+				params.message = this.processSendMessage(params.message);
+				await this.botActionHelper.sendReply(
+					context.chatId,
+					params.message,
+					params.message_id
+				);
+				this.kuukiyomiHandler.increaseResponseRate(0.1);
+				return { status: "success", action: "reply", message: params.message };
 
-	/**
-	 * 处理网页打开结果
-	 */
-	async handleWebContent(webContent, context) {
-		context.similarMessage = "";
-		let botActionResult;
-		if (webContent.success) {
-			botActionResult = `
-<title>${webContent.title}</title>
-<content>
-${webContent.content}
-${webContent.truncated ? "网页内容超长被截断" : ""}
-</content>
-`;
-		} else {
-			botActionResult = `URL打开失败`;
+			case "chat_text":
+				if (!params.message) {
+					throw new Error("发送消息缺少内容参数");
+				}
+				if (this._checkMessageDuplicate(params.message, context)) {
+					throw new Error("检测到重复消息");
+				}
+				params.message = this.processSendMessage(params.message);
+				await this.botActionHelper.sendText(context.chatId, params.message);
+				return { status: "success", action: "text", message: params.message };
+
+			case "chat_note":
+				if (!params.note) {
+					throw new Error("记录笔记缺少必要参数");
+				}
+				await this.botActionHelper.saveAction(context.chatId, params.note, "note");
+				return { status: "success", action: "note", note: params.note };
+
+			case "chat_search":
+				if (!params.keyword) {
+					throw new Error("搜索缺少关键词参数");
+				}
+				let result = await this.botActionHelper.search(context.chatId, params.keyword);
+				context.messageContext.push({
+					content_type: "chat_search_called",
+					text: `<keyword>${params.keyword}</keyword>`,
+				});
+				return {
+					status: "success",
+					action: "search",
+					keyword: params.keyword,
+					results: this.llmHelper.processMessageHistory(result, true),
+				};
+
+			case "web_search":
+				if (!params.keyword) {
+					throw new Error("搜索缺少关键词参数");
+				}
+				let webResult = await this.botActionHelper.googleSearch(params.keyword);
+				context.messageContext.push({
+					content_type: "web_search_called",
+					text: `<keyword>${params.keyword}</keyword>`,
+				});
+				return {
+					status: "success",
+					action: "web_search",
+					keyword: params.keyword,
+					results: webResult,
+				};
+
+			case "web_getcontent":
+				if (!params.url) {
+					throw new Error("访问网页缺少URL参数");
+				}
+				let webContent = await this.botActionHelper.openURL(params.url);
+				context.messageContext.push({
+					content_type: "web_getcontent_called",
+					text: `<url>${params.url}</url>`,
+				});
+				return {
+					status: "success",
+					action: "web_getcontent",
+					url: params.url,
+					content: webContent,
+				};
+
+			case "user_memories":
+				if (!params.userid || !params.memories) {
+					throw new Error("更新用户记忆缺少必要参数");
+				}
+				let memoryResult = await this.botActionHelper.updateMemory(
+					params.userid,
+					params.memories
+				);
+				return {
+					status: "success",
+					action: "update_memories",
+					userid: params.userid,
+					memories: params.memories,
+				};
+
+			default:
+				throw new Error(`未知的工具调用: ${name}`);
 		}
-		context.messageContext.push({
-			content_type: "web_open_result",
-			text: botActionResult,
-		});
-		let messages = await this.prepareMessages(context);
-		let newResponse = await this.llmHelper.callLLM(
-			messages,
-			null,
-			this.chatConfig.actionGenerator.backend,
-			this.chatConfig.actionGenerator.maxRetries
-		);
-		return this.processResponse(newResponse, context);
 	}
 
 	/**
@@ -489,5 +395,172 @@ ${webContent.truncated ? "网页内容超长被截断" : ""}
 			if (longer[i] !== shorter[i]) diff++;
 		}
 		return diff;
+	}
+
+	/**
+	 * 获取工具定义
+	 */
+	getTools() {
+		return [
+			{
+				type: "function",
+				function: {
+					name: "chat_skip",
+					description: "跳过当前消息，不进行回复",
+					parameters: {
+						type: "object",
+						properties: {},
+						required: [],
+					},
+				},
+			},
+			{
+				type: "function",
+				function: {
+					name: "chat_text",
+					description: "直接向群内发送消息",
+					parameters: {
+						type: "object",
+						properties: {
+							message: {
+								type: "string",
+								description: "要发送的内容",
+							},
+						},
+						required: ["message"],
+					},
+				},
+			},
+			{
+				type: "function",
+				function: {
+					name: "chat_reply",
+					description: "回复某一条消息",
+					parameters: {
+						type: "object",
+						properties: {
+							message_id: {
+								type: "string",
+								description: "要回复的消息ID",
+							},
+							message: {
+								type: "string",
+								description: "要发送的内容",
+							},
+						},
+						required: ["message_id", "message"],
+					},
+				},
+			},
+			{
+				type: "function",
+				function: {
+					name: "chat_note",
+					description: "记录群聊笔记，用符合心情的语气记录",
+					parameters: {
+						type: "object",
+						properties: {
+							note: {
+								type: "string",
+								description: "要记录的事件、参与者和想法",
+							},
+						},
+						required: ["note"],
+					},
+				},
+			},
+			{
+				type: "function",
+				function: {
+					name: "chat_search",
+					description: "检索聊天记录",
+					parameters: {
+						type: "object",
+						properties: {
+							keyword: {
+								type: "string",
+								description: "一个陈述句来描述你要搜索的内容",
+							},
+						},
+						required: ["keyword"],
+					},
+				},
+			},
+			{
+				type: "function",
+				function: {
+					name: "user_memories",
+					description: "更新用户记忆",
+					parameters: {
+						type: "object",
+						properties: {
+							userid: {
+								type: "string",
+								description: "该用户的UID",
+							},
+							memories: {
+								type: "string",
+								description: "要更新或者添加的长期记忆内容",
+							},
+						},
+						required: ["userid", "memories"],
+					},
+				},
+			},
+			{
+				type: "function",
+				function: {
+					name: "web_search",
+					description: "使用谷歌搜索互联网",
+					parameters: {
+						type: "object",
+						properties: {
+							keyword: {
+								type: "string",
+								description: "搜索关键词",
+							},
+						},
+						required: ["keyword"],
+					},
+				},
+			},
+			{
+				type: "function",
+				function: {
+					name: "web_getcontent",
+					description: "根据URL获取内容",
+					parameters: {
+						type: "object",
+						properties: {
+							url: {
+								type: "string",
+								description: "要访问的url",
+							},
+						},
+						required: ["url"],
+					},
+				},
+			},
+		];
+	}
+
+	/*
+	 * 发送消息前处理
+	 * 把句子中的英文逗号替换为中文逗号，vertical quote换成curved quote
+	 */
+	processSendMessage(message) {
+		if (!message) return message;
+
+		// 替换英文逗号为中文逗号
+		let processed = message.replace(/,/g, "，");
+
+		// 把所有vertical quotes替换成curved quotes
+		processed = processed
+			// 处理双引号
+			.replace(/"([^"]*?)"/g, "“$1”")
+			// 处理单引号
+			.replace(/'([^']*?)'/g, "‘$1’");
+
+		return processed;
 	}
 }
