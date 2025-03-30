@@ -19,9 +19,10 @@ export class MCPHelper {
 	 * @param {string} [serverConfig.path] stdio 服务器的脚本路径
 	 * @param {string} [serverConfig.url] sse 服务器的 URL
 	 * @param {Object} [serverConfig.env] 环境变量配置
+	 * @param {Object} [serverConfig.headers] SSE 连接的 HTTP 请求头
 	 */
 	async connectToServer(serverConfig) {
-		const { name, description, type, env = {} } = serverConfig;
+		const { name, description, type, env = {}, headers = {} } = serverConfig;
 		const serverKey = type === "sse" ? serverConfig.url : serverConfig.path;
 
 		try {
@@ -63,8 +64,22 @@ export class MCPHelper {
 				if (!url) {
 					throw new Error("SSE server URL is required");
 				}
-				// SSE 服务器的环境变量需要通过其他方式配置（如服务器端配置）
-				transport = new SSEClientTransport(new URL(url));
+				// 创建 SSE transport 时传入 headers
+				transport = new SSEClientTransport(new URL(url), {
+					requestInit: { headers: headers },
+					eventSourceInit: {
+						// The EventSource package augments EventSourceInit with a "fetch" parameter.
+						// You can use this to set additional headers on the outgoing request.
+						// Based on this example: https://github.com/modelcontextprotocol/typescript-sdk/issues/118
+						async fetch(input, init) {
+							const headers = new Headers(init?.headers || {});
+							for (const [key, value] of Object.entries(serverConfig.headers || {})) {
+								headers.set(key, value);
+							}
+							return fetch(input, { ...init, headers });
+						},
+					},
+				});
 			} else {
 				throw new Error(`Unsupported server type: ${type}`);
 			}

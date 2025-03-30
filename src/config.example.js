@@ -151,6 +151,16 @@ chat_skip
 					},
 					description: "提供GitHub相关功能",
 				},
+				{
+					type: "sse",
+					name: "CustomSSE",
+					url: "https://your-sse-server.com/events",
+					description: "自定义SSE服务器",
+					headers: {
+						Authorization: "Bearer your-token",
+						"Custom-Header": "custom-value",
+					},
+				},
 			],
 		},
 		availableStickerSets: ["neuro_sama_rune"],
