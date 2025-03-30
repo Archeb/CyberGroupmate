@@ -208,8 +208,9 @@ ${this.stickerHelper.getAvailableEmojis().join(",")}
 					// 如果接近最大调用深度，添加提示信息
 					if (context.StackDepth >= this.chatConfig.actionGenerator.maxStackDepth - 1) {
 						messages.push({
-							role: "system",
-							content: "即将达到最大对话深度，请尽快总结当前结果并结束对话。",
+							role: "user",
+							content:
+								"<notice>即将达到最大对话深度，请尽快总结当前结果并结束对话。</notice>",
 						});
 					}
 
