@@ -173,6 +173,7 @@ export class MCPHelper {
 
 		try {
 			const result = await server.mcp.callTool({ name: toolName, arguments: params });
+			console.log(`MCP tool ${name} executed with result:`, result);
 			return {
 				status: "success",
 				action: name,
