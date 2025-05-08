@@ -132,6 +132,10 @@ export class KuukiyomiHandler {
 	 */
 	async consider(decision, processedMsg) {
 		if (!decision.shouldAct) return decision;
+		if (processedMsg.text?.includes("[force]")) {
+			// 如果消息包含"force"，直接返回决策
+			return decision;
+		}
 
 		try {
 			// 提取上下文
@@ -382,7 +386,7 @@ export class KuukiyomiHandler {
 				this.stats.lastInteractionTime = Date.now(); // 更新主动交互时间
 				result.shouldAct = true;
 				result.decisionType = "mention";
-				result.scene = "当前唤起场景为被提及或回复";
+				result.scene = "当前唤起场景为被提及或回复，请积极主动回应";
 				this.adjustResponseRate(); // 调整响应率
 				this.lastResponseTime.set(processedMsg.chat_id, Date.now());
 				return result;
