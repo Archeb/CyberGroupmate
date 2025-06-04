@@ -58,6 +58,9 @@ export class LLMHelper {
 
 				if (typeof completion === "string") completion = JSON.parse(completion);
 
+				// 处理Gemini API的特殊情况：将Python代码转换为tool calls
+				let processedChoice = this.processGeminiResponse(completion.choices[0]);
+
 				if (this.chatConfig.debug) {
 					// 保存日志到文件
 					let timestamp = new Date().toISOString().replace(/[:.]/g, "-");
@@ -67,7 +70,7 @@ export class LLMHelper {
 						// 分隔线
 						"\n=== Response ===\n",
 						// 响应内容
-						JSON.stringify(completion.choices[0], null, 2),
+						JSON.stringify(processedChoice, null, 2),
 						// 模型
 						`model: ${backendConfig.model}`,
 					].join("\n");
@@ -85,7 +88,7 @@ export class LLMHelper {
 						this.chatConfig.memoChannelId,
 						[
 							"response:",
-							JSON.stringify(completion.choices[0], null, 2),
+							JSON.stringify(processedChoice, null, 2),
 							"model:",
 							backendConfig.model,
 						].join("\n"),
@@ -94,9 +97,9 @@ export class LLMHelper {
 					);
 				}
 
-				if (this.chatConfig.debug) console.log(completion.choices[0]);
+				if (this.chatConfig.debug) console.log(processedChoice);
 
-				return completion.choices[0];
+				return processedChoice;
 			} catch (error) {
 				if (error.message === "Request was aborted.") {
 					throw new Error("AbortError");
@@ -198,5 +201,180 @@ export class LLMHelper {
 		});
 
 		return textHistory.join("\n");
+	}
+	/**
+	 * 解析Python代码块中的函数调用并转换为tool calls
+	 */
+	parsePythonCodeToToolCalls(content) {
+		// 查找markdown代码块
+		const codeBlockRegex = /```(?:python)?\s*([\s\S]*?)```\s*$/;
+		const match = content.match(codeBlockRegex);
+		
+		if (!match) {
+			return null;
+		}
+ 
+		const pythonCode = match[1].trim();
+		const toolCalls = [];
+ 
+		// 匹配print()函数内的API调用
+		// 支持多行和单行格式
+		const printRegex = /print\s*\(\s*([\s\S]*?\))\s*\)/g;
+		
+		let printMatch;
+		let callIndex = 0;
+		
+		while ((printMatch = printRegex.exec(pythonCode)) !== null) {
+			const printContent = printMatch[1];
+			
+			// 在print内容中查找API调用 (object.method格式)
+			const apiCallRegex = /(\w+)\.(\w+)\s*\(\s*(.*?)\s*\)/;
+			const apiMatch = printContent.match(apiCallRegex);
+			
+			if (apiMatch) {
+				const [, objectName, methodName, argsString] = apiMatch;
+				
+				try {
+					// 解析参数
+					const args = this.parsePythonArguments(argsString);
+					
+					// 构造tool call
+					const toolCall = {
+						id: `call_${Date.now()}_${callIndex}`,
+						type: "function",
+						function: {
+							name: methodName, // 只使用方法名，不包含对象名
+							arguments: JSON.stringify(args)
+						}
+					};
+					
+					toolCalls.push(toolCall);
+					callIndex++;
+				} catch (error) {
+					if (this.chatConfig.debug) {
+						console.log(`解析API调用失败: ${apiMatch[0]}, 错误: ${error.message}`);
+					}
+				}
+			}
+		}
+ 
+		return toolCalls.length > 0 ? toolCalls : null;
+	}
+ 
+	/**
+	 * 解析Python函数参数
+	 */
+	parsePythonArguments(argsString) {
+		if (!argsString.trim()) {
+			return {};
+		}
+ 
+		const args = {};
+		
+		// 简单的参数解析，支持 key=value 格式
+		const argPairs = this.splitArguments(argsString);
+		
+		for (const pair of argPairs) {
+			const equalIndex = pair.indexOf('=');
+			if (equalIndex > 0) {
+				const key = pair.substring(0, equalIndex).trim();
+				let value = pair.substring(equalIndex + 1).trim();
+				
+				// 移除引号并解析值
+				if ((value.startsWith('"') && value.endsWith('"')) || 
+					(value.startsWith("'") && value.endsWith("'"))) {
+					value = value.slice(1, -1);
+				} else if (!isNaN(value)) {
+					value = Number(value);
+				} else if (value === 'True') {
+					value = true;
+				} else if (value === 'False') {
+					value = false;
+				} else if (value === 'None') {
+					value = null;
+				}
+				
+				args[key] = value;
+			}
+		}
+		
+		return args;
+	}
+ 
+	/**
+	 * 分割函数参数，处理嵌套的引号和括号
+	 */
+	splitArguments(argsString) {
+		const args = [];
+		let current = '';
+		let inQuotes = false;
+		let quoteChar = '';
+		let parenDepth = 0;
+		
+		for (let i = 0; i < argsString.length; i++) {
+			const char = argsString[i];
+			
+			if (!inQuotes && (char === '"' || char === "'")) {
+				inQuotes = true;
+				quoteChar = char;
+				current += char;
+			} else if (inQuotes && char === quoteChar) {
+				inQuotes = false;
+				current += char;
+			} else if (!inQuotes && char === '(') {
+				parenDepth++;
+				current += char;
+			} else if (!inQuotes && char === ')') {
+				parenDepth--;
+				current += char;
+			} else if (!inQuotes && char === ',' && parenDepth === 0) {
+				args.push(current.trim());
+				current = '';
+			} else {
+				current += char;
+			}
+		}
+		
+		if (current.trim()) {
+			args.push(current.trim());
+		}
+		
+		return args;
+	}
+ 
+	/**
+	 * 处理Gemini API的Python代码转换
+	 */
+	processGeminiResponse(choice) {
+		if (!choice.message || !choice.message.content) {
+			return choice;
+		}
+ 
+		const content = choice.message.content;
+		const toolCalls = this.parsePythonCodeToToolCalls(content);
+		
+		if (toolCalls) {
+			// 移除代码块，保留其他内容
+			const codeBlockRegex = /```(?:python)?\s*([\s\S]*?)```\s*$/;
+			const cleanContent = content.replace(codeBlockRegex, '').trim();
+			
+			// 创建新的choice对象
+			const newChoice = {
+				...choice,
+				message: {
+					...choice.message,
+					content: cleanContent || null,
+					tool_calls: toolCalls
+				}
+			};
+			
+			if (this.chatConfig.debug) {
+				console.log('检测到Python代码，转换为tool calls:', toolCalls);
+			}
+			
+			return newChoice;
+		}
+		
+		return choice;
 	}
 }
