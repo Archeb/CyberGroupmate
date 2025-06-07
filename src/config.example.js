@@ -79,10 +79,6 @@ chat_skip
 				model: "",
 			},
 		},
-		google: {
-			apiKey: "",
-			cseId: "",
-		},
 		gemini: {
 			// 基于 gemini grounding with google search 快速联网获取答案
 			apiKey: "",

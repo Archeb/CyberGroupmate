@@ -321,18 +321,6 @@ ${this.stickerHelper.getAvailableEmojis().join(",")}
 					results: this.llmHelper.processMessageHistory(result, true),
 				};
 
-			case "web_search":
-				if (!params.keyword) {
-					throw new Error("搜索缺少关键词参数");
-				}
-				let webResult = await this.botActionHelper.googleSearch(params.keyword);
-				return {
-					status: "success",
-					action: "web_search",
-					keyword: params.keyword,
-					results: webResult,
-				};
-
 			case "web_getcontent":
 				if (!params.url) {
 					throw new Error("访问网页缺少URL参数");
@@ -515,23 +503,6 @@ ${this.stickerHelper.getAvailableEmojis().join(",")}
 							},
 						},
 						required: ["userid", "memories"],
-					},
-				},
-			},
-			{
-				type: "function",
-				function: {
-					name: "web_search",
-					description: "使用谷歌搜索互联网",
-					parameters: {
-						type: "object",
-						properties: {
-							keyword: {
-								type: "string",
-								description: "搜索关键词",
-							},
-						},
-						required: ["keyword"],
 					},
 				},
 			},

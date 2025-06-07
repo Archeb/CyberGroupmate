@@ -118,28 +118,6 @@ export class BotActionHelper {
 		return searchResults;
 	}
 
-	async googleSearch(query, num = 5) {
-		const url = `https://www.googleapis.com/customsearch/v1?key=${
-			this.chatConfig.google.apiKey
-		}&cx=${this.chatConfig.google.cseId}&q=${encodeURIComponent(query)}&num=${num}`;
-
-		try {
-			const response = await fetch(url);
-			const data = await response.json();
-
-			if (data.items && data.items.length > 0) {
-				return data.items.map((item) => ({
-					title: item.title,
-					link: item.link,
-					snippet: item.snippet,
-				}));
-			}
-			return [];
-		} catch (error) {
-			console.error("搜索出错:", error);
-			return [];
-		}
-	}
 
 	async quickAnswer(query, dynamicThreshold = 0.4) {
 		try {
