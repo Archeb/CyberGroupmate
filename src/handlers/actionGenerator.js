@@ -232,7 +232,11 @@ ${this.stickerHelper.getAvailableEmojis().join(",")}
 
 					return this.processResponse(newResponse, context, messages);
 				}
+			}else{
+				// 没有工具调用，直接把回复文本当chat_text发群里
+				await this.executeToolCall("chat_text", {message:response.message.content}, context);
 			}
+
 		} catch (error) {
 			if (error.name === "AbortError" || error.message === "AbortError") {
 				throw error;
