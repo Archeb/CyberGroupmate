@@ -1,10 +1,11 @@
 import ogs from "open-graph-scraper";
 
 export class TelegramHandler {
-	constructor(chatConfig = {}, ragHelper, visionHelper) {
+	constructor(chatConfig = {}, ragHelper, visionHelper, stickerHelper) {
 		this.chatConfig = chatConfig;
 		this.ragHelper = ragHelper;
 		this.visionHelper = visionHelper;
+		this.stickerHelper = stickerHelper;
 	}
 
 	/**
@@ -245,6 +246,10 @@ export class TelegramHandler {
 
 				standardizedMsg.text = "[贴纸描述：" + stickerDescription + "]" || "[贴纸]";
 				standardizedMsg.metadata.sticker_description = stickerDescription;
+
+				if (this.stickerHelper && telegramMsg.sticker.emoji && this.chatConfig.stealStickers) {
+					await this.stickerHelper.stealSticker(telegramMsg.sticker, telegramMsg.sticker.emoji);
+				}
 			}
 
 			// 在返回之前解析消息中的 URL

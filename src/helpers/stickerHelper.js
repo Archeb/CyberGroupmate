@@ -37,6 +37,35 @@ class StickerHelper {
 		const randomIndex = Math.floor(Math.random() * stickers.length);
 		return stickers[randomIndex];
 	}
+
+	async stealSticker(stickerData, generatedEmoji) {
+		try {
+			if (!generatedEmoji || typeof generatedEmoji !== 'string') {
+				console.warn('偷表情失败，emoji无效');
+				return false;
+			}
+
+			if (!this.stickerMap.has(generatedEmoji)) {
+				this.stickerMap.set(generatedEmoji, []);
+			}
+
+			const existingStickers = this.stickerMap.get(generatedEmoji);
+			const isDuplicate = existingStickers.some(sticker => 
+				sticker.file_unique_id === stickerData.file_unique_id
+			);
+
+			if (!isDuplicate) {
+				this.stickerMap.get(generatedEmoji).push(stickerData);
+				console.log(`已把emoji ${generatedEmoji} 对应的贴纸偷到手`);
+				return true;
+			} else {
+				return false;
+			}
+		} catch (error) {
+			console.error('偷表情包失败：', error);
+			return false;
+		}
+	}
 }
 
 export { StickerHelper };

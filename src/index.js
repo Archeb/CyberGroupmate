@@ -87,7 +87,7 @@ async function getChatState(chatId) {
 			mcpHelper,
 			mcpTools // 传入已初始化的 MCP 工具列表
 		);
-		let telegramHandler = new TelegramHandler(chatConfig, ragHelper, visionHelper);
+		let telegramHandler = new TelegramHandler(chatConfig, ragHelper, visionHelper, stickerHelper);
 
 		chatStates.set(chatId, {
 			isProcessing: false,

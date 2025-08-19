@@ -160,6 +160,7 @@ chat_skip
 			],
 		},
 		availableStickerSets: ["neuro_sama_rune"],
+		stealStickers: true, // 是否允许从其他贴纸集中偷取贴纸（不会保存，重启失效）
 		memoChannelId: 123456,
 		enableMemo: true,
 		blacklistUsers: [],
