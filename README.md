@@ -1,108 +1,86 @@
-# CyberGroupmate
+# CyberGroupmate (赛博群友)
 
-一个基于 CodeAct 的社交 Agent。目标不是做“会回消息的 bot”，而是做一个真正能在群聊里长期观察、记忆、决策、行动的赛博群友。
+> **An LLM-powered Telegram social agent so human-like that newcomers can't tell it apart from a real group member.**
 
-当前主线架构已经切换为：
+CyberGroupmate is an autonomous AI agent that participates in Telegram group chats with natural, human-like behavior. Built on the [CodeAct](https://arxiv.org/abs/2402.01030) paradigm, the agent writes and executes TypeScript code to perceive, reason, and act — rather than relying on rigid tool-calling APIs [[1]](file://Implementation_Plan.md).
 
-`PlatformAdapter -> NotificationCenter -> FastRouter / RecordingPipeline / Memory -> ReplyPipeline -> CodeAct Agent`
+---
 
-重点变化：
+## ✨ Key Features
 
-- Telegram 连接和消息监听现在由宿主侧官方 `TelegramAdapter` 接管
-- Agent 不再在 bootstrap 里自己连接 Telegram、自己挂 listener
-- bootstrap 只负责理解系统、加载文档、做幂等初始化
-- 所有能力继续坚持 code-first：不用 tool calling，Agent 通过代码接口、`actions.*`、`skills.*` 行动
-- 每个 scene 的 `.d.ts` 现在只描述它自己的能力；共享能力定义由框架按 scene 组合注入
-- `ReplyPipeline` 现在会自动注入 `Scene Focus + Latent Memory`，让 Memory V2 以“潜意识上下文”的方式参与决策
+- **Air-Reading Engine** — Intelligent message routing with topic-level triage; knows when to speak and when to stay silent [[1]](file://Implementation_Plan.md)
+- **Natural Conversation Flow** — Simulates human reply delays, graceful topic exit, and identity-probing detection [[1]](file://Implementation_Plan.md)
+- **Three-Layer Memory System** — Short-term compaction, mid-term episodic/social memory, and long-term semantic recall backed by SQLite + FTS5 + vector search [[1]](file://Implementation_Plan.md)
+- **Structured Decision Pipeline** — FastRouter → RecordingPipeline → TopicRegistry → ReplyPipeline, ensuring stable behavior across model tiers [[1]](file://Implementation_Plan.md)
+- **Multi-Model Routing** — Automatically selects cheap / mid / SOTA models based on event complexity [[1]](file://Implementation_Plan.md)
+- **Feedback Loop** — Tracks group reactions after each reply and adjusts future behavior [[1]](file://Implementation_Plan.md)
+- **CodeAct Execution** — The agent writes real TypeScript in a sandboxed environment, enabling flexible multi-step reasoning and self-debugging [[2]](file://main.ts)
+- **Scene System** — Context-window management via switchable "scenes" (home / telegram / memory), each with its own typed API surface [[1]](file://Implementation_Plan.md)
+- **Reflection Engine** — Periodic LLM-driven self-reflection that consolidates episodic memories, updates person profiles, and extracts core facts [[1]](file://Implementation_Plan.md)
 
-## 当前状态
+---
 
-- `Phase 1-5`：已完成
-- `Phase 6A`：已完成
-- `Phase 6B`：主运行链已接通
-- Telegram ingress：已从 bootstrap 迁出，走官方 adapter
-- Reply / Memory / Feedback 闭环：已接通并有测试覆盖
+## 🏗 Architecture Overview
 
-如果你想看详细设计，读 [Implementation_Plan.md](/mnt/g/Projects/CyberGroupmate/Implementation_Plan.md)。
-
-## 核心心智模型
-
-- `scene` 像手机里的 app
-- `NotificationCenter` 像手机通知中心
-- Telegram/未来的 Discord 都应该先进入 NC，再由框架统一消费
-- Agent 主要掌握“怎么理解、怎么检索、怎么回复、怎么写代码扩展自己”
-
-## 架构概览
-
-```text
-Telegram / Future IM
-        │
-        ▼
-PlatformAdapter
-  - connect/login
-  - receive messages
-  - normalize to nc.message
-  - expose host-backed ctx APIs
-        │
-        ▼
-NotificationCenter
-  - append-only events.jsonl
-  - queue / drain / urgency
-        │
-        ▼
-FastRouter
-  - FAST_PATH
-  - ENGAGED
-  - RECORDING
-        │
-        ├── EngagedTopicHandler
-        ├── RecordingPipeline
-        │     - topic clustering
-        │     - summary + triage
-        │     - TopicRegistry
-        │     - Memory V2 writes
-        │
-        ▼
-ReplyPipeline
-  - build ReplyTask
-  - inject topic / recall / route context
-  - inject Scene Focus / Latent Memory
-        │
-        ▼
-CodeAct Session
-  - sandbox
-  - actions.*
-  - memory.*
-  - skills.*
-  - ctx.tg host proxy
-  - scene-specific type defs composed by framework
-        │
-        ▼
-FeedbackLoop
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    Platform Adapter Layer                    │
+│               (TelegramAdapter — start/stop/normalize)       │
+└──────────────────────────┬──────────────────────────────────┘
+                           │ NCEvent (standardized)
+                           ▼
+┌─────────────────────────────────────────────────────────────┐
+│                NotificationCenter (Event Bus)                │
+│                  + events.jsonl persistence                   │
+└──────────────────────────┬──────────────────────────────────┘
+                           │ nc.drain()
+                           ▼
+┌─────────────────────────────────────────────────────────────┐
+│                  Cognition Pipeline (Phase 6)                │
+│                                                              │
+│  FastRouter ──┬── FAST_PATH (@/reply/DM) ──► ReplyPipeline  │
+│               ├── ENGAGED (active topic)  ──► EngagedHandler │
+│               └── RECORDING (observe)     ──► RecordingPipe  │
+│                                                              │
+│  TopicRegistry (10-state machine)    ModelRouter (rule-based)│
+│  FeedbackLoop (post-reply eval)      ContextAssembler        │
+└──────────────────────────┬──────────────────────────────────┘
+                           │ ReplyTask
+                           ▼
+┌─────────────────────────────────────────────────────────────┐
+│                 Execution Layer (CodeAct)                     │
+│                                                              │
+│  Session Runner (multi-turn LLM ↔ Sandbox)                   │
+│  Sandbox Worker (new Function() + persistent ctx namespace)  │
+│  SceneManager (home / telegram / memory)                     │
+└──────────────────────────┬──────────────────────────────────┘
+                           │
+                           ▼
+┌─────────────────────────────────────────────────────────────┐
+│                     Memory V2 (SQLite)                        │
+│  topics │ core_facts │ person_identities │ person_group_profiles │
+│  message_log │ FTS5 indexes │ vector embeddings              │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-## Scene TypeDefs
+[[2]](file://main.ts) [[1]](file://Implementation_Plan.md)
 
-`scene` 的类型定义现在是组合出来的，不是每个 `.d.ts` 各自复制一整套全局接口。
+---
 
-- `src/scenes/shared/*.d.ts` 只定义共享能力块，比如 `scene`、`runtime`、`actions`、`skills`
-- `src/scenes/home.d.ts`、`src/scenes/telegram.d.ts`、`src/scenes/memory.d.ts` 只定义各自 scene 专属能力
-- 框架在注册 scene 时决定给该 scene 注入哪些定义
+## 📋 Prerequisites
 
-这条规则的目的很简单：
+| Requirement | Version |
+|-------------|---------|
+| **Node.js** | ≥ 22 |
+| **npm** | ≥ 9 |
+| A Telegram Bot Token **or** Userbot session | — |
+| An LLM API key (Anthropic / OpenAI-compatible) | — |
 
-- 避免 `d.ts` 重复拷贝后长期漂移
-- 避免把某个平台或某个 mode 的能力错误暴露给所有 scene
-- 让 adapter/框架可以按实际 capability surface 裁剪 Agent 可见定义
+---
 
-## 环境要求
+## 🚀 Quick Start
 
-- Node.js `>= 22`
-- npm
-- Telegram 凭据
-- 一个可用的 LLM API 配置
-
-## 安装
+### 1. Clone & Install
 
 ```bash
 git clone git@github.com:Archeb/CyberGroupmate.git
@@ -110,300 +88,301 @@ cd CyberGroupmate
 npm install
 ```
 
-## 配置
+### 2. Configure
 
-先复制配置：
+Copy the example config and fill in your credentials:
 
 ```bash
 cp config.example.yaml config.yaml
 ```
 
-然后至少在 `config.yaml` 里准备这些值：
+**Minimum required configuration** in `config.yaml`:
 
 ```yaml
+llm_profiles:
+  default:
+    provider: anthropic        # or "openai"
+    base_url: https://api.anthropic.com
+    model: claude-sonnet-4-20250514
+    api_key: sk-ant-...
+    temperature: 0.7
+    max_tokens: 4096
+
+model_tiers:
+  cheap: default
+  mid: default
+  sota: default
+
+persona:
+  name: 赛博群友
+  description: |
+    你是一个活泼、有趣的群友……（自定义人格描述）
+
 telegram:
-  mode: bot
+  mode: bot                    # "bot" or "userbot"
   api_id: "12345678"
-  api_hash: "abcdef1234567890"
-  bot_token: "123456:ABCDEF"
-
-# 或 userbot 模式
-# telegram:
-#   mode: userbot
-#   api_id: "12345678"
-#   api_hash: "abcdef1234567890"
-#   phone: "+8613xxxxxxxxx"
+  api_hash: "your_api_hash"
+  bot_token: "123456:ABC-..."  # bot mode
+  # phone: "+861xxxxxxxxxx"    # userbot mode
 ```
 
-LLM、Telegram、embedding 等业务配置现在都只从 `config.yaml` 读取。
-环境变量只建议用于调试开关，例如 `LOG_LEVEL`。
+Environment variables (`TG_API_ID`, `TG_API_HASH`, `TG_BOT_TOKEN`, etc.) override the YAML values [[1]](file://Implementation_Plan.md).
 
-`userbot` 模式下，首次登录会在启动过程中通过终端提示你输入：
+### 3. Prepare Agent Docs
 
-- Telegram OTP 验证码
-- 两步验证密码（如果账号开启了 2FA）
-
-会话会持久化到 `workspace/tg-session/account`，后续重启会自动复用。
-
-检查配置：
+Place your system prompt and bootstrap prompt in the workspace:
 
 ```bash
-npx tsx src/cli.ts config
+mkdir -p workspace/agent-docs
+# Edit these files to customize agent behavior:
+#   workspace/agent-docs/system-prompt.md
+#   workspace/agent-docs/bootstrap-prompt.md
 ```
 
-## 启动
-
-```bash
-npm start
-```
-
-或者：
+### 4. Run
 
 ```bash
 npx tsx src/main.ts
 ```
 
-推荐调试方式：
+On first launch the agent will run a **bootstrap** sequence — connecting to Telegram and initializing the runtime. Successful bootstrap code is cached in `workspace/bootstrap-code.json` for fast replay on subsequent restarts [[2]](file://main.ts) [[1]](file://Implementation_Plan.md).
+
+---
+
+## 🛠 CLI Tools
+
+CyberGroupmate ships with a CLI for debugging and inspection [[3]](file://cli.ts):
 
 ```bash
-LOG_LEVEL=debug npm start
+npx tsx src/cli.ts <command> [args...]
 ```
 
-你应该看到这些关键现象：
+| Command | Description |
+|---------|-------------|
+| `sandbox` | Interactive Sandbox REPL — execute TypeScript directly |
+| `notify [type] [text]` | Push a notification event into the queue (`--urgent` flag supported) |
+| `drain` | View and flush the current notification queue |
+| `memory <subcmd>` | Query the memory system |
+| `config` | Inspect loaded configuration and file status |
+| `status` | View agent state, recent events, and memory statistics |
+| `dry-run <file.jsonl>` | Replay historical messages for offline evaluation |
 
-1. `TelegramAdapter` 启动成功
-2. sandbox 启动成功
-3. bootstrap 运行，但不会要求 Agent 自己连接 Telegram
-4. 后续 Telegram 消息会直接进入 `NotificationCenter`
-
-## 人工验证
-
-下面这套流程是当前最重要的手动验收路径。
-
-### A. 验证 Telegram ingress 不依赖 bootstrap
-
-1. 启动进程：`LOG_LEVEL=debug npm start`
-2. 观察日志里是否出现 `TelegramAdapter` 启动成功
-3. 让另一个 Telegram 账号向 bot / userbot 所在会话发一条消息
-4. 观察日志和 `workspace/events.jsonl`
-
-预期：
-
-- 即使 Agent bootstrap 还没做任何平台连接代码，消息也会被记录进 [events.jsonl](/mnt/g/Projects/CyberGroupmate/workspace/events.jsonl)
-- 事件类型应该是 `nc.message`
-- 事件里应该明确包含来源身份，例如：
-  - `scene`
-  - `source.platform`
-  - `source.chatId`
-  - `source.userId`
-  - `source.messageId`
-  - `chatType`
-  - `isDirectMessage`
-- Agent 不需要 `runtime.spawn("tg-listener", ...)`
-
-可辅助执行：
+### Memory Sub-commands
 
 ```bash
-npx tsx src/cli.ts drain
+npx tsx src/cli.ts memory recall "京都旅行"       # Hybrid search (vector + FTS5)
+npx tsx src/cli.ts memory browse "谁提过 Rust"    # Browse message archive
+npx tsx src/cli.ts memory reflect --chat -100123  # Trigger reflection for a chat
+npx tsx src/cli.ts memory status                  # Database statistics
 ```
 
-### B. 验证 ReplyPipeline -> Agent -> Telegram 发送链
+### Dry-Run (Offline Evaluation)
 
-1. 用另一个账号发一条明确需要回应的消息
-2. 观察日志中是否出现：
-   - `FAST_PATH`
-   - 或 `话题通过 Triage`
-   - 或 `对话模式就绪`
-3. 观察 Agent 是否进入 session 并调用 `ctx.tg` / `skills.social.replyInTelegram`
-4. 观察新事件：
-   - `system.agent_message_sent`
-   - 之后的 `system.feedback_evaluated`
-
-预期：
-
-- Agent 发送消息时，不需要自己创建 Telegram client
-- 发送通过宿主侧 `ctx.tg` host proxy 完成
-- 如果要跨 scene 行动，应先 `scene.enter("telegram", { chatId })`；切换后当前代码块会立即结束，由下一回合继续
-- 如果当前 session 运行期间又来了新的外部消息或 reply task，系统会中断当前 session，把控制权交还主循环
-- 发言后反馈会进入 `FeedbackLoop`
-- 首轮 prompt 里应能看到：
-  - `Scene Focus`
-  - `Latent Memory`
-  - 紧凑消息摘要，例如：
-    - `[telegram/private] 莫思奇多 (u:682932098 c:682932098 m:1354) 3分钟前: 在吗在吗`
-
-### C. 验证 Memory V2 在写入
-
-启动后跑一段真实消息流，或者先做 dry-run：
+Replay exported chat history through the full pipeline without sending any messages [[3]](file://cli.ts) [[1]](file://Implementation_Plan.md):
 
 ```bash
-npx tsx src/cli.ts memory status
+npx tsx src/cli.ts dry-run history.jsonl --chat-id -100123456 --days 30 --reflect
 ```
 
-预期：
+Options: `--chat-id <id>`, `--days <n>`, `--reflect`, `--memory-db <path>`
 
-- `topics`
-- `messages`
-- `persons`
-- `profiles`
+---
 
-这些计数会增长。
+## 📁 Project Structure
 
-也可以直接看数据库：
+```
+cybergroupmate/
+├── src/
+│   ├── main.ts                  # Orchestrator — bootstrap → event loop
+│   ├── cli.ts                   # CLI debugging tools
+│   ├── core/                    # Config, logger, LLM client, safety
+│   ├── adapter/                 # Platform adapters (Telegram)
+│   ├── sandbox/                 # CodeAct execution engine
+│   ├── event/                   # NotificationCenter + compaction
+│   ├── pipeline/                # Decision pipeline (Phase 6)
+│   ├── memory-v2/               # Three-layer memory system
+│   ├── scenes/                  # Scene definitions + shared type defs
+│   └── agent/                   # Agent docs system
+├── system-prompts/              # LLM prompt templates
+├── config.yaml                  # Runtime configuration
+├── config.example.yaml          # Annotated config template
+├── workspace/                   # Runtime data (gitignored)
+│   ├── memory.db                # SQLite memory database
+│   ├── events.jsonl             # Append-only event log
+│   ├── agent-state.md           # Persistent agent state
+│   ├── bootstrap-code.json      # Cached bootstrap code
+│   ├── tg-session/              # Telegram session files
+│   ├── agent-docs/              # Agent-readable documents
+│   └── sessions/                # Session transcripts
+├── tests/
+└── docs/
+```
 
-- [memory.db](/mnt/g/Projects/CyberGroupmate/workspace/memory.db)
+[[1]](file://Implementation_Plan.md)
 
-关键表：
+---
 
-- `topics`
-- `message_log`
-- `person_identities`
-- `person_group_profiles`
-- `group_models`
+## ⚙️ Configuration Reference
 
-这些表中的内容现在不只供 Agent 主动 `memory.recall()`，还会在 ReplyPipeline 命中目标 chat 时被自动摘要注入上下文。
+CyberGroupmate uses a layered configuration: **environment variables > config.yaml > defaults** [[1]](file://Implementation_Plan.md).
 
-### D. 验证 bootstrap 已经降责
+### LLM Profiles & Model Tiers
 
-看这些文件：
+Define named LLM profiles and assign them to three cost tiers:
 
-- [bootstrap-prompt.md](/mnt/g/Projects/CyberGroupmate/workspace/agent-docs/bootstrap-prompt.md)
-- [system-prompt.md](/mnt/g/Projects/CyberGroupmate/workspace/agent-docs/system-prompt.md)
-- [telegram.md](/mnt/g/Projects/CyberGroupmate/workspace/agent-docs/telegram.md)
+```yaml
+llm_profiles:
+  gemini-flash:
+    provider: openai
+    base_url: https://generativelanguage.googleapis.com/v1beta/openai
+    model: gemini-2.0-flash
+    api_key: ...
+    temperature: 0.7
+    max_tokens: 4096
 
-预期：
+  claude-sonnet:
+    provider: anthropic
+    base_url: https://api.anthropic.com
+    model: claude-sonnet-4-20250514
+    api_key: ...
+    temperature: 0.7
+    max_tokens: 8192
 
-- 不再要求 Agent “连接 Telegram”
-- 不再要求 Agent “自己设置监听”
-- 文档明确说明 `ctx.tg` 是系统注入的 host proxy
+model_tiers:
+  cheap: gemini-flash       # Recording Pipeline, Triage, Feedback
+  mid: claude-sonnet         # Main agent sessions, Reply Pipeline
+  sota: claude-sonnet        # Complex @ queries, Playbook generation
+```
 
-### E. 验证 Scene Focus / Latent Memory 自动注入
+[[1]](file://Implementation_Plan.md)
 
-1. 用一个已有记忆的会话继续和 bot / userbot 对话
-2. 使用 `LOG_LEVEL=debug npm start`
-3. 观察首轮 session prompt
+### Reflection Configuration
 
-预期：
+```yaml
+reflection:
+  silence_threshold: 7200    # Trigger after 2h of chat silence
+  max_interval: 86400        # Force trigger every 24h
+  awake_hours: [8, 24]       # Only reflect during these hours
+  timezone: "Asia/Shanghai"
+  check_interval: 300        # Check every 5 minutes
+```
 
-- 会出现 `[Scene Focus]`
-- 会出现 `[Latent Memory]`
-- 内容优先来自：
-  - `person_identities`
-  - `person_group_profiles`
-  - `group_models`
-  - 近 7 天相关 topics
-  - 当前 chat 最近几条 `message_log`
-- scene 仍然只是 `telegram` / `memory` / `home`
-- 不会出现动态 scene 名如 `telegram/682932098`
+[[2]](file://main.ts) [[1]](file://Implementation_Plan.md)
 
-### F. 验证 docs 是按需读取而不是默认前置
+### Notification Tuning
 
-预期：
+```yaml
+notification:
+  urgent_words: ["?", "？", "呢", "吗"]
+```
 
-- 普通回复任务里，Agent 会优先基于已注入的类型定义、消息摘要、`Scene Focus` 和 `Latent Memory` 直接写代码
-- 只有在需要高级能力或不确定 API 细节时，才会显式调用 `docs.read(...)`
+---
 
-## CLI
+## 🔄 How It Works
+
+### Event Loop
+
+1. **TelegramAdapter** connects to Telegram and pushes standardized `NCEvent`s into the NotificationCenter [[2]](file://main.ts)
+2. **Main loop** drains events in batches (with configurable batch window and urgency detection) [[2]](file://main.ts)
+3. **FastRouter** classifies each message into one of three paths [[1]](file://Implementation_Plan.md):
+   - **FAST_PATH** — Direct @mentions, replies to agent, DMs → immediate CodeAct session
+   - **ENGAGED** — Belongs to an active conversation topic → EngagedTopicHandler
+   - **RECORDING** — Normal group chat → RecordingPipeline buffer
+4. **RecordingPipeline** flushes buffered messages (50 msgs or 2 min silence), performs LLM topic clustering and triage, updates TopicRegistry, and writes to Memory V2 [[1]](file://Implementation_Plan.md)
+5. **ReplyPipeline** assembles context (scene focus + latent memory) and creates `ReplyTask`s [[2]](file://main.ts) [[1]](file://Implementation_Plan.md)
+6. **CodeAct Session Runner** executes multi-turn LLM ↔ Sandbox interactions until the agent finishes (no more code blocks) [[2]](file://main.ts)
+7. **Compaction** extracts summaries, facts, and person updates from the session transcript [[1]](file://Implementation_Plan.md)
+8. **FeedbackLoop** monitors group reactions for 3 minutes after each agent reply [[2]](file://main.ts) [[1]](file://Implementation_Plan.md)
+
+### Bootstrap & Recovery
+
+- On first run, the agent goes through an LLM-guided bootstrap to initialize its environment [[2]](file://main.ts)
+- Successful bootstrap code is cached and replayed on restart; if replay fails, a full LLM bootstrap is re-run [[2]](file://main.ts) [[1]](file://Implementation_Plan.md)
+- If the sandbox process crashes, the orchestrator automatically restarts it, replays bootstrap, and re-queues pending events [[2]](file://main.ts) [[1]](file://Implementation_Plan.md)
+
+---
+
+## 🧠 Memory System (V2)
+
+A three-layer memory architecture built on SQLite [[1]](file://Implementation_Plan.md):
+
+| Layer | Contents | Mechanism |
+|-------|----------|-----------|
+| **Short-term** | Session compaction summaries | Automatic post-session extraction |
+| **Mid-term** | Topic episodes, person profiles, group models | RecordingPipeline + Reflection |
+| **Long-term** | Core facts, consolidated knowledge | Reflection engine (merge + prune) |
+
+**Retrieval**:
+- `memory.recall(query)` — Hybrid search combining vector similarity (FNV-1a n-gram embeddings or OpenAI embeddings) with FTS5 keyword matching [[1]](file://Implementation_Plan.md)
+- `memory.browseHistory(request)` — LLM-guided deep reading of message archives [[1]](file://Implementation_Plan.md)
+- `memory.reflect(chatId)` — Periodic reflection that consolidates episodes, updates Dunbar-tier person profiles, and extracts durable facts [[1]](file://Implementation_Plan.md)
+
+---
+
+## 📊 Observability
+
+| Artifact | Location | Description |
+|----------|----------|-------------|
+| Event log | `workspace/events.jsonl` | Append-only log of all system and external events [[1]](file://Implementation_Plan.md) |
+| Session transcripts | `workspace/sessions/` | Full LLM conversation history per session [[1]](file://Implementation_Plan.md) |
+| Agent state | `workspace/agent-state.md` | Persistent agent self-description and working memory [[2]](file://main.ts) |
+| Structured logs | stdout/stderr | Configurable via `LOG_LEVEL` and `LOG_FORMAT` env vars [[1]](file://Implementation_Plan.md) |
 
 ```bash
-npx tsx src/cli.ts <command>
+LOG_LEVEL=debug LOG_FORMAT=json npx tsx src/main.ts
 ```
 
-常用命令：
+---
 
-- `config`：检查配置解析结果
-- `status`：查看运行状态
-- `drain`：读取并清空当前 NC 队列
-- `notify [type] [text]`：手动推送通知
-- `memory status`：看 Memory V2 统计
-- `memory recall <关键词>`：检索记忆
-- `memory browse <意图>`：浏览历史消息
-- `memory reflect --chat <id>`：手动触发 Reflection
-- `dry-run <history.jsonl>`：历史回放
-- `sandbox`：进入交互式 sandbox
-
-## Dry-Run
-
-如果你不想直接用真实 Telegram 流量，可以先用历史消息回放。
+## 🧪 Testing
 
 ```bash
-npx tsx src/cli.ts dry-run chat_history.jsonl --days 0 --reflect
+npx tsx --test           # Run all tests
+npx tsx --test tests/    # Run tests in specific directory
 ```
 
-输入格式示例：
+---
 
-```json
-{"id":"1","chat_id":"-10012345","user_id":"100","user_name":"Alice","text":"有人知道怎么配吗","date":"2026-03-01T10:00:00Z"}
-```
+## 🗺 Roadmap
 
-注意：现在系统内部 canonical `chatId/userId/messageId` 都按字符串处理。
+| Phase | Status | Description |
+|-------|--------|-------------|
+| **1–5** | ✅ Complete | Core runtime, CodeAct engine, memory, scenes, compaction, CLI |
+| **6A** | ✅ Complete | Memory V2, Air-Reading Engine, Recording Pipeline, Dry-Run, Model Router |
+| **6B** | ✅ Complete | Ingress Boundary Refactor, Reply Pipeline, Action Surface, Skills, Feedback Loop |
+| **7.1** | 📝 Planned | Playbook System — SOTA-generated behavioral guides for weaker models |
+| **7.2** | 📝 Planned | Skill Auto-Generation — SOTA intervenes on failure and creates reusable skills |
+| **7.3** | 📝 Planned | CoT Template Distillation — Extract chain-of-thought templates from successful interactions |
+| **7.4** | 📝 Planned | Cost Control — Daily budget controller and model-tier cost strategy |
+| **7.5** | 📝 Planned | Degradation Strategy — Three-level graceful degradation |
 
-## 测试
+[[1]](file://Implementation_Plan.md)
 
-运行全部测试：
+---
 
-```bash
-npm test
-```
+## 💰 Estimated Cost (4,000 messages/day)
 
-如果只想跑当前主链相关：
+| Component | Model Tier | Daily Cost (Gemini Flash) |
+|-----------|-----------|--------------------------|
+| Recording Pipeline | Cheap | ~$0.17 |
+| Engaged Topic Triage | Cheap | ~$0.02 |
+| Reply Pipeline | Mid | ~$0.10–0.25 |
+| Feedback Loop | Cheap | ~$0.02 |
+| Compaction | Cheap/Mid | ~$0.05–0.10 |
+| **Total** | — | **~$0.36–0.56/day** |
 
-```bash
-npx tsx --test \
-  tests/sandbox.test.ts \
-  tests/scene-manager.test.ts \
-  tests/phase6-chain.test.ts \
-  tests/reply-pipeline.test.ts \
-  tests/feedback-loop.test.ts \
-  tests/nc-event.test.ts \
-  tests/memory-v2.test.ts \
-  tests/notification-center.test.ts
-```
+Monthly estimate: **$10–20** (cheap + mid models only) [[1]](file://Implementation_Plan.md)
 
-其中最重要的是：
+---
 
-- [phase6-chain.test.ts](/mnt/g/Projects/CyberGroupmate/tests/phase6-chain.test.ts)
-  - 覆盖 `ReplyTask -> runCodeActSession -> sandbox -> host-call -> Telegram send -> NC 回写`
-- [sandbox.test.ts](/mnt/g/Projects/CyberGroupmate/tests/sandbox.test.ts)
-  - 覆盖 host-backed `ctx.tg` proxy
+## 📄 License
 
-## 关键文件
+This project is currently unlicensed. Please contact the repository owner for usage terms.
 
-- [main.ts](/mnt/g/Projects/CyberGroupmate/src/main.ts)
-  - 系统入口，启动 adapter / sandbox / pipeline / main loop
-- [telegram-adapter.ts](/mnt/g/Projects/CyberGroupmate/src/adapter/telegram-adapter.ts)
-  - 官方 Telegram ingress adapter
-- [notification-center.ts](/mnt/g/Projects/CyberGroupmate/src/event/notification-center.ts)
-  - 统一通知中心
-- [fast-router.ts](/mnt/g/Projects/CyberGroupmate/src/pipeline/fast-router.ts)
-  - FAST_PATH / ENGAGED / RECORDING 路由
-- [recording-pipeline.ts](/mnt/g/Projects/CyberGroupmate/src/pipeline/recording-pipeline.ts)
-  - 话题聚类、Triage、记忆落盘
-- [reply-pipeline.ts](/mnt/g/Projects/CyberGroupmate/src/pipeline/reply-pipeline.ts)
-  - Agent-Memory bridge
-- [context-assembler.ts](/mnt/g/Projects/CyberGroupmate/src/pipeline/context-assembler.ts)
-  - 自动组装 `Scene Focus / Latent Memory`
-- [memory-v2.ts](/mnt/g/Projects/CyberGroupmate/src/memory-v2/memory-v2.ts)
-  - SQLite 记忆存储
-- [sandbox-worker.ts](/mnt/g/Projects/CyberGroupmate/src/sandbox/sandbox-worker.ts)
-  - sandbox 里的 code-first 运行面
+---
 
-## 当前限制
+## 🙏 Acknowledgments
 
-- 当前只有 Telegram 官方 adapter，Discord 仍未实现
-- Telegram host proxy 目前只暴露了主链需要的常用方法，不是完整 mtcute 全量镜像
-- bootstrap 仍然存在，但已经不承担 canonical ingress 责任
-
-## 结论
-
-如果你只关心“现在系统是不是已经从旧 bootstrap listener 方案切走了”，答案是：**是**。
-
-现在正确的验证标准不是“Agent 能不能自己写出 Telegram 监听代码”，而是：
-
-1. 平台消息是否先进入官方 adapter
-2. `NotificationCenter` 是否成为统一入口
-3. Agent 是否只通过代码接口理解、检索、回复
-4. Memory 是否既能被主动 recall，也能以潜意识上下文自动注入
-5. Reply / Memory / Feedback 闭环是否能真实跑通
-
-当前 README 就是按这条验收线组织的。  
+- Architecture inspired by the [CodeAct paper](https://arxiv.org/abs/2402.01030) (Wang et al., 2024) [[1]](file://Implementation_Plan.md)
+- Telegram client powered by [@mtcute/node](https://github.com/mtcute/mtcute)
+- Memory backed by-sqlite3](https://github.com/WiseLibs/better-sqlite3) with FTS5
