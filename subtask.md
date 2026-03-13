@@ -1,669 +1,711 @@
-# Memory V2 实施子任务清单
+# Subagent Architecture — 详细实施子任务
 
-**关联文档**：[memory.md](memory.md) (v3.0) · [Implementation_Plan.md](Implementation_Plan.md) (Task 6.0)
-
-> [!IMPORTANT]
-> 不保留任何 V1 兼容接口。直接面向 V2 设计实现，V1 类型（`MemoryEntry`, `PersonProfile`, `ConversationSummary`）和方法（`store`, `search`, `getPerson`, `updatePerson` 等）全部删除。
-
-```
-依赖图：M1 ──→ M2 ──→ M4
-          └──→ M3        
-```
+> **关联设计文档**: `subagent.md` v0.5.0  
+> **关联总体规划**: `Implementation_Plan.md` Phase 7+ 扩展  
+> **创建时间**: 2026-03-13  
+> **状态**: 待审阅
 
 ---
 
-## Phase M1：SQLite 数据层（4天）✅
+## 前置审计結論
 
-> stub → 真实 CRUD，让数据跑通全链路。
+### subagent.md 与现有代码的对齐分析
 
-### M1.1 清理 V1 接口 + types.ts 重构（0.5天）✅
+| 维度 | 现有代码状态 | subagent.md 设计 | Gap |
+|------|-------------|-----------------|-----|
+| **NC 队列** | 单一全局队列 `NotificationCenter`，单一 `drain()` | Q1 全局事件总线 + Q2 per-group buffer | NC 需增加 per-chatId dispatch |
+| **Sandbox** | 单实例 `new Sandbox()`，`main.ts:688` | per-subagent 独立 Sandbox | 需要 `SandboxPool` 多实例管理 |
+| **Session** | 单一 `messages: ChatMessage[]`，Phase 5 的 scope 隔离 | per-subagent 独立 `ChatMessage[]` | 需要 per-group session 管理 |
+| **主循环** | `mainEventLoop()` 单循环消费所有事件 | 主 Agent 注意力循环 (Phase 1-7 串行) | 需要完全重构 |
+| **TopicRegistry** | 全局单例 | per-subagent Observer 持有 | 需要分组实例化 |
+| **RecordingPipeline** | 全局单例 | per-subagent Observer 内 | 需要分组实例化 |
+| **FastRouter** | 全局单例，区分 FAST_PATH/ENGAGED/RECORDING | 取消独立组件，功能整合到 Observer | 需要重新分配职责 |
+| **EngagedTopicHandler** | 全局单例 | 保留逻辑，下沉到 CodeActExecutor | 需要迁移 |
+| **ReplyPipeline** | 全局共享，生成 ReplyTask | 保留共享，但 ReplyTask 由主 Agent 生成 | 需要调整调用方 |
+| **FeedbackLoop** | 全局共享 | 保留共享 | 兼容 |
+| **GlobalState/TaskList** | 不存在 | 主 Agent 维护全局状态 + skills.taskList | 新增 |
+| **message_log** | 由 RecordingPipeline 批量写入 | 实时落盘（NC 推入时写入） | 需要调整写入时机 |
+| **Cosine Decay** | 不存在 | 控制上下文深度 L0-L3 | 新增 |
+| **FastPath** | `FastRouter` 中的 FAST_PATH 概念 | 独立 FastPath Handler + 预授权机制 | 语义不同，需重新实现 |
+| **Stickiness** | 不存在 | per-group GroupStickiness | 新增 |
+| **Prompt 注入** | 硬编码 system prompt + event 格式化 | 7 个结构化注入点 (§12) | 需要模板化 |
 
-**文件**：`src/memory-v2/types.ts`
+### 一致性确认
 
-- [x] 删除 V1 兼容类型：`MemoryEntry`, `PersonProfile`, `ConversationSummary`, `TodoItem`
-- [x] 删除 `IMemoryStoreV2` 中的 V1 方法签名：`search`, `store`, `getPerson`, `updatePerson`, `getRecentConversations`, `storeConversation`, `getPendingTasks`, `addTodo`, `rawQuery`, `close`
-- [x] `TopicNode` 增加字段：`pipelineTopicId?: string`, `wasEngaged: boolean`, `interventionCount: number`
-- [x] `TopicNode.tags` 重命名为 `keywords`
-- [x] `IMemoryStoreV2` 新增 V2 方法签名：
-  - `init(): void` — 建表
-  - `upsertTopic(pipelineTopicId: string, data: Partial<TopicNode>): string`
-  - `finalizeTopic(pipelineTopicId: string): void` — 标记 ended_at
-  - `storeMessageBatch(messages: MessageLogEntry[]): void`
-  - `storeFact(subject: string, content: string, category: FactCategory, source?: string): string`
-  - `upsertPersonIdentity(userId: string, data: Partial<PersonIdentity>): void`
-  - `upsertPersonGroupProfile(userId: string, chatId: string, data: Partial<PersonGroupProfile>): void`
-  - `upsertGroupModel(chatId: string, data: Partial<GroupModel>): void`
-  - `getGroupModel(chatId: string): GroupModel | null`
-  - `storeInteraction(episode: Omit<InteractionEpisode, 'id'>): string`
-  - `close(): void`
-- [x] 新增 `MessageLogEntry` 类型
-
-**文件**：`src/memory-v2/index.ts`
-
-- [x] 清理导出：删除 V1 类型导出，新增 `MessageLogEntry` 导出
-
-### M1.2 memory-v2.ts 全面重写（1天）✅
-
-**文件**：`src/memory-v2/memory-v2.ts`
-
-- [x] 引入 `better-sqlite3`，constructor 调用 `this.initTables()`
-- [x] `initTables()`：7 张表 + FTS5 虚拟表（独立模式）
-- [x] 删除全部 V1 stub 方法
-- [x] 实现 `upsertTopic` — INSERT OR UPDATE by pipeline_topic_id
-- [x] 实现 `finalizeTopic` — UPDATE ended_at
-- [x] 实现 `storeMessageBatch` — INSERT OR IGNORE 批量
-- [x] 实现 `storeFact` — INSERT core_facts + FTS5 同步
-- [x] 实现 `upsertPersonIdentity` — INSERT OR UPDATE
-- [x] 实现 `upsertPersonGroupProfile` — INSERT OR UPDATE
-- [x] 实现 `upsertGroupModel` / `getGroupModel`
-- [x] 实现 `storeInteraction` — INSERT interactions
-- [x] 实现 `recall` — FTS5 + LIKE fallback（修复了 CJK 文本支持）
-- [x] 实现 `browseHistory` — 关键词匹配 topics → message_log 拉消息
-- [x] `reflect` — stub（M2 实现）
-- [x] `close` — `this.db.close()`
-
-### M1.3 Recording Pipeline Step 4 接入（0.5天）✅
-
-**文件**：`src/pipeline/recording-pipeline.ts`
-
-- [x] 构造器增加 `memory?: MemoryStoreV2` 参数
-- [x] Step 4 实现：upsertTopic + storeMessageBatch + upsertPersonIdentity
-- [x] 删除 Step 4 的 stub 日志
-
-### M1.4 main.ts 接线（0.25天）✅
-
-**文件**：`src/main.ts`
-
-- [x] L495: `RecordingPipeline` 构造器传入 `memory` 实例
-- [x] 监听 `topic:archived` 事件 → `memory.finalizeTopic(topic.id)`
-
-### M1.5 TopicRegistry ARCHIVED 钩子（0.25天）✅
-
-**文件**：`src/pipeline/topic-registry.ts`
-
-- [x] 确认 cleanup() 中 STALE→ARCHIVED 已 emit `topic:archived`（L188-190 已有）
-
-### M1.6 Compaction V2 改造（0.5天）✅
-
-**文件**：`src/event/compaction.ts`
-
-- [x] 修改 COMPACTION_PROMPT：输出增加 `category`（FactCategory）和 `subject` 字段
-- [x] 替换写入调用：
-  - ~~`memory.store(fact)`~~ → `memory.storeFact(subject, content, category)`
-  - ~~`memory.updatePerson()`~~ → `memory.upsertPersonIdentity()` + `memory.upsertPersonGroupProfile()`
-  - ~~`memory.storeConversation()`~~ → 删除（topics 由 Recording Pipeline 负责）
-  - ~~`memory.addTodo()`~~ → 删除
-
-### M1.7 sandbox-worker.ts + cli.ts 内存 API 改造（0.25天）✅
-
-**文件**：`src/sandbox/sandbox-worker.ts`
-
-- [x] L236-269 `memory` 对象替换为 V2 接口：`recall`, `browseHistory`, `reflect`
-- [x] 删除 V1 方法（search/store/getPerson/updatePerson/rawQuery 等）
-
-**文件**：`src/cli.ts`
-
-- [x] memory 子命令替换为 V2：`recall`/`browse`/`status`
-- [x] cmdStatus 统计查询 V2 表
-
-**额外修复**：`src/sandbox/sandbox.ts`
-
-- [x] 修复 pre-existing 路径 bug：`projectRoot` 默认值 `join(__dirname, "..")` → `join(__dirname, "..", "..")`（`__dirname` = `src/sandbox/`，需上溯 2 级才到项目根目录）
-
-### M1.8 测试（0.5天）✅
-
-**测试框架**：`node:test` + `assert/strict`（与现有 `tests/` 一致）
-**数据库**：`tests/helpers/test-db.ts` 提供 `createTestMemory(name)` / `cleanupTestMemory()` — 每个 suite 独立 DB
-
-#### 测试基础设施 [NEW]
-
-- `tests/helpers/test-db.ts` — 共享 DB 生命周期 + `seedTestData()` 种子数据（3话题/12消息/5事实/3用户/1群组）
-- `tests/scripts/bootstrap-dryrun-db.ts` — 独立脚本，创建预填充的轻量 DB 供手动 dry-run 验证
-  - 用法: `npx tsx tests/scripts/bootstrap-dryrun-db.ts [output-path]`
-  - 默认输出到 `workspace/test-memory.db`
-
-#### 实际测试结果：`tests/memory-v2.test.ts`（34 个测试用例，全部通过）
-
-13 suites, 34 tests — **100% pass** (duration ~320ms)
-
-#### FTS5 Bug 修复（测试中发现）
-
-- **FTS5 content-sync → 独立模式**：content-sync 模式下 DELETE 操作导致 "database disk image is malformed"
-- **recall() LIKE fallback**：FTS5 unicode61 对中文分词效果差，0 结果时需自动回退 LIKE
-
-#### 文件：`tests/memory-v2.test.ts`（覆盖现有 V1 stub 测试）
-
-```
-describe("MemoryStoreV2")
-├─ describe("init 建表")
-│   ├─ it("构造后 7 张表全部存在")         → pragma table_list 查 7 张表名
-│   ├─ it("FTS5 虚拟表 topics_fts 存在")      → SELECT * FROM topics_fts LIMIT 0 不报错
-│   ├─ it("FTS5 虚拟表 core_facts_fts 存在")  → 同上
-│   ├─ it("重复 init() 不报错 (IF NOT EXISTS)")  → 连续调 2 次
-│   └─ it("WAL 模式已启用")                    → pragma journal_mode === 'wal'
-│
-├─ describe("upsertTopic")
-│   ├─ it("首次写入 → INSERT，返回 UUID")     → 返回值匹配 UUID 格式，SELECT 确认行存在
-│   ├─ it("相同 pipeline_topic_id 再次写入 → UPDATE")  → 返回相同 UUID，summary 被更新
-│   ├─ it("不同 pipeline_topic_id 写入 → 两行")    → SELECT COUNT = 2
-│   ├─ it("Partial 更新只写指定字段")          → 先 insert 全量，再 update 只传 summary，检查 label 不变
-│   ├─ it("keywords 存取为 JSON 数组")         → 写入 ["a","b"] → 读回确认相等
-│   └─ it("was_engaged 和 intervention_count 正确存取")  → 写 true/3 → 读回确认
-│
-├─ describe("finalizeTopic")
-│   ├─ it("标记 ended_at 为当前时间")          → 调用后 SELECT ended_at IS NOT NULL
-│   └─ it("不存在的 pipeline_topic_id 不报错")  → 静默失败
-│
-├─ describe("storeMessageBatch")
-│   ├─ it("批量写入 5 条消息")                → SELECT COUNT = 5
-│   ├─ it("重复 messageId+chatId 不报错 (IGNORE)")  → 写 5 条 + 写 3 条重复 + 2 条新 → COUNT = 7
-│   ├─ it("空数组不报错")                    → storeMessageBatch([]) 不 throw
-│   └─ it("display_name 正确存储")               → 写入后 SELECT display_name 匹配
-│
-├─ describe("storeFact")
-│   ├─ it("写入后可以 SELECT 到")               → 按 id 查询确认存在
-│   ├─ it("category 正确存储")                 → 写 'preference' → 读回确认
-│   └─ it("source 可选参数正确处理")           → 不传 source → NULL；传 source → 存在
-│
-├─ describe("FTS5 搜索")
-│   ├─ it("core_facts_fts 中文关键词搜索")   → 写 "小明喜欢吃拉面" → 搜 "拉面" → 命中
-│   ├─ it("topics_fts label+keywords 搜索")  → 写 label="京都旅行" keywords=["a"] → 搜 "京都" → 命中
-│   └─ it("无匹配时返回空结果")              → 搜 "不存在的关键词" → 空数组
-│
-├─ describe("upsertPersonIdentity")
-│   ├─ it("首次写入 INSERT")                  → SELECT 确认行存在
-│   └─ it("相同 userId 再次写入 UPDATE")       → display_name 被更新
-│
-├─ describe("upsertPersonGroupProfile")
-│   ├─ it("首次写入 INSERT")                  → SELECT by (userId, chatId) 确认
-│   ├─ it("相同 userId+chatId UPDATE")         → traits 被更新
-│   └─ it("不同 chatId 独立行")               → 同一 userId, 2 个 chatId → COUNT = 2
-│
-├─ describe("upsertGroupModel / getGroupModel")
-│   ├─ it("写入后 get 返回完整对象")           → 字段匹配
-│   └─ it("不存在的 chatId 返回 null")         → getGroupModel("nonexist") === null
-│
-├─ describe("storeInteraction")
-│   ├─ it("返回 UUID")                        → 匹配 UUID 格式
-│   └─ it("存储的字段正确")                  → SELECT 确认 chat_id, user_id, type, summary
-│
-├─ describe("recall")
-│   ├─ it("搜索命中 topics")                  → 先写 topic(summary="京都旅行") → recall("京都") → topics.length ≥ 1
-│   ├─ it("搜索命中 core_facts")              → 先写 fact("小明喜欢拉面") → recall("拉面") → facts.length ≥ 1
-│   ├─ it("chatId 过滤生效")                → 写 2 个不同 chatId topic → recall(" ", {chatId: "A"}) → 只返回 A
-│   ├─ it("daysBack 过滤生效")               → 写 1 个 30 天前 topic + 1 个今天 topic → recall("", {daysBack:7}) → 只返回今天的
-│   └─ it("无匹配时返回空结果")              → recall("不存在") → topics=[], facts=[]
-│
-├─ describe("browseHistory")
-│   ├─ it("按关键词命中 topic 并拉取消息")   → 先写 topic + messages(messageRange 内) → browseHistory({intent:"关键词"}) → segments 非空
-│   └─ it("无匹配时返回空 segments")        → browseHistory({intent:"不存在"}) → segments=[]
-│
-└─ describe("close")
-    └─ it("close 后操作报错")                → close() → upsertTopic() throws
-```
-
-#### 文件：`tests/recording-pipeline-memory.test.ts` [NEW]
-
-```
-describe("RecordingPipeline Step 4 Integration")
-├─ it("flush 后 topics 表有数据")         → 模拟 10 条消息 + mock LLM 返回 clustering/triage
-│                                         → flush() → SELECT topics → ≥ 1 行
-├─ it("flush 后 message_log 有数据")     → 同上 → SELECT message_log → 10 行
-├─ it("多次 flush 同一话题 → upsert 而非重复插入")  → flush 两次 → topics 行数不变，summary 被更新
-└─ it("ARCHIVED 事件触发 finalizeTopic")  → 模拟 topic:archived emit → ended_at 非 null
-```
-
-#### 文件：`tests/compaction-v2.test.ts` [NEW]
-
-```
-describe("Compaction V2 写入")
-├─ it("事实写入 core_facts 而非旧 memories 表")  → 模拟 compaction 输出 → core_facts 有数据
-├─ it("事实带有 category 和 subject")        → category='preference', subject='user123'
-└─ it("画像写入 person_group_profiles")       → upsertPersonGroupProfile 被调用，字段正确
-```
-
-- [x] 删除旧测试文件 `tests/memory.test.ts`（V1 stub 测试）
-- [ ] `tests/recording-pipeline-memory.test.ts` — 待 M2/M3 与 LLM mock 一起实现
-- [ ] `tests/compaction-v2.test.ts` — 待 M2/M3 与 LLM mock 一起实现
-- [x] `tsc --noEmit` 0 错误
-- [x] sandbox tests 12/12 pass — **已修复**（`sandbox.ts` `projectRoot` 路径错误，目录重构 commit `e9c53c5` 引入）
+subagent.md 中引用的以下现有概念与代码**一致**，可直接复用：
+- `Topic` / `TopicState` / `TriageDecision` / `Message` 类型 (pipeline/types.ts)
+- Recording Pipeline 的 Step 1-4 处理流程
+- `memory.recall()` / `memory.browseHistory()` 的 host-call 桥接机制
+- `ContextAssembler` 的 sceneFocus + latentMemory 组装逻辑
+- `ReplyPipeline` 的 FULL_CODEACT / GUIDED / ENFORCED 三模式
+- `ModelRouter` 的路由规则框架
+- `FeedbackLoop` 的简化版 engagement 检测
 
 ---
 
-## Phase M2：Reflection Skill + 情感记忆合并（3天）
+## S1: 消息基础设施改造
 
-### M2.1 Reflection 引擎核心（1天）✅
+### S1.1 — message_log 实时落盘
 
-**文件**：`src/memory-v2/reflection.ts` [NEW]
+**目标**: 消息到达 NC 时同步写入 `message_log`，保证主 Agent 可以按 snapshotTimestamp 读取一致视图。
 
-- [x] `runReflection(chatId, memory, llmConfig, reflectionConfig?): Promise<ReflectionResult>`
-- [x] Step 1：查 `group_models.last_reflected_at` 之后的 topics + interactions
-- [x] Step 2：统计每个活跃用户的消息数、主动发起率、活跃时段
-- [x] Step 3：调 cheap model → 结构化 JSON（画像增量 / 邓巴调整 / core_facts / group 氛围）
-- [x] Step 4：解析 → 写入 `person_group_profiles` / `core_facts` / `group_models`
-- [x] Step 5：更新 `group_models.last_reflected_at`
-- [x] `ReflectionConfig` 独立配置接口（temperature / maxTokens / model 可覆盖）
-- [x] `parseReflectionJSON()` 支持纯 JSON + markdown 代码块 + 宽松模式
-- [x] `buildReflectionPrompt()` 含邓巴分层指引和事实分类说明
+**现状**: `message_log` 由 `RecordingPipeline.flush()` Step 4 批量写入（延迟 2 min+）。
 
-**query helpers** (memory-v2.ts)：
-- [x] `getTopicsSince(chatId, since)`
-- [x] `getInteractionsSince(chatId, since)`
-- [x] `getProfilesForChat(chatId)`
+**修改**:
 
-**prompt 外部化** (`system-prompts/`)：
-- [x] `reflection-system.md` — Reflection system prompt 从 reflection.ts 抽出
-- [x] `compaction-system.md` — Compaction system prompt 从 compaction.ts 抽出
-- [x] 两个文件均使用 lazy-cache + fallback 加载模式
+#### [MODIFY] `notification-center.ts`
+- 在 `push()` 方法中，对 `telegram.message` 类型事件，同步调用 `messageLogWriter.write(event)` 写入 `message_log`
+- 增加 `messageLogWriter` 依赖注入接口
+- 保留原有 JSONL 事件日志不变
 
-### M2.2 情感记忆合并（0.5天）✅
+#### [NEW] `src/event/message-log-writer.ts`
+- `MessageLogWriter` 类，接受 `MemoryStoreV2` 实例
+- `write(event: NCEvent)`: 将 telegram.message 事件解析为 `message_log` 行并写入 SQLite
+- 幂等写入（重复 messageId 跳过）
 
-**文件**：`src/memory-v2/reflection.ts`
+#### [MODIFY] `src/pipeline/recording-pipeline.ts`
+- Step 4 的 `message_log` 写入改为 `INSERT OR IGNORE`（因为 S1.1 已经实时写入）
+- 保持 topic/embedding 等其他写入不变
 
-- [x] `mergeEpisodes(userId, chatId, memory)`：
-  - >7天 InteractionEpisode → MergedMemory(week)
-  - >30天 week → MergedMemory(month)
-  - >90天 month → MergedMemory(quarter)
-  - >365天 quarter → MergedMemory(year)
-  - 只保留 significance > 0.7 的 highlights
-- [x] 在 `runReflection()` Step 4d 末尾调用
-- [x] 辅助函数：`groupByPeriod()`, `cascadeMerge()`, `computeOverallSentiment()`, `getPeriodKey()`
-- [x] LLM 辅助分析：`analyzeMergeWithLLM()` + `analyzeCascadeMergeWithLLM()`
-  - cheap model 综合分析 overallSentiment / highlights / relationshipTrend
-  - LLM 失败时自动回退到规则合并
-  - `mergeEpisodes()` 现为 async，接受 `llmConfig` + `reflectionConfig`
-- [x] `system-prompts/merge-episodes-system.md` — 合并分析 prompt
+### S1.2 — NC per-chatId dispatch
 
-### M2.3 邓巴分层精度控制（0.5天）✅
+**目标**: NC 支持按 chatId 分发事件到各 Subagent 的 Q2 buffer。
 
-**文件**：`src/memory-v2/reflection.ts`
+#### [MODIFY] `notification-center.ts`
+- 新增 `subscribe(chatId: string, handler: (event) => void)` 方法
+- `push()` 时，除了入总队列，同时调用匹配 chatId 的 handler
+- 新增 `subscribeCatchAll(handler)` 用于监听所有事件（主 Agent 用）
 
-- [x] `trimProfileByTier(userId, chatId, memory)`：
-  - Tier 1 (核心)→traits:10, interests:15, episodes:14天
-  - Tier 2 (熟悉)→traits:6, interests:10, episodes:7天
-  - Tier 3 (认识)→traits:3, interests:5, episodes:3天
-  - Tier 4 (陌生)→traits:1, interests:2, episodes:1天
-- [x] 在 `runReflection()` Step 4e 写回画像前应用裁剪
-- [x] `TIER_LIMITS` 配置表（来自 memory.md §3.2.4）
+#### [NEW] `src/event/group-dispatcher.ts`
+- `GroupDispatcher` 类：管理 chatId → handler 的注册表
+- 接入 NC 的 subscribe 接口
+- 支持动态注册/注销群组
 
-### M2.4 系统集成（0.5天）
+### S1.3 — MessageSnapshot 读取
 
-- [x] `memory-v2.ts`: `reflect()` 从 stub → 调用 `runReflection()` (dynamic import)
-- [x] `main.ts`: `setInterval`（5分钟）冷场触发检查 + `lastActivityPerChat` 活跃追踪
-  - 冷场阈值: `config.agent.reflection.silence_threshold` 默认 7200s (2h)
-  - `reflectionInProgress` Set 防重入
-- [x] `cli.ts`: 新增 `memory reflect --chat <id>` 子命令
-  - 使用 `resolveTierProfile("cheap")` 获取 LLMConfig
-  - 输出 personUpdates / newFacts / mergedEpisodes / insights / topicsSummary
+**目标**: 主 Agent 可以按 snapshotTimestamp 读取时间一致的消息视图。
 
-### M2.5 测试（0.5天）
+#### [NEW] `src/memory-v2/message-snapshot.ts`
+- `buildMessageSnapshot(chatId, snapshotTimestamp, lastAttendedAt)`: 从 `message_log` 查询
+- 返回 `MessageSnapshot` 接口（如 subagent.md §1.1）
 
-#### 文件：`tests/reflection.test.ts` [NEW]
+### S1 测试计划
 
-```
-describe("Reflection Skill")
-├─ describe("mergeEpisodes 情感合并")
-│   ├─ it("≤ 7天的 episodes 不被合并")        → 写 3 条 5 天前 episode → 调 merge → recentEpisodes 长度不变
-│   ├─ it("> 7天 episodes 合并为 MergedMemory(week)")  → 写 5 条 10 天前 episodes → merge → recentEpisodes 减少，mergedMemory 增加
-│   ├─ it("合并保留 significance > 0.7 的 highlights")  → 写 sig=0.9 和 sig=0.3 → 合并后只保留 0.9
-│   ├─ it("> 30天 week 合并为 MergedMemory(month)")     → 写 40 天前 week merged → merge → 升级为 month
-│   ├─ it("合并后 overallSentiment 正确计算")     → 3 positive + 1 negative → overall='positive'
-│   └─ it("空 episodes 不报错")                  → mergeEpisodes("user","chat") → 无变化
-│
-├─ describe("trimProfileByTier 邓巴裁剪")
-│   ├─ it("Tier 1 → traits≤10, interests≤10, episodes≤15")
-│   │     → 输入 15 traits, tier=1 → 输出 10 traits
-│   ├─ it("Tier 2 → traits≤6, interests≤6, episodes≤8")
-│   │     → 输入 10 traits, tier=2 → 输出 6 traits
-│   ├─ it("Tier 3 → traits≤3, interests≤3, episodes≤3")
-│   ├─ it("Tier 4 → traits≤1, interests≤1, episodes≤1")
-│   │     → 输入 5 traits, tier=4 → 输出 1 trait
-│   └─ it("未超过上限时不裁剪")
-│       → 输入 2 traits, tier=1 → 输出 2 traits（不变）
-│
-├─ describe("runReflection 集成")
-│   ├─ it("调用后 group_models.last_reflected_at 被更新")
-│   │     → 先写 group_model(last_reflected_at=昨天) + 1 topic → runReflection → last_reflected_at = 今天
-│   ├─ it("无新 topics 时 reflection 跳过不报错")
-│   │     → last_reflected_at = 刚才，无新 topic → runReflection → 无数据操作
-│   ├─ it("生成的 core_facts 写入 core_facts 表")
-│   │     → mock LLM 返回 2 条 fact → SELECT core_facts ≥ 2 行
-│   └─ it("画像更新写入 person_group_profiles")
-│       → mock LLM 返回 traits=["X"] → SELECT traits 包含 "X"
-│
-└─ describe("Reflection Prompt 解析")
-    ├─ it("合法 JSON 正确解析")              → 模拟 LLM 返回合法结构化 JSON → 无报错
-    ├─ it("JSON 外包 markdown 代码块能处理")   → ```json\n{...}\n``` → 正确提取
-    └─ it("LLM 返回非 JSON 时优雅降级")      → 返回纯文本 → 不崩溃，记录警告
-```
+#### 单元测试 `tests/subagent/s1-message-infra.test.ts`
 
-#### 手动验证
+| # | 测试用例 | 验证点 |
+|---|---------|--------|
+| 1 | `MessageLogWriter` 写入 telegram.message 事件 | `message_log` 表新增对应行, 字段映射正确 |
+| 2 | `MessageLogWriter` 幂等写入 | 相同 messageId 重复写入不报错，不重复 |
+| 3 | `MessageLogWriter` 忽略非 telegram.message 事件 | `system.*` 类事件不写入 message_log |
+| 4 | NC `push()` 触发实时落盘 | push 一条 telegram.message 后，立即能从 message_log 查到 |
+| 5 | NC `subscribe(chatId)` 只收到指定群消息 | push 群 A/B 消息，群 A 订阅者只收群 A |
+| 6 | NC `subscribeCatchAll()` 收到所有消息 | push 群 A/B 消息，catchAll 全收 |
+| 7 | `GroupDispatcher` 动态注册/注销 | 注册 → 收到消息 → 注销 → 不再收到 |
+| 8 | `buildMessageSnapshot()` 时间一致性 | 写入 t=100,200,300 的消息，snapshot(250) 只返回 t≤250 的 |
+| 9 | `buildMessageSnapshot()` 按 chatId 过滤 | 多群消息混合，snapshot 只返回指定 chatId |
+| 10 | Recording Pipeline `INSERT OR IGNORE` 兼容 | 实时写入后，Pipeline flush 不 crash |
 
-- [ ] CLI `memory reflect --chat <id>` 执行无报错
-- [ ] 执行后 `person_group_profiles` 表有更新（traits/interests 变化）
-- [ ] 执行后 `core_facts` 表新增了事实行
+#### 集成测试
+- 完整流程：NC push → 实时落盘 → GroupDispatcher 分发 → MessageSnapshot 查询
+- 并发安全：多线程同时 push 100 条消息，message_log 无遗漏无重复
 
-### M2.6 审计修复（Debug Phase）
+### S1 Milestone: **M-S1 消息实时化**
 
-> 基于 memory.md v3.0 与 M1+M2 实现的全面对比审计。修复前三组为高优先级阻塞项，必须在 M3 之前完成。
-
-#### 🔴 高优先级
-
-**M2.6.1 Recording Pipeline 补充 PersonGroupProfile 程序化字段更新** ✅
-
-> memory.md §3.1 L446-455：每次收到消息时程序化更新 `messageCount++`、`activeHours[hour]++`、`lastSeenAt`
-
-**文件**：`src/pipeline/recording-pipeline.ts`
-
-- [x] flush Step 4 中按 `(senderId, chatId)` 分组消息
-- [x] 调用 `memory.incrementProfileStats(uid, chatId, { messageCountDelta, activeHoursDelta, lastSeenAt })`
-
-**文件**：`src/memory-v2/memory-v2.ts` + `types.ts`
-
-- [x] 新增 `incrementProfileStats()` 方法（原子增量 `message_count += N`）
-- [x] `activeHours` 逐 slot 累加合并（读-合并-写）
-- [x] `lastSeenAt` 取较新值语义（SQL `CASE WHEN`）
-
-**M2.6.2 max_interval 强制反思触发** ✅
-
-> memory.md §3.3 L588：`max_interval: 86400`，即使群一直活跃也至少每 24h 反思一次
-
-**文件**：`src/main.ts`
-
-- [x] 增加 `lastReflectedAtMap` 追踪（per-chat）
-- [x] 触发条件改为 `silenceTriggered || maxIntervalTriggered`
-- [x] 冷场触发后重置计时，最大间隔触发后不重置
-
-**文件**：`src/core/config.ts` + `config.example.yaml`
-
-- [x] `ReflectionExternalConfig` 增加 `maxInterval?: number`（默认 86400）
-- [x] `config.example.yaml` 增加 `max_interval: 86400`
-
-**M2.6.3 Reflection 更新 person_identities** ✅
-
-> memory.md §3.3 L673：Reflection Step 6 写入 `person_identities: 更新 aliases / displayName（如有变化）`
-
-**文件**：`src/memory-v2/reflection.ts`
-
-- [x] `ReflectionLLMOutput` 增加 `identityUpdates?: Array<{ userId, displayName?, aliases? }>`
-- [x] Step 4 新增 4a′ 步骤：写入 `memory.upsertPersonIdentity()` 更新 aliases/displayName
-- [x] `parseReflectionJSON` 保留 `identityUpdates` 字段（两条解析路径均已更新）
-
-#### 🟡 中优先级
-
-**M2.6.4 Dunbar 分层人数上限检查** ✅
-
-> memory.md §3.1 L412-416：Tier 1 ≤15, Tier 2 ≤50, Tier 3 ≤150
-
-- [x] `runReflection` Step 4f：统计各 Tier 人数，超出按 `messageCount` 升序降级最不活跃的用户
-
-**M2.6.5 core_facts.expires_at 支持** ✅
-
-> memory.md §3.4 L796：`plan` 类 fact 带 `expires_at`，过期后应过滤
-
-- [x] `storeFact()` 增加可选 `expiresAt` 参数（types.ts + memory-v2.ts）
-- [x] `recall()` FTS5 和 LIKE 双路径过滤 `expires_at IS NULL OR expires_at > datetime('now')`
-
-**M2.6.6 awake_hours 作息触发** ✅
-
-> memory.md §3.3 L574
-
-- [x] `ReflectionExternalConfig` 增加 `awakeHours?: [number, number]` + `timezone?: string`
-- [x] `main.ts` 增加 `isOutsideAwakeHours()` 函数（支持 `Intl.DateTimeFormat` 时区）
-- [x] 作息触发条件：`isOutsideAwakeHours() && sinceReflectionSec > 3600`
-- [x] `config.example.yaml` 增加 `awake_hours` + `timezone` 配置项
-
-#### 🔵 低优先级（可延后处理）
-
-**M2.6.7 Reflection agent-state 写入** ✅
-
-- [x] Reflection Step 6：追加结构化反思摘要到 `agent-state.md`（周期/统计/洞察，3500 字符截断）
-
-**M2.6.8 upsertPersonGroupProfile UPDATE 日志** ✅
-
-- [x] UPDATE 路径增加 `log.debug`
-
-**M2.6.9 Compaction 回写 topics.sentiment** ✅
-
-- [x] Reflection Step 4b′：匹配 `topicsSummary` 与当期 topics，将 LLM 分析的 sentiment 回写到 topics 表
+| 验收标准 | 验证方式 |
+|---------|--------|
+| `telegram.message` 推入 NC 后 **<50ms** 可从 `message_log` 查到 | 单元测试 #4 |
+| `buildMessageSnapshot(chatId, ts)` 返回结果不含 ts 之后的消息 | 单元测试 #8 |
+| NC per-chatId subscribe 正确路由到指定 handler | 单元测试 #5-6 |
+| Recording Pipeline flush 与实时写入无冲突 | 单元测试 #10 |
+| 全部 10 个单元测试通过，`tsc` 0 错误 | `npm test -- --grep s1` |
 
 ---
 
-## Phase M3：智能 Context Compaction（3天）✅
+## S2: SubagentManager + Observer 组件
 
-### M3.1 ContextManager 核心（1天）✅
+### S2.1 — SubagentManager 骨架
 
-**文件**：`src/memory-v2/context-manager.ts` [NEW]
+**目标**: 管理所有群组的 Subagent 实例生命周期。
 
-> 纯函数模块（无状态），不引入外部依赖（不用 js-tiktoken），使用 CJK 感知的字符估算。
+#### [NEW] `src/subagent/subagent-manager.ts`
+- `SubagentManager` 类
+  - `getOrCreate(chatId): GroupSubagent` — 按需创建
+  - `getAllSubagents(): GroupSubagent[]`
+  - `releaseIdle(maxIdleMs)` — 释放长时间无活动的 subagent
+- 持有 NC、MemoryStoreV2、AppConfig 引用
 
-- [x] `ContextBudget` 配置接口
-  - `effectiveContextWindow: number` — 有效上下文窗口（默认 32000）
-  - `systemPromptRatio: number` — system prompt 预算比例（默认 0.20）
-  - `briefingRatio: number` — context briefing 预算比例（默认 0.15）
-  - `recentHistoryRatio: number` — 近期消息预算比例（默认 0.50）
-  - `outputReserve: number` — output 预留（默认 4096）
-  - `minRecentMessages: number` — 最少保留消息数（默认 6）
-  - `maxBriefingTokens: number` — Context Briefing 最大 token 数（默认 3000）
-- [x] `estimateTokens(text)` — CJK 感知（英文 /4、CJK /1.5、混合加权）
-- [x] `estimateMessagesTokens(messages)` — 批量估算
-- [x] `shouldCompact(messages, budget)` — 总 token > effectiveContextWindow * 0.85
-- [x] `classifyMessages(messages, budget)` — 分段：`{ systemPrompt, briefing?, candidates, recent }`
-  - `systemPrompt`: messages[0] (role=system)
-  - `briefing`: messages[1] 如果标记为 `scope: "context-briefing"`
-  - `recent`: 尾部保留 `minRecentMessages` 条或 `recentHistoryRatio` 预算内
-  - `candidates`: 中间部分（压缩候选）
+### S2.2 — GroupSubagent 骨架
 
-**耦合点**：
-- 读取 `ChatMessage` 接口（`src/core/llm.ts`）
-- 被 `main.ts` 消费（M3.4 替换 rolling truncation）
+**目标**: 每个群组的 Subagent 容器，持有三个组件。
 
-**文件**：`src/core/config.ts` [MODIFY]
-- [x] `ContextBudgetConfig` 接口 + `AppConfig.contextBudget`
-- [x] `loadConfig()` 解析 `context_budget` 节
+#### [NEW] `src/subagent/group-subagent.ts`
+- `GroupSubagent` 类
+  - `chatId: string`
+  - `observer: Observer`
+  - `codeActExecutor: CodeActExecutor`
+  - `fastPath: FastPathHandler`
+  - `stickiness: GroupStickiness`
+  - `buildQueueEntry(): AttentionQueueEntry`
 
-**文件**：`config.example.yaml` [MODIFY]
-- [x] 新增 `context_budget` 配置节
+### S2.3 — Observer 组件
 
-**文件**：`src/memory-v2/index.ts` [MODIFY]
-- [x] 导出 context-manager 公共 API（estimateTokens, shouldCompact, compact, mergeContextBudget 等）
+**目标**: per-group Observer，消费消息、维护 TopicRegistry、计算 Engagement。
 
-### M3.2 话题连贯性保护（0.5天）✅
+#### [NEW] `src/subagent/observer.ts`
+- `Observer` 类
+  - 持有 per-group `TopicRegistry` 实例
+  - 持有 per-group `RecordingPipeline` 实例
+  - `onMessage(event: NCEvent)` — 加入 Q2 buffer
+  - `getDigest(): TopicDigest[]`
+  - `getMessageSnapshot(upTo): MessageSnapshot`
+  - `getEngagementScore(): number` — 纯算法计算（如 subagent.md §3.4）
+  - `checkAlert(): ObserverAlert | null`
+  - `checkFastPathRequest(): boolean`
 
-- [x] `identifyProtectedMessages(messages, options?)` — reply chain + ENGAGED 话题消息 + 最近 N 条
-- [x] 受保护消息在压缩时跳过
+**关键决策**: `TopicRegistry` 和 `RecordingPipeline` 从全局单例改为 per-group 实例化。需要修改它们的构造函数接受 chatId 过滤。
 
-### M3.3 Compaction 执行逻辑（1天）✅
+#### [MODIFY] `src/pipeline/topic-registry.ts`
+- 构造函数增加 `chatId?: string` 过滤参数
+- 如果指定了 chatId，`register()` / `get()` / `getActive()` 只操作该 chatId 的话题
+- 向后兼容：不指定 chatId 时保持全局行为（用于测试和 dry-run）
 
-- [x] `compact(messages, llmConfig, budget, options?)` → cheap model 生成 Context Briefing → 重组消息数组
-- [x] 输出：[System Prompt] + [Context Briefing] + [受保护的候选] + [Recent]
-- [x] LLM 失败时回退到简单统计摘要
-- [x] `system-prompts/context-compaction.md` — Context Briefing 生成 prompt（外部化）
+#### [MODIFY] `src/pipeline/recording-pipeline.ts`
+- 构造函数增加 `chatId` 参数
+- `onMessage()` 只接受指定 chatId 的消息
+- 事件 emission 不变
 
-### M3.4 替换 Rolling Truncation + 配置化（0.25天）✅
+### S2.4 — Q3 注意力队列
 
-- [x] `main.ts` L511-524 → `shouldCompact()` + `compact()` + 错误回退
-- [x] 新增 `cheapConfig` 参数透传到 `mainEventLoop`
-- [x] `config.example.yaml` 新增 `context_budget` 配置节
+#### [NEW] `src/subagent/attention-queue.ts`
+- `DynamicAttentionQueue` 类（如 subagent.md §4.3）
+  - `enqueueOrUpdate()`, `boost()`, `block()`, `unblock()`, `dequeue()`, `evaluate()`
+  - 内部 `Map<string, AttentionQueueEntry>`
+  - `evaluate()` 实现：合并同群上报、时间衰减、FastPath 请求处理
 
-### M3.5 测试（0.5天）✅
+### S2 测试计划
 
-#### 实际测试结果：`tests/context-manager.test.ts`（31 个测试用例，全部通过）
+#### 单元测试 `tests/subagent/s2-subagent-observer.test.ts`
 
-9 suites, 31 tests — **100% pass** (duration ~286ms)
+| # | 测试用例 | 验证点 |
+|---|---------|--------|
+| 1 | `SubagentManager.getOrCreate()` 创建新实例 | 返回 GroupSubagent, chatId 匹配 |
+| 2 | `SubagentManager.getOrCreate()` 复用已有实例 | 两次调用同 chatId 返回同一对象 |
+| 3 | `SubagentManager.releaseIdle()` 回收超时实例 | lastActivity 超过阈值的被释放 |
+| 4 | `Observer.onMessage()` 写入 Q2 buffer | buffer 中包含消息 |
+| 5 | `Observer.getDigest()` 返回 TopicDigest | flush 后有话题摘要 |
+| 6 | `Observer.getEngagementScore()` 纯算法计算 | 高频多人消息 → 高分, 低频 → 低分 |
+| 7 | `Observer.checkAlert()` 超阈值触发告警 | engagement ≥ 60 → 返回 OBSERVER_ALERT |
+| 8 | `Observer.checkAlert()` 未超阈值不告警 | engagement < 60 → 返回 null |
+| 9 | per-group TopicRegistry 隔离 | 群 A/B 各自的话题互不可见 |
+| 10 | per-group RecordingPipeline 隔离 | 群 A/B 各自 flush, 不交叉 |
+| 11 | `DynamicAttentionQueue.enqueueOrUpdate()` 新增条目 | dequeue 返回该条目 |
+| 12 | `DynamicAttentionQueue.enqueueOrUpdate()` 更新已有条目 | priority 取最高值 |
+| 13 | `DynamicAttentionQueue.dequeue()` 返回最高优先级 | 多条目中优先级最高的先出 |
+| 14 | `DynamicAttentionQueue.block()` / `unblock()` | block 后 dequeue 跳过, unblock 后恢复 |
+| 15 | `DynamicAttentionQueue.evaluate()` 时间衰减 | 长时间未处理的条目 priority 下降 |
 
-#### 文件：`tests/context-manager.test.ts` [NEW]
+#### 集成测试
+- NC push 3 群消息 → GroupDispatcher → 3 个 Observer 各自收到 → 各自产出独立 TopicDigest
+- Observer ALERT → 注入 Q3 → Q3 排序正确
 
-```
-describe("ContextManager")
-├─ describe("estimateTokens")                    — 5 tests
-├─ describe("estimateMessagesTokens")             — 2 tests
-├─ describe("shouldCompact")                      — 4 tests
-├─ describe("classifyMessages")                   — 5 tests
-├─ describe("identifyProtectedMessages")          — 6 tests
-├─ describe("compact")                            — 2 tests
-├─ describe("mergeContextBudget")                 — 3 tests
-├─ describe("ContextBudget 配置集成")              — 1 test
-└─ describe("main.ts rolling truncation 已替换")   — 3 tests
-```
+### S2 Milestone: **M-S2 感知层就绪**
 
-#### 手动验证
-
-- [ ] dry-run 跑 > 50 条消息，观察日志确认 Compaction 触发
-- [ ] 确认压缩后的 Context Briefing 包含早期话题摘要
-- [ ] ENGAGED 话题的消息不被压缩（检查日志）
-
----
-
-## Phase M4：向量搜索 + Deep Recall（4天）✅ DONE
-
-### M4.1 Embedding 封装（0.5天）✅
-
-**文件**：`src/memory-v2/embedding.ts` [NEW]
-
-- [x] `embed(texts: string[]): Promise<Float32Array[]>` — 双模式: OpenAI API + 本地 hash-based
-- [x] 本地模式: FNV-1a n-gram hash 128维向量, L2归一化
-- [x] `cosineSimilarity`, `topKSimilar`, BLOB转换工具
-- [x] 批量处理 + 重试
-
-### M4.2 向量索引集成（1天）✅
-
-> 实际方案：不引入 sqlite-vec 原生模块，使用纯 JS 余弦相似度暴力搜索。对 <10K 条记录的场景足够高效。
-
-- [x] `vectorSearchTopics(queryEmbedding, limit, chatId?)` — SELECT embedding → 纯 JS 余弦 top-K
-- [x] `vectorSearchFacts(queryEmbedding, limit, categories?)` — 同上
-- [x] `storeFact()` 增加可选 embedding 参数
-
-### M4.3 recall() 混合检索（1天）✅
-
-- [x] embed(query) → 向量搜索（主路径）+ FTS5/LIKE（补充）+ Map 去重
-- [x] token > deepRecallThreshold → cheap model deepSummary
-- [x] persons 关联（通过 topic.participants 匹配 person_group_profiles）
-
-### M4.4 browseHistory() 升级（1天）✅
-
-- [x] Step 1: LLM 意图解析 → {keywords, daysBack, userId}（fallback: 空格分词）
-- [x] Step 2: 向量搜索定位 topics（fallback: LIKE 搜索）
-- [x] Step 3: message_log 拉消息
-- [x] Step 4: LLM 深度阅读生成 answer（fallback: 话题标题拼接）
-
-### M4.5 Pipeline 嵌入集成（0.5天）✅
-
-- [x] Recording Pipeline flush Step 4 增加 embedding 生成
-- [x] `index.ts` 导出 embedding 公共 API
-- [x] 构造器新增 `embeddingConfig` + `cheapLlmConfig`
-
-### M4.6 测试（0.5天）
-
-#### 文件：`tests/embedding.test.ts` [NEW]
-
-```
-describe("Embedding")
-├─ it("单条文本生成 1536 维向量")          → embed(["测试"]) → result[0].length === 1536
-├─ it("批量文本生成对应数量向量")        → embed(["a","b","c"]) → result.length === 3
-├─ it("空数组返回空数组")                → embed([]) → []
-└─ it("API 失败重试 3 次后报错")            → mock 3 次 500 → throw
-```
-
-#### 文件：`tests/recall-hybrid.test.ts` [NEW]
-
-```
-describe("recall() 混合检索")
-├─ it("向量搜索命中语义相似但无关键词匹配的 topic")
-│     → 写 topic(label="关西地区交通指南") → recall("京都如何去") → 命中（语义相似）
-├─ it("FTS5 精确匹配作为补充路径")
-│     → 写 topic(label="Python 错误调试") → recall("Python") → FTS5 命中
-├─ it("向量 + FTS5 结果合并去重")
-│     → 同一 topic 被两路都命中 → 返回 1 个，不重复
-├─ it("token > deepRecallThreshold 触发 deepSummary")
-│     → mock 大量结果 → result.deepSummary 非 undefined
-└─ it("结果关联 person_group_profiles")
-      → topic 参与者 match profile → result.persons.length ≥ 1
-```
-
-#### 文件：`tests/browse-history-deep.test.ts` [NEW]
-
-```
-describe("browseHistory() 深度阅读")
-├─ it("意图解析 → 关键词 + 时间范围")
-│     → mock LLM 返回 {keywords:["X"], daysBack:7} → 正确解析
-├─ it("定位 topics + 拉取 message_log 原始消息")
-│     → 写 topic(messageRange: 100-110) + 11 条 msg → segments 包含原始消息
-├─ it("LLM 深度阅读生成 answer")
-│     → mock LLM 返回总结文本 → result.answer 非空且不包含 "stub"
-└─ it("messagesRead 统计正确")
-      → segments 总消息数 === result.messagesRead
-```
-
-#### 文件：`tests/vector-index.test.ts` [NEW]
-
-```
-describe("向量索引" )
-├─ it("upsertTopic 写入后 topics_vec 有数据")
-│     → upsertTopic + embedding → SELECT from topics_vec → 1 行
-├─ it("storeFact 写入后 core_facts_vec 有数据")
-├─ it("向量相似度搜索返回最近邻")       → 写 3 个 embedding → 搜索 → top1 cosine 距离最小
-└─ it("sqlite-vec 编译失败时回退纯 JS 余弦")  → 模拟加载失败 → cosine 计算仍正确
-```
-
-#### 手动验证
-
-- [ ] CLI `memory recall "京都 交通"` → 命中语义相关但无关键字完全匹配的 topic
-- [ ] CLI `memory browse "之前谁推荐过岚山"` → 返回 answer + 原始对话段落
-- [ ] 检查 `workspace/memory.db` 中 topics 表的 embedding 列非 NULL
+| 验收标准 | 验证方式 |
+|---------|--------|
+| `SubagentManager` 可按需创建/获取/回收 Subagent | 单元测试 #1-3 |
+| Observer 消费消息后产出正确 TopicDigest | 单元测试 #4-5 |
+| Engagement 计算值域 0-100, 符合 subagent.md §3.4 公式 | 单元测试 #6 |
+| Observer ALERT 在 engagement ≥ 60 时产生 | 单元测试 #7-8 |
+| per-group TopicRegistry/RecordingPipeline 完全隔离 | 单元测试 #9-10 |
+| Q3 优先级排序正确, block/unblock 行为一致 | 单元测试 #11-15 |
+| 全部 15 个单元测试通过, `tsc` 0 错误 | `npm test -- --grep s2` |
 
 ---
 
-### M4.7 sqlite-vec 向量索引加速（1.5天）🔮 PLANNED
+## S3: Sandbox 多实例化 + CodeActExecutor
 
-> **触发条件**：topics 或 core_facts 带 embedding 行数 > 5000，或单次 vectorSearch 耗时 > 50ms。
->
-> **详细实施方案**：见 [similarity_calculation.md](file:///Users/jamiecao/.gemini/antigravity/brain/d54c2f1e-d8a0-40b3-8e68-75edee5cac4e/similarity_calculation.md) 中「sqlite-vec 引入实施路径」章节。
+### S3.1 — SandboxPool
 
-**依赖**: `npm install sqlite-vec`
+**目标**: 管理多个 Sandbox worker 进程实例。
 
-#### M4.7.1 扩展加载 + 双模式检测（0.5天）
+#### [NEW] `src/sandbox/sandbox-pool.ts`
+- `SandboxPool` 类
+  - `acquire(chatId): Sandbox` — 获取或创建 sandbox
+  - `release(chatId)` — 释放 sandbox（不立即 kill，超时后回收）
+  - `maxInstances: number` (默认 5)
+  - `idleTimeout: number` (默认 10 min)
+  - 内部 LRU 管理
 
-- [ ] `tryLoadSqliteVec()` — 动态 require + `sqliteVec.load(db)` + 版本检测
-- [ ] `sqliteVecAvailable` 标志位控制查询路径
-- [ ] 加载失败时 warn 日志 + 透明 fallback
+#### [MODIFY] `src/sandbox/sandbox.ts`
+- 不修改现有 Sandbox 类
+- 每个实例已经是独立 worker 进程，SandboxPool 只管多实例调度
 
-#### M4.7.2 vec0 虚拟表创建 + 写入同步（0.5天）
+### S3.2 — CodeActExecutor
 
-- [ ] `initTables()` 条件创建 `topics_vec` / `facts_vec`（vec0 虚拟表）
-- [ ] `topics_vec`: `topic_id` PK + `chat_id` partition key + `embedding FLOAT[N]`
-- [ ] `facts_vec`: `fact_id` PK + `category` 辅助列 + `embedding FLOAT[N]`
-- [ ] `upsertTopic()` / `storeFact()` 写入时同步 `INSERT OR REPLACE` 到 vec0
+**目标**: per-group CodeAct 执行器，持有独立 LLM Session 和 Sandbox。
 
-#### M4.7.3 vectorSearch 双模式查询（0.25天）
+#### [NEW] `src/subagent/code-act-executor.ts`
+- `CodeActExecutor` 类
+  - `session: { messages: ChatMessage[], lastCompactedAt }` — 独立对话历史
+  - `sandbox: Sandbox | null` — 通过 SandboxPool 获取
+  - `execute(task: CodeActReplyTask): Promise<SubagentCallback>`
+    1. 通过 SandboxPool.acquire() 获取或复用 sandbox
+    2. 将 task.contextSnapshot 注入到 session（Prompt ➎ 模板）
+    3. 调用 `runCodeActSession()` 在独立 session 中执行
+    4. 完成后产出 callback
+    5. 不释放 sandbox（等 SandboxPool 超时回收）
+  - `enqueue(task)` — 入 Q4，串行执行
 
-- [ ] `vectorSearchTopics` — sqlite-vec 可用时使用 `WHERE embedding MATCH vec_f32(?) AND k = ?` KNN 查询
-- [ ] `vectorSearchFacts` — 同上
-- [ ] vec0 返回 `distance` → 转换为 `similarity = 1 - distance`（归一化向量下）
-- [ ] 不可用时 fallback 到现有纯 JS 暴力搜索
+#### [NEW] `src/subagent/types.ts`
+- 所有 subagent 相关类型定义
+  - `AttentionQueueEntry`, `CodeActReplyTask`, `FastPathAuthTask`, `SubagentCallback`
+  - `FastPathConfig`, `GroupStickiness`, `GroupContextPackage`
+  - `MainAgentGlobalState`, `AgentTask`
+  - `TopicDigest`, `ObserverAlert`, `MessageSnapshot`
+  - `AttendResult`, `Decision`
 
-#### M4.7.4 迁移工具 + 测试（0.25天）
+### S3.3 — Q4 + Q5 队列
 
-**文件**: `src/memory-v2/migration.ts` [NEW]
+#### [NEW] `src/subagent/execution-queue.ts`
+- `ExecutionQueue` 类 (per-subagent Q4)
 
-- [ ] `rebuildVecIndex()` — 从主表 embedding BLOB 批量填充 vec0
-- [ ] 首次检测到 vec0 表为空时自动触发
-- [ ] 测试：vec0 写入、KNN 查询、fallback 回退、迁移工具
+#### [NEW] `src/subagent/callback-queue.ts`
+- `CallbackQueue` 类 (全局 Q5)
+  - `enqueue(cb: SubagentCallback)`
+  - `drain(): SubagentCallback[]`
 
-#### 兼容性保证
+### S3 测试计划
 
-- 数据始终写入主表 embedding BLOB（单一真相源）
-- vec0 为纯索引，可随时 DROP + 重建
-- `sqlite-vec` 不可用时完全透明 fallback（不影响任何现有功能）
+#### 单元测试 `tests/subagent/s3-sandbox-executor.test.ts`
+
+| # | 测试用例 | 验证点 |
+|---|---------|--------|
+| 1 | `SandboxPool.acquire()` 创建新 sandbox | 返回可用 Sandbox, isAlive()=true |
+| 2 | `SandboxPool.acquire()` 复用空闲 sandbox | 同 chatId 二次调用返回同一实例 |
+| 3 | `SandboxPool.acquire()` 达到上限排队 | maxInstances=2, 第 3 个 acquire 等待或获取 LRU |
+| 4 | `SandboxPool` 空闲超时回收 | 空闲 > idleTimeout 后实例被 stop() |
+| 5 | `CodeActExecutor.execute()` 正常流程 | 注入 Prompt ➎ → 执行 → 返回 COMPLETED callback |
+| 6 | `CodeActExecutor.execute()` 执行超时 | maxResponseTime 超过后返回 ERROR callback |
+| 7 | `CodeActExecutor.execute()` sandbox 崩溃恢复 | sandbox 异常退出后重新 acquire → 重试 |
+| 8 | `CodeActExecutor` 独立 session 持久化 | 两次 execute 的 session messages 连续 |
+| 9 | `ExecutionQueue` 串行执行 | enqueue 2 个 task, 验证按顺序完成 |
+| 10 | `CallbackQueue.drain()` 返回所有 pending | enqueue 3 个 callback, drain 一次拿全 |
+| 11 | `CallbackQueue.drain()` 清空后为空 | drain 后再 drain 返回空数组 |
+
+#### 集成测试（需要真实 Sandbox worker）
+- CodeActExecutor 注入简单代码任务 → sandbox 执行 `console.log()` → 验证 callback 输出
+- 2 个 CodeActExecutor 并行使用不同 sandbox → 互不干扰
+
+### S3 Milestone: **M-S3 执行层就绪**
+
+| 验收标准 | 验证方式 |
+|---------|--------|
+| SandboxPool 可管理 2-5 个并行 Sandbox 实例 | 单元测试 #1-4 |
+| CodeActExecutor 从 SandboxPool 获取 sandbox, 注入 Prompt ➎, 执行, 返回 callback | 单元测试 #5 |
+| 超时和崩溃场景有 graceful 处理 | 单元测试 #6-7 |
+| 每个 CodeActExecutor 持有独立 session 历史 | 单元测试 #8 |
+| Q4 串行、Q5 批量 drain 行为正确 | 单元测试 #9-11 |
+| 全部 11 个单元测试通过, `tsc` 0 错误 | `npm test -- --grep s3` |
 
 ---
 
-## 验收标准
+## S4: FastPath Handler
 
-| Phase | 自动化验收 | 手动验收 |
-|-------|----------|----------|
-| M1 | `memory-v2.test.ts` 全通过（25+ case）；`recording-pipeline-memory.test.ts` 全通过；`compaction-v2.test.ts` 全通过 | dry-run 跑 1 天消息，检查 memory.db 中 topics/message_log/core_facts 有数据 |
-| M2 | `reflection.test.ts` 全通过（18+ case） | CLI `memory reflect` 后 person_group_profiles 和 core_facts 有更新 |
-| M3 | `context-manager.test.ts` 全通过（15+ case） | dry-run >50 条消息，确认 Compaction 触发且 ENGAGED 话题不被压缩 |
-| M4 | `embedding.test.ts` + `vector-search.test.ts` 全通过 | CLI 语义搜索命中，embedding 列非 NULL |
-| M4.7 | `sqlite-vec.test.ts` 全通过 + fallback 测试 | 10K+ 记录下 vectorSearch < 10ms |
+### S4.1 — FastPathHandler
+
+#### [NEW] `src/subagent/fast-path-handler.ts`
+- `FastPathHandler` 类（如 subagent.md §3.3）
+  - `enabled: boolean`, `config: FastPathConfig | null`
+  - `authorize(config)` — 主 Agent 授权
+  - `revoke()` — 撤销授权
+  - `onTriggerMessage(msg: Message)` — Observer 检测到触发消息后调用
+  - `execute(trigger: Message): Promise<SubagentCallback>`
+    - 使用 Prompt ➏ 模板（单次 mid-tier LLM 调用）
+    - 限制 `maxRepliesBeforeReauth`
+    - 检查 `expiresAt`
+  - 产出 callback → Q5
+
+### S4 测试计划
+
+#### 单元测试 `tests/subagent/s4-fast-path.test.ts`
+
+| # | 测试用例 | 验证点 |
+|---|---------|--------|
+| 1 | `authorize()` 后 enabled=true | config 正确设置 |
+| 2 | `revoke()` 后 enabled=false | config 被清空 |
+| 3 | 未授权时 `onTriggerMessage()` 不触发 | 返回 null / 不执行 |
+| 4 | 授权后 `execute()` 返回回复内容 | callback.type=COMPLETED, replyContent 非空 |
+| 5 | `execute()` 返回 `__SKIP__` 时不发消息 | callback.type=SKIPPED |
+| 6 | 达到 `maxRepliesBeforeReauth` 自动禁用 | 第 N+1 次 execute 返回 disabled |
+| 7 | 过期后自动禁用 | expiresAt 过后 execute 返回 disabled |
+| 8 | FastPath callback 正确入 Q5 | CallbackQueue 中有对应 callback |
+| 9 | Prompt ➏ 模板渲染 | 包含 preauthorizedActions, blockedActions, tonePreset |
+| 10 | 并发消息不重复触发 | 2 条消息快速到达只触发 1 次 execute |
+
+#### 集成测试（mock LLM）
+- authorize → 3 条 @agent 消息 → FastPath 回复 3 次 → 第 4 条自动 disable
+- authorize → 等 >expiresMinutes → 下一条消息不触发
+
+### S4 Milestone: **M-S4 快速回复通道就绪**
+
+| 验收标准 | 验证方式 |
+|---------|--------|
+| 主 Agent 可通过 `authorize(config)` 动态开启 FastPath | 单元测试 #1-3 |
+| FastPath 使用 mid-tier LLM 产出回复, 延迟 < 2s (mock) | 单元测试 #4 |
+| `__SKIP__` 机制生效 | 单元测试 #5 |
+| maxReplies 和 expiresAt 自动禁用 | 单元测试 #6-7 |
+| Callback 正确回流 Q5 | 单元测试 #8 |
+| 全部 10 个单元测试通过 | `npm test -- --grep s4` |
+
+---
+
+## S5: 主 Agent 注意力循环
+
+### S5.1 — MainAgentLoop
+
+**目标**: 完全重构 `main.ts` 中的 `mainEventLoop()`，替换为 subagent.md 中的 Phase 1-7 注意力循环。
+
+#### [NEW] `src/main-agent/main-agent-loop.ts`
+- `mainAgentLoop()` 异步函数（如 subagent.md §4.5）
+  - Phase 1: Drain Q5 callbacks
+  - Phase 2: 动态队列评估
+  - Phase 3: Dequeue 最高优先级
+  - Phase 4: 构建时间一致上下文 (Cosine Decay)
+  - Phase 5: 批量决策
+  - Phase 6: 分派到 subagent
+  - Phase 7: 更新全局状态
+
+### S5.2 — Cosine Decay
+
+#### [NEW] `src/main-agent/cosine-decay.ts`
+- `getContextDepth(entry: AttentionQueueEntry): 0 | 1 | 2 | 3`
+- 如 subagent.md §7
+
+### S5.3 — Decision Maker
+
+#### [NEW] `src/main-agent/decision-maker.ts`
+- `makeDecisions(ctx, globalState, replyMode): AttendResult`
+  - 使用 Prompt ➌ + ➍ 模板
+  - 调用 LLM 生成 JSON 格式的 `AttendResult`
+  - 解析并验证输出
+- `estimateReplyCount(signals): NONE | SINGLE | BATCH`
+
+### S5.4 — GroupContextPackage 构建
+
+#### [NEW] `src/main-agent/context-builder.ts`
+- `buildContextPackage(entry, depth): GroupContextPackage`
+  - L0: TopicDigest only
+  - L1: + GroupModel + Playbook + callbacks
+  - L2: + 消息原文 + cheap model 判断
+  - L3: + SOTA 深度分析 + 完整历史
+- 使用 `MessageSnapshot` (S1.3) + `ContextAssembler` (现有) 组装
+
+### S5.5 — Prompt 模板系统
+
+#### [NEW] `workspace/agent-docs/prompts/main-agent-system.md`
+- 主 Agent 系统 Prompt（模板 ➋）
+
+#### [NEW] `workspace/agent-docs/prompts/attend-context.md`
+- Attend 上下文注入模板（模板 ➌ + ➍）
+
+#### [NEW] `workspace/agent-docs/prompts/codeact-task.md`
+- CodeActExecutor 任务注入模板（模板 ➎）
+
+#### [NEW] `workspace/agent-docs/prompts/fastpath-system.md`
+- FastPath 系统 Prompt（模板 ➏）
+
+#### [NEW] `src/main-agent/prompt-renderer.ts`
+- Handlebars 风格模板渲染器
+- 加载 `.md` 模板 + 注入变量 → 生成 prompt 字符串
+
+### S5.6 — main.ts 重构
+
+#### [MODIFY] `src/main.ts`
+- `main()` 函数重构：
+  - 初始化 `SubagentManager`, `SandboxPool`, `GroupDispatcher`, `CallbackQueue`, `DynamicAttentionQueue`
+  - NC 事件由 `GroupDispatcher` 分发到各 Subagent Observer
+  - 启动 `mainAgentLoop()` 替代现有 `mainEventLoop()`
+  - 保留 bootstrap 逻辑（用于初始化 Telegram 连接等）
+  - 保留 Reflection 定时器
+- 删除旧的 `mainEventLoop()` 和 `formatEvents()` 等辅助函数
+- `FastRouter` / `EngagedTopicHandler` 单例移除，由 per-group Observer/CodeActExecutor 承担
+
+### S5 测试计划
+
+#### 单元测试 `tests/subagent/s5-main-agent.test.ts`
+
+| # | 测试用例 | 验证点 |
+|---|---------|--------|
+| 1 | Cosine Decay depth=L0 (新 attend, cycle 初期) | 返回 0 |
+| 2 | Cosine Decay depth=L2 (cosine 谷底) | 返回 2 |
+| 3 | Cosine Decay ALERT 强制升级 | depth<2 时有 ALERT → 升至 L2+ |
+| 4 | `estimateReplyCount()` 无 mention, 1 话题 → SINGLE | replyMode=SINGLE |
+| 5 | `estimateReplyCount()` 2+ 话题 → BATCH | replyMode=BATCH |
+| 6 | `estimateReplyCount()` engagement<20, 无 mention → NONE | replyMode=NONE |
+| 7 | `buildContextPackage()` L0 只含 TopicDigest | 无 messages, 无 GroupModel |
+| 8 | `buildContextPackage()` L2 含消息原文 | messages 数组非空 |
+| 9 | `buildContextPackage()` L3 含完整历史 | 历史消息 + deepSummary |
+| 10 | Prompt ➋ 模板渲染 | 包含 globalState, taskList 变量 |
+| 11 | Prompt ➌ 模板渲染 | 包含 topicRegistry, engagementScore, callbacks |
+| 12 | Prompt ➎ 模板渲染 | 包含 targetMessages, contentDirection |
+| 13 | `makeDecisions()` JSON 解析 | LLM 返回的 JSON 可被解析为 AttendResult |
+| 14 | `makeDecisions()` JSON 格式异常回退 | 非法 JSON → 返回 NONE 决策 |
+
+#### 主循环集成测试 `tests/subagent/s5-loop-integration.test.ts`
+
+| # | 测试用例 | 验证点 |
+|---|---------|--------|
+| 15 | Phase 1: Q5 callback → unblock | drain callback → Q3 对应群 unblock |
+| 16 | Phase 2-3: Q3 排序 + dequeue | 3 群入队, 最高 priority 先出 |
+| 17 | Phase 4-5: 上下文构建 + 决策 (mock LLM) | 决策输出合规 |
+| 18 | Phase 6: CODEACT_REPLY → Q4 + block | subagent Q4 收到 task, Q3 被 block |
+| 19 | Phase 6: FAST_PATH_AUTH → FastPath handler | FastPath 被 authorize |
+| 20 | 完整双轮: 群 A 决策→执行→callback→unblock→再轮询 | 两轮循环无 crash |
+
+### S5 Milestone: **M-S5 决策层就绪**
+
+| 验收标准 | 验证方式 |
+|---------|--------|
+| Cosine Decay 计算正确, 0/1/2/3 四档覆盖 | 单元测试 #1-3 |
+| `estimateReplyCount()` 信号逻辑正确 | 单元测试 #4-6 |
+| GroupContextPackage 四级深度构建正确 | 单元测试 #7-9 |
+| 4 个 Prompt 模板渲染输出合规 | 单元测试 #10-12 |
+| `makeDecisions()` LLM 输出解析 + 异常容错 | 单元测试 #13-14 |
+| 主循环 Phase 1-7 完整跑通 (mock LLM) | 集成测试 #15-20 |
+| `main.ts` 重构后系统可正常启动和 bootstrap | 手动验证 |
+| 全部 20 个测试通过, `tsc` 0 错误 | `npm test -- --grep s5` |
+
+---
+
+## S6: Global State + TaskList Skill
+
+### S6.1 — GlobalState 管理
+
+#### [NEW] `src/main-agent/global-state.ts`
+- `MainAgentGlobalState` 持久化（JSON 文件 `workspace/global-state.json`）
+- `loadGlobalState()` / `saveGlobalState()`
+- `AgentTask` CRUD 操作
+
+### S6.2 — TaskList Skill
+
+#### [NEW] `src/sandbox/skills/task-list.ts`
+- `skills.taskList.add()`, `.update()`, `.list()`, `.getGlobalState()`, `.updateSummary()`
+- 通过 host-call 桥接到 `GlobalState` 实例
+
+#### [MODIFY] `src/sandbox/sandbox-worker.ts`
+- 注入 `skills.taskList` 命名空间到 sandbox globalThis
+
+### S6 测试计划
+
+#### 单元测试 `tests/subagent/s6-global-state.test.ts`
+
+| # | 测试用例 | 验证点 |
+|---|---------|--------|
+| 1 | `loadGlobalState()` 首次启动 | 返回默认空 state |
+| 2 | `saveGlobalState()` + 重新 `load()` | 持久化 round-trip |
+| 3 | `addTask()` 新增任务 | taskList 长度 +1, 状态=PENDING |
+| 4 | `updateTask()` 状态更新 | PENDING→IN_PROGRESS→DONE |
+| 5 | `listTasks()` 按状态过滤 | 只返回指定状态 |
+| 6 | `pendingFollowups` 跨群任务管理 | add → 查询 → 完成 lifecycle |
+| 7 | `recentDecisions` 记录 | 添加决策记录, 验证时间戳排序 |
+| 8 | `skills.taskList.add()` 通过 host-call | sandbox 中调用→ 实际写入 globalState |
+| 9 | `skills.taskList.list()` 通过 host-call | sandbox 中调用→ 返回正确任务列表 |
+| 10 | GlobalState JSON 文件损坏恢复 | 写入非法 JSON→ load 返回默认值 |
+
+### S6 Milestone: **M-S6 全局状态就绪**
+
+| 验收标准 | 验证方式 |
+|---------|--------|
+| GlobalState 持久化到 `workspace/global-state.json`, load/save round-trip | 单元测试 #1-2 |
+| AgentTask CRUD 完整 | 单元测试 #3-5 |
+| 跨群 pendingFollowups 可追踪 | 单元测试 #6 |
+| Sandbox 中 `skills.taskList.*` 可通过 host-call 正常调用 | 单元测试 #8-9 |
+| 损坏恢复不 crash | 单元测试 #10 |
+| 全部 10 个测试通过 | `npm test -- --grep s6` |
+
+---
+
+## S7: GroupStickiness + 自适应
+
+### S7.1 — Stickiness 数据模型
+
+#### [NEW] `src/subagent/stickiness.ts`
+- `GroupStickiness` 接口实现
+- 预设值表（CORE/FAMILIAR/ACQUAINTANCE/STRANGER）
+- `updateStickiness(current, feedback): GroupStickiness` — 自适应更新规则
+
+### S7.2 — Stickiness 持久化
+
+#### [MODIFY] `src/memory-v2/index.ts`
+- `group_models` 表增加 `stickiness` JSON 字段
+- `getGroupStickiness(chatId)` / `setGroupStickiness(chatId, stickiness)`
+
+### S7 测试计划
+
+#### 单元测试 `tests/subagent/s7-stickiness.test.ts`
+
+| # | 测试用例 | 验证点 |
+|---|---------|--------|
+| 1 | 预设值 CORE | priorityMultiplier=1.0, fastPathEligible=true |
+| 2 | 预设值 STRANGER | priorityMultiplier=0.2, fastPathEligible=false |
+| 3 | `updateStickiness()` positive feedback → 升级 | ACQUAINTANCE → FAMILIAR |
+| 4 | `updateStickiness()` negative feedback → 降级 | FAMILIAR → ACQUAINTANCE |
+| 5 | `updateStickiness()` 不越界 | CORE + positive → 仍是 CORE |
+| 6 | `updateStickiness()` overactive 策略触发 | 超过 overactiveThreshold → 策略改变 |
+| 7 | `getGroupStickiness()` 从 MemoryV2 读取 | 返回保存的 stickiness |
+| 8 | `setGroupStickiness()` 写入 MemoryV2 | 写入后 get 返回相同值 |
+| 9 | 首次获取返回 STRANGER 默认值 | 未设置过的群组返回默认 |
+| 10 | Stickiness 影响 Q3 优先级计算 | CORE 群 engagement=50 > STRANGER 群 engagement=50 |
+
+### S7 Milestone: **M-S7 群组自适应就绪**
+
+| 验收标准 | 验证方式 |
+|---------|--------|
+| 4 级预设值正确 (CORE/FAMILIAR/ACQUAINTANCE/STRANGER) | 单元测试 #1-2 |
+| Feedback 驱动升降级逻辑正确 | 单元测试 #3-6 |
+| MemoryV2 中 stickiness 持久化 read/write round-trip | 单元测试 #7-9 |
+| Stickiness 与 Q3 priority 正确联动 | 单元测试 #10 |
+| 全部 10 个测试通过 | `npm test -- --grep s7` |
+
+---
+
+## S8: 集成与迁移
+
+### S8.1 — 现有事件监听迁移
+
+**目标**: 将现有 `main.ts` 中的事件监听逻辑迁移到新架构。
+
+| 现有监听 | 迁移目标 |
+|---------|---------|
+| `recordingPipeline.on("topic:triage-passed")` | Observer 的 Recording Pipeline 内, 产出 → Q3 DIGEST_UPDATE |
+| `engagedHandler.on("engaged:response-ready")` | CodeActExecutor 内 |
+| `engagedHandler.on("engaged:exit")` | CodeActExecutor 内 |
+| `topicRegistry.on("topic:archived")` | Observer 内 |
+| `sandbox.on("notify")` | per-subagent Sandbox 的 notify 事件 |
+| `sandbox.setHostCallHandler(...)` | per-subagent Sandbox 各自设置 |
+
+### S8.2 — 配置扩展
+
+#### [MODIFY] `config.yaml`
+- 新增 `subagent` section：
+  ```yaml
+  subagent:
+    maxSandboxInstances: 5
+    sandboxIdleTimeout: 600000    # 10 min
+    pollInterval: 5000            # 5 sec
+    fastPath:
+      defaultMaxReplies: 3
+      defaultExpiresMinutes: 5
+      engagementThreshold: 70
+    stickiness:
+      defaults:
+        CORE: { priorityMultiplier: 1.0, depthCyclePeriod: 10 }
+        FAMILIAR: { priorityMultiplier: 0.7, depthCyclePeriod: 20 }
+        ACQUAINTANCE: { priorityMultiplier: 0.4, depthCyclePeriod: 35 }
+        STRANGER: { priorityMultiplier: 0.2, depthCyclePeriod: 50 }
+  ```
+
+#### [MODIFY] `src/core/config.ts`
+- 增加 `SubagentConfig` 类型定义和解析
+
+### S8.3 — 集成测试
+
+本阶段的测试整合了 S1-S7 各阶段的单元测试，并额外增加端到端场景测试。
+
+### S8 测试计划
+
+#### 端到端场景测试 `tests/subagent/s8-e2e-scenarios.test.ts`
+
+以 subagent.md 附录 A 的 5 个场景为蓝本，使用 mock LLM：
+
+| # | 场景 | 验证点 |
+|---|------|--------|
+| 1 | 场景 1: 多群 + 一群深度讨论 | 深度讨论群 Observer ALERT → Q3 优先 → CODEACT_REPLY → callback → unblock; 低活跃群 IGNORE/DEFER |
+| 2 | 场景 2: 多群同时激烈 | 3 群串行处理, BATCH 模式 → 多 CODEACT_REPLY → 全 blocked → callbacks 陆续到达 → 全 unblock |
+| 3 | 场景 3: 高频 @ | L3 深度 → CODEACT_REPLY → unblock → 再有 @ → 二次 BATCH + FastPath 授权 → FastPath 触发回复 |
+| 4 | 场景 4: 多群 @ + FastPath 差异化 | CORE 群 → 宽 FastPath(5次/10min); FAMILIAR 群 → 不授权(engagement<70); ACQUAINTANCE → 不可授权 |
+| 5 | 场景 5: 跨群传话 | GlobalState.pendingFollowups 记录 → 群 E 处理获取信息 → 主动提升群 A 优先级 → 转告 → taskList DONE |
+
+#### 回归测试 `tests/subagent/s8-regression.test.ts`
+
+| # | 测试用例 | 验证点 |
+|---|---------|--------|
+| 6 | 旧 main.ts 事件处理覆盖 | 所有原 `mainEventLoop` 处理的事件类型在新架构中仍有处理路径 |
+| 7 | Reflection 定时器保留 | 冷场触发/最大间隔/作息触发仍然工作 |
+| 8 | Config.yaml 新字段解析 | subagent section 正确加载 |
+| 9 | Bootstrap 流程不变 | Telegram 初始化正常 |
+| 10 | FeedbackLoop 兼容 | agent_message_sent 事件仍被正确消费 |
+
+#### 性能/资源测试
+
+| # | 测试用例 | 验证点 |
+|---|---------|--------|
+| 11 | 100 群 subagent 创建 | 内存增量 < 500MB, 创建耗时 < 5s |
+| 12 | SandboxPool 5 实例并行 | 无死锁, 所有任务完成 |
+| 13 | 主循环 1000 轮空转 | 无内存泄漏 (RSS 稳定) |
+
+### S8 Milestone: **M-S8 集成验收**
+
+| 验收标准 | 验证方式 |
+|---------|--------|
+| 附录 A 全部 5 个场景在 mock 环境中 pass | 端到端测试 #1-5 |
+| 所有原 main.ts 事件链路在新架构中有对应处理 | 回归测试 #6-10 |
+| 100 群 + 5 sandbox 并行无死锁/泄漏 | 性能测试 #11-13 |
+| `config.yaml` 新 subagent section 解析正确 | 回归测试 #8 |
+| 新旧架构 `npm run dev` 均可启动 (旧架构通过 feature flag 保留) | 手动验证 |
+| 全部 S1-S8 共 **96 个测试** 通过, `tsc` 0 错误 | `npm test` |
+
+---
+
+## 实施顺序、依赖与 Milestone 路线图
+
+```mermaid
+graph TB
+    S1["S1: 消息基础设施<br/>M-S1"] --> S2["S2: SubagentManager + Observer<br/>M-S2"]
+    S1 --> S5["S5: 主 Agent 循环<br/>M-S5"]
+    S2 --> S3["S3: Sandbox 多实例 + CodeActExecutor<br/>M-S3"]
+    S2 --> S4["S4: FastPath<br/>M-S4"]
+    S3 --> S5
+    S4 --> S5
+    S5 --> S6["S6: GlobalState + TaskList<br/>M-S6"]
+    S5 --> S7["S7: Stickiness<br/>M-S7"]
+    S6 --> S8["S8: 集成与迁移<br/>M-S8"]
+    S7 --> S8
+
+    style S1 fill:#4A90D9,color:#fff
+    style S2 fill:#4A90D9,color:#fff
+    style S3 fill:#7B68EE,color:#fff
+    style S4 fill:#7B68EE,color:#fff
+    style S5 fill:#E8532E,color:#fff
+    style S6 fill:#2ECC71,color:#fff
+    style S7 fill:#2ECC71,color:#fff
+    style S8 fill:#F39C12,color:#fff
+```
+
+## Milestone 路线图
+
+| Milestone | 阶段 | 累计天数 | 测试数 | 关键交付物 | Gate 条件 |
+|-----------|------|---------|--------|-----------|----------|
+| **M-S1** | S1 | Day 2 | 10 | 消息实时落盘, NC per-chatId dispatch, MessageSnapshot | 10/10 tests pass, `tsc` 0 error |
+| **M-S2** | S2 | Day 5 | 25 | SubagentManager, Observer, per-group TopicRegistry, Q3 | 15/15 新 tests pass |
+| **M-S3** | S3 | Day 8 | 36 | SandboxPool, CodeActExecutor, Q4/Q5 | 11/11 新 tests pass, 多 sandbox 并行稳定 |
+| **M-S4** | S4 | Day 10 | 46 | FastPathHandler, 预授权/撤销/过期机制 | 10/10 新 tests pass |
+| **M-S5** | S5 | Day 14 | 66 | 主 Agent 注意力循环, Cosine Decay, Prompt 模板, main.ts 重构 | 20/20 新 tests pass, 系统可启动 |
+| **M-S6** | S6 | Day 16 | 76 | GlobalState 持久化, TaskList Skill, host-call 桥接 | 10/10 新 tests pass |
+| **M-S7** | S7 | Day 18 | 86 | GroupStickiness 四级预设, 自适应升降级 | 10/10 新 tests pass |
+| **M-S8** | S8 | Day 20 | 96 | 端到端 5 场景, 回归, 性能, feature flag | **全部 96 tests pass**, 连续运行 4h 无 crash |
+
+## 估时汇总
+
+| 阶段 | 新文件 | 修改文件 | 测试文件 | 测试用例 | 估时 |
+|------|-------|---------|---------|---------|------|
+| S1 | 3 | 2 | 1 | 10 | 2 天 |
+| S2 | 4 | 2 | 1 | 15 | 3 天 |
+| S3 | 4 | 0 | 1 | 11 | 3 天 |
+| S4 | 1 | 0 | 1 | 10 | 2 天 |
+| S5 | 6 + 4 prompts | 1 (main.ts) | 2 | 20 | 4 天 |
+| S6 | 2 | 1 | 1 | 10 | 2 天 |
+| S7 | 1 | 1 | 1 | 10 | 2 天 |
+| S8 | 0 | 2 | 2 | 13 | 2 天 |
+| **合计** | **25** | **9** | **10** | **96** (~99 含集成) | **~20 天** |
