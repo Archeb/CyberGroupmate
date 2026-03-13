@@ -1,0 +1,236 @@
+/**
+ * global-state.ts — 主 Agent 全局状态管理
+ *
+ * 持久化存储主 Agent 的全局状态：
+ * - 任务列表 (TaskList)
+ * - 最近决策记录
+ * - 跨群待办事项
+ * - 注意力概要
+ *
+ * 使用 JSON 文件持久化，支持损坏恢复。
+ *
+ * 参考设计：subagent.md §9, subtask.md S6
+ */
+
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
+import { dirname } from "node:path";
+import type { MainAgentGlobalState, AgentTask } from "../subagent/types.js";
+import { createLogger } from "../core/logger.js";
+import { randomUUID } from "node:crypto";
+
+const log = createLogger("global-state");
+
+/** GlobalState 配置 */
+export interface GlobalStateConfig {
+    /** 持久化文件路径。默认 workspace/global-state.json */
+    filePath: string;
+    /** 最大最近决策数。默认 50 */
+    maxRecentDecisions: number;
+    /** 自动保存间隔 (ms)。0 = 不自动保存。默认 30000 */
+    autoSaveInterval: number;
+}
+
+const DEFAULT_CONFIG: GlobalStateConfig = {
+    filePath: "workspace/global-state.json",
+    maxRecentDecisions: 50,
+    autoSaveInterval: 30000,
+};
+
+/**
+ * GlobalState — 主 Agent 全局状态管理器
+ */
+export class GlobalState {
+    private state: MainAgentGlobalState;
+    private config: GlobalStateConfig;
+    private dirty = false;
+    private autoSaveTimer: ReturnType<typeof setInterval> | null = null;
+
+    constructor(config?: Partial<GlobalStateConfig>) {
+        this.config = { ...DEFAULT_CONFIG, ...config };
+        this.state = this.load();
+
+        // 自动保存
+        if (this.config.autoSaveInterval > 0) {
+            this.autoSaveTimer = setInterval(() => {
+                if (this.dirty) this.save();
+            }, this.config.autoSaveInterval);
+            if (this.autoSaveTimer.unref) this.autoSaveTimer.unref();
+        }
+    }
+
+    // ─── 读取 ───
+
+    /** 获取全局状态快照 */
+    getState(): Readonly<MainAgentGlobalState> {
+        return { ...this.state };
+    }
+
+    /** 获取任务列表 */
+    getTaskList(): AgentTask[] {
+        return [...this.state.taskList];
+    }
+
+    /** 获取最近决策 */
+    getRecentDecisions(): ReadonlyArray<{ chatId: string; decision: string; timestamp: string }> {
+        return this.state.recentDecisions;
+    }
+
+    /** 获取注意力概要 */
+    getAttentionSummary(): string {
+        return this.state.attentionSummary;
+    }
+
+    // ─── 写入 ───
+
+    /** 添加任务 */
+    addTask(description: string, chatId?: string, priority: "LOW" | "MEDIUM" | "HIGH" = "MEDIUM"): AgentTask {
+        const task: AgentTask = {
+            id: randomUUID(),
+            description,
+            status: "PENDING",
+            chatId,
+            priority,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+        };
+        this.state.taskList.push(task);
+        this.markDirty();
+        log.debug("addTask", { taskId: task.id, description });
+        return task;
+    }
+
+    /** 更新任务状态 */
+    updateTaskStatus(taskId: string, status: AgentTask["status"]): boolean {
+        const task = this.state.taskList.find(t => t.id === taskId);
+        if (!task) return false;
+
+        task.status = status;
+        task.updatedAt = new Date().toISOString();
+        if (status === "DONE" || status === "CANCELLED") {
+            task.completedAt = new Date().toISOString();
+        }
+        this.markDirty();
+        return true;
+    }
+
+    /** 记录决策 */
+    recordDecision(chatId: string, decision: string): void {
+        this.state.recentDecisions.push({
+            chatId,
+            decision,
+            timestamp: new Date().toISOString(),
+        });
+
+        // 保持最大数量
+        while (this.state.recentDecisions.length > this.config.maxRecentDecisions) {
+            this.state.recentDecisions.shift();
+        }
+
+        this.state.lastActiveAt = new Date().toISOString();
+        this.markDirty();
+    }
+
+    /** 更新注意力概要 */
+    updateAttentionSummary(summary: string): void {
+        this.state.attentionSummary = summary;
+        this.markDirty();
+    }
+
+    /** 添加跨群待办 */
+    addFollowup(sourceChatId: string, targetChatId: string, description: string): string {
+        const id = randomUUID();
+        this.state.pendingFollowups.push({
+            id,
+            sourceChatId,
+            targetChatId,
+            description,
+            status: "PENDING",
+            createdAt: new Date().toISOString(),
+        });
+        this.markDirty();
+        return id;
+    }
+
+    /** 完成跨群待办 */
+    completeFollowup(followupId: string): boolean {
+        const fu = this.state.pendingFollowups.find(f => f.id === followupId);
+        if (!fu) return false;
+
+        fu.status = "DONE";
+        fu.completedAt = new Date().toISOString();
+        this.markDirty();
+        return true;
+    }
+
+    // ─── 持久化 ───
+
+    /** 立即保存 */
+    save(): void {
+        try {
+            const dir = dirname(this.config.filePath);
+            if (!existsSync(dir)) {
+                mkdirSync(dir, { recursive: true });
+            }
+            writeFileSync(this.config.filePath, JSON.stringify(this.state, null, 2), "utf-8");
+            this.dirty = false;
+            log.debug("save: 成功", { filePath: this.config.filePath });
+        } catch (err) {
+            log.error("save: 失败", { error: String(err) });
+        }
+    }
+
+    /** 释放（停止自动保存，保存当前状态） */
+    dispose(): void {
+        if (this.autoSaveTimer) {
+            clearInterval(this.autoSaveTimer);
+            this.autoSaveTimer = null;
+        }
+        if (this.dirty) this.save();
+    }
+
+    // ─── 内部 ───
+
+    private markDirty(): void {
+        this.dirty = true;
+    }
+
+    private load(): MainAgentGlobalState {
+        if (!existsSync(this.config.filePath)) {
+            return this.defaultState();
+        }
+
+        try {
+            const raw = readFileSync(this.config.filePath, "utf-8");
+            const parsed = JSON.parse(raw);
+            log.info("load: 已恢复", { filePath: this.config.filePath });
+            return this.validateState(parsed);
+        } catch (err) {
+            log.warn("load: 文件损坏，使用默认值", { error: String(err) });
+            return this.defaultState();
+        }
+    }
+
+    private validateState(raw: unknown): MainAgentGlobalState {
+        const def = this.defaultState();
+        if (!raw || typeof raw !== "object") return def;
+
+        const obj = raw as Record<string, unknown>;
+        return {
+            lastActiveAt: typeof obj.lastActiveAt === "string" ? obj.lastActiveAt : def.lastActiveAt,
+            taskList: Array.isArray(obj.taskList) ? obj.taskList : def.taskList,
+            recentDecisions: Array.isArray(obj.recentDecisions) ? obj.recentDecisions : def.recentDecisions,
+            pendingFollowups: Array.isArray(obj.pendingFollowups) ? obj.pendingFollowups : def.pendingFollowups,
+            attentionSummary: typeof obj.attentionSummary === "string" ? obj.attentionSummary : def.attentionSummary,
+        };
+    }
+
+    private defaultState(): MainAgentGlobalState {
+        return {
+            lastActiveAt: new Date().toISOString(),
+            taskList: [],
+            recentDecisions: [],
+            pendingFollowups: [],
+            attentionSummary: "",
+        };
+    }
+}

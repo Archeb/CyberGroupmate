@@ -80,6 +80,9 @@ export class NotificationCenter {
     /** 是否正在自己写文件（避免自触发） */
     private selfWriting = false;
 
+    /** push 后同步调用的钩子列表 (S1: 用于 MessageLogWriter + GroupDispatcher) */
+    private pushHooks: Array<(event: NotificationEvent) => void> = [];
+
     /**
      * 创建 NotificationCenter 实例
      * @param logPath - JSONL 事件日志文件路径
@@ -132,10 +135,31 @@ export class NotificationCenter {
             this.fileOffset = statSync(this.logPath).size;
         } catch { /* ignore */ }
 
+        // 同步调用 push 钩子 (S1: MessageLogWriter 实时落盘 + GroupDispatcher 事件分发)
+        for (const hook of this.pushHooks) {
+            try {
+                hook(event);
+            } catch (err) {
+                log.error("push hook 异常", { type: event.type, error: String(err) });
+            }
+        }
+
         // 唤醒所有等待中的 drain 调用
         this.wakeWaiters();
 
         return event;
+    }
+
+    /**
+     * 注册 push 后同步调用的钩子
+     * @returns 取消注册的函数
+     */
+    onPush(hook: (event: NotificationEvent) => void): () => void {
+        this.pushHooks.push(hook);
+        return () => {
+            const idx = this.pushHooks.indexOf(hook);
+            if (idx >= 0) this.pushHooks.splice(idx, 1);
+        };
     }
 
     /**

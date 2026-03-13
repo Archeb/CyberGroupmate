@@ -118,6 +118,61 @@ export interface ContextBudgetConfig {
     maxBriefingTokens?: number;
 }
 
+/** Subagent 系统外部配置（从 config.yaml 加载） */
+export interface SubagentExternalConfig {
+    maxSandboxInstances?: number;
+    sandboxIdleTimeout?: number;
+    pollInterval?: number;
+    alertEngagementThreshold?: number;
+    cosineDecay?: {
+        defaultCyclePeriod?: number;
+    };
+    fastPath?: {
+        defaultMaxReplies?: number;
+        defaultExpiresMinutes?: number;
+        engagementThreshold?: number;
+    };
+    stickiness?: Record<string, {
+        priorityMultiplier?: number;
+        depthCyclePeriod?: number;
+    }>;
+    stickinessThresholds?: {
+        upgrade?: {
+            strangerToAcquaintance?: number;
+            acquaintanceToFamiliar?: number;
+            familiarToCore?: number;
+        };
+        downgrade?: {
+            coreToFamiliar?: number;
+            familiarToAcquaintance?: number;
+            acquaintanceToStranger?: number;
+        };
+    };
+    attentionQueue?: {
+        timeDecayPerSecond?: number;
+        maxSize?: number;
+    };
+    observer?: {
+        engagementWindowMs?: number;
+    };
+    mainLoop?: {
+        maxAttendsPerTick?: number;
+    };
+    decision?: {
+        batchThreshold?: number;
+        noneThreshold?: number;
+        batchMessageThreshold?: number;
+    };
+    globalState?: {
+        maxRecentDecisions?: number;
+        autoSaveInterval?: number;
+    };
+    codeAct?: {
+        maxExecutionTimeMs?: number;
+        maxSessionMessages?: number;
+    };
+}
+
 export interface AppConfig {
     llmProfiles: Record<string, LLMConfig>;
     modelTiers: ModelTiersConfig;
@@ -127,6 +182,7 @@ export interface AppConfig {
     reflection: ReflectionExternalConfig;
     contextBudget?: ContextBudgetConfig;
     embedding: EmbeddingConfig;
+    subagent?: SubagentExternalConfig;
 }
 
 // ─── 默认值 ───
@@ -268,6 +324,7 @@ export function loadConfig(configPath?: string, forceReload?: boolean): AppConfi
         },
         contextBudget: parsedContextBudget,
         embedding: parseEmbeddingConfig(fileConfig),
+        subagent: parseSubagentConfig(fileConfig),
     };
 
     _cached = config;
@@ -328,6 +385,88 @@ function parseEmbeddingConfig(fileConfig: Record<string, unknown>): EmbeddingCon
     }
 
     return result;
+}
+// ─── Subagent 配置解析 ───
+
+function parseSubagentConfig(fileConfig: Record<string, unknown>): SubagentExternalConfig | undefined {
+    const raw = fileConfig.subagent as Record<string, unknown> | undefined;
+    if (!raw || typeof raw !== "object") return undefined;
+
+    const rawFP = (raw.fast_path ?? {}) as Record<string, unknown>;
+    const rawStick = (raw.stickiness ?? {}) as Record<string, unknown>;
+    const rawStickT = (raw.stickiness_thresholds ?? {}) as Record<string, unknown>;
+    const rawUpgrade = (rawStickT.upgrade ?? {}) as Record<string, unknown>;
+    const rawDowngrade = (rawStickT.downgrade ?? {}) as Record<string, unknown>;
+    const rawAQ = (raw.attention_queue ?? {}) as Record<string, unknown>;
+    const rawObs = (raw.observer ?? {}) as Record<string, unknown>;
+    const rawML = (raw.main_loop ?? {}) as Record<string, unknown>;
+    const rawDec = (raw.decision ?? {}) as Record<string, unknown>;
+    const rawGS = (raw.global_state ?? {}) as Record<string, unknown>;
+    const rawCA = (raw.code_act ?? {}) as Record<string, unknown>;
+    const rawCD = (raw.cosine_decay ?? {}) as Record<string, unknown>;
+
+    // Parse stickiness levels
+    const stickinessDefaults: SubagentExternalConfig["stickiness"] = {};
+    for (const level of ["CORE", "FAMILIAR", "ACQUAINTANCE", "STRANGER"]) {
+        const lv = rawStick[level] as Record<string, unknown> | undefined;
+        if (lv && typeof lv === "object") {
+            stickinessDefaults[level] = {
+                priorityMultiplier: lv.priority_multiplier != null ? num(lv.priority_multiplier, 1) : undefined,
+                depthCyclePeriod: lv.depth_cycle_period != null ? num(lv.depth_cycle_period, 20) : undefined,
+            };
+        }
+    }
+
+    return {
+        maxSandboxInstances: raw.max_sandbox_instances != null ? num(raw.max_sandbox_instances, 5) : undefined,
+        sandboxIdleTimeout: raw.sandbox_idle_timeout != null ? num(raw.sandbox_idle_timeout, 600000) : undefined,
+        pollInterval: raw.poll_interval != null ? num(raw.poll_interval, 5000) : undefined,
+        alertEngagementThreshold: raw.alert_engagement_threshold != null ? num(raw.alert_engagement_threshold, 60) : undefined,
+        cosineDecay: Object.keys(rawCD).length > 0 ? {
+            defaultCyclePeriod: rawCD.default_cycle_period != null ? num(rawCD.default_cycle_period, 20) : undefined,
+        } : undefined,
+        fastPath: Object.keys(rawFP).length > 0 ? {
+            defaultMaxReplies: rawFP.default_max_replies != null ? num(rawFP.default_max_replies, 3) : undefined,
+            defaultExpiresMinutes: rawFP.default_expires_minutes != null ? num(rawFP.default_expires_minutes, 5) : undefined,
+            engagementThreshold: rawFP.engagement_threshold != null ? num(rawFP.engagement_threshold, 70) : undefined,
+        } : undefined,
+        stickiness: Object.keys(stickinessDefaults).length > 0 ? stickinessDefaults : undefined,
+        stickinessThresholds: Object.keys(rawStickT).length > 0 ? {
+            upgrade: Object.keys(rawUpgrade).length > 0 ? {
+                strangerToAcquaintance: rawUpgrade.stranger_to_acquaintance != null ? num(rawUpgrade.stranger_to_acquaintance, 5) : undefined,
+                acquaintanceToFamiliar: rawUpgrade.acquaintance_to_familiar != null ? num(rawUpgrade.acquaintance_to_familiar, 20) : undefined,
+                familiarToCore: rawUpgrade.familiar_to_core != null ? num(rawUpgrade.familiar_to_core, 50) : undefined,
+            } : undefined,
+            downgrade: Object.keys(rawDowngrade).length > 0 ? {
+                coreToFamiliar: rawDowngrade.core_to_familiar != null ? num(rawDowngrade.core_to_familiar, 14) : undefined,
+                familiarToAcquaintance: rawDowngrade.familiar_to_acquaintance != null ? num(rawDowngrade.familiar_to_acquaintance, 30) : undefined,
+                acquaintanceToStranger: rawDowngrade.acquaintance_to_stranger != null ? num(rawDowngrade.acquaintance_to_stranger, 60) : undefined,
+            } : undefined,
+        } : undefined,
+        attentionQueue: Object.keys(rawAQ).length > 0 ? {
+            timeDecayPerSecond: rawAQ.time_decay_per_second != null ? num(rawAQ.time_decay_per_second, 0.001) : undefined,
+            maxSize: rawAQ.max_size != null ? num(rawAQ.max_size, 100) : undefined,
+        } : undefined,
+        observer: Object.keys(rawObs).length > 0 ? {
+            engagementWindowMs: rawObs.engagement_window_ms != null ? num(rawObs.engagement_window_ms, 300000) : undefined,
+        } : undefined,
+        mainLoop: Object.keys(rawML).length > 0 ? {
+            maxAttendsPerTick: rawML.max_attends_per_tick != null ? num(rawML.max_attends_per_tick, 3) : undefined,
+        } : undefined,
+        decision: Object.keys(rawDec).length > 0 ? {
+            batchThreshold: rawDec.batch_threshold != null ? num(rawDec.batch_threshold, 50) : undefined,
+            noneThreshold: rawDec.none_threshold != null ? num(rawDec.none_threshold, 10) : undefined,
+            batchMessageThreshold: rawDec.batch_message_threshold != null ? num(rawDec.batch_message_threshold, 10) : undefined,
+        } : undefined,
+        globalState: Object.keys(rawGS).length > 0 ? {
+            maxRecentDecisions: rawGS.max_recent_decisions != null ? num(rawGS.max_recent_decisions, 50) : undefined,
+            autoSaveInterval: rawGS.auto_save_interval != null ? num(rawGS.auto_save_interval, 30000) : undefined,
+        } : undefined,
+        codeAct: Object.keys(rawCA).length > 0 ? {
+            maxExecutionTimeMs: rawCA.max_execution_time_ms != null ? num(rawCA.max_execution_time_ms, 60000) : undefined,
+            maxSessionMessages: rawCA.max_session_messages != null ? num(rawCA.max_session_messages, 100) : undefined,
+        } : undefined,
+    };
 }
 
 // ─── 内部辅助 ───

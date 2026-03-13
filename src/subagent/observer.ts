@@ -1,0 +1,277 @@
+/**
+ * observer.ts — per-group Observer 组件
+ *
+ * 每个群组的感知层：
+ * - 消费消息到 Q2 buffer
+ * - 维护 per-group TopicRegistry（话题状态机）
+ * - 计算 Engagement Score（纯算法）
+ * - 检测告警条件（engagement 超阈值）
+ * - 检测 FastPath 请求条件
+ * - 产出 TopicDigest 供 Q3 消费
+ *
+ * 参考设计：subagent.md §3.2
+ */
+
+import type { NotificationEvent } from "../event/notification-center.js";
+import type {
+    TopicDigest,
+    ObserverAlert,
+    SubagentConfig,
+} from "./types.js";
+import { DEFAULT_SUBAGENT_CONFIG } from "./types.js";
+import { createLogger } from "../core/logger.js";
+
+const log = createLogger("observer");
+
+/** Observer 配置 */
+export interface ObserverConfig {
+    /** 告警 engagement 阈值 (0-100)。默认 60 */
+    alertEngagementThreshold: number;
+    /** FastPath 推荐的 engagement 阈值。默认 70 */
+    fastPathEngagementThreshold: number;
+    /** engagement 计算时间窗口 (ms)。默认 5 分钟 */
+    engagementWindowMs: number;
+    /** @ bot 的关键词列表 */
+    mentionKeywords: string[];
+}
+
+const DEFAULT_OBSERVER_CONFIG: ObserverConfig = {
+    alertEngagementThreshold: DEFAULT_SUBAGENT_CONFIG.alertEngagementThreshold,
+    fastPathEngagementThreshold: DEFAULT_SUBAGENT_CONFIG.fastPath.engagementThreshold,
+    engagementWindowMs: 5 * 60 * 1000,
+    mentionKeywords: [],
+};
+
+/** Q2 buffer 中的消息条目 */
+interface BufferedMessage {
+    event: NotificationEvent;
+    timestamp: number;
+}
+
+/**
+ * Observer — per-group 感知组件
+ *
+ * 不持有 TopicRegistry/RecordingPipeline 实例（在 GroupSubagent 中注入）。
+ * Observer 负责：
+ * 1. 消息缓冲 (Q2)
+ * 2. Engagement 计算
+ * 3. Alert/FastPath 检测
+ * 4. TopicDigest 产出（从 TopicRegistry 提取）
+ */
+export class Observer {
+    readonly chatId: string;
+    private config: ObserverConfig;
+
+    /** Q2: 消息缓冲 */
+    private buffer: BufferedMessage[] = [];
+
+    /** 最后一条消息的时间 */
+    private lastMessageAt: number = 0;
+
+    /** 独立发言者集合（用于 engagement 计算） */
+    private recentSenders = new Map<string, number>(); // userId → lastMessageAt
+
+    /** 当前 engagement score 缓存 */
+    private cachedEngagement: number = 0;
+
+    /** 话题摘要（外部设置） */
+    private topicDigests: TopicDigest[] = [];
+
+    /** 总消息数（自创建以来） */
+    private totalMessageCount = 0;
+
+    /** @ bot 消息数 */
+    private mentionCount = 0;
+
+    constructor(chatId: string, config?: Partial<ObserverConfig>) {
+        this.chatId = chatId;
+        this.config = { ...DEFAULT_OBSERVER_CONFIG, ...config };
+    }
+
+    /**
+     * 接收一条消息到 Q2 buffer
+     */
+    onMessage(event: NotificationEvent): void {
+        const now = Date.now();
+        this.buffer.push({ event, timestamp: now });
+        this.lastMessageAt = now;
+        this.totalMessageCount++;
+
+        // 更新 sender 追踪
+        const userId = String(event.userId ?? event.user_id ?? event.senderId ?? "");
+        if (userId) {
+            this.recentSenders.set(userId, now);
+        }
+
+        // 检测 mention
+        const text = String(event.text ?? event.message ?? "");
+        if (this.config.mentionKeywords.some(kw => text.includes(kw))) {
+            this.mentionCount++;
+        }
+
+        // 清理过期 buffer 条目
+        this.cleanExpiredBuffer(now);
+
+        // 重算 engagement
+        this.cachedEngagement = this.calculateEngagement(now);
+
+        log.debug("onMessage", {
+            chatId: this.chatId,
+            bufferSize: this.buffer.length,
+            engagement: this.cachedEngagement,
+        });
+    }
+
+    /**
+     * 获取当前 engagement score (0-100)
+     *
+     * 算法 (subagent.md §3.4)：
+     * E = min(100, msgRate × 20 + senderDiversity × 15 + mentionBoost)
+     * - msgRate: 窗口内每分钟消息数
+     * - senderDiversity: 独立发言者数
+     * - mentionBoost: 有 @bot 时 +20
+     */
+    getEngagementScore(): number {
+        return this.cachedEngagement;
+    }
+
+    /**
+     * 获取话题摘要列表
+     */
+    getDigest(): TopicDigest[] {
+        return [...this.topicDigests];
+    }
+
+    /**
+     * 外部注入话题摘要（由 GroupSubagent 在 RecordingPipeline flush 后调用）
+     */
+    setTopicDigests(digests: TopicDigest[]): void {
+        this.topicDigests = digests;
+    }
+
+    /**
+     * 检查是否需要发出 OBSERVER_ALERT
+     * @returns ObserverAlert 或 null
+     */
+    checkAlert(): ObserverAlert | null {
+        if (this.cachedEngagement < this.config.alertEngagementThreshold) {
+            return null;
+        }
+
+        const hotTopic = this.topicDigests.length > 0
+            ? this.topicDigests.reduce((a, b) =>
+                (b.messageCount > a.messageCount) ? b : a
+            )
+            : undefined;
+
+        return {
+            type: "OBSERVER_ALERT",
+            chatId: this.chatId,
+            engagementScore: this.cachedEngagement,
+            topicCount: this.topicDigests.length,
+            hotTopic,
+            hasMention: this.mentionCount > 0,
+            reason: this.mentionCount > 0
+                ? `High engagement (${this.cachedEngagement}) with @mentions`
+                : `High engagement (${this.cachedEngagement})`,
+            timestamp: new Date().toISOString(),
+        };
+    }
+
+    /**
+     * 检查是否推荐 FastPath
+     */
+    checkFastPathRequest(): boolean {
+        return this.cachedEngagement >= this.config.fastPathEngagementThreshold
+            && this.mentionCount > 0;
+    }
+
+    /**
+     * 获取 buffer 中的消息数
+     */
+    getBufferSize(): number {
+        return this.buffer.length;
+    }
+
+    /**
+     * 获取总消息数
+     */
+    getTotalMessageCount(): number {
+        return this.totalMessageCount;
+    }
+
+    /**
+     * 获取 mention 数
+     */
+    getMentionCount(): number {
+        return this.mentionCount;
+    }
+
+    /**
+     * 获取自上次 attend 以来的新消息数
+     */
+    getNewMessageCount(sinceTimestamp?: number): number {
+        if (!sinceTimestamp) return this.totalMessageCount;
+        return this.buffer.filter(m => m.timestamp > sinceTimestamp).length;
+    }
+
+    /**
+     * 清空 buffer（attend 后调用）
+     */
+    clearBuffer(): void {
+        this.buffer = [];
+        this.mentionCount = 0;
+    }
+
+    /**
+     * 重置统计（用于测试）
+     */
+    reset(): void {
+        this.buffer = [];
+        this.recentSenders.clear();
+        this.cachedEngagement = 0;
+        this.topicDigests = [];
+        this.totalMessageCount = 0;
+        this.mentionCount = 0;
+        this.lastMessageAt = 0;
+    }
+
+    // ─── 内部方法 ───
+
+    private calculateEngagement(now: number): number {
+        const windowStart = now - this.config.engagementWindowMs;
+
+        // 窗口内消息
+        const windowMessages = this.buffer.filter(m => m.timestamp >= windowStart);
+        const msgCount = windowMessages.length;
+
+        // 消息频率（每分钟）
+        const windowMinutes = this.config.engagementWindowMs / 60_000;
+        const msgRate = msgCount / windowMinutes;
+
+        // 独立发言者数
+        const activeSenders = new Set<string>();
+        for (const m of windowMessages) {
+            const userId = String(m.event.userId ?? m.event.user_id ?? m.event.senderId ?? "");
+            if (userId) activeSenders.add(userId);
+        }
+        const senderDiversity = activeSenders.size;
+
+        // mention boost
+        const mentionBoost = this.mentionCount > 0 ? 20 : 0;
+
+        return Math.min(100, Math.round(msgRate * 20 + senderDiversity * 15 + mentionBoost));
+    }
+
+    private cleanExpiredBuffer(now: number): void {
+        const windowStart = now - this.config.engagementWindowMs;
+        this.buffer = this.buffer.filter(m => m.timestamp >= windowStart);
+
+        // 清理过期 sender 追踪
+        for (const [userId, lastSeen] of this.recentSenders.entries()) {
+            if (lastSeen < windowStart) {
+                this.recentSenders.delete(userId);
+            }
+        }
+    }
+}
