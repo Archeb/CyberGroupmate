@@ -1,8 +1,8 @@
 # CyberGroupmate — 项目实施方案
 
-> **文档版本**: 0.9.0
-> **最后更新**: 2026-03-08
-> **状态**: Phase 1-5 已完成，Phase 6A（Memory V2 全量 + Air-Reading Engine + Recording Pipeline + Dry-Run + Model Router）已完成，Phase 6B（Ingress Boundary Refactor + Reply Pipeline + Code-First Action Surface + Agent-Skill Runtime + Feedback Loop）已完成，Phase 7 规划中。
+> **文档版本**: 0.10.0
+> **最后更新**: 2026-03-13
+> **状态**: Phase 1-5 已完成，Phase 6A/6B/6C 已完成（6C = Subagent Notification 处理架构 S1-S8，132/132 tests pass），Phase 7 规划中。
 
 ---
 
@@ -52,6 +52,14 @@
 | 7.3 | CoT Template Distillation | 📝 规划中 | SOTA 提取典型场景思维链模板；弱模型直接套用 |
 | 7.4 | Cost Control | 📝 规划中 | 每日预算控制器；模型分层策略 |
 | 7.5 | Degradation Strategy | 📝 规划中 | 三级降级：API 超时 → 持续不可用 → 系统异常 |
+| 6C.S1 | 消息基础设施改造 | ✅ 完成 | message_log 实时落盘; NC per-chatId dispatch; MessageSnapshot; 10 tests pass |
+| 6C.S2 | SubagentManager + Observer | ✅ 完成 | per-group Observer (Q2 buffer + Engagement); Q3 注意力队列; 22 tests pass |
+| 6C.S3 | Sandbox 多实例 + CodeActExecutor | ✅ 完成 | SandboxPool; per-group CodeAct Session + Q4/Q5; 15 tests pass |
+| 6C.S4 | FastPath Handler | ✅ 完成 | 预授权/撤销/过期/maxReplies 自动禁用; __SKIP__; 13 tests pass |
+| 6C.S5 | 主 Agent 注意力循环 | ✅ 完成 | 串行循环; Cosine Decay L0-L3; DecisionMaker; Prompt 模板系统; 27 tests pass |
+| 6C.S6 | GlobalState + TaskList Skill | ✅ 完成 | JSON 持久化; CRUD + 损坏恢复; skills.taskList host-call; 15 tests pass |
+| 6C.S7 | GroupStickiness | ✅ 完成 | 四级亲密度 (CORE/FAMILIAR/ACQUAINTANCE/STRANGER); 升降级; 15 tests pass |
+| 6C.S8 | 集成与配置外部化 | ✅ 完成 | 端到端集成; config.yaml subagent section; prompt .md 文件; 15 tests pass |
 
 ---
 
@@ -607,6 +615,24 @@ cybergroupmate/
 │   │   ├── home.d.ts
 │   │   ├── telegram.d.ts
 │   │   └── memory.d.ts
+│   ├── subagent/                   # Subagent 多群组架构 [Phase 6C 新增]
+│   │   ├── types.ts                # 所有 subagent 类型 + DEFAULT_SUBAGENT_CONFIG
+│   │   ├── subagent-manager.ts     # SubagentManager (getOrCreate/releaseIdle)
+│   │   ├── group-subagent.ts       # GroupSubagent (持有 Observer + CodeAct + FastPath)
+│   │   ├── observer.ts             # per-group Observer (Q2 buffer + Engagement)
+│   │   ├── attention-queue.ts      # Q3 DynamicAttentionQueue
+│   │   ├── code-act-executor.ts    # per-group CodeActExecutor (独立 Session)
+│   │   ├── execution-queue.ts      # per-subagent Q4 ExecutionQueue
+│   │   ├── callback-queue.ts       # 全局 Q5 CallbackQueue
+│   │   ├── fast-path-handler.ts    # FastPath (预授权/maxReplies/过期)
+│   │   └── stickiness.ts           # GroupStickiness 四级亲密度
+│   ├── main-agent/                 # 主 Agent 注意力循环 [Phase 6C 新增]
+│   │   ├── main-agent-loop.ts      # Phase 1-7 串行注意力循环
+│   │   ├── cosine-decay.ts         # Cosine Decay 上下文深度 L0-L3
+│   │   ├── decision-maker.ts       # estimateReplyMode + estimateReplyCount
+│   │   ├── context-builder.ts      # L0-L3 四级 GroupContextPackage
+│   │   ├── global-state.ts         # MainAgentGlobalState 持久化
+│   │   └── prompt-renderer.ts      # 文件加载 + 惰性缓存 + Mustache 渲染
 │   ├── agent/                      # Agent 辅助
 │   │   └── docs.ts                 # 文档系统
 │   └── tools/                      # 独立工具脚本
@@ -621,9 +647,14 @@ cybergroupmate/
 │   ├── browse-deep-read.md
 │   ├── merge-cascade-user.md
 │   ├── merge-episodes-system.md
-│   └── merge-episodes-user.md
+│   ├── merge-episodes-user.md
+│   ├── subagent-attention.md       # ➌ Attend 上下文注入模板 [Phase 6C]
+│   ├── subagent-decision.md        # ➍ 决策输出约束模板 [Phase 6C]
+│   ├── subagent-execution.md       # ➎ CodeAct 任务注入模板 [Phase 6C]
+│   ├── subagent-fast-path.md       # ➏ FastPath 约束模板 [Phase 6C]
+│   └── subagent-callback.md        # ➐ Callback 结果回注模板 [Phase 6C]
 ├── scripts/                        # 构建/运维脚本
-├── config.yaml                     # 配置文件
+├── config.yaml                     # 配置文件（含 subagent: section）
 ├── config.example.yaml             # 配置模板（含注释说明）
 ├── package.json
 ├── tsconfig.json
@@ -634,6 +665,7 @@ cybergroupmate/
 │   ├── events.jsonl
 │   ├── agent-state.md
 │   ├── bootstrap-code.json
+│   ├── global-state.json           # 主 Agent 全局状态 [Phase 6C]
 │   ├── agent-docs/                 # Agent 可读文档
 │   └── sessions/
 ├── docs/                           # 项目文档
@@ -641,7 +673,8 @@ cybergroupmate/
 │   ├── scene-authoring.md
 │   └── 另一个架构的cybergroupmate.md
 ├── memory.md                       # Memory V2 详细设计文档
-├── subtask.md                      # Memory V2 子任务追踪
+├── subagent.md                     # Subagent Notification 处理设计大纲 [Phase 6C]
+├── subtask.md                      # Subagent 详细实施子任务 [Phase 6C]
 ├── README.md
 └── tests/
 ```
@@ -2042,7 +2075,7 @@ interface DailyBudget {
 
 ### Phase 6-7 实施路线图
 
-#### Phase 6A：基础管线 + Dry-Run + Memory V2（~3 周）
+#### Phase 6A：基础管线 + Dry-Run + Memory V2（~3 周）✅ 已完成
 
 | Task | 内容 | 依赖 | 估时 | 状态 |
 |------|------|------|------|------|
@@ -2056,7 +2089,7 @@ interface DailyBudget {
 | **6.0-M3** | **智能 Context Compaction**（token budget + 话题保护） | M1 | **3天** | ✅ 完成 |
 | **6.0-M4** | **向量搜索 + Deep Recall**（纯 JS 余弦 + embedding + browseHistory） | M1+M2 | **4天** | ✅ 完成 |
 
-#### Phase 6B：Ingress Boundary + Reply Pipeline + Action Surface + Skill（已完成）
+#### Phase 6B：Ingress Boundary + Reply Pipeline + Action Surface + Skill ✅ 已完成
 
 | Task | 内容 | 依赖 | 估时 | 状态 |
 |------|------|------|------|------|
@@ -2066,29 +2099,192 @@ interface DailyBudget {
 | 6.5 | Agent-Skill Runtime（skills.memory / skills.social） | 6.4 | 2天 | ✅ |
 | 6.6 | Feedback Loop（发言后评估） | 6.3 | 2天 | ✅ |
 
-#### Phase 7：SOTA 知识下沉（~2-3 周）
+#### Phase 6C：Subagent Notification 处理架构（S1-S8）✅ 已完成
 
-| Task | 内容 | 依赖 | 估时 |
-|------|------|------|------|
-| 7.1 | Playbook System（SOTA 定期生成行为指南） | 6.0, 6.2 | 3天 |
-| 7.2 | Skill Auto-Generation（失败→SOTA 介入→生成 Skill） | sandbox, 6.7 | 4天 |
-| 7.3 | CoT Template Distillation（思维链模板提取） | 7.1 | 2天 |
-| 7.4 | Cost Control（每日预算 + 模型分层） | config | 2天 |
-| 7.5 | Degradation Strategy（三级降级） | 7.4 | 2天 |
-| — | 全链路集成测试 + 真实群运行验证 | 全部 | 3天 |
+**背景与定位**：Phase 6A 建立了单群组的感知-决策管线（TopicRegistry + Recording Pipeline + Air-Reading），Phase 6B 完善了执行层（Reply Pipeline + Action Surface + Feedback Loop）。然而，系统仍然是单体事件循环——当多个群组同时活跃时，无法并行感知、无法对各群组独立调度。Phase 6C 在 6A/6B 的基础上，**将单体事件循环重构为主 Agent + 多 Subagent 架构**，实现多群组并行感知、串行决策、独立执行的分层处理模型。这是 Phase 6 "社交智能工程化" 的自然延伸——从"能处理一个群组"进化到"能同时处理多个群组"。
 
-**Phase 6 验收标准**：
+> 本阶段的设计在 Phase 7（SOTA 知识下沉）之前完成，为 Phase 7 的 Playbook 注入和 Skill 分发提供了多群组调度基础。
+
+| Task | 内容 | 依赖 | 测试数 | 状态 |
+|------|------|------|--------|------|
+| S1 | 消息基础设施（实时落盘 + per-chatId dispatch + MessageSnapshot） | NC, 6B | 10 | ✅ |
+| S2 | SubagentManager + Observer + Q3 注意力队列 | S1 | 22 | ✅ |
+| S3 | SandboxPool 多实例 + CodeActExecutor + Q4/Q5 | S2 | 15 | ✅ |
+| S4 | FastPath Handler（预授权 + maxReplies + 过期） | S2 | 13 | ✅ |
+| S5 | 主 Agent 注意力循环 + Cosine Decay + Prompt 模板 | S1,S3,S4 | 27 | ✅ |
+| S6 | GlobalState + TaskList Skill | S5 | 15 | ✅ |
+| S7 | GroupStickiness 四级亲密度 | S5 | 15 | ✅ |
+| S8 | 集成 + config.yaml 外部化 + prompt .md 文件化 | S6,S7 | 15 | ✅ |
+| — | **合计** | — | **132** | `tsc` 0 errors |
+
+**Phase 6 验收标准（6A/6B/6C）**：
 - Dry-Run 在历史聊天记录上运行，输出评估报告，误触发率 < 20%
 - Guided 模式下弱模型能稳定完成回复流程（不误发消息、不无限 debug）
 - Recording Pipeline 持续运行 24h 无异常，话题提取质量人工验证通过
 - Engaged Topic Handler 在对话模式下回复延迟 < 20 秒（含自然延迟），节奏自然
 - 退出机制验证：MAX_TURNS 硬上限生效、身份探测场景能触发退出、连续被无视后自动退出
+- **[6C]** 132/132 tests pass，`tsc` 0 errors
+- **[6C]** 所有 subagent 超参数外部化到 `config.yaml` `subagent:` section
+- **[6C]** 5 个 prompt 模板外部化到 `system-prompts/subagent-*.md` 文件
+- **[6C]** 代码审计 3 passes 完成，无 logic bugs
+
+#### Phase 7：SOTA 知识下沉（~2-3 周）
+
+| Task | 内容 | 依赖 | 估时 |
+|------|------|------|------|
+| 7.1 | Playbook System（SOTA 定期生成行为指南） | 6C, 6.2 | 3天 |
+| 7.2 | Skill Auto-Generation（失败→SOTA 介入→生成 Skill） | 6C, sandbox | 4天 |
+| 7.3 | CoT Template Distillation（思维链模板提取） | 7.1 | 2天 |
+| 7.4 | Cost Control（每日预算 + 模型分层） | config | 2天 |
+| 7.5 | Degradation Strategy（三级降级） | 7.4 | 2天 |
+| — | 全链路集成测试 + 真实群运行验证 | 全部 | 3天 |
 
 **Phase 7 验收标准**：
 - Playbook 每日自动生成，内容准确反映群聊动态
 - Skill Auto-Generation 在弱模型失败场景下成功介入并生成可用 Skill ≥ 3 个
 - 弱模型使用 Skill + Playbook 后，Action Success Rate 提升 ≥ 30%
 - 连续运行 48h，成本在预算范围内，无不可恢复崩溃
+
+---
+
+### Phase 6C 详细设计：Subagent Notification 处理架构 [NEW @Phase-6C]
+
+> **设计文档**: `subagent.md` v0.5.0
+> **详细子任务**: `subtask.md`
+
+> [!IMPORTANT]
+> **核心不变式**：所有关于"是否回复"和"回复什么内容"的决策，**只在主 Agent 中发生**。Subagent 的任何组件都不做内容决策。唯一例外是 FastPath，经主 Agent 预授权后在严格限定范围内自主回复。
+
+**与 Phase 6A/6B 的关系**：
+- Phase 6A 的 TopicRegistry、Recording Pipeline、FastRouter 被 Observer 消费，成为 per-group 感知层的输入
+- Phase 6B 的 Reply Pipeline、ContextAssembler 被 CodeActExecutor 集成为执行能力
+- Phase 6C 在此基础上引入主 Agent 决策层 + 多群组调度层，完成从单群组到多群组的架构升级
+
+**与 Phase 7 的关系**：
+- Phase 7 的 Playbook System 可通过 GroupContextPackage 注入到主 Agent 决策上下文
+- Phase 7 的 Skill Auto-Generation 由 CodeActExecutor 的 sandbox 提供执行环境
+- Phase 7 的 Cost Control 可对 per-subagent 的 sandbox/session 纳入预算管控
+
+#### 6C.1 架构概览：速度分层模型
+
+```
+  主 Agent（快层·决策者）              Subagent（慢层·执行者）
+  ┌──────────────────────┐            ┌──────────────────────────┐
+  │ 完整上下文            │            │ Observer (始终运行)       │
+  │ 所有决策权            │ ←感知上报─ │  · 消息消费+话题聚类     │
+  │ 批量指令分派          │            │  · Engagement 评分       │
+  │ Callback 审查        │            │  · 告警/FastPath 请求    │
+  │ 全局状态+TaskList     │ ─指令分派→ │                          │
+  │ 动态队列评估          │            │ CodeActExecutor (按需)    │
+  │ 多/单条回复判断       │            │  · 执行复杂回复          │
+  │                      │ ←回调──── │  · 独立 Session+Sandbox  │
+  │                      │            │                          │
+  │                      │ ─预授权──→ │ FastPath (高engagement)  │
+  │                      │ ←回调──── │  · 预授权范围内快速回复   │
+  └──────────────────────┘            └──────────────────────────┘
+```
+
+#### 6C.2 五队列架构
+
+| 队列 | 位置 | 来源 | 消费者 |
+|------|------|------|--------|
+| **Q1** NotificationCenter | 全局 | PlatformAdapter 实时推入 | GroupDispatcher 按 chatId 分发 |
+| **Q2** Inbound Buffer | per-Subagent Observer | Q1 分发 | Observer → Recording Pipeline → TopicDigest |
+| **Q3** 注意力队列 | 主 Agent | Observer 上报 / Alert / FastPath 请求 | 主 Agent 串行 dequeue |
+| **Q4** Execution Queue | per-Subagent | 主 Agent 分派的 ReplyTask | CodeActExecutor / FastPath |
+| **Q5** Callback Queue | 全局 | CodeAct/FastPath 完成 | 主 Agent Phase 1 drain |
+
+#### 6C.3 Subagent 三组件
+
+**Observer**（纯感知，不做内容决策）：
+- Q2 buffer → Recording Pipeline → TopicRegistry → Engagement 评分
+- 产出 `DIGEST_UPDATE` / `OBSERVER_ALERT` / `FAST_PATH_REQUEST` → Q3
+- Engagement 公式：`E = min(100, msgRate×20 + senderDiversity×15 + mentionBoost)`
+
+**CodeActExecutor**（独立环境执行复杂回复）：
+- 独立 LLM Session + 独立 Sandbox（通过 SandboxPool）
+- 执行主 Agent 的 `CODEACT_REPLY` 指令 → callback → Q5
+- Session 自动 compact（超限时保留最近条目）
+
+**FastPath**（预授权范围内快速回复）：
+- 由主 Agent 通过 `FAST_PATH_AUTH` 显式授权
+- `maxRepliesBeforeReauth` + `expiresAt` 双重限制
+- `__SKIP__` 标记跳过不确定的消息
+- 每次回复产生 callback → Q5
+
+#### 6C.4 主 Agent 注意力循环
+
+```
+Phase 1: drain Q5 callbacks → unblock 对应群组
+Phase 2: evaluate Q3（合并上报 + 时间衰减 + Alert boost）
+Phase 3: dequeue 最高优先级群组
+Phase 4: Cosine Decay → 构建 GroupContextPackage (L0-L3)
+Phase 5: estimateReplyMode (NONE/SINGLE/BATCH) → 决策
+Phase 6: 分派到 subagent (Q4) → block if CodeAct
+Phase 7: 更新 GlobalState → 回到 Phase 1
+```
+
+**Cosine Decay 上下文深度**：
+
+| 深度 | 内容 | 公式 |
+|------|------|------|
+| L0 | TopicDigest only | `depth = round((1+cos(2πn/T))/2 × 3)` |
+| L1 | + GroupModel + Playbook + callbacks | cyclePeriod 由 stickiness 决定 |
+| L2 | + 消息原文 | CORE=10, FAMILIAR=20 |
+| L3 | + SOTA 深度分析 + 完整历史 | ACQUAINTANCE=35, STRANGER=50 |
+
+#### 6C.5 GroupStickiness 四级亲密度
+
+| 等级 | priorityMultiplier | depthCyclePeriod | fastPathEligible |
+|------|--------------------|------------------|------------------|
+| CORE | 1.0 | 10 | ✅ |
+| FAMILIAR | 0.7 | 20 | ✅ |
+| ACQUAINTANCE | 0.4 | 35 | ❌ |
+| STRANGER | 0.2 | 50 | ❌ |
+
+升降级逻辑：avgMessagesPerDay → 升级；daysSinceLastInteraction → 降级。
+
+#### 6C.6 Prompt 注入点 (7 个)
+
+| # | 注入点 | 模板文件 | 触发频率 |
+|---|-------|---------|--------|
+| ➊ | Triage (观察层) | (现有 pipeline prompt) | ~每 2min/群 |
+| ➋ | Main System (决策层) | (现有 system prompt) | 一次 |
+| ➌ | Attend 上下文 | `subagent-attention.md` | 每次轮询 |
+| ➍ | Decision 约束 | `subagent-decision.md` | 每次轮询 |
+| ➎ | CodeAct Task | `subagent-execution.md` | 每个 CODEACT_REPLY |
+| ➏ | FastPath | `subagent-fast-path.md` | 每次授权 |
+| ➐ | Callback 回注 | `subagent-callback.md` | 每个 callback |
+
+#### 6C.7 配置外部化
+
+所有超参数迁移到 `config.yaml` 的 `subagent:` section：
+
+```yaml
+subagent:
+  max_sandbox_instances: 5
+  cosine_decay: { default_cycle_period: 20 }
+  fast_path: { default_max_replies: 3, engagement_threshold: 70 }
+  stickiness: { CORE: {...}, FAMILIAR: {...}, ACQUAINTANCE: {...}, STRANGER: {...} }
+  attention_queue: { time_decay_per_second: 0.001, max_size: 100 }
+  decision: { batch_threshold: 50, none_threshold: 10 }
+  observer: { engagement_window_ms: 300000 }
+  stickiness_thresholds: { upgrade: {...}, downgrade: {...} }
+```
+
+#### 6C.8 测试覆盖
+
+| 测试文件 | 阶段 | 用例数 |
+|---------|------|--------|
+| `s1-message-infra.test.ts` | S1 | 10 |
+| `s2-subagent-observer.test.ts` | S2 | 22 |
+| `s3-sandbox-executor.test.ts` | S3 | 15 |
+| `s4-fast-path.test.ts` | S4 | 13 |
+| `s5-main-agent.test.ts` | S5 | 27 |
+| `s6-global-state.test.ts` | S6 | 15 |
+| `s7-stickiness.test.ts` | S7 | 15 |
+| `s8-integration.test.ts` | S8 | 15 |
+| **合计** | | **132** |
 
 ---
 
