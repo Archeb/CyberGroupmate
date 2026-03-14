@@ -1,9 +1,10 @@
 # Dryrun 系统分析与多群聊测试设计
 
-> **文档版本**: 0.1.0  
+> **文档版本**: 0.3.0  
 > **创建时间**: 2026-03-13  
+> **最后更新**: 2026-03-14  
 > **状态**: 设计分析稿  
-> **关联文档**: `Implementation_Plan.md` Phase 6.7, `subagent.md` v0.5.0, `subtask.md`
+> **关联文档**: `Implementation_Plan.md` Phase 6.7/6C/7, `subagent.md` v0.5.0, `subtask.md`
 
 ---
 
@@ -34,6 +35,33 @@
    - [4.2 锁问题分类与分析](#42-锁问题分类与分析)
    - [4.3 Dryrun 中如何测试锁问题](#43-dryrun-中如何测试锁问题)
 5. [实施建议](#5-实施建议)
+6. [可观测性设计](#6-可观测性设计)
+   - [6.1 Dryrun Trace 数据模型](#61-dryrun-trace-数据模型)
+   - [6.2 结构化日志增强](#62-结构化日志增强)
+   - [6.3 Span 层级与关联](#63-span-层级与关联)
+   - [6.4 实时仪表盘数据](#64-实时仪表盘数据)
+   - [6.5 Dryrun 报告中的可观测性聚合](#65-dryrun-报告中的可观测性聚合)
+7. [断点与调试设计](#7-断点与调试设计)
+   - [7.1 Dryrun 断点系统](#71-dryrun-断点系统)
+   - [7.2 步进调试模式](#72-步进调试模式)
+   - [7.3 条件断点](#73-条件断点)
+   - [7.4 回放调试](#74-回放调试)
+   - [7.5 调试接口与 CLI 集成](#75-调试接口与-cli-集成)
+8. [未来扩展兼容性审查](#8-未来扩展兼容性审查)
+   - [8.1 Phase 7 兼容性](#81-phase-7-兼容性)
+   - [8.2 Appendix B 扩展兼容性](#82-appendix-b-扩展兼容性)
+   - [8.3 Dryrun Harness 扩展点清单](#83-dryrun-harness-扩展点清单)
+9. [架构冲突分析与修正](#9-架构冲突分析与修正)
+10. [Dryrun Harness 实施细化](#10-dryrun-harness-实施细化)
+    - [10.1 核心组件实例化蓝图](#101-核心组件实例化蓝图)
+    - [10.2 消息分发流程](#102-消息分发流程)
+    - [10.3 主循环实现细化](#103-主循环实现细化)
+11. [测试环境 Examples](#11-测试环境-examples)
+    - [11.1 Example A — 基础多群注意力竞争](#111-example-a--基础多群注意力竞争)
+    - [11.2 Example B — FastPath + CodeAct 并发](#112-example-b--fastpath--codeact-并发)
+    - [11.3 Example C — 高并发压力 + 锁测试](#113-example-c--高并发压力--锁测试)
+    - [11.4 Example D — 端到端全流程 (Real LLM)](#114-example-d--端到端全流程-real-llm)
+    - [11.5 JSONL 样本生成工具](#115-jsonl-样本生成工具)
 
 ---
 
@@ -963,6 +991,20 @@ Phase D4: 锁与并发测试（~2 天）
   ├── ConcurrencyTestHook
   ├── 场景化锁测试矩阵 L1-L10
   └── 变异测试框架
+
+Phase D5: 可观测性（~2 天）
+  ├── DryRunTrace / DryRunSpan 数据模型
+  ├── logger.ts 增强（simTs/spanId/traceId）
+  ├── RoundSnapshot NDJSON stream
+  ├── DryRunObservabilityReport 聚合
+  └── Span 命名空间约定
+
+Phase D6: 断点与调试（~3 天）
+  ├── Breakpoint 引擎（16 个断点位置）
+  ├── 交互式 Debug Shell (readline)
+  ├── 条件断点 eval 上下文
+  ├── StateSnapshot + rewind
+  └── CLI --debug / --break / --trace 集成
 ```
 
 ### 5.2 与 S1-S8 子任务的依赖关系
@@ -978,11 +1020,16 @@ graph LR
     D2 --> D3["D3: 报告"]
     D2 --> D4["D4: 并发测试"]
     D3 --> D4
+    D3 --> D5["D5: 可观测性"]
+    D4 --> D5
+    D5 --> D6["D6: 断点与调试"]
 
     style D1 fill:#E8532E,color:#fff
     style D2 fill:#E8532E,color:#fff
     style D3 fill:#2ECC71,color:#fff
     style D4 fill:#F39C12,color:#fff
+    style D5 fill:#3498DB,color:#fff
+    style D6 fill:#9B59B6,color:#fff
 ```
 
 > [!IMPORTANT]
@@ -1004,3 +1051,1164 @@ npx tsx src/cli.ts dry-run chat.jsonl --concurrency-test
 ```
 
 当不传 `--multi-group` 时，fallback 到现有的全局单例模式；传了 `--multi-group` 时，使用新的 per-group Observer + 注意力循环模拟。
+
+---
+
+## 6. 可观测性设计
+
+> [!NOTE]
+> 本节设计基于现有 `logger.ts` 的 JSON/text 双格式输出能力（模块标签 + level 过滤），并对齐 `Implementation_Plan.md` Appendix B 中 "可观测性 Dashboard" 的未来扩展方向。
+
+### 6.1 Dryrun Trace 数据模型
+
+Dryrun 中的每一次运行产出一个完整的 `DryRunTrace`，它是所有可观测性数据的根容器。与现有 `DryRunResult`（只关心最终统计）不同，`DryRunTrace` 记录**过程**。
+
+```typescript
+/** 一次 Dryrun 运行的完整 Trace */
+interface DryRunTrace {
+  /** 运行唯一 ID (ULID) */
+  traceId: string;
+  /** 运行开始时间（真实时钟） */
+  startedAt: string;
+  /** 运行结束时间 */
+  endedAt: string;
+  /** 模拟时间范围 (SimulatedClock 的 start/end) */
+  simulatedTimeRange: { start: number; end: number };
+
+  /** 所有 Span（有序列表） */
+  spans: DryRunSpan[];
+
+  /** 聚合指标 */
+  metrics: DryRunMetrics;
+
+  /** 配置快照（用于重现） */
+  configSnapshot: {
+    scenario: object;
+    appConfig: object;
+    gitCommit?: string;
+  };
+}
+
+/** 单个操作的 Span */
+interface DryRunSpan {
+  spanId: string;
+  parentSpanId?: string;      // 构成 Span 树
+  traceId: string;
+
+  /** 操作名称（结构化命名空间） */
+  operation: string;           // e.g. "observer.flush", "main_agent.phase3.dequeue"
+  /** 关联的 chatId（如果有） */
+  chatId?: string;
+  /** 关联的 round 编号 */
+  round?: number;
+
+  /** 时间信息 */
+  startTime: number;           // SimulatedClock 时间
+  endTime: number;
+  wallClockDuration: number;   // 真实耗时 (ms)
+
+  /** 属性（操作相关的结构化数据） */
+  attributes: Record<string, unknown>;
+
+  /** 事件列表（Span 内的离散打点） */
+  events: Array<{
+    name: string;
+    timestamp: number;
+    attributes?: Record<string, unknown>;
+  }>;
+
+  /** 状态 */
+  status: 'OK' | 'ERROR' | 'SKIPPED';
+  errorMessage?: string;
+}
+```
+
+**命名空间约定** — 从 `logger.ts` 的 `createLogger(module)` 模块标签自然延伸：
+
+```
+observer.<chatId>.onMessage          消息接收
+observer.<chatId>.flush              话题聚类+Triage
+observer.<chatId>.engagement         Engagement 计算
+attention_queue.evaluate             Q3 动态评估
+attention_queue.dequeue              Q3 出队
+main_agent.round.<n>                 主循环第 n 轮
+main_agent.phase1.drain_callbacks    Phase 1
+main_agent.phase3.dequeue            Phase 3
+main_agent.phase4.build_context      Phase 4
+main_agent.phase5.decide             Phase 5 决策
+main_agent.phase6.dispatch           Phase 6 分派
+main_agent.phase7.update_state       Phase 7
+executor.<chatId>.codeact            CodeAct 执行
+executor.<chatId>.fastpath           FastPath 执行
+callback_queue.enqueue               Q5 入队
+callback_queue.drain                 Q5 批量取出
+memory.flush                         Memory 写入
+memory.recall                        Memory 检索
+```
+
+### 6.2 结构化日志增强
+
+现有 `logger.ts` 的 JSON 模式已输出 `{ts, level, module, msg, data}`。为 Dryrun 模式增加 `spanId` 和 `traceId` 关联：
+
+```typescript
+interface DryRunLogEntry {
+  ts: string;           // 真实时钟 ISO
+  simTs: number;        // 模拟时钟 timestamp (新增)
+  level: LogLevel;
+  module: string;
+  msg: string;
+  data?: Record<string, unknown>;
+  // 可观测性关联 (新增)
+  traceId?: string;
+  spanId?: string;
+  chatId?: string;
+  round?: number;
+}
+```
+
+**实现方式**：`SimulatedClock` 注入到 `createLogger` 的全局配置中。当 `dryrunMode = true` 时，每条日志自动附加 `simTs`。`spanId` 通过 `AsyncLocalStorage`（或简单的 context 传递）在 span 作用域内自动附加。
+
+```typescript
+// 增强 logger.ts
+export function enableDryRunMode(clock: SimulatedClock, traceId: string): void {
+  globalConfig.dryrunMode = true;
+  globalConfig.simClock = clock;
+  globalConfig.traceId = traceId;
+}
+```
+
+### 6.3 Span 层级与关联
+
+```mermaid
+graph TD
+    ROOT["DryRunTrace<br/>traceId=01jA..."]
+    ROOT --> R1["main_agent.round.1"]
+    ROOT --> R2["main_agent.round.2"]
+    ROOT --> RN["main_agent.round.N"]
+
+    R1 --> R1P1["phase1.drain_callbacks"]
+    R1 --> R1P2["phase2.evaluate"]
+    R1 --> R1P3["phase3.dequeue<br/>chatId=-100001"]
+    R1 --> R1P4["phase4.build_context<br/>depth=L2"]
+    R1 --> R1P5["phase5.decide"]
+    R1 --> R1P6["phase6.dispatch<br/>CODEACT_REPLY"]
+    R1 --> R1P7["phase7.update_state"]
+
+    R1P3 --> OBS["observer.-100001.flush"]
+    R1P6 --> EXEC["executor.-100001.codeact<br/>(异步, 跨 round)"]
+    EXEC --> CB["callback_queue.enqueue<br/>(出现在 round.3)"]
+```
+
+关键关联规则：
+- **同 round 的所有 phase span** 共享 `parentSpanId = round span`
+- **Observer span** 与触发它的 round 关联，但记录自己的 `chatId`
+- **跨 round 的 CodeAct span**：`startTime` 在 round N，`endTime` 在 round M。`parentSpanId = round N 的 dispatch span`
+- **Callback span**：`parentSpanId = 对应的 executor span`（通过 `taskId` 关联）
+
+### 6.4 实时仪表盘数据
+
+Dryrun 每个 round 结束后产出一条 `RoundSnapshot`，可被前端实时消费或事后分析：
+
+```typescript
+interface RoundSnapshot {
+  round: number;
+  simTimestamp: number;
+  wallClockMs: number;           // 本 round 真实耗时
+
+  // Q3 状态
+  queueSize: number;
+  queueActive: number;
+  queueBlocked: number;
+  topPriority: number;
+  attendedChatId: string | null;
+
+  // per-group 摘要
+  groups: Array<{
+    chatId: string;
+    engagement: number;
+    bufferSize: number;
+    blocked: boolean;
+    topicCount: number;
+    newMessages: number;
+  }>;
+
+  // 本 round 决策
+  decisions: Decision[];
+
+  // 累计指标
+  cumulativeReplies: number;
+  cumulativeIgnores: number;
+  activeCodeActTasks: number;
+  activeFastPaths: number;
+
+  // LLM 调用统计
+  llmCalls: { model: string; tokens: number; latencyMs: number }[];
+}
+```
+
+**输出通道**：
+- **NDJSON stream**：`--output-stream <path>` 将 `RoundSnapshot` 逐行写入，支持 `tail -f` 实时监控
+- **WebSocket**（可选）：与 Implementation_Plan Appendix B 的 Grafana Dashboard 对齐，通过 WebSocket 推送到前端
+- **报告聚合**：运行结束后从所有 `RoundSnapshot` 聚合为最终 metrics
+
+### 6.5 Dryrun 报告中的可观测性聚合
+
+扩展 §3.8 的 `MultiGroupDryRunResult`，新增 `observability` 字段：
+
+```typescript
+interface DryRunObservabilityReport {
+  /** 总 LLM 调用统计 */
+  llmStats: {
+    totalCalls: number;
+    totalTokens: number;
+    totalLatencyMs: number;
+    byModel: Record<string, { calls: number; tokens: number; avgLatencyMs: number }>;
+    byComponent: Record<string, { calls: number; tokens: number }>;
+    // 长尾分析
+    p50LatencyMs: number;
+    p95LatencyMs: number;
+    p99LatencyMs: number;
+  };
+
+  /** Pipeline 时序分析 */
+  pipelineTiming: {
+    /** 消息到达 → Observer flush 的平均延迟 */
+    avgObserverFlushDelayMs: number;
+    /** Observer flush → Q3 enqueue 延迟 */
+    avgQ3EnqueueDelayMs: number;
+    /** Q3 enqueue → Main Agent attend 延迟（排队等待时间） */
+    avgQueueWaitMs: number;
+    maxQueueWaitMs: number;
+    /** Main Agent attend → CodeAct callback 延迟 */
+    avgCodeActDurationMs: number;
+    /** 端到端：消息到达 → 回复 callback 的总延迟 */
+    avgEndToEndMs: number;
+  };
+
+  /** 操作 SLA 达标率 */
+  slaCompliance: {
+    /** Observer flush < 5s */
+    observerFlushUnder5s: number;  // 百分比
+    /** 端到端 < 25s（硬上限） */
+    endToEndUnder25s: number;
+    /** Q3 排队 < 30s */
+    queueWaitUnder30s: number;
+  };
+
+  /** Span 总览 */
+  spanSummary: {
+    totalSpans: number;
+    errorSpans: number;
+    spansByOperation: Record<string, { count: number; avgDurationMs: number }>;
+  };
+}
+```
+
+---
+
+## 7. 断点与调试设计
+
+> [!IMPORTANT]
+> Dryrun 的核心价值不仅是"能跑"——而是"能停下来看"。断点系统使开发者能在多群并发模拟中精确定位问题，理解系统在特定时刻的完整状态。
+
+### 7.1 Dryrun 断点系统
+
+断点是 Dryrun 模拟引擎的一等公民。当命中断点时，`SimulatedClock` 暂停，所有状态冻结，等待调试者检查或继续。
+
+```typescript
+/** 断点位置枚举——对应主循环和 Subagent 的关键决策点 */
+type BreakpointLocation =
+  // 主循环
+  | 'round_start'               // 每轮开始
+  | 'phase1_after_drain'        // drain callbacks 后
+  | 'phase2_after_evaluate'     // Q3 评估后
+  | 'phase3_after_dequeue'      // dequeue 后（拿到目标群组）
+  | 'phase5_after_decide'       // LLM 决策后
+  | 'phase6_after_dispatch'     // 分派后
+  | 'phase7_after_state_update' // 状态更新后
+  // Observer
+  | 'observer_on_message'       // Observer 收到消息
+  | 'observer_after_flush'      // Observer flush 完成
+  | 'observer_alert'            // Observer 产出告警
+  // Executor
+  | 'executor_task_start'       // CodeAct/FastPath 开始执行
+  | 'executor_task_complete'    // 执行完成，callback 入 Q5
+  // Memory
+  | 'memory_after_write'        // Memory 写入后
+  // 全局
+  | 'block_event'               // 群组被 block
+  | 'unblock_event';            // 群组被 unblock
+
+/** 断点定义 */
+interface Breakpoint {
+  id: string;
+  location: BreakpointLocation;
+  /** 条件表达式（JS，在当前上下文中 eval） */
+  condition?: string;
+  /** 是否启用 */
+  enabled: boolean;
+  /** 命中次数限制 (0 = 无限) */
+  hitCountLimit: number;
+  currentHitCount: number;
+}
+```
+
+### 7.2 步进调试模式
+
+```bash
+# 步进模式启动
+npx tsx src/cli.ts dry-run chat.jsonl --multi-group --debug
+
+# 进入交互式调试器
+🔍 Dryrun Debug Shell (type 'help' for commands)
+dryrun> 
+```
+
+**调试命令**：
+
+| 命令 | 说明 |
+|------|------|
+| `continue` / `c` | 继续执行到下一个断点 |
+| `step` / `s` | 执行一个 round |
+| `step-phase` | 执行当前 round 的下一个 phase |
+| `step-message` | 推进到下一条消息到达 |
+| `break <location> [condition]` | 设置断点 |
+| `delete <bp-id>` | 删除断点 |
+| `list` | 列出所有断点 |
+| `inspect queue` | 查看 Q3 当前状态 |
+| `inspect observer <chatId>` | 查看 Observer 状态 |
+| `inspect global-state` | 查看 GlobalState |
+| `inspect memory <chatId>` | 查看 Memory 统计 |
+| `inspect timeline [last N]` | 查看最近 N 条时间线事件 |
+| `watch <expr>` | 添加 watch 表达式 |
+| `eval <expr>` | 在当前上下文执行 JS |
+| `snapshot [path]` | 导出当前完整状态快照 |
+| `rewind <round>` | 回退到指定 round（需要启用快照） |
+| `quit` | 退出 |
+
+### 7.3 条件断点
+
+条件断点允许在海量消息中精确停在感兴趣的时刻：
+
+```bash
+# 当群 -100001 的 engagement 超过 80 时暂停
+dryrun> break observer_alert chatId === "-100001" && engagement > 80
+
+# 当主 Agent 决定回复某个话题时暂停
+dryrun> break phase5_after_decide decisions.some(d => d.action === "REPLY")
+
+# 当同时有 3 个以上群被 block 时暂停（检测资源耗尽）
+dryrun> break phase6_after_dispatch blockedCount >= 3
+
+# 当模拟时间超过指定时刻时暂停
+dryrun> break round_start simClock.now() > 1709500000000
+```
+
+**条件上下文变量**：
+
+| 变量 | 类型 | 说明 |
+|------|------|------|
+| `chatId` | `string` | 当前操作关联的群组 |
+| `round` | `number` | 当前 round 编号 |
+| `simClock` | `SimulatedClock` | 模拟时钟 |
+| `queue` | `DynamicAttentionQueue` | Q3 队列 |
+| `decisions` | `Decision[]` | 当前决策结果 |
+| `engagement` | `number` | 当前群 engagement |
+| `blockedCount` | `number` | 当前被 block 的群数 |
+| `globalState` | `MainAgentGlobalState` | 全局状态 |
+| `callbacks` | `SubagentCallback[]` | 刚 drain 的 callbacks |
+
+### 7.4 回放调试
+
+启用快照后，Dryrun 在每个 round 结束时保存完整状态快照，支持**回退**到任意历史 round：
+
+```typescript
+interface StateSnapshot {
+  round: number;
+  simTimestamp: number;
+
+  // 完整状态
+  queueState: AttentionQueueEntry[];
+  observerStates: Map<string, {
+    buffer: BufferedMessage[];
+    engagement: number;
+    topicDigests: TopicDigest[];
+    totalMessageCount: number;
+  }>;
+  callbackQueue: SubagentCallback[];
+  globalState: MainAgentGlobalState;
+  pendingCodeActTasks: CodeActReplyTask[];
+
+  // 可选：Memory DB 的 SQLite 快照
+  memoryCheckpoint?: string;  // 文件路径
+}
+```
+
+**快照策略**：
+- **默认**：不启用（节省内存）
+- **`--debug`**：每 round 保存轻量快照（不含 Memory DB）
+- **`--debug --full-snapshots`**：每 N 轮保存含 DB 的完整快照
+- **`--debug --snapshot-interval 10`**：每 10 轮快照一次
+
+### 7.5 调试接口与 CLI 集成
+
+```bash
+# 完整调试模式
+npx tsx src/cli.ts dry-run chat.jsonl --multi-group --debug
+
+# 非交互式：设置断点（命中时输出状态并暂停 → 按 Enter 继续）
+npx tsx src/cli.ts dry-run chat.jsonl --multi-group \
+  --break phase5_after_decide \
+  --break observer_alert
+
+# 只输出 trace，不暂停（事后分析）
+npx tsx src/cli.ts dry-run chat.jsonl --multi-group --trace trace.ndjson
+
+# 步进模式：每个 round 暂停
+npx tsx src/cli.ts dry-run chat.jsonl --multi-group --debug --step
+
+# round 级回放
+npx tsx src/cli.ts dry-run chat.jsonl --multi-group --debug --replay-from 42
+```
+
+**调试输出格式**（命中断点时）：
+
+```
+═══════════════════════════════════════════════════════
+🔴 Breakpoint hit: phase5_after_decide (round 23)
+   SimTime: 2026-03-01T12:05:30.000Z
+   ChatId: -100001 ("旅行交流群")
+═══════════════════════════════════════════════════════
+  Q3: 4 entries (2 active, 2 blocked)
+    -100001 ★ priority=72.3 (CORE, engagement=85)
+    -100002   priority=41.0 (FAMILIAR, engagement=30)
+    -100003   [BLOCKED] reason="codeact_executing"
+    -100004   [BLOCKED] reason="codeact_executing"
+
+  Decisions:
+    [REPLY] topic="京都岚山旅行攻略" confidence=0.78
+    [OBSERVE] topic="新番讨论" confidence=0.4
+
+  GlobalState.taskList: 2 items
+    [HIGH] "传话: 群A→群B 关于旅行信息"
+    [LOW]  "关注 alice 的技术选型问题"
+═══════════════════════════════════════════════════════
+dryrun> _
+```
+
+---
+
+## 8. 未来扩展兼容性审查
+
+> [!IMPORTANT]
+> 本节对照 `Implementation_Plan.md` 中 Phase 7 的全部 Task 和 Appendix B 的扩展路径，逐项审查 Dryrun Harness 的设计是否能支撑。
+
+### 8.1 Phase 7 兼容性
+
+| Task | 内容 | Dryrun Harness 支撑方案 | 需要新增的扩展点 |
+|------|------|------------------------|----------------|
+| **7.1 Playbook System** | SOTA 每日生成 GroupPlaybook → 注入到决策上下文 | `scenario.yaml` 中可预设 Playbook 内容；`GroupContextPackage.L1+` 已包含 `playbook` 字段；Mock 决策器在 `phase4.build_context` 中注入 | ⬜ `PlaybookProvider` 接口：`getPlaybook(chatId) → GroupPlaybook`，支持从文件/DB/mock 加载 |
+| **7.2 Skill Auto-Generation** | 弱模型连续失败 → SOTA 介入生成 Skill | Dryrun 中 CodeAct 是 mock 的，不会真正失败。需要**失败注入器** | ⬜ `FailureInjector`：按概率/规则给 mock CodeAct 注入失败，触发 SOTA 介入路径 |
+| **7.3 CoT Template Distillation** | SOTA 成功交互 → 提取思维链模板 | Dryrun Trace 的 Span 树天然记录了决策路径，可作为 CoT 提取输入 | ⬜ `TraceToCoTExtractor`：从 `DryRunTrace` 中提取成功 REPLY 的 Span 链 → 模板候选 |
+| **7.4 Cost Control** | DailyBudget 预算管控 | Dryrun Trace 已统计 `llmStats.totalTokens/totalCalls`；加入预算模拟 | ⬜ `BudgetSimulator`：在 round 循环中模拟 `DailyBudget` 消耗，触发 PASSIVE_ONLY 降级 |
+| **7.5 Degradation Strategy** | 三级降级（API 失败 → 纯记忆 → 停止） | 需要在 mock LLM 层模拟 API 失败 | ⬜ `APIFailureSimulator`：按场景注入连续 API 错误，验证降级/恢复行为 |
+
+### 8.2 Appendix B 扩展兼容性
+
+| 扩展方向 | Dryrun Harness 支撑方案 | 就绪状态 |
+|---------|------------------------|---------|
+| **多平台 (Discord 等)** | `PlatformAdapter` 抽象已就绪；JSONL 输入格式与平台无关（只需 `id/chat_id/user_id/text/date`）；`scenario.yaml` 可增加 `platform` 字段 | ✅ 就绪 |
+| **向量记忆** | Memory 层是接口化的；Dryrun 创建独立 DB 实例；向量搜索替换不影响 Dryrun 层 | ✅ 就绪 |
+| **可观测性 Dashboard** | §6.4 的 `RoundSnapshot` NDJSON stream + WebSocket 推送已预留；Span 模型对齐 OpenTelemetry 语义 | ✅ 就绪 |
+| **Human-in-the-loop** | 断点系统（§7）天然支持人工审批模拟——在 `phase6_after_dispatch` 设断点等于手动审批 | ✅ 就绪 |
+| **Fine-tuning** | Trace 数据包含完整的 input→decision→outcome 三元组；可直接用于 SFT 数据集构建 | ⬜ 需增加 `TraceToSFTExporter` |
+| **自主学新工具** | CodeAct sandbox 的 `npm install` 行为在 Dryrun 中被 mock；需要 mock 的 package registry | ⬜ 需增加 `MockPackageRegistry` |
+
+### 8.3 Dryrun Harness 扩展点清单
+
+以下是 Dryrun Harness 设计中预留的所有扩展点，确保未来的任何 Phase 7 Task 或 Appendix B 扩展都能无缝接入：
+
+```typescript
+/** Dryrun Harness 扩展点注册表 */
+interface DryRunHarnessExtensions {
+  // ─── 输入层 ───
+  /** 消息来源适配器（替换 JSONL 文件读取） */
+  messageSource: MessageSource;        // 接口: nextBatch() → Message[]
+  /** 场景配置加载器 */
+  scenarioLoader: ScenarioLoader;      // 接口: load(path) → ScenarioConfig
+
+  // ─── 感知层 ───
+  /** Observer 工厂（可替换为自定义 Observer） */
+  observerFactory: (chatId: string, config: ObserverConfig) => Observer;
+  /** Engagement 计算策略（可替换算法） */
+  engagementStrategy: (buffer: Message[], window: number) => number;
+
+  // ─── 决策层 ───
+  /** LLM 提供者（mock/real/hybrid） */
+  llmProvider: LLMProvider;            // 接口: call(prompt, config) → response
+  /** 决策器（rule-based/mock/real） */
+  decisionMaker: DecisionMaker;        // 接口: decide(context) → Decision[]
+  /** Playbook 提供者 */
+  playbookProvider?: PlaybookProvider;  // 接口: get(chatId) → GroupPlaybook | null
+  /** 预算模拟器 */
+  budgetSimulator?: BudgetSimulator;   // 接口: consume(tokens) → isOverBudget
+
+  // ─── 执行层 ───
+  /** CodeAct 执行模拟器 */
+  codeActSimulator: CodeActSimulator;  // 接口: execute(task) → callback (延迟)
+  /** 失败注入器 */
+  failureInjector?: FailureInjector;   // 接口: shouldFail(task) → Error | null
+  /** API 失败模拟器 */
+  apiFailureSimulator?: APIFailureSimulator;
+
+  // ─── 可观测性 ───
+  /** Trace 收集器 */
+  traceCollector: TraceCollector;      // 接口: startSpan/endSpan
+  /** Snapshot 输出 */
+  snapshotWriter?: SnapshotWriter;     // 接口: write(RoundSnapshot)
+  /** 断点处理器 */
+  breakpointHandler?: BreakpointHandler;
+
+  // ─── 报告层 ───
+  /** 报告格式化器（可扩展输出格式） */
+  reportFormatters: ReportFormatter[]; // 接口: format(result) → string
+  /** SFT 数据导出器 */
+  sftExporter?: TraceToSFTExporter;
+  /** CoT 模板提取器 */
+  cotExtractor?: TraceToCoTExtractor;
+}
+```
+
+**扩展点加载方式**：
+
+```yaml
+# scenario.yaml 中声明扩展
+extensions:
+  llmProvider: "mock"               # "mock" | "real" | "hybrid"
+  playbook: "workspace/playbook.json"
+  failureInjection:
+    codeActFailRate: 0.1            # 10% 的 CodeAct mock 返回失败
+    apiFailPattern: "burst"         # "random" | "burst" | "gradual"
+    apiFailBurstLength: 5
+  budget:
+    maxTokens: 2000000
+    maxAPICalls: 300
+  sftExport: "workspace/sft-dataset.jsonl"
+```
+
+> [!TIP]
+> 每个扩展点的接口都设计为单一职责——一个扩展点只做一件事。这保证了组合灵活性。例如，测试 Cost Control 只需替换 `budgetSimulator`，不影响其他组件。
+
+---
+
+## 9. 架构冲突分析与修正
+
+> [!WARNING]
+> 对照 `subagent.md` v0.5.0、`notification-center.ts`、`group-subagent.ts`、`subagent-manager.ts` 和 `Implementation_Plan.md` Phase 6C 的实际代码，发现以下 6 个 Dryrun 设计与真实架构的不一致点。**每条不一致都必须在实施前修正**。
+
+### 冲突 C1：DEFERRED_RE_ENTRY 源类型缺失
+
+**真实架构** (`subagent.md` §2.1, §13.1 D1 类型)：Main Agent Phase 5 可以输出 `DEFER` 决策，这会导致一个 `DEFERRED_RE_ENTRY` 条目重新入队 Q3，延迟后重新被 attend。
+
+**Dryrun 设计 (§3.6)** 中的 `simulatedMainAgentLoop` 没有实现 DEFER → 重新入队路径。
+
+**修正**：在 Phase 6 分派逻辑中增加：
+```typescript
+case 'DEFER':
+  // 重新入队，降低优先级，延迟后再次被 dequeue
+  queue.enqueueOrUpdate({
+    chatId: next.chatId,
+    priority: next.priority * 0.5,  // 衰减
+    source: 'DEFERRED_RE_ENTRY',
+  });
+  break;
+```
+
+### 冲突 C2：NC batchWindow/urgentWords 语义未模拟
+
+**真实架构** (`notification-center.ts` L173-L233)：NC 的 `drain()` 有复杂的批量收集逻辑——`batchWindow`（30s 默认）+ `urgentWords`（`?`/`？`/`呢`/`吗`含问号的消息立即触发）。非紧急消息会在队列中积攒最多 30 秒。
+
+**Dryrun 设计** 中的 `EventDispatcher` 直接按时间窗口切分消息，没有模拟 NC 的 urgent 判断。
+
+**修正**：`EventDispatcher` 增加 urgent 检测逻辑：
+```typescript
+class EventDispatcher {
+  private urgentWords = ['?', '？', '呢', '吗'];
+  
+  isUrgent(msg: Message): boolean {
+    if (msg.isMention || msg.replyToAgent) return true;
+    return this.urgentWords.some(w => (msg.text ?? '').includes(w));
+  }
+  
+  // nextBatch 中：如果窗口内有 urgent 消息，立即触发（不等待 batchWindow）
+  nextBatch(windowMs: number): { messages: Message[]; triggeredByUrgent: boolean } { ... }
+}
+```
+
+### 冲突 C3：markAttended() 清空 Observer buffer
+
+**真实代码** (`group-subagent.ts` L98-103)：`GroupSubagent.markAttended()` 除了更新 `lastAttendedAt` 和 `attendCount`，还会调用 `observer.clearBuffer()`——这意味着 attend 后，Observer 的 Q2 buffer 被清空，后续 engagement 基于清空后的新消息重算。
+
+**Dryrun 设计** (§3.6 Phase 7) 中只更新了 `lastAttendedAt`，没有触发 `observer.clearBuffer()`。
+
+**修正**：在 simulatedMainAgentLoop 的 Phase 7 增加：
+```typescript
+// Phase 7: 更新全局状态
+const subagent = subagentManager.get(next.chatId);
+subagent.markAttended();  // 内含 clearBuffer()
+```
+
+### 冲突 C4：SubagentManager 生命周期未模拟
+
+**真实代码** (`subagent-manager.ts` L90-107)：`SubagentManager.releaseIdle()` 在每轮主循环中可能回收空闲 10 分钟以上的 Subagent 实例。
+
+**Dryrun 设计** 假设所有群组的 Observer 在整个模拟期间都存活。
+
+**修正**：在 `simulatedMainAgentLoop` 中定期调用 `releaseIdle()`（在多群长时间模拟中检测对已回收 Subagent 的访问是否导致错误）。
+
+### 冲突 C5：GroupContextPackage 字段名不一致
+
+**`subagent.md` §4.1** 中的 `GroupContextPackage` 使用 `rawMessages`、`newMessagesSinceLastAttend`、`messageSummary` 等字段。
+
+**`src/subagent/types.ts`** 中的 `GroupContextPackage` 使用 `messages`、`topicDigests`、`deepSummary` 等字段。
+
+**影响**：Dryrun Mock 决策器构建 `GroupContextPackage` 时应以 `types.ts`（代码实际类型）为准，而不是 `subagent.md`（设计文档）。`subagent.md` 中的部分字段名待未来对齐。
+
+### 冲突 C6：NC pushHooks 分发链
+
+**真实代码** (`notification-center.ts` L83-84, L138-145)：NC 通过 `pushHooks` 同步触发 S1 的 `MessageLogWriter`（实时落盘）和 `GroupDispatcher`（按 chatId 分发到各 Observer）。
+
+**Dryrun 设计** 中的 `EventDispatcher` 跳过了 NC 层，直接按时间窗口从 JSONL 读取消息分发到 Observer。这是**合理的简化**（Dryrun 不需要实时落盘，消息已在 JSONL 文件中），但需要确保：
+1. 消息到达 Observer 时携带的字段与 `NotificationEvent` 一致（特别是 `_id`、`_ts`、`_urgent`）
+2. 如果需要测试 NC 层的行为（如 batchWindow），应提供 `NCSimulator` 可选组件插入分发链
+
+**修正**：在 `EventDispatcher` 中将 JSONL 消息统一转换为 `NotificationEvent` 格式：
+```typescript
+function jsonlToNCEvent(msg: Message): NotificationEvent {
+  return {
+    _id: msg.id ?? ulid(),
+    _ts: msg.date ?? new Date(msg.timestamp).toISOString(),
+    type: 'telegram.message',
+    chatId: msg.chat_id,
+    userId: msg.user_id,
+    text: msg.text,
+    _urgent: isUrgentMessage(msg),
+    // ... 其他字段映射
+  };
+}
+```
+
+---
+
+## 10. Dryrun Harness 实施细化
+
+### 10.1 核心组件实例化蓝图
+
+```typescript
+/** Dryrun Harness 启动函数 */
+async function runMultiGroupDryRun(config: MultiGroupDryRunConfig): Promise<MultiGroupDryRunResult> {
+  // ─── 时钟与 Trace ───
+  const clock = new SimulatedClock(config.startTimestamp);
+  const traceId = ulid();
+  const traceCollector = new TraceCollector(traceId);
+  enableDryRunMode(clock, traceId);  // §6.2
+
+  // ─── 输入层 ───
+  const dispatcher = new EventDispatcher(clock);
+  for (const [chatId, filePath] of config.groupFiles) {
+    dispatcher.loadMessages(chatId, filePath);
+  }
+
+  // ─── 感知层 — 复用真实代码 ───
+  const subagentManager = new SubagentManager({
+    idleTimeout: config.simulation.idleTimeoutMs ?? 600_000,
+    observerConfig: {
+      engagementWindowMs: config.simulation.engagementWindowMs ?? 300_000,
+      mentionKeywords: config.agentMentionKeywords ?? [],
+    },
+    stickinessProvider: (chatId) => config.groups[chatId]?.stickiness,
+  });
+
+  // ─── 决策层 — 复用真实组件 ───
+  const queue = new DynamicAttentionQueue({
+    timeDecayPerSecond: config.simulation.timeDecayPerSecond ?? 0.001,
+    maxSize: 100,
+  });
+  const callbackQueue = new CallbackQueue();
+  const globalState: MainAgentGlobalState = {
+    lastActiveAt: new Date().toISOString(),
+    taskList: [],
+    recentDecisions: [],
+    pendingFollowups: [],
+    attentionSummary: '',
+  };
+
+  // ─── Memory ───
+  const dbPath = config.memoryDbPath ?? `/tmp/dryrun-${traceId}.db`;
+  const memory = new MemoryStoreV2(dbPath);
+
+  // ─── 决策器选择 ───
+  const decider = config.decisionMode === 'real'
+    ? new RealLLMDecider(config.llmConfig)
+    : config.decisionMode === 'mock'
+      ? new MockLLMDecider(config.mockDecisions)
+      : new RuleBasedDecider(config.rules);
+
+  // ─── 断点引擎（如果 debug 模式） ───
+  const debugger = config.debug ? new BreakpointEngine(config.breakpoints) : null;
+
+  // ════════════════════════════════
+  //  主模拟循环
+  // ════════════════════════════════
+  const result = await simulateMainLoop({
+    clock, dispatcher, subagentManager, queue, callbackQueue,
+    globalState, memory, decider, traceCollector, debugger,
+    config: config.simulation,
+  });
+
+  // ─── 报告生成 ───
+  memory.close();
+  return buildReport(result, traceCollector, config);
+}
+```
+
+### 10.2 消息分发流程
+
+Dryrun 中消息的分发路径**镜像真实 NC → GroupDispatcher → Observer 链**，但用静态文件输入替代实时 NC：
+
+```
+真实运行:  Telegram → PlatformAdapter → NC.push() → pushHook(MessageLogWriter)
+                                                   → pushHook(GroupDispatcher)
+                                                       → subagentManager.getOrCreate(chatId)
+                                                       → observer.onMessage(event)
+
+Dryrun:    JSONL → EventDispatcher.loadMessages() → 按时间排序
+           clock.advance() → EventDispatcher.nextBatch()
+                           → for each msg:
+                               event = jsonlToNCEvent(msg)
+                               subagent = subagentManager.getOrCreate(event.chatId)
+                               subagent.observer.onMessage(event)  // ← 直接复用真实 Observer
+                               subagent.touch()
+```
+
+**关键决策**：Dryrun **直接复用** `Observer`、`DynamicAttentionQueue`、`CallbackQueue` 等真实组件，而不是 mock 它们。只有 CodeActExecutor 和 FastPath 被 mock（因为需要 Sandbox + LLM 调用）。
+
+### 10.3 主循环实现细化
+
+```typescript
+async function simulateMainLoop(deps: SimDeps): Promise<SimResult> {
+  const { clock, dispatcher, subagentManager, queue, callbackQueue,
+          globalState, memory, decider, traceCollector, debugger: dbg,
+          config } = deps;
+
+  const timeline: TimelineEvent[] = [];
+  const snapshots: StateSnapshot[] = [];
+  let round = 0;
+
+  while (dispatcher.hasMore() || !callbackQueue.isEmpty) {
+    round++;
+    const roundSpan = traceCollector.startSpan(`main_agent.round.${round}`, { round });
+
+    // ═══ 推进时钟，分发消息到 Observers ═══
+    const batch = dispatcher.nextBatch(config.pollIntervalMs);
+    for (const msg of batch.messages) {
+      const event = jsonlToNCEvent(msg);
+      const sa = subagentManager.getOrCreate(event.chatId as string);
+      sa.observer.onMessage(event);
+      sa.touch();
+      timeline.push({ timestamp: clock.now(), event: 'MESSAGE', chatId: event.chatId as string,
+                       details: { text: (event.text as string)?.slice(0, 80) } });
+    }
+
+    // ═══ Phase 1: Drain Callbacks (Q5) ═══
+    await dbg?.check('phase1_after_drain', { round, callbacks: callbackQueue.peek() });
+    const callbacks = callbackQueue.drain();
+    for (const cb of callbacks) {
+      queue.unblock(cb.chatId);
+      timeline.push({ timestamp: clock.now(), event: 'UNBLOCK', chatId: cb.chatId,
+                       details: { taskId: cb.taskId, status: cb.status } });
+    }
+
+    // ═══ Phase 2: 更新 Q3 ═══
+    for (const sa of subagentManager.getAllSubagents()) {
+      queue.enqueueOrUpdate(sa.buildQueueEntry());
+
+      // Observer 告警检测 (C1 修正：含 FAST_PATH_REQUEST)
+      const alert = sa.observer.checkAlert();
+      if (alert) {
+        queue.boost(sa.chatId, 15);
+        timeline.push({ timestamp: clock.now(), event: 'ALERT', chatId: sa.chatId,
+                         details: { engagement: alert.engagementScore } });
+      }
+    }
+    queue.evaluate();
+    await dbg?.check('phase2_after_evaluate', { round, queue });
+
+    // ═══ Phase 3: Dequeue ═══
+    const next = queue.dequeue();
+    if (!next) {
+      clock.advance(config.pollIntervalMs);
+      roundSpan.end('OK');
+      continue;
+    }
+    timeline.push({ timestamp: clock.now(), event: 'ATTEND', chatId: next.chatId,
+                     details: { priority: next.priority, stickiness: next.stickinessLevel } });
+    await dbg?.check('phase3_after_dequeue', { round, chatId: next.chatId, queue });
+
+    // ═══ Phase 4: Context depth (Cosine Decay) ═══
+    const sa = subagentManager.get(next.chatId)!;
+    const depth = getContextDepth(next);
+    const ctx: GroupContextPackage = {
+      depth: depth as 0|1|2|3, chatId: next.chatId,
+      snapshotTimestamp: new Date(clock.now()).toISOString(),
+      topicDigests: next.topicDigests,
+      engagementScore: sa.observer.getEngagementScore(),
+    };
+
+    // ═══ Phase 5: 决策 ═══
+    const replyMode = estimateReplyCount(next, sa);
+    const result = await decider.decide(ctx, globalState, replyMode);
+    timeline.push({ timestamp: clock.now(), event: 'DECISION', chatId: next.chatId,
+                     details: { replyMode, decisions: result.decisions } });
+    await dbg?.check('phase5_after_decide', { round, chatId: next.chatId, decisions: result.decisions });
+
+    // ═══ Phase 6: 分派 ═══
+    let hasCodeAct = false;
+    for (const d of result.decisions) {
+      switch (d.action) {
+        case 'REPLY':
+          // Mock CodeAct — 固定延迟后向 Q5 投递 callback
+          scheduleCallback(clock, callbackQueue, next.chatId, d, config.mockCodeActDelayMs);
+          hasCodeAct = true;
+          break;
+        case 'FAST_PATH_AUTH':
+          // Mock FastPath 授权
+          break;
+        case 'DEFER':
+          // C1 修正：重新入队
+          queue.enqueueOrUpdate({
+            chatId: next.chatId, priority: next.priority * 0.5,
+            basePriority: next.basePriority * 0.5, enqueuedAt: clock.now(),
+          });
+          break;
+      }
+    }
+    if (hasCodeAct) {
+      queue.block(next.chatId, 'codeact_executing');
+      timeline.push({ timestamp: clock.now(), event: 'BLOCK', chatId: next.chatId, details: {} });
+    }
+
+    // ═══ Phase 7: 更新状态 ═══
+    sa.markAttended();  // C3 修正：含 clearBuffer()
+    globalState.lastActiveAt = new Date(clock.now()).toISOString();
+    await dbg?.check('phase7_after_state_update', { round, globalState });
+
+    // ═══ 快照（debug 模式） ═══
+    if (dbg) snapshots.push(captureSnapshot(round, clock, queue, subagentManager, callbackQueue, globalState));
+
+    // ═══ Subagent 生命周期管理 (C4 修正) ═══
+    if (round % 50 === 0) subagentManager.releaseIdle();
+
+    roundSpan.end('OK');
+    clock.advance(config.pollIntervalMs);
+  }
+
+  return { timeline, snapshots, rounds: round, globalState };
+}
+```
+
+---
+
+## 11. 测试环境 Examples
+
+> [!NOTE]
+> 以下 4 个 Example 从简到繁，覆盖 Dryrun 的核心测试场景。每个 Example 包含完整 `scenario.yaml`、JSONL 样本数据结构、和预期输出验证点。
+
+### 11.1 Example A — 基础多群注意力竞争
+
+**目标**: 验证 Q3 优先级排序 + Cosine Decay + Stickiness 对注意力分配的影响。
+
+**群组设置 (3群)**:
+
+| 群 | chatId | Stickiness | 消息量 | 话题特征 |
+|----|--------|-----------|--------|---------|
+| 旅行交流群 | `-100001` | CORE | 80条/10min | 旅行攻略讨论 (agent 有经验) |
+| 技术讨论群 | `-100002` | FAMILIAR | 30条/10min | Rust vs Go 性能辩论 |
+| 闲聊水群 | `-100003` | STRANGER | 120条/10min | 表情包+日常闲聊 |
+
+```yaml
+# workspace/dryrun/examples/a-attention/scenario.yaml
+groups:
+  "-100001":
+    title: "旅行交流群"
+    stickiness:
+      level: CORE
+      priorityMultiplier: 1.0
+      depthCyclePeriod: 10
+      fastPathEligible: true
+      overactiveThreshold: 100
+  "-100002":
+    title: "技术讨论群"
+    stickiness:
+      level: FAMILIAR
+      priorityMultiplier: 0.7
+      depthCyclePeriod: 20
+      fastPathEligible: true
+      overactiveThreshold: 100
+  "-100003":
+    title: "闲聊水群"
+    stickiness:
+      level: STRANGER
+      priorityMultiplier: 0.2
+      depthCyclePeriod: 50
+      fastPathEligible: false
+      overactiveThreshold: 100
+
+simulation:
+  timeScale: 0           # 尽快处理
+  pollIntervalMs: 5000
+  maxRounds: 100
+  mockCodeActDelayMs: 3000
+  mockFastPathDelayMs: 1000
+
+agentMentionKeywords: ["@CyberGroupmate", "@赛博群友"]
+
+evaluation:
+  enableTimeline: true
+```
+
+**JSONL 样本** (`a-group-travel.jsonl`):
+
+```jsonl
+{"id":"1","chat_id":"-100001","user_id":"u1","user_name":"alice","text":"有人去过京都的岚山吗","date":"2026-03-01T12:00:00Z"}
+{"id":"2","chat_id":"-100001","user_id":"u2","user_name":"bob","text":"去过，秋天去的，红叶超美","date":"2026-03-01T12:00:15Z"}
+{"id":"3","chat_id":"-100001","user_id":"u3","user_name":"carol","text":"我也想去，但感觉交通很麻烦？","date":"2026-03-01T12:00:30Z"}
+{"id":"4","chat_id":"-100001","user_id":"u1","user_name":"alice","text":"对啊从大阪过去要多久","date":"2026-03-01T12:00:45Z"}
+{"id":"5","chat_id":"-100001","user_id":"u2","user_name":"bob","text":"JR大概一个半小时？但是我记得有更快的","date":"2026-03-01T12:01:10Z"}
+{"id":"6","chat_id":"-100001","user_id":"u4","user_name":"dave","text":"坐阪急转岚电更快一小时出头","date":"2026-03-01T12:01:25Z"}
+{"id":"7","chat_id":"-100001","user_id":"u3","user_name":"carol","text":"哇感觉好复杂","date":"2026-03-01T12:01:40Z"}
+{"id":"8","chat_id":"-100001","user_id":"u1","user_name":"alice","text":"有没有那种一日券之类的","date":"2026-03-01T12:01:55Z"}
+```
+
+**验证点**：
+- ✅ CORE 群 (`-100001`) 应最先被 attend（优先级最高）
+- ✅ STRANGER 群 (`-100003`) 在 100 轮中被 attend 的次数应远小于 CORE 群
+- ✅ 注意力分配比例应大致符合 `priorityMultiplier` 比例（1.0 : 0.7 : 0.2）
+- ✅ Cosine Decay 使 CORE 群（cycle=10）在连续 attend 后深度从 L0→L1→L2 周期性变化
+
+### 11.2 Example B — FastPath + CodeAct 并发
+
+**目标**: 验证 FastPath 授权 → 快速回复 → reauth 到期、CodeAct block/unblock、两者回调并发到达 Q5。
+
+**群组设置 (3群)**:
+
+| 群 | chatId | 场景 |
+|----|--------|------|
+| 高活跃群 | `-100010` | CORE，持续高 engagement，触发 FastPath 授权 |
+| @提问群 | `-100011` | FAMILIAR，有 3 条 @agent 消息，触发 CodeAct |
+| 安静群 | `-100012` | ACQUAINTANCE，仅 2 条消息，不触发任何操作 |
+
+```yaml
+# workspace/dryrun/examples/b-fastpath/scenario.yaml
+groups:
+  "-100010":
+    title: "高活跃群"
+    stickiness: { level: CORE, priorityMultiplier: 1.0, depthCyclePeriod: 10, fastPathEligible: true, overactiveThreshold: 100 }
+  "-100011":
+    title: "@提问群"
+    stickiness: { level: FAMILIAR, priorityMultiplier: 0.7, depthCyclePeriod: 20, fastPathEligible: true, overactiveThreshold: 100 }
+  "-100012":
+    title: "安静群"
+    stickiness: { level: ACQUAINTANCE, priorityMultiplier: 0.4, depthCyclePeriod: 35, fastPathEligible: false, overactiveThreshold: 100 }
+
+simulation:
+  timeScale: 0
+  pollIntervalMs: 3000
+  maxRounds: 50
+  mockCodeActDelayMs: 8000    # CodeAct 模拟 8s 执行
+  mockFastPathDelayMs: 500    # FastPath 模拟 0.5s
+```
+
+**JSONL 关键消息** (`b-concurrent.jsonl`):
+
+```jsonl
+{"id":"b1","chat_id":"-100010","user_id":"u10","user_name":"eve","text":"哈哈哈太搞笑了","date":"2026-03-02T14:00:00Z"}
+{"id":"b2","chat_id":"-100010","user_id":"u11","user_name":"frank","text":"笑死我了","date":"2026-03-02T14:00:02Z"}
+{"id":"b3","chat_id":"-100010","user_id":"u12","user_name":"grace","text":"这个梗太好了","date":"2026-03-02T14:00:04Z"}
+{"id":"b4","chat_id":"-100010","user_id":"u10","user_name":"eve","text":"还有更绝的","date":"2026-03-02T14:00:06Z"}
+{"id":"b5","chat_id":"-100010","user_id":"u11","user_name":"frank","text":"快发快发","date":"2026-03-02T14:00:08Z"}
+{"id":"b6","chat_id":"-100011","user_id":"u20","user_name":"alice","text":"@CyberGroupmate 你能帮我查一下上周讨论的那个 Rust benchmark 吗","date":"2026-03-02T14:00:10Z"}
+{"id":"b7","chat_id":"-100010","user_id":"u13","user_name":"henry","text":"@CyberGroupmate 你也来评价一下这个梗","date":"2026-03-02T14:00:12Z"}
+{"id":"b8","chat_id":"-100011","user_id":"u21","user_name":"bob","text":"@CyberGroupmate 还有上次那个 Go 的内存对比数据","date":"2026-03-02T14:00:20Z"}
+```
+
+**验证点**：
+- ✅ `-100010` 高 engagement → 主 Agent 授权 FastPath
+- ✅ `b7` (@agent 在高活跃群) → FastPath 快速回复（不走 CodeAct）
+- ✅ `b6` 和 `b8` (@agent 在提问群) → CodeAct 执行
+- ✅ `-100011` 在 CodeAct 执行期间被 block，`-100010` 不受影响
+- ✅ CodeAct callback 到达后 `-100011` 正确 unblock
+- ✅ 安静群 (`-100012`) 在 50 轮中被 attend ≤ 2 次
+
+### 11.3 Example C — 高并发压力 + 锁测试
+
+**目标**: 验证 5 群同时高活跃、SandboxPool 耗尽、Observer 累积告警、GlobalState 并发安全。对应 §4.3 锁测试矩阵 L1-L10。
+
+**群组设置 (5群)**:
+
+| 群 | chatId | Stickiness | 压力特征 |
+|----|--------|-----------|---------|
+| A | `-100020` | CORE | 20 条/min，含 3 条 @agent |
+| B | `-100021` | CORE | 25 条/min，突发 burst |
+| C | `-100022` | FAMILIAR | 15 条/min，2 条 @agent |
+| D | `-100023` | FAMILIAR | 10 条/min，1 条长消息 (>200字) |
+| E | `-100024` | ACQUAINTANCE | 5 条/min，纯闲聊 |
+
+```yaml
+# workspace/dryrun/examples/c-stress/scenario.yaml
+groups:
+  "-100020": { title: "核心群A", stickiness: { level: CORE, priorityMultiplier: 1.0, depthCyclePeriod: 10, fastPathEligible: true, overactiveThreshold: 100 } }
+  "-100021": { title: "核心群B", stickiness: { level: CORE, priorityMultiplier: 1.0, depthCyclePeriod: 10, fastPathEligible: true, overactiveThreshold: 100 } }
+  "-100022": { title: "熟悉群C", stickiness: { level: FAMILIAR, priorityMultiplier: 0.7, depthCyclePeriod: 20, fastPathEligible: true, overactiveThreshold: 100 } }
+  "-100023": { title: "熟悉群D", stickiness: { level: FAMILIAR, priorityMultiplier: 0.7, depthCyclePeriod: 20, fastPathEligible: true, overactiveThreshold: 100 } }
+  "-100024": { title: "认识群E", stickiness: { level: ACQUAINTANCE, priorityMultiplier: 0.4, depthCyclePeriod: 35, fastPathEligible: false, overactiveThreshold: 100 } }
+
+simulation:
+  timeScale: 0
+  pollIntervalMs: 2000        # 加快轮询
+  maxRounds: 200
+  mockCodeActDelayMs: 10000   # CodeAct 10s (故意慢，测试 block 累积)
+  mockFastPathDelayMs: 500
+  maxSandboxInstances: 2      # 限制为 2 个并发 (测试 L4 SandboxPool 耗尽)
+
+concurrencyTest:
+  enabled: true
+  injectBetween:
+    - before: "phase5_read"
+      after: "phase7_write"
+      inject: "globalState.taskList.push({id:'injected',description:'并发注入',status:'PENDING',priority:'LOW',createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()})"
+```
+
+**验证点** (对应 §4.3.4 锁测试矩阵)：
+- ✅ **L1**: 5 个 Observer 同时上报 → Q3 中有 5 条 entry
+- ✅ **L3**: A 和 B 同时被 block → callback 交错到达 → 双方最终 unblock
+- ✅ **L4**: `maxSandboxInstances=2`，3+ 群同时需要 CodeAct → 第 3 个排队/降级
+- ✅ **L6**: `concurrencyTest.injectBetween` 注入 GlobalState 修改 → 验证无丢失
+- ✅ **L8**: block 期间 Observer 累积的 alert → unblock 后 Q3 优先级正确反映
+- ✅ **L10**: 性能：`evaluate()` 在 5 群全活跃时完成 < 50ms
+
+### 11.4 Example D — 端到端全流程 (Real LLM)
+
+**目标**: 使用真实 LLM（cheap model）进行端到端评估。评估 Recording Pipeline 话题聚类质量、Triage 判断准确率、决策合理性。
+
+**群组设置 (3群)** — 使用真实导出的 Telegram 聊天记录：
+
+```yaml
+# workspace/dryrun/examples/d-e2e/scenario.yaml
+groups:
+  "-100030": { title: "日本旅行交流群", stickiness: { level: CORE, priorityMultiplier: 1.0, depthCyclePeriod: 10, fastPathEligible: true, overactiveThreshold: 100 } }
+  "-100031": { title: "二次元研究所", stickiness: { level: FAMILIAR, priorityMultiplier: 0.7, depthCyclePeriod: 20, fastPathEligible: true, overactiveThreshold: 100 } }
+  "-100032": { title: "大学同学群", stickiness: { level: CORE, priorityMultiplier: 1.0, depthCyclePeriod: 10, fastPathEligible: true, overactiveThreshold: 100 } }
+
+simulation:
+  timeScale: 0
+  pollIntervalMs: 5000
+  maxRounds: 50
+  mockCodeActDelayMs: 5000
+  mockFastPathDelayMs: 1000
+
+extensions:
+  llmProvider: "real"         # 使用真实 LLM
+  llmTier: "cheap"            # Gemini Flash
+
+evaluation:
+  enableTimeline: true
+  compareWithBaseline: "workspace/dryrun/examples/d-e2e/baseline.json"
+```
+
+**验证点**：
+- ✅ Recording Pipeline 话题聚类：每个群的话题数符合预期（无跨群误聚类）
+- ✅ Triage 准确率：@ agent 消息 100% 通过 Triage
+- ✅ 注意力分配：CORE 群的 attend 次数 > FAMILIAR 群
+- ✅ 成本估算：总 token 消耗在 `DailyBudget` 预算范围内
+- ✅ 与基线对比：wouldReply 数量偏差 < 20%
+
+### 11.5 JSONL 样本生成工具
+
+为方便快速创建测试数据，提供脚本化的 JSONL 生成工具：
+
+```typescript
+// workspace/dryrun/scripts/generate-sample.ts
+import { writeFileSync } from 'node:fs';
+
+interface GenerateConfig {
+  chatId: string;
+  users: Array<{ id: string; name: string }>;
+  messageCount: number;
+  startTime: string;        // ISO 8601
+  avgIntervalMs: number;    // 消息平均间隔
+  mentionKeyword?: string;  // @ 关键词
+  mentionRate?: number;     // @ 概率 (0-1)
+  topics: string[];         // 话题池（随机选取作为消息内容前缀）
+}
+
+function generateJSONL(config: GenerateConfig): string {
+  const lines: string[] = [];
+  let t = new Date(config.startTime).getTime();
+
+  for (let i = 0; i < config.messageCount; i++) {
+    const user = config.users[Math.floor(Math.random() * config.users.length)];
+    const topic = config.topics[Math.floor(Math.random() * config.topics.length)];
+    const isMention = Math.random() < (config.mentionRate ?? 0);
+    const text = isMention
+      ? `${config.mentionKeyword} ${topic}`
+      : topic;
+
+    lines.push(JSON.stringify({
+      id: `msg_${config.chatId}_${i}`,
+      chat_id: config.chatId,
+      user_id: user.id,
+      user_name: user.name,
+      text,
+      date: new Date(t).toISOString(),
+    }));
+
+    t += config.avgIntervalMs + (Math.random() - 0.5) * config.avgIntervalMs * 0.5;
+  }
+
+  return lines.join('\n') + '\n';
+}
+
+// 用法示例：生成 Example A 的旅行群消息
+const output = generateJSONL({
+  chatId: '-100001',
+  users: [
+    { id: 'u1', name: 'alice' },
+    { id: 'u2', name: 'bob' },
+    { id: 'u3', name: 'carol' },
+    { id: 'u4', name: 'dave' },
+  ],
+  messageCount: 80,
+  startTime: '2026-03-01T12:00:00Z',
+  avgIntervalMs: 7500,  // ~ 8 条/min
+  mentionKeyword: '@CyberGroupmate',
+  mentionRate: 0.05,    // 5% 的消息 @agent
+  topics: [
+    '京都岚山好玩吗',
+    '从大阪怎么去',
+    '交通券怎么买',
+    '竹林拍照好看',
+    '猴子公园值得去吗',
+    '推荐哪家抹茶',
+    '要住一晚吗还是当天来回',
+    '红叶季人多不多',
+  ],
+});
+
+writeFileSync('workspace/dryrun/examples/a-attention/a-group-travel.jsonl', output);
+```
+
+**运行**:
+```bash
+npx tsx workspace/dryrun/scripts/generate-sample.ts
+```
