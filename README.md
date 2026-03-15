@@ -20,6 +20,53 @@ CyberGroupmate is an autonomous AI agent that participates in Telegram group cha
 
 ---
 
+## 🐳 Docker 部署
+
+### 快速启动
+
+```bash
+# 1. 准备配置文件
+cp config.example.yaml config.yaml
+# 编辑 config.yaml，填写 Telegram 凭据和 LLM API Key
+
+# 2. 启动
+docker compose up -d
+
+# 3. 查看日志
+docker compose logs -f
+```
+
+### Userbot 首次登录
+
+如果使用 userbot 模式，首次启动需要输入 OTP 验证码：
+
+```bash
+docker attach cybergroupmate
+# 输入验证码后按 Ctrl+P, Ctrl+Q 脱离（不要 Ctrl+C）
+```
+
+### 数据持久化
+
+运行数据（SQLite 数据库、Telegram 会话、事件日志等）存储在 Docker named volume `cybergroupmate-data` 中。
+
+```bash
+# 备份数据
+docker run --rm -v cybergroupmate-data:/data -v $(pwd):/backup alpine tar czf /backup/cybergroupmate-backup.tar.gz -C /data .
+
+# 恢复数据
+docker run --rm -v cybergroupmate-data:/data -v $(pwd):/backup alpine tar xzf /backup/cybergroupmate-backup.tar.gz -C /data
+```
+
+### 自定义配置
+
+所有配置通过 `config.yaml` 文件管理（不使用环境变量）。修改配置后重启容器即可生效：
+
+```bash
+docker compose restart
+```
+
+---
+
 ## 🏗 Architecture Overview
 
 WIP, refer to docs for detailed information.

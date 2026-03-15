@@ -1,0 +1,15 @@
+node_modules
+dist
+workspace
+.git
+.gitignore
+.vscode
+.DS_Store
+.env
+.env.*
+.tmp
+*.md
+config.yaml
+tests
+docs
+scripts
