@@ -9,7 +9,7 @@
  * 参考设计：subagent.md §2
  */
 
-import { GroupSubagent, type GroupSubagentOptions } from "./group-subagent.js";
+import { GroupSubagent, type GroupSubagentOptions, type RecordingPipelineDeps } from "./group-subagent.js";
 import type { SubagentConfig, GroupStickiness, StickinessLevel } from "./types.js";
 import { DEFAULT_SUBAGENT_CONFIG } from "./types.js";
 import { createLogger } from "../core/logger.js";
@@ -24,6 +24,8 @@ export interface SubagentManagerConfig {
     observerConfig?: ConstructorParameters<typeof GroupSubagent>[0]["observerConfig"];
     /** 默认 stickiness 工厂（可注入 MemoryV2 lookup） */
     stickinessProvider?: (chatId: string) => GroupStickiness | undefined;
+    /** RecordingPipeline 依赖（注入每个 GroupSubagent） */
+    recordingDeps?: RecordingPipelineDeps;
 }
 
 const DEFAULT_MANAGER_CONFIG: SubagentManagerConfig = {
@@ -53,6 +55,7 @@ export class SubagentManager {
                 chatId,
                 observerConfig: this.config.observerConfig,
                 stickiness,
+                recordingDeps: this.config.recordingDeps,
             });
             this.subagents.set(chatId, subagent);
             log.info("getOrCreate: 创建新 Subagent", { chatId, total: this.subagents.size });
@@ -93,6 +96,7 @@ export class SubagentManager {
 
         for (const [chatId, subagent] of this.subagents.entries()) {
             if (subagent.isIdle(timeout)) {
+                subagent.dispose();
                 this.subagents.delete(chatId);
                 released.push(chatId);
                 log.info("releaseIdle: 释放 Subagent", { chatId });
@@ -110,11 +114,14 @@ export class SubagentManager {
      * 手动移除指定 chatId 的 Subagent
      */
     remove(chatId: string): boolean {
-        const result = this.subagents.delete(chatId);
-        if (result) {
+        const sub = this.subagents.get(chatId);
+        if (sub) {
+            sub.dispose();
+            this.subagents.delete(chatId);
             log.info("remove: 移除 Subagent", { chatId, remaining: this.subagents.size });
+            return true;
         }
-        return result;
+        return false;
     }
 
     /**
@@ -128,6 +135,9 @@ export class SubagentManager {
      * 释放所有实例
      */
     dispose(): void {
+        for (const sub of this.subagents.values()) {
+            sub.dispose();
+        }
         this.subagents.clear();
         log.info("dispose: 所有 Subagent 已释放");
     }

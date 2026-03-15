@@ -26,6 +26,7 @@ import { createLogger } from "../core/logger.js";
 import { readFileSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { shouldCompact, compact as contextManagerCompact } from "../memory-v2/context-manager.js";
 
 const log = createLogger("code-act-executor");
 
@@ -246,7 +247,7 @@ export class CodeActExecutor {
 
         // 检查 session 长度
         if (this.session.length > this.config.maxSessionMessages) {
-            this.compactSession();
+            await this.compactSession();
         }
 
         try {
@@ -339,7 +340,7 @@ export class CodeActExecutor {
         if (this.session.length > 0) {
             // 先检查是否需要 compact
             if (this.session.length > this.config.maxSessionMessages) {
-                this.compactSession();
+                await this.compactSession();
             }
             // 将历史 session 消息作为 LLM 上下文注入
             for (const msg of this.session) {
@@ -554,18 +555,20 @@ export class CodeActExecutor {
     }
 
     /**
-     * Fix 3: 智能 Compact — 保留操作摘要 + 已发消息
+     * Fix 3: 两层智能 Compact
      *
-     * 扫描 session 历史和 executionRecords，生成结构化摘要：
-     * - 每个 task 做了什么
-     * - 发出了哪些消息
-     * - assistant 的思考要点
-     * 丢弃代码块原文。
+     * Layer 1 (快速/确定性): 扫描 session 历史和 executionRecords，
+     * 生成结构化摘要，保留操作+已发消息+思考要点，丢弃代码块。
+     *
+     * Layer 2 (LLM/token-budget): 如果 compact 后 token 总量仍超预算，
+     * 调用 context-manager.compact() 生成 LLM Context Briefing，
+     * 支持话题保护和 reply chain 保护。
      */
-    private compactSession(): void {
+    private async compactSession(): Promise<void> {
         const keep = Math.max(4, Math.floor(this.config.maxSessionMessages * 0.4));
         if (this.session.length <= keep) return;
 
+        // ═══ Layer 1: 结构化快速 compact ═══
         // 从 executionRecords 构建摘要
         const recordSummaries: string[] = [];
         for (const rec of this.executionRecords) {
@@ -612,10 +615,41 @@ export class CodeActExecutor {
             this.executionRecords = this.executionRecords.slice(-3);
         }
         this.lastCompactedAt = new Date().toISOString();
-        log.debug("compactSession", {
+        log.debug("compactSession Layer 1", {
             chatId: this.chatId,
             remaining: this.session.length,
             executionRecords: this.executionRecords.length,
         });
+
+        // ═══ Layer 2: token-budget LLM compact (context-manager) ═══
+        if (this.llmConfig) {
+            const chatMessages: ChatMessage[] = this.session.map(m => ({
+                role: m.role,
+                content: m.content,
+            }));
+            if (shouldCompact(chatMessages)) {
+                log.info("compactSession Layer 2: token 仍超预算，调用 context-manager compact", {
+                    chatId: this.chatId,
+                    messageCount: chatMessages.length,
+                });
+                try {
+                    const compacted = await contextManagerCompact(chatMessages, this.llmConfig);
+                    this.session = compacted.map(m => ({
+                        role: m.role as SessionMessage["role"],
+                        content: m.content,
+                        timestamp: new Date().toISOString(),
+                    }));
+                    log.info("compactSession Layer 2 完成", {
+                        chatId: this.chatId,
+                        afterMessages: this.session.length,
+                    });
+                } catch (err) {
+                    log.warn("compactSession Layer 2 失败，保留 Layer 1 结果", {
+                        chatId: this.chatId,
+                        error: String(err),
+                    });
+                }
+            }
+        }
     }
 }

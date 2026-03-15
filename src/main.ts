@@ -18,7 +18,6 @@ import { MemoryStoreV2 } from "./memory-v2/index.js";
 import { loadConfig, resolveTierProfile, type AppConfig, type LLMConfig } from "./core/config.js";
 import {
     TopicRegistry,
-    RecordingPipeline,
     FeedbackLoop,
     type AgentMessageSentEvent,
 } from "./pipeline/index.js";
@@ -42,7 +41,7 @@ import { estimateReplyMode, buildReplyDecisions, buildObserveDecision } from "./
 import { buildGroupContext } from "./main-agent/context-builder.js";
 import { renderPrompt, buildAttentionVariables } from "./main-agent/prompt-renderer.js";
 import { callLLM, type ChatMessage } from "./core/llm.js";
-import type { AttendResult, CodeActReplyTask, SubagentCallback, TopicDigest } from "./subagent/types.js";
+import type { AttendResult, CodeActReplyTask, SubagentCallback } from "./subagent/types.js";
 import type { FastPathEvent } from "./subagent/fast-path-handler.js";
 
 const log = createLogger("main");
@@ -143,17 +142,33 @@ async function main(): Promise<void> {
                         return memory.browseHistory(args[0] as any);
                     case "memory.reflect":
                         return memory.reflect(String(args[0]), llmConfig, appConfig.reflection);
-                    case "actions.getTopicContext":
-                        return serializeTopic(topicRegistry.get(String(args[0])));
+                    case "actions.getTopicContext": {
+                        // 在所有 per-group topicRegistries 中查找
+                        const topicId = String(args[0]);
+                        for (const sub of subagentManager.getAllSubagents()) {
+                            const t = sub.topicRegistry.get(topicId);
+                            if (t) return serializeTopic(t);
+                        }
+                        return null;
+                    }
                     case "actions.listActiveTopics": {
                         const cid = args[0];
                         if (typeof cid === "string" && cid.length > 0) {
-                            return topicRegistry.getActive(cid).map(serializeTopic);
+                            const sub = subagentManager.get(cid);
+                            return sub ? sub.topicRegistry.getActive(cid).map(serializeTopic) : [];
                         }
-                        return topicRegistry.getAll().map(serializeTopic);
+                        // 聚合所有群组的话题
+                        return subagentManager.getAllSubagents()
+                            .flatMap(s => s.topicRegistry.getAll())
+                            .map(serializeTopic);
                     }
                     case "actions.recallForTopic": {
-                        const topic = topicRegistry.get(String(args[0]));
+                        // 在所有 per-group topicRegistries 中查找
+                        let topic: any = null;
+                        for (const sub of subagentManager.getAllSubagents()) {
+                            topic = sub.topicRegistry.get(String(args[0]));
+                            if (topic) break;
+                        }
                         if (!topic) return null;
                         const query = [topic.label, ...topic.keywords].filter(Boolean).join(" ");
                         return memory.recall(query, {
@@ -207,16 +222,11 @@ async function main(): Promise<void> {
         (message) => console.log(`🤖 ${message}`),
     );
 
-    // ─── Pipeline 组件（话题聚类 + 反馈追踪） ───
-    const topicRegistry = new TopicRegistry();
-    const recordingPipeline = new RecordingPipeline(topicRegistry, cheapConfig, appConfig.persona?.description ?? "赛博群友", memory);
-    const feedbackLoop = new FeedbackLoop(topicRegistry, memory, nc);
-
-    // Phase 6 TopicRegistry 事件
-    topicRegistry.on("topic:archived", (topic: any) => {
-        memory.finalizeTopic(topic.id);
-        log.debug("话题归档，标记 ended_at", { topicId: topic.id, label: topic.label });
-    });
+    // ─── Pipeline 组件（反馈追踪 — 话题聚类已下沉到 per-group RecordingPipeline） ───
+    // FeedbackLoop 使用一个轻量级的全局 TopicRegistry 仅用于追踪 agent 消息
+    // 实际话题聚类在 per-group GroupSubagent.topicRegistry 中完成
+    const globalTopicRegistryForFeedback = new TopicRegistry();
+    const feedbackLoop = new FeedbackLoop(globalTopicRegistryForFeedback, memory, nc);
 
     // ─── Subagent 架构组件初始化 ───
     const messageLogWriter = new MessageLogWriter(memory, {
@@ -230,6 +240,11 @@ async function main(): Promise<void> {
             alertEngagementThreshold: appConfig.subagent?.alertEngagementThreshold ?? 60,
             fastPathEngagementThreshold: appConfig.subagent?.fastPath?.engagementThreshold ?? 70,
             mentionKeywords: appConfig.notification?.urgentWords ?? ["?", "？", "呢", "吗"],
+        },
+        recordingDeps: {
+            llmConfig: cheapConfig,
+            personaDescription: appConfig.persona?.description ?? "赛博群友",
+            memory,
         },
     });
     const q3 = new DynamicAttentionQueue({
@@ -251,7 +266,7 @@ async function main(): Promise<void> {
     // Hook 1: 消息实时落盘到 message_log
     nc.onPush(event => messageLogWriter.write(event));
 
-    // Hook 2: 消息分发到 per-group Observer → 更新 Q3
+    // Hook 2: 消息分发到 per-group GroupSubagent (Observer + RecordingPipeline) → 更新 Q3
     nc.onPush(event => {
         const chatId = String(event.chatId ?? "");
         if (!chatId) return;
@@ -260,7 +275,8 @@ async function main(): Promise<void> {
         if (eventType !== "nc.message" && eventType !== "telegram.message") return;
 
         const sub = subagentManager.getOrCreate(chatId);
-        sub.observer.onMessage(event);
+        // Per-group: Observer + RecordingPipeline 同时处理消息 (subagent.md §3.1)
+        sub.onMessage(event);
         q3.enqueueOrUpdate(sub.buildQueueEntry());
 
         // Fix 7: FastPath 触发路径 — 消息到达时检查是否有已授权的 FastPath
@@ -277,8 +293,6 @@ async function main(): Promise<void> {
                 log.warn("FastPath handle error", { chatId, error: String(err) });
             });
         }
-
-        // TODO [AUDIT]: 将 RecordingPipeline 话题聚类内嵌到 Observer (subagent.md §3.1)
     });
 
     // Hook 3: FeedbackLoop 消息追踪
@@ -296,36 +310,12 @@ async function main(): Promise<void> {
         }
     });
 
-    // ─── Recording Pipeline → Observer Bridge ───
-    // 话题 triage 完成后，将活跃话题摘要注入对应群组的 Observer（保留此 bridge）
-    recordingPipeline.on("topic:triage-passed", (topic: any, decision: any) => {
-        log.info("话题通过 Triage", { topicId: topic.id, label: topic.label, type: decision.intervention_type });
-
-        const chatId = String(topic.chatId ?? "");
-        if (chatId) {
-            const sub = subagentManager.get(chatId);
-            if (sub) {
-                const activeTopics = topicRegistry.getActive(chatId);
-                const digests: TopicDigest[] = activeTopics.map((t: any) => ({
-                    topicId: String(t.id),
-                    label: String(t.label ?? ""),
-                    summary: String(t.summary ?? t.recentContext ?? ""),
-                    state: String(t.state ?? "ACTIVE"),
-                    participants: [...(t.participantIds ?? [])].map(String),
-                    keywords: Array.isArray(t.keywords) ? t.keywords : [],
-                    messageCount: t.messageIds?.length ?? 0,
-                    lastActivityAt: String(t.lastMessageAt ?? new Date().toISOString()),
-                    triageDecision: decision?.should_intervene ? "ENGAGE" as const : "IGNORE" as const,
-                    triageConfidence: decision?.confidence ?? 0,
-                }));
-                sub.observer.setTopicDigests(digests);
-                q3.enqueueOrUpdate(sub.buildQueueEntry());
-            }
+    // Per-group TopicRegistry 定时清理（遍历所有 subagent 的 topicRegistry）
+    setInterval(() => {
+        for (const sub of subagentManager.getAllSubagents()) {
+            sub.topicRegistry.cleanup();
         }
-    });
-
-    // TopicRegistry 定时清理
-    setInterval(() => topicRegistry.cleanup(), 60_000);
+    }, 60_000);
 
     // SubagentManager 定时空闲回收
     setInterval(() => {
@@ -611,7 +601,7 @@ ${activeTasksText}
             if (decision.action === "REPLY") {
                 // Fix 3: 构建符合 subagent.md §13.2 B1 规格的 contextSnapshot
                 // 获取话题摘要
-                const activeTopics = topicRegistry.getActive(result.chatId);
+                const activeTopics = subagent?.topicRegistry.getActive(result.chatId) ?? [];
                 const topicForDecision = decision.topicId
                     ? activeTopics.find((t: any) => String(t.id) === decision.topicId)
                     : activeTopics[0];
