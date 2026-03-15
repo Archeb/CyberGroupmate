@@ -659,6 +659,11 @@ ${activeTasksText}
                     executor.setSessionFilePath(subagentManager.getSessionFilePath(result.chatId));
                     // 尝试从磁盘加载已有 session
                     executor.loadSession();
+                    subagent.codeActExecutor = executor;
+                }
+
+                // 确保依赖已注入（restoreAll 恢复的 executor 可能缺少依赖）
+                if (!executor.hasDependencies()) {
                     executor.setCallbackHandler((cb: SubagentCallback) => {
                         q5.enqueue(cb);
                         log.info("Subagent 执行完成 → Q5", {
@@ -676,7 +681,6 @@ ${activeTasksText}
                     });
                     // Fix 9: 注入 Sandbox + NC + LLM 依赖
                     executor.setDependencies(sandboxPool, nc, llmConfig, join(DATA_DIR, "sessions"), appConfig.persona);
-                    subagent.codeActExecutor = executor;
                 }
 
                 executor.enqueue(task);
