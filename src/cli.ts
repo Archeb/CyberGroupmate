@@ -394,7 +394,6 @@ async function cmdConfig(): Promise<void> {
         join(DATA_DIR, "memory.db"),
         join(DATA_DIR, "events.jsonl"),
         join(DATA_DIR, "agent-state.md"),
-        join(DATA_DIR, "bootstrap-code.json"),
     ];
     for (const f of files) {
         const exists = existsSync(f);

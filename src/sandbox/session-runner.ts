@@ -6,7 +6,6 @@
  *
  * 在整体架构中的位置：
  * - Orchestrator (main.ts) 在处理事件时调用 runCodeActSession
- * - Bootstrap 流程使用此 runner 让 agent 自主完成初始化
  * - 每个 session 的完整对话记录保存到 data/sessions/
  */
 
@@ -140,7 +139,7 @@ export async function runCodeActSession(
     nc: NotificationCenter,
     llmConfig: LLMConfig,
     sessionsDir: string = "workspace/sessions",
-    /** 每段代码的执行超时（毫秒），默认 30s，bootstrap 可设 5min */
+    /** 每段代码的执行超时（毫秒），默认 30s */
     executeTimeout: number = 30000
 ): Promise<SessionResult> {
     const sessionId = ulid();

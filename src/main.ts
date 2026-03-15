@@ -2,11 +2,11 @@
  * main.ts — Orchestrator / Agent Main Loop
  *
  * 系统入口点。管理 agent 的完整生命周期：
- * Bootstrap(初始化) → Main Event Loop(事件处理) → Compaction(压缩归档)
+ * PlatformAdapter(平台连接) → Main Event Loop(事件处理) → Compaction(压缩归档)
  *
  * 在整体架构中的位置：
  * - 创建并连接所有核心组件（NC, Sandbox, Memory, SceneManager）
- * - 运行 bootstrap 流程让 agent 自主初始化
+ * - 平台连接由 PlatformAdapter 自动完成
  * - 主循环中 drain 事件 → 组装 context → 运行 CodeAct session
  */
 
@@ -15,10 +15,10 @@ import { Sandbox } from "./sandbox/sandbox.js";
 import { MemoryStoreV2 } from "./memory-v2/index.js";
 import { SceneManager } from "./scenes/scene-manager.js";
 import { registerBuiltinScenes } from "./scenes/index.js";
-import { runCodeActSession, SessionResult } from "./sandbox/session-runner.js";
+import { runCodeActSession } from "./sandbox/session-runner.js";
 import { runCompaction } from "./event/compaction.js";
 import { loadConfig, resolveTierProfile, type AppConfig, type LLMConfig } from "./core/config.js";
-import { callLLM, ChatMessage } from "./core/llm.js";
+import { ChatMessage } from "./core/llm.js";
 import { shouldCompact, compact, mergeContextBudget } from "./memory-v2/context-manager.js";
 import {
     TopicRegistry,
@@ -33,10 +33,8 @@ import {
 } from "./pipeline/index.js";
 import {
     readFileSync,
-    writeFileSync,
     existsSync,
     mkdirSync,
-    appendFileSync,
 } from "node:fs";
 import { join } from "node:path";
 import { createLogger } from "./core/logger.js";
@@ -54,9 +52,6 @@ const EVENTS_PATH = join(DATA_DIR, "events.jsonl");
 
 /** Agent 状态文件路径 */
 const AGENT_STATE_PATH = join(DATA_DIR, "agent-state.md");
-
-/** Bootstrap 代码保存路径 */
-const BOOTSTRAP_CODE_PATH = join(DATA_DIR, "bootstrap-code.json");
 
 /** Session transcript 目录 */
 const SESSIONS_DIR = join(DATA_DIR, "sessions");
@@ -186,147 +181,6 @@ function serializeTopic(topic: ReturnType<TopicRegistry["get"]>): Record<string,
             replyToMessageId: msg.replyToMessageId ? String(msg.replyToMessageId) : undefined,
         })),
     };
-}
-
-/**
- * 保存成功执行的 bootstrap 代码
- */
-function saveBootstrapCode(codes: string[]): void {
-    writeFileSync(
-        BOOTSTRAP_CODE_PATH,
-        JSON.stringify({ version: 2, codes }, null, 2),
-        "utf-8",
-    );
-}
-
-/**
- * 加载保存的 bootstrap 代码
- */
-function loadBootstrapCode(): string[] | null {
-    if (!existsSync(BOOTSTRAP_CODE_PATH)) return null;
-    try {
-        const parsed = JSON.parse(readFileSync(BOOTSTRAP_CODE_PATH, "utf-8")) as
-            | { version?: number; codes?: string[] }
-            | string[];
-        if (Array.isArray(parsed)) {
-            return null;
-        }
-        if (parsed.version !== 2 || !Array.isArray(parsed.codes)) {
-            return null;
-        }
-        return parsed.codes;
-    } catch {
-        return null;
-    }
-}
-
-// ─── Bootstrap ───
-
-/**
- * Bootstrap prompt — 告诉 agent 需要初始化什么
- */
-function buildBootstrapPrompt(homeTypeDefs: string, appConfig: AppConfig): string {
-    const promptPath = join(DATA_DIR, "agent-docs", "bootstrap-prompt.md");
-    let promptTemplate = "";
-
-    if (existsSync(promptPath)) {
-        promptTemplate = readFileSync(promptPath, "utf-8");
-    } else {
-        // Fallback or error if not found, but we expect it to exist
-        promptTemplate = `# Bootstrap 初始化\n\n请连接 Telegram。\n\n{{HOME_TYPE_DEFS}}`;
-    }
-
-    return promptTemplate
-        .replace("{{HOME_TYPE_DEFS}}", homeTypeDefs);
-}
-
-/**
- * 运行 bootstrap 流程
- *
- * 先尝试重放保存的 bootstrap 代码。如果失败，则运行完整 LLM bootstrap。
- */
-async function runBootstrap(
-    sandbox: Sandbox,
-    nc: NotificationCenter,
-    sceneManager: SceneManager,
-    llmConfig: LLMConfig,
-    systemPrompt: string,
-    appConfig: AppConfig
-): Promise<void> {
-    // 尝试重放保存的 bootstrap 代码
-    const savedCodes = loadBootstrapCode();
-    if (savedCodes && savedCodes.length > 0) {
-        console.log("[Bootstrap] 尝试重放保存的 bootstrap 代码...");
-        try {
-            for (const code of savedCodes) {
-                const result = await sandbox.execute(code, 30000);
-                if (result.error) {
-                    throw new Error(
-                        `Bootstrap replay failed: ${result.output}`
-                    );
-                }
-            }
-            log.info("重放成功");
-            return;
-        } catch (err: unknown) {
-            const errorMsg =
-                err instanceof Error ? err.message : String(err);
-            log.warn("重放失败，回退到 LLM bootstrap", { error: errorMsg });
-        }
-    }
-
-    // 完整 LLM bootstrap
-    log.info("运行 LLM bootstrap...");
-
-    const homeScene = sceneManager.getScene("home");
-    const homeTypeDefs = homeScene?.typeDefs ?? "";
-
-    while (true) {
-        const bootstrapMessages: ChatMessage[] = [
-            { role: "system", content: systemPrompt },
-            { role: "user", content: buildBootstrapPrompt(homeTypeDefs, appConfig) },
-        ];
-
-        const result = await runCodeActSession(
-            bootstrapMessages,
-            "home",
-            sandbox,
-            nc,
-            llmConfig,
-            SESSIONS_DIR,
-            5 * 60 * 1000  // 5 分钟超时（等验证码可能需要更长时间）
-        );
-
-        // 提取所有成功执行的代码块
-        const successfulCodes: string[] = [];
-        let hasCompleteSignal = false;
-
-        for (const turn of result.turns) {
-            for (let i = 0; i < turn.codeBlocks.length; i++) {
-                const execResult = turn.executionResults[i];
-                if (execResult && !execResult.error) {
-                    successfulCodes.push(turn.codeBlocks[i]);
-                    if (execResult.output && execResult.output.includes("BOOTSTRAP_COMPLETE")) {
-                        hasCompleteSignal = true;
-                    }
-                }
-            }
-        }
-
-        if (hasCompleteSignal) {
-            // 保存成功的 bootstrap 代码
-            if (successfulCodes.length > 0) {
-                saveBootstrapCode(successfulCodes);
-                log.info(`保存了 ${successfulCodes.length} 段 bootstrap 代码`);
-            }
-            log.info("Bootstrap 完成", { turns: result.turns.length, reason: result.endReason });
-            break;
-        } else {
-            log.warn("未收到 BOOTSTRAP_COMPLETE 信号，视为 Bootstrap 失败，不保存并重试", { reason: result.endReason });
-            // 等待一小段时间后重试，避免死循环请求崩溃
-            await new Promise(r => setTimeout(r, 3000));
-        }
-    }
 }
 
 // ─── Main Event Loop ───
@@ -515,14 +369,6 @@ async function mainEventLoop(
             log.warn("Sandbox 已退出，尝试重启...");
             try {
                 await sandbox.start();
-                await runBootstrap(
-                    sandbox,
-                    nc,
-                    sceneManager,
-                    llmConfig,
-                    systemPrompt,
-                    appConfig
-                );
                 log.info("Sandbox 重启完成");
             } catch (err: unknown) {
                 const errorMsg =
@@ -830,16 +676,6 @@ async function main(): Promise<void> {
     log.info("启动 Sandbox...");
     await sandbox.start();
     log.info("Sandbox 就绪");
-
-    // ─── Bootstrap ───
-    await runBootstrap(
-        sandbox,
-        nc,
-        sceneManager,
-        llmConfig,
-        systemPrompt,
-        appConfig
-    );
 
     // ─── 主循环 ───
     await mainEventLoop(
