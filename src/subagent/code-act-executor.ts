@@ -314,9 +314,12 @@ export class CodeActExecutor {
         const toneGuidance = ctx.toneGuidance ?? "";
         const contentDirection = ctx.contentDirection ?? task.decisions.map(d => d.contentDirection ?? "").filter(Boolean).join("; ");
 
-        // 2. 格式化目标消息
+        // 2. 格式化目标消息（含 reply-to 关系）
         const targetMessages = (ctx.recentMessages ?? []).map(
-            (m: any) => `[${m.timestamp ?? ""}] ${m.sender ?? "?"}: ${m.text ?? ""}`
+            (m: any) => {
+                const replyTag = m.replyTo ? ` (↩ reply to ${m.replyTo})` : "";
+                return `[${m.timestamp ?? ""}] ${m.sender ?? "?"}${replyTag}: ${m.text ?? ""}`;
+            }
         ).join("\n") || "(无目标消息原文)";
 
         // 3. 格式化决策

@@ -460,8 +460,19 @@ async function main(): Promise<void> {
             if (depth >= 2) {
                 const recentMsgs = memory.getRecentMessages(entry.chatId, 20);
                 if (recentMsgs.length > 0) {
+                    // 构建 messageId → displayName 映射，用于解析 replyTo 关系
+                    const msgIdToName = new Map<string, string>();
+                    for (const m of recentMsgs) {
+                        msgIdToName.set(m.messageId, m.displayName || `(uid:${m.userId})`);
+                    }
                     messagesText = recentMsgs.map(
-                        (m: any) => `[${m.timestamp ?? ""}] ${m.displayName ?? "(uid:" + m.userId + ")"}: ${m.text ?? ""}`
+                        (m: any) => {
+                            const sender = m.displayName ?? `(uid:${m.userId})`;
+                            const replyTag = m.replyToMessageId
+                                ? ` (↩ reply to ${msgIdToName.get(m.replyToMessageId) ?? `msg#${m.replyToMessageId}`})`
+                                : "";
+                            return `[${m.timestamp ?? ""}] ${sender}${replyTag}: ${m.text ?? ""}`;
+                        }
                     ).join("\n");
                 }
             }
@@ -612,11 +623,19 @@ ${activeTasksText}
 
                 // 获取最近消息
                 const recentMsgs = memory.getRecentMessages(result.chatId, 20);
+                // 构建 messageId → displayName 映射，用于解析 replyTo 关系
+                const dispatchMsgIdToName = new Map<string, string>();
+                for (const m of recentMsgs) {
+                    dispatchMsgIdToName.set(m.messageId, m.displayName || `(uid:${m.userId})`);
+                }
                 const formattedMessages = recentMsgs.map((m: any) => ({
-                    id: String(m.id ?? m.message_id ?? ""),
-                    sender: String(m.display_name ?? m.displayName ?? m.sender ?? m.user_id ?? "?"),
+                    id: String(m.messageId ?? m.id ?? m.message_id ?? ""),
+                    sender: String(m.displayName ?? m.display_name ?? m.sender ?? m.user_id ?? "?"),
                     text: String(m.text ?? ""),
                     timestamp: String(m.timestamp ?? ""),
+                    replyTo: m.replyToMessageId
+                        ? (dispatchMsgIdToName.get(m.replyToMessageId) ?? `msg#${m.replyToMessageId}`)
+                        : undefined,
                 }));
 
                 // 获取人物信息
