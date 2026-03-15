@@ -1000,8 +1000,7 @@ interface GroupStickiness {
       "topicId": "topic_travel",
       "contentDirection": "回忆之前的京都经验，推荐一天行程",
       "toneGuidance": "随意友好",
-      "model": "gemini-flash",
-      "pipelineMode": "GUIDED"
+      "model": "gemini-flash"
     },
     {
       "type": "IGNORE",
@@ -1230,7 +1229,6 @@ Session 摘要: {{result.sessionSummary}}
     "contentDirection": "回忆之前去京都的经验，推荐一天的行程安排（岚山早上+金阁寺下午）"
   },
   "replyStrategy": {
-    "pipelineMode": "GUIDED",
     "model": "gemini-flash",
     "maxLength": 200
   },
@@ -1368,8 +1366,7 @@ Phase 5 — 主 agent 审视群 B:
         targetMessageIds: ["msg_101", "msg_103"],    ← bob 的分析 + dave 的数据
         contentDirection: "从 memory 中回忆之前讨论过的 benchmark,
                           补充 IO 密集 vs CPU 密集场景的区别",
-        model: "gemini-flash",
-        pipelineMode: "GUIDED" }
+        model: "gemini-flash" }
     ]
 
 Phase 6 — 分派 + block:
@@ -1443,8 +1440,7 @@ Q3 排序: [群C: 62×1.0+alert=92] > [群A: 55×1.0=55] > [群B: 50×0.7=35]
   decisions = [
     { type: "CODEACT_REPLY",
       targetMessageIds: ["msg_201"],         ← eve 的提案消息
-      contentDirection: "支持周六方案，提议具体餐厅（参考之前的聚会记录）",
-      pipelineMode: "GUIDED" }
+      contentDirection: "支持周六方案，提议具体餐厅（参考之前的聚会记录）" }
   ]
   → Q4(群C): CODEACT_REPLY → block(群C)
 
@@ -1521,8 +1517,7 @@ Q3: [群C: urgent=L3强制] > [群A: 22] > [群B: 15]
     { type: "CODEACT_REPLY",
       targetMessageIds: ["msg_401"],
       contentDirection: "搜索 memory 中 eve 提到的链接, 找到后回复",
-      model: "claude-sonnet-4",           ← SOTA 因为复杂检索
-      pipelineMode: "FULL_CODEACT" }
+      model: "claude-sonnet-4" }           ← SOTA 因为复杂检索
   ]
   → block(群C)
 
@@ -1696,8 +1691,7 @@ Q3: [群A: 70+alert] > [群E: 65×0.7+alert] > [群B/C: 低]
   decisions = [
     { type: "CODEACT_REPLY",
       targetMessageIds: ["msg_alice"],
-      contentDirection: "告诉 alice '好的我去问问'",
-      pipelineMode: "GUIDED" }
+      contentDirection: "告诉 alice '好的我去问问'" }
   ]
   → block(群A)
 
@@ -1713,8 +1707,7 @@ Q3: [群A: 70+alert] > [群E: 65×0.7+alert] > [群B/C: 低]
   decisions = [
     { type: "CODEACT_REPLY",
       targetMessageIds: ["msg_bob"],
-      contentDirection: "告诉 bob '好的我转告 alice'",
-      pipelineMode: "GUIDED" }
+      contentDirection: "告诉 bob '好的我转告 alice'" }
   ]
   → block(群E)
 
@@ -1739,8 +1732,7 @@ t=0:12  群E callback: 已发送 "好的我转告"
   decisions = [
     { type: "CODEACT_REPLY",
       targetMessageIds: [],           ← 主动发起, 非回复
-      contentDirection: "告诉 alice: bob 说活动改到下午三点了",
-      pipelineMode: "GUIDED" }
+      contentDirection: "告诉 alice: bob 说活动改到下午三点了" }
   ]
   → skills.taskList.update(taskId, "DONE")
 

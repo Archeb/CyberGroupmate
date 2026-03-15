@@ -1,8 +1,8 @@
 # CyberGroupmate — 项目实施方案
 
-> **文档版本**: 0.10.0
-> **最后更新**: 2026-03-13
-> **状态**: Phase 1-5 已完成，Phase 6A/6B/6C 已完成（6C = Subagent Notification 处理架构 S1-S8，132/132 tests pass），Phase 7 规划中。
+> **文档版本**: 0.11.0
+> **最后更新**: 2026-03-15
+> **状态**: Phase 1-5 已完成，Phase 6A/6B/6C 已完成（6C = Subagent Notification 处理架构 S1-S8，132/132 tests pass），Phase 7 规划中。架构精简：移除 Bootstrap、Pipeline Mode，简化 Scene，引入 Dynamic API Surface 和分层 API 视野。
 
 ---
 
@@ -20,18 +20,18 @@
 | 1.6 | 项目脚手架（package.json, tsconfig, git 初始化） | ✅ 完成 | ESM, Node ≥22, strict TS, 55 tests passing |
 | 2.1 | LLM 调用封装 | ✅ 完成 | 支持 Anthropic + OpenAI API；重试 + 指数退避；配置迁移到 config.ts (yaml 库) |
 | 2.2 | CodeAct Session Runner | ✅ 完成 | 多轮交互循环；parseResponse 解析 ts/js/typescript/javascript 围栏；输出截断 4000 字符；每 5 轮检查新通知 |
-| 2.3 | Bootstrap 流程 | ✅ 完成 | 代码保存+重放机制；重放失败回退到完整 LLM bootstrap |
+| 2.3 | ~~Bootstrap 流程~~ | ❌ 已移除 | [REMOVED @v0.11.0] 架构精简：平台连接由 PlatformAdapter 负责 |
 | 2.4 | Main Event Loop | ✅ 完成 | drain+context组装+session运行；sandbox 崩溃检测+自动重启；graceful shutdown |
 | 3.1 | Session Compaction | ✅ 完成 | LLM 提取摘要/事实/人物/待办；自动写入 memory 各表；JSON 解析含 markdown 代码块回退 |
 | 3.2 | Agent State 管理 | ✅ 完成 | agent-state.md 自动更新；3500 字符截断防无限增长；main.ts 读取注入到 context |
 | 3.3 | System Prompt 调优 | ✅ 完成 | system-prompt.md 含 CodeAct 环境说明、行为原则、场景系统、{{PERSONA}} 注入 |
 | 3.4 | 安全限制（rate limit、禁止破坏性操作） | ✅ 完成 | MessageRateLimiter (session/分钟)、12 个禁止方法、sent-messages.jsonl 审计日志 |
-| 4.1 | 错误恢复（sandbox 重启 + bootstrap 重放） | ✅ 完成 | 已在 main.ts 中实现：sandbox 崩溃检测 → 重启 → bootstrap 重放 → 事件推回队列 |
+| 4.1 | 错误恢复（sandbox 重启） | ✅ 完成 | 已在 main.ts 中实现：sandbox 崩溃检测 → 重启 → 事件推回队列 |
 | 4.2 | CLI 工具 | ✅ 完成 | 6 个子命令 (sandbox REPL/notify/drain/memory/config/status)；支持多行输入、缩写命令 |
 | 4.3 | 配置化 | ✅ 完成 | config.ts: 统一 AppConfig (LLM/Persona/Telegram)；yaml 库解析；env > yaml > defaults；TG_ 自动注入 |
 | 4.4 | Agent Docs 系统 | ✅ 完成 | docs.ts + docs/mtcute-guide.md；sandbox 中 docs.read()/docs.list()；避免 agent 联网搜索 |
 | 4.5 | 结构化日志 | ✅ 完成 | logger.ts: level/format/color；LOG_LEVEL + LOG_FORMAT 环境变量；子 logger；已集成到 main.ts |
-| 4.6 | Bootstrap 改进 | ✅ 完成 | 具体 mtcute 代码示例 (bot/userbot)；登录流程 + OTP 交互；docs 注入到 sandbox |
+| 4.6 | ~~Bootstrap 改进~~ | ❌ 已移除 | [REMOVED @v0.11.0] 随 Bootstrap 一起移除 |
 | 4.7 | 跨进程通讯补丁 | ✅ 完成 | NC cross-process fix (buffer offset instead of string slice, fallback polling) |
 | 4.8 | API Docs 与配置补丁 | ✅ 完成 | Mtcute API docs fix (full prototype method reference, Object.keys 警告); Temperature 覆盖 fix |
 | 5.1 | Scene-Bound Sessions | ✅ 完成 | 单一 session + scope 过滤，见 Phase 5 总结 |
@@ -46,7 +46,7 @@
 | 6.7 | Dry-Run System | ✅ 完成 | JSONL 历史消息加载 → 按时间模拟事件到达 → FastRouter+RecordingPipeline 处理 → JSON 评估报告输出；CLI `dry-run` 子命令（支持 --chat-id、--days 过滤）；saveDryRunReport 保存详细报告 |
 | 6.8 | Model Router | ✅ 完成 | 规则表驱动路由（7 条默认规则）；3 层模型映射（cheap/mid/sota）；复杂度评估（消息长度、是否含问题、多人讨论、介入类型）；可通过构造函数自定义规则和模型名称 |
 | — | 目录重组 | ✅ 完成 | src/ 重组为 core/、sandbox/、event/、scenes/、pipeline/、memory-v2/、adapter/（平台适配层）、agent/（docs）；main.ts + cli.ts 保留顶层。所有 import 路径 + 测试已更新。 |
-| 6B.0 | Ingress Boundary Refactor | ✅ 完成 | `nc.message` 标准化 schema、`PlatformAdapter` 抽象、全链路 string ID 迁移、官方 `TelegramAdapter`、bootstrap 降责。框架正式接管消息消费侧，Agent 掌握消息生产侧与扩展侧。 |
+| 6B.0 | Ingress Boundary Refactor | ✅ 完成 | `nc.message` 标准化 schema、`PlatformAdapter` 抽象、全链路 string ID 迁移、官方 `TelegramAdapter`。框架正式接管消息消费侧，Agent 掌握消息生产侧与扩展侧。 |
 | 7.1 | Playbook System | 📝 规划中 | SOTA 定期分析生成 GroupPlaybook；注入弱模型上下文 |
 | 7.2 | Skill Auto-Generation | 📝 规划中 | SOTA 介入失败场景 → 写代码/测试/类型 → 生成可复用 Skill |
 | 7.3 | CoT Template Distillation | 📝 规划中 | SOTA 提取典型场景思维链模板；弱模型直接套用 |
@@ -101,13 +101,13 @@ CyberGroupmate（赛博群友）是一个基于 LLM 的 Telegram 社交智能体
 
 ## 1. 系统架构
 
-### 1.1 总体架构（融合架构 Phase 6+）
+### 1.1 总体架构（融合架构 Phase 6+） [REVISED @v0.11.0]
 
 本项目在 Phase 5 完成了 CodeAct 执行引擎的基础建设。Phase 6 引入结构化决策流水线，Phase 6B 完成了 Ingress 边界重构——**框架正式接管消息消费侧，Agent 掌握消息生产侧与扩展侧**。整体形成**四层架构**：Platform Adapter 提供平台无关的消息接入，决策流水线提供行为可控性，CodeAct 提供底层执行灵活性，三者共享统一的记忆系统。
 
 **核心职责划分**：平台连接与事件标准化属于基础设施；消息理解、回复、记忆利用属于智能体。
 
-**核心心智模型**：`scene` 像手机里的 app，`NotificationCenter` 像手机通知中心，`PlatformAdapter` 像操作系统的 push/system integration 层。Agent 在 `home` scene 看到的是“有哪些 app 发来了什么通知”，再决定是否切过去处理。
+**核心心智模型**：`scene` 是框架层面的能力分区，用于适配不同平台和 API。`NotificationCenter` 是系统的事件总线，`PlatformAdapter` 是平台接入层。Subagent 直接在各自的群组上下文中工作，无需主动切换场景。
 
 ```mermaid
 graph TB
@@ -179,13 +179,14 @@ graph TB
     MR -. "路由决策" .-> RPL
 ```
 
-**核心设计原则**：
+**核心设计原则** [REVISED @v0.11.0]：
 
-1. **渐进增强**：弱模型走 Enforced Pipeline（系统代执行），SOTA 模型走 Advisory 模式（完全自由 CodeAct）。系统永远有保底行为。
-2. **Ingress 是基础设施，不是行为智能**：平台连接由官方 PlatformAdapter 负责，不依赖 Agent bootstrap 的成功与否。
+1. **Dynamic API Surface（动态 API 暴露）**：根据角色（Main Agent / Subagent）和当前需要，动态暴露可用接口。Main Agent 拥有除 `telegram.sendMessage` 之外的全部能力；Subagent 拥有 `sendMessage` + `memory.lookup`（默认 scope 本群）+ 框架内部 API + 专属 skills。
+2. **Ingress 是基础设施，不是行为智能**：平台连接由官方 PlatformAdapter 负责，框架自动完成。
 3. **观察与行动分离**：Recording Pipeline 持续后台运行，不依赖 agent 是否决定回复。
 4. **代码即统一动作空间**：不引入独立 tool use 协议；所有系统能力都通过代码 API 暴露。Skill 也是代码，不是工具。
 5. **SOTA 知识下沉**：SOTA 模型的判断力通过 Playbook、Skill、CoT 模板"物化"为结构化数据，弱模型可以直接消费。
+6. **分层 API 视野**：Main Agent 和 Subagent 看到不同的 API 集合，各司其职。不通过复杂的 pipeline mode 来适配模型能力差异，而是直接通过暴露简单或复杂的 API 来适配。
 
 ### 1.2 数据流
 
@@ -193,38 +194,33 @@ graph TB
 2. `Fast Router` 消费事件，决定进入快速路径（@回复/私聊/ENGAGED 话题）或 Recording Pipeline 缓冲
 3. `Recording Pipeline` 批量提取话题、摘要、Triage，更新 TopicRegistry，写入 Memory V2
 4. `Reply Pipeline` / `ContextAssembler` 将话题级判断和潜意识记忆转换为 Agent 可消费的 `ReplyTask`
-5. Agent 在 sandbox 中通过 CodeAct 写 TypeScript 代码处理任务（切换场景、调用 memory/actions/skills）
+5. Agent 在 sandbox 中通过 CodeAct 写 TypeScript 代码处理任务（调用 memory/actions/skills，根据角色暴露不同 API）
 6. 多轮交互直到 agent 完成处理（不再输出代码块）
 7. Session 结束后做 compaction，`Feedback Loop` 追踪发言后效
 
-### 1.3 场景（Scene）系统
+### 1.3 场景（Scene）系统 [REVISED @v0.11.0]
 
-Agent 的 context window 是有限资源，应像人类注意力一样管理。
+**框架层面的能力分区**：Scene 是框架为不同平台/API 定义能力接口的机制。每个 scene 对应一组 TypeScript 类型定义（`.d.ts`），描述在该上下文中可用的 API。
 
-**核心概念**：Agent 在任一时刻只处于一个「场景」中。每个场景提供该场景专属的 TypeScript 类型定义（`.d.ts`）。Agent 通过 `scene.enter("telegram")` 切换场景，此时新场景的类型定义作为 observation 返回，替代之前的类型信息。
+**与 Subagent 架构的关系**：在当前的 subagent 架构下，agent 不再需要主动切换场景。Subagent 直接在 telegram group 的上下文中工作，框架根据角色自动注入对应的 API。Scene 的设计保留在框架层面，用于：
+1. **多平台适配**：新增平台 = 新增 `PlatformAdapter` + scene + action surface
+2. **API 组织**：不同能力域（telegram、memory 等）的类型定义按 scene 组织
+3. **未来扩展**：接入新的 API 时，以 scene 为单位定义能力边界
 
-这类似于 AVG 游戏中进入不同房间——进入不同场景，能施展的动作不同。但 agent 始终拥有自己的意识流（连贯的 LLM 对话历史），知道自己要干什么。最顶部的 system prompt 定义了它的行为模式和人格。
+**Dynamic API Surface**：
 
-**场景切换的运行时行为**：
-- `scene.enter(name)` 被调用时，sandbox worker 返回新场景的类型定义和上下文说明作为 stdout 输出
-- 这个输出成为 CodeAct 交互中的 observation，进入下一轮 LLM 输入
-- Agent 看到新的类型定义后，就知道在这个场景中可以做什么
+取代旧的 L0/L1/L2 类型展开粒度设计，改为根据角色和需要动态暴露 API：
 
-**类型定义的展开粒度**：
-- **L0（场景列表）**：只有场景名 + 一句话描述。在 home 场景中通过 `scene.list()` 获得。
-- **L1（核心类型）**：进入场景后默认展示。手写的精简版类型定义，只包含常用方法和核心数据结构。不是库的完整 `.d.ts`，而是人工裁剪的子集，控制在 100-200 行以内。
-- **L2（完整类型）**：Agent 遇到困难时可以调用 `scene.showFullTypes()` 主动请求更详细的类型定义。
+| 角色 | 可用 API | 说明 |
+|------|----------|------|
+| **Main Agent** | 除 `telegram.sendMessage` 外的全部 | 完整决策能力，不直接发消息 |
+| **Subagent** | `telegram.sendMessage` + `memory.lookup`（scope=本群）+ 框架内部 API + 专属 skills | 执行层，受限的 API 视野 |
 
 类型定义本身就是最好的文档——Agent 看到的是 TypeScript 接口签名，比自然语言描述的 tool specification 更精确、更紧凑，而且 LLM 天然理解这种格式。
 
-**MVP 包含的场景**：
-- `home`：通知中心。查看通知、决定下一步、切换场景。只有 `scene`、`runtime`、`ctx` 的类型。
-- `telegram`：Telegram 操作。精简版的 `TelegramClient`、`Message`、`Chat`、`User` 等接口。
-- `memory`：记忆系统。`MemoryStore`、`PersonProfile`、`ConversationSummary` 等接口。
-
-**扩展预留** [REVISED @Phase-6B]：
-- 新增平台 = 新增 `PlatformAdapter` + scene + action surface，而不是只新增一个 scene。Scene 不再负责平台接入，而是提供 Agent 在该平台上的能力接口。
-- Agent 未来可以自己注册新场景（`scene.register(name, typeDefs)`）
+**扩展预留**：
+- 新增平台 = 新增 `PlatformAdapter` + scene + action surface
+- Scene 不负责平台接入，而是提供 Agent 在该平台上的能力接口
 
 ### 1.4 通知积累与批量呈现
 
@@ -335,23 +331,19 @@ Worker → Host：
 
 **扩展预留**：`Memory` 是一个清晰的接口，后续换 Postgres + pgvector 只需改实现。加向量搜索只需新增 `vectorSearch` 方法。
 
-### 2.5 Scene Manager
+### 2.5 Scene Manager [REVISED @v0.11.0]
 
-**职责**：管理场景注册表和场景切换。
+**职责**：框架层面的场景注册表，用于组织不同能力域的类型定义。
 
 **数据结构（每个场景）**：
 - `name`: 场景标识符
 - `description`: 一句话描述
-- `typeDefs`: L1 精简类型定义字符串（`.d.ts` 文件内容）
-- `fullTypeDefs`（可选）: L2 完整类型定义
-- `contextSetup`（可选）: 进入场景时的额外说明文本
-- `prelude`（可选）: 进入场景时在 sandbox 中自动执行的代码
+- `typeDefs`: 类型定义字符串（`.d.ts` 文件内容）
+- `contextSetup`（可选）: 额外说明文本
 
-**注入到 sandbox 的接口**：
-- `scene.enter(name)`: 切换场景。将场景说明 + 类型定义通过 `console.log` 输出，作为下一轮 observation 返回给 LLM。
-- `scene.current`: 当前场景名
-- `scene.list()`: 列出所有可用场景及简介
-- `scene.showFullTypes()`: 展示当前场景的 L2 完整类型定义
+**框架使用方式**：
+- SceneManager 按角色（Main Agent / Subagent）组装不同的类型定义集合，注入到对应的 sandbox
+- Agent 不再需要主动调用 `scene.enter()` 切换场景
 
 ### 2.6 LLM 调用封装
 
@@ -363,24 +355,23 @@ Worker → Host：
 - 处理 rate limiting 和重试
 - 可配置 model name、temperature、max tokens
 
-### 2.7 Agent Main Loop（Orchestrator）
+### 2.7 Agent Main Loop（Orchestrator） [REVISED @v0.11.0]
 
-**Phase 1 — Bootstrap**：
+**启动流程**：
 1. 创建 NotificationCenter、Sandbox、Memory、SceneManager 实例
-2. 向 LLM 发送 bootstrap prompt，告知 agent 身份、可用 runtime API、以及需要设置 Telegram 订阅
-3. 运行一个 CodeAct session（多轮），agent 自己写代码完成连接和订阅设置
-4. Agent 表示 READY 后保存 bootstrap 代码到 `data/bootstrap-code.json`，进入主循环
+2. 创建 PlatformAdapter（如 TelegramAdapter），自动连接平台并开始监听
+3. 直接进入主事件循环
 
-**Phase 2 — Main Event Loop**：
+**Main Event Loop**：
 1. `nc.drain(timeout)` 等待事件
 2. 有事件时：
    a. 读取当前 agent state（`data/agent-state.md`）
    b. 格式化事件为文本
-   c. 组装 context：system prompt + agent state + home 场景类型定义 + 事件文本
-   d. 运行 CodeAct session（agent 可能切换多个场景来处理事件）
+   c. 组装 context：system prompt + agent state + 根据角色动态注入的 API 类型定义 + 事件文本
+   d. 运行 CodeAct session
    e. Session 结束后执行 compaction
-3. 超时无事件：可选执行 idle 行为（MVP 中跳过）
-4. 检查 sandbox 是否存活，不存活则重启并重放 bootstrap
+3. 超时无事件：可选执行 idle 行为
+4. 检查 sandbox 是否存活，不存活则重启
 
 **CodeAct Session Runner**：
 1. 调用 LLM 获取 response
@@ -406,18 +397,17 @@ Compaction 使用独立的 LLM 调用（不是 agent 自己做的），保证即
 
 ## 3. 类型定义文件规范
 
-### 3.1 编写原则
+### 3.1 编写原则 [REVISED @v0.11.0]
 
-1. **精简但完备**：只包含 agent 常用的方法和数据结构，不是库的完整类型。控制在 100-200 行以内。
+1. **精简但完备**：只包含 agent 常用的方法和数据结构。控制在 100-200 行以内。
 2. **注释即文档**：每个方法和字段都有 JSDoc 注释。Agent 读注释来理解用法。
-3. **类型即约束**：精确的参数和返回值类型帮助 agent 写出正确代码。类型错误是额外的自动反馈。
-4. **跨场景共用类型**：`scene`、`runtime`、`ctx` 在所有场景中都可用，每个场景的 `.d.ts` 中都要声明。
+3. **类型即约束**：精确的参数和返回值类型帮助 agent 写出正确代码。
+4. **按角色动态组装**：框架根据角色（Main Agent / Subagent）自动组装不同的类型定义集合，不需要 agent 主动切换场景。
 
-### 3.1.5 shared/ — 跨场景共用类型 [NEW @Phase-6B]
+### 3.1.5 shared/ — 跨场景共用类型 [REVISED @v0.11.0]
 
-类型定义文件重构后，通用能力从 `home.d.ts` 中提取到 `src/scenes/shared/` 目录，所有 scene 共享：
+类型定义文件重构后，通用能力提取到 `src/scenes/shared/` 目录：
 
-- **`scene.d.ts`**：`scene.enter(name, focus?)` / `scene.focus(target)` / `scene.current` / `scene.list()` / `scene.showFullTypes()`
 - **`runtime.d.ts`**：`runtime.notify(event)` / `runtime.input(prompt)` / `runtime.print(msg)` / `runtime.spawn(name, fn)` / `runtime.kill(name)` / `runtime.ps()`
 - **`ctx.d.ts`**：`ctx: Record<string, any>` — 跨场景、跨代码块的持久化变量容器
 - **`actions.d.ts`**：`actions.getTopicContext(topicId)` / `actions.listActiveTopics(chatId?)` / `actions.recallForTopic(topicId, options?)`
@@ -425,9 +415,9 @@ Compaction 使用独立的 LLM 调用（不是 agent 自己做的），保证即
 
 > 注意：`runtime.cron()` 在早期设计中存在但在实际实现中已移除。
 
-### 3.2 home.d.ts
+### 3.2 home.d.ts [REVISED @v0.11.0]
 
-Home 场景现在仅是通知中心视角的最小声明文件（只包含注释说明），不再承载场景切换和 runtime 类型定义——这些已提取到 `shared/` 目录。
+Home 场景现在仅是通知中心视角的最小声明文件。
 
 ### 3.3 telegram.d.ts
 
@@ -471,7 +461,7 @@ Memory V2 场景类型定义，三层记忆模型接口。
 
 ## 4. System Prompt 设计
 
-### 4.1 结构
+### 4.1 结构 [REVISED @v0.11.0]
 
 ```
 # 你是谁
@@ -479,21 +469,20 @@ Memory V2 场景类型定义，三层记忆模型接口。
 
 # 你的运行环境
 [解释 CodeAct 模式：你通过写 TypeScript 代码来行动]
-[解释 ctx 对象、场景系统、runtime API]
+[解释 ctx 对象、可用 API]
 
 # 你的工作方式
-[解释事件循环：收到通知 → 进入对应场景 → 写代码处理 → 存记忆]
-[解释场景切换：scene.enter() 会展示新场景的可用 API]
+[解释事件循环：收到通知 → 写代码处理 → 存记忆]
+[解释可用 API 概览——根据角色动态注入]
 
 # 重要行为原则
 - 不要每条消息都回复。真人不会这样做。读空气。
 - 回复要自然，用群里的语气风格。
 - 如果不确定上下文，先查记忆或拉历史消息。
 - 如果代码执行出错，看错误信息自己 debug。
-- 你可以随时修改自己的订阅规则。
 
 # 可用 API 概览
-[极简概述——详细类型在进入场景后可见]
+[根据角色动态注入的类型定义——详细类型在 session 初始化时可见]
 ```
 
 ### 4.2 人格可配置
@@ -510,14 +499,10 @@ Memory V2 场景类型定义，三层记忆模型接口。
 |------|------|---------|
 | L1 | Agent 代码执行出错 | 错误 stack trace 作为 observation 返回给 LLM，agent 自己 debug 并重试  |
 | L2 | 后台任务崩溃（断连、网络错误） | `guardedRun` 捕获异常 → 推 `system.background_error` 到 NC → agent 自己修 |
-| L3 | Sandbox worker 进程崩溃 | Orchestrator 检测 `isAlive() === false` → 创建新 sandbox → 重放 bootstrap 代码 |
+| L3 | Sandbox worker 进程崩溃 | Orchestrator 检测 `isAlive() === false` → 创建新 sandbox → 重新注入 API |
 | L4 | Host 进程崩溃 | 从 events.jsonl 恢复。重新启动全流程。 |
 
-### 5.2 Bootstrap 重放
-
-- Bootstrap session 中 agent 每段成功执行的代码保存到 `workspace/bootstrap-code.json`
-- Sandbox 重启后，依次自动执行这些代码（不经过 LLM），快速恢复
-- 重放中某段代码失败则回退到完整 LLM bootstrap 流程
+> [REMOVED @v0.11.0] 原§5.2 Bootstrap 重放已移除。平台连接由 PlatformAdapter 自动完成，不再需要 bootstrap 代码重放。
 
 ### 5.3 安全限制
 
@@ -664,7 +649,7 @@ cybergroupmate/
 │   ├── memory.db
 │   ├── events.jsonl
 │   ├── agent-state.md
-│   ├── bootstrap-code.json
+
 │   ├── global-state.json           # 主 Agent 全局状态 [Phase 6C]
 │   ├── agent-docs/                 # Agent 可读文档
 │   └── sessions/
@@ -757,7 +742,7 @@ cybergroupmate/
 - 单元测试
 
 **Task 1.5 — SceneManager + 类型定义文件**
-- SceneManager 实现（场景注册、enter、list、showFullTypes）
+- SceneManager 实现（场景注册、按角色动态组装 API）
 - 编写 `home.d.ts`、`telegram.d.ts`、`memory.d.ts`
 - 注入 sandbox worker
 - 单元测试
@@ -770,13 +755,13 @@ cybergroupmate/
 - `README.md` 初始版本
 - 首个 commit + `v0.1.0-scaffold` tag
 
-**Phase 1 验收标准**：集成测试——在 sandbox 中执行 `scene.enter("telegram")` → 连接 mtcute → `runtime.spawn` 启动监听 → 从另一个账号发消息 → 后台任务 `runtime.notify()` → host 侧 `nc.drain()` 取到事件。全链路跑通。
+**Phase 1 验收标准**：集成测试——在 sandbox 中调用 API → 连接 mtcute → `runtime.spawn` 启动监听 → 从另一个账号发消息 → 后台任务 `runtime.notify()` → host 侧 `nc.drain()` 取到事件。全链路跑通。
 
 完成后打 tag `v0.1.0`，更新 README 和 CHANGELOG。
 
 ### Phase 2：Agent Loop + LLM 集成（目标：~1 周）
 
-**目标**：Agent 能自主 bootstrap 并响应 @ 消息。
+**目标**：Agent 能响应 @ 消息。
 
 **Task 2.1 — LLM 调用封装**
 - `callLLM(messages)` 函数
@@ -791,17 +776,14 @@ cybergroupmate/
 - Session 内定期追加新通知
 - Session transcript 记录到 `data/sessions/`
 
-**Task 2.3 — Bootstrap 流程**
-- Bootstrap prompt 编写
-- Bootstrap session 运行
-- 保存成功执行的代码到 `data/bootstrap-code.json`
+> [REMOVED @v0.11.0] 原 Task 2.3 Bootstrap 流程已移除。
 
 **Task 2.4 — Main Event Loop**
-- 完整 main loop（bootstrap → event loop）
+- 完整 main loop（事件循环）
 - Context 组装
 - Sandbox 崩溃检测
 
-**Phase 2 验收标准**：启动 agent → 自主连接 Telegram 并设置监听 → 有人 @ agent → agent 读取消息上下文并回复。端到端跑通。
+**Phase 2 验收标准**：启动 agent → 有人 @ agent → agent 读取消息上下文并回复。端到端跑通。
 
 完成后打 tag `v0.2.0`，更新 README 和 CHANGELOG。
 
@@ -833,7 +815,7 @@ cybergroupmate/
 
 **Task 4.1 — 错误恢复**
 - Sandbox 崩溃检测 + 自动重启
-- Bootstrap 代码重放
+- sandbox 崩溃自动重启
 - 测试：手动 kill sandbox 后系统自动恢复
 
 **Task 4.2 — CLI 工具**
@@ -1064,18 +1046,82 @@ cybergroupmate/
      lastSummary?: string;          // 上一轮 Triage 生成的一句话摘要（跨 flush 持久化）
      lastKeyPoints?: string[];      // 上一轮 Triage 生成的要点列表（跨 flush 持久化）
    }
-   ```
+1.  **Fast Router（快速路由）**：
+    -   被直接 @、回复 agent 消息、私聊 → 标记为 `FAST_PATH`，跳过初筛
+    -   属于 ENGAGED 话题的消息 → 转交 Engaged Topic Handler（Task 6.1.1）
+    -   其他群聊消息 → 进入 Recording Pipeline 缓冲（Task 6.2）
 
-6. **话题状态机**：
+2.  **Topic-Level Triage（话题级初筛）**：
+    -   由 Recording Pipeline 触发（每次 flush 提取出话题后）
+    -   对每个 ACTIVE 话题独立执行 Triage
+    -   使用便宜模型（Gemini Flash / GPT-4o-mini）
+    -   输出结构化判断：`should_intervene`, `reason`, `intervention_type`, `confidence`
+    -   `confidence < 0.6` 一律不介入
+    -   intervention_type 枚举：FACTUAL_CORRECTION, KNOWLEDGE_GAP, QUESTION_ANSWER, RESOURCE_SHARING, CONFLICT_MEDIATION, CONSENSUS_SUMMARY, CASUAL_CHAT, NOT_APPLICABLE
 
-   ```
-                       ┌─────────────────────────────────┐
-                       │       Recording Pipeline        │
-                       │       (观察模式, 50条/2min)       │
-                       └────────────────┬────────────────┘
-                                        │ 话题提取完成
-                                        ▼
-                                 ┌─────────────┐
+3.  **预热缓存（Preload）**：
+    -   Triage 通过后，立即并行启动记忆检索（`memory.recall()`）
+    -   结果附加到话题对象上，后续 pipeline 直接使用
+
+4.  **超时硬上限**：
+    -   从 Recording Pipeline flush 到 Reply Pipeline 交付，整条链路最大 25 秒
+    -   超时后静默，不发迟到消息
+
+5.  **TopicRegistry（话题注册表）**：
+
+    由 Recording Pipeline 维护的实时话题数据结构：
+
+    ```typescript
+    interface Topic {
+      id: string;                    // topic_<timestamp>_<seq>
+      chatId: string;
+      label: string;                 // 3-5 词的话题标签（LLM 生成）
+      keywords: string[];            // 关键词集合
+      participantIds: Set<string>;   // 参与者 user_id 集合
+      messageIds: string[];          // 属于此话题的消息 ID 列表
+      state: TopicState;
+      decision?: TriageDecision;     // 最近一次 Triage 的结果
+      parentTopicId?: string;        // 话题演变链（流变时指向原话题）
+      ignoreReason?: string;         // 上一次 IGNORED 的原因（用于流变继承）
+      cooldownBoost?: boolean;       // 流变时的冷却增强标记
+
+      // 时间戳
+      createdAt: number;
+      lastActivityAt: number;
+      lastTriagedAt?: number;
+
+      // 对话模式专用字段（state=ENGAGED 时使用，创建时初始化）
+      turnCount: number;             // agent 已回复轮次（初始 0）
+      maxTurns: number;              // 最大回复轮次（初始 5）
+      lastAgentReplyAt?: number;
+      primaryInterlocutor?: string;  // 主要对话对象
+      pendingMessages: Message[];    // 待处理消息缓冲（初始 []）
+      exitSignals: ExitSignal[];     // 累积退出信号（初始 []）
+      irrelevantStreak: number;      // 连续不相关消息计数（初始 0）
+      nextReplyInstruction?: "wrap_up" | "minimal_acknowledgment" | "redirect_to_others";
+      exitAfterNextReply?: boolean;
+
+      // 统计
+      messageCount: number;
+      interventionCount: number;
+
+      // 上下文快照（给 Triage 用）
+      recentContext: string;         // 最近几条消息的摘要（LLM 生成）
+      lastSummary?: string;          // 上一轮 Triage 生成的一句话摘要（跨 flush 持久化）
+      lastKeyPoints?: string[];      // 上一轮 Triage 生成的要点列表（跨 flush 持久化）
+    }
+    ```
+
+6.  **话题状态机**：
+
+    ```
+                        ┌─────────────────────────────────┐
+                        │       Recording Pipeline        │
+                        │       (观察模式, 50条/2min)       │
+                        └────────────────┬────────────────┘
+                                         │ 话题提取完成
+                                         ▼
+                                  ┌─────────────┐
                         ┌────────│    ACTIVE    │────────┐
                         │        └──────┬──────┘        │
                         │               │ Triage 触发    │ 无新消息 >15min
@@ -1193,7 +1239,7 @@ cybergroupmate/
 
    > 注意：话题流变的判定完全依赖 LLM（Recording Pipeline 的话题提取环节），因为群聊中用户普遍不使用 reply_to_message，无法通过算法可靠地判断消息间的关联关系。
 
-**输出**：每个话题被标注 `decision`（ENGAGE / IGNORE）和 `pipelineMode`（FULL_CODEACT / GUIDED / ENFORCED）。只有 decision=ENGAGE 的话题才进入 Reply Pipeline。
+**输出**：每个话题被标注 `decision`（ENGAGE / IGNORE）。只有 decision=ENGAGE 的话题才进入 Reply Pipeline。
 
 #### Task 6.1.1 — Engaged Topic Handler（对话模式） [NEW @Phase-6.1.1]
 
@@ -1552,68 +1598,18 @@ class RecordingPipeline {
 - 两者互补，不冲突
 - ENGAGED 话题的消息同时被两条路径处理：快速路径处理实时对话，Recording Pipeline 处理记忆写入
 
-#### Task 6.3 — Reply Pipeline Framework [REVISED @Phase-6B: 已完成]
+#### Task 6.3 — Reply Pipeline Framework [REVISED @v0.11.0: 移除三种模式]
 
-**职责**：规范化 agent 的回复行为，根据模型能力提供不同程度的流程引导。
+**职责**：规范化 agent 的回复行为。
 
-**三种模式**：
+> [REMOVED @v0.11.0] 原三种 Pipeline Mode（Advisory / Guided / Enforced）已移除。不再通过复杂的 pipeline mode 适配模型能力差异，而是通过 Dynamic API Surface 根据角色暴露不同的 API。
 
-| 模式 | 适用场景 | 实现方式 |
-|------|---------|---------|
-| **Advisory**（建议性） | SOTA 模型 + 复杂场景 | system prompt 中描述推荐流程，不强制。agent 保留完全 CodeAct 自由度 |
-| **Guided**（引导性） | 中等模型 + 一般场景 | 系统预加载上下文注入 prompt，每个 stage 有提示。agent 在框架内写代码 |
-| **Enforced**（强制性） | 弱模型 + 简单场景 | 系统代码硬编码执行 pipeline 各阶段，模型只在 THINK 和 ACT 阶段填充内容，不需要写代码 |
-
-**Pipeline 阶段**（Guided/Enforced 模式执行）：
-
-```
-Stage 1: PERCEIVE (感知)
-├── 自动注入：当前通知摘要
-├── 自动/引导执行：读取最近 N 条群聊消息获取上下文
-└── 输出：context_summary
-
-Stage 2: RECALL (回忆)
-├── 自动执行：根据消息发送者查询 PersonModel
-├── 自动执行：根据话题关键词搜索相关记忆
-├── 自动执行：查询与此人的最近交互记录
-└── 输出：memory_context
-
-Stage 3: THINK (思考)
-├── 判断：要不要回复？（基于 GroupModel 的规范）
-├── 判断：用什么语气？（基于 PersonModel.relationToAgent）
-├── 规划：回复的核心内容是什么
-└── 输出：reply_plan
-
-Stage 4: ACT (行动)
-├── 生成回复文本
-├── 执行发送（通过 staging 机制防止误发）
-└── 输出：sent_message_id
-
-Stage 5: REMEMBER (记忆)
-├── 更新 PersonModel（如果有新信息）
-├── 存储本次交互摘要
-└── 更新 agent state
-```
-
-**消息 Staging 机制**：
-- Enforced/Guided 模式下，消息不直接发送，而是进入暂存区 `actions.draft()`
-- 只有走完所有 stage 并通过最终检查后才 `actions.commitDrafts()` 实际发送
-- 防止弱模型在 debug 过程中误发消息
-
-**Session Runner 集成**：
-- 不替换整个 session runner，而是在 context 组装阶段根据 `pipelineMode` 注入不同的上下文
-- FULL_CODEACT 模式：只给建议流程提示
-- GUIDED 模式：注入预加载的记忆上下文 + 分步引导
-- ENFORCED 模式：系统硬编码执行 pipeline，模型只负责 THINK 和 ACT
-
-**ContextAssembler 桥接层** [NEW @Phase-6B]：
+**ContextAssembler 桥接层**：
 
 Reply Pipeline 中的 `ContextAssembler` 负责把 Memory V2 的结构化输出自动注入 Agent 首轮上下文，分为两块：
 
 1. **Scene Focus**：当前目标 chat 的最近消息、场景信息
 2. **Latent Memory**：与当前 chat 强相关的人物画像、群组模型、近期话题摘要
-
-这里的“潜意识”不是把原始数据库原样塞给 Agent，而是把框架已经整理好的、与当前 chat 强相关的摘要自动注入。
 
 **实施状态**：`ReplyPipeline` 已能为 FAST_PATH、话题 triage、ENGAGED continuation 组装 `ReplyTask`；`main.ts` 主循环已改为消费 `ReplyTask` 而不是直接消费原始事件批。
 
@@ -1709,15 +1705,13 @@ Feedback Loop 的评估结果直接反馈给 Engaged Topic Handler 的退出信�
 
 #### 6B.0-3：官方 `TelegramAdapter`
 
-`TelegramAdapter` 从 Agent bootstrap 中的临时代码升级为官方 first-party adapter，位于 `src/adapter/telegram-adapter.ts`。
+`TelegramAdapter` 升级为官方 first-party adapter，位于 `src/adapter/telegram-adapter.ts`。
 
 #### 6B.0-4：全链路 string ID 迁移
 
 `chatId`、`userId`、`messageId` 等核心 ID 全部统一为 `string` 类型，保证平台无关性。
 
-#### 6B.0-5：Bootstrap 降责
-
-Bootstrap 的职责限制为：初始化 Agent 的运行环境、人格、默认 scene。不再负责建立平台连接或设置消息监听器——这些由 `PlatformAdapter` 承担。
+> [REMOVED @v0.11.0] 原 6B.0-5 Bootstrap 降责已移除。Bootstrap 流程已彻底废除。
 
 ---
 
@@ -1734,8 +1728,6 @@ interface DryRunConfig {
   daysBack: number;
   /** 使用哪个模型 */
   model: string;
-  /** 使用哪种 pipeline 模式 */
-  pipelineMode: 'FULL_CODEACT' | 'GUIDED' | 'ENFORCED';
   /** 是否实际发送消息（false = 只评估不发送） */
   send: boolean;
   /** 消息来源：file = JSON 文件, live = 实时运行 */
@@ -1791,34 +1783,32 @@ interface DryRunResult {
 
 **用途**：
 - 调优初筛的 confidence 阈值
-- 对比不同模型/pipeline 模式的表现
+- 对比不同模型的表现
 - 验证 PersonModel 和 GroupModel 的有效性
 - 发现需要修正的行为模式
 
 **CLI 命令**：
 ```bash
-# 实时模式，运行时长7天
-npx tsx src/cli.ts dry-run --chat -100123456 --days 7 --model gpt-4o-mini --mode GUIDED
-# 历史记录模式，取最近三日
-npx tsx src/cli.ts dry-run --file chat.json --days 3 --model claude-opus-4-6 --mode FULL_CODEACT
+npx tsx src/cli.ts dry-run --chat -100123456 --days 7 --model gpt-4o-mini
+npx tsx src/cli.ts dry-run --file chat.json --days 3 --model claude-opus-4-6
 ```
 
-#### Task 6.8 — Model Router [REVISED @Phase-6B: 重编号，原 6.7]
+#### Task 6.8 — Model Router [REVISED @v0.11.0]
 
-**职责**：根据事件的复杂度和重要性，自动选择合适的模型和 pipeline 模式。
+**职责**：根据事件的复杂度和重要性，自动选择合适的模型。
 
 **路由规则**：
 
-| 事件类型 | 模型选择 | Pipeline 模式 |
-|---------|---------|-------------|
-| 直接 @ 或私聊 + 复杂问题 | SOTA (Claude Sonnet 4 / GPT-4o) | FULL_CODEACT |
-| 直接 @ 或私聊 + 简单问题 | Mid-tier (GPT-4o-mini) | GUIDED |
-| 群聊主动介入 + 高 confidence | Mid-tier | GUIDED |
-| 群聊主动介入 + 低 confidence | Cheap (Gemini Flash) | ENFORCED |
-| 定时任务（Playbook 生成等） | SOTA | N/A（专用流程） |
-| Recording Pipeline | Cheap | N/A（专用流程） |
-| Triage 初筛 | Cheap | N/A |
-| Feedback 评估 | Cheap | N/A |
+| 事件类型 | 模型选择 |
+|---------|---------|
+| 直接 @ 或私聊 + 复杂问题 | SOTA (Claude Sonnet 4 / GPT-4o) |
+| 直接 @ 或私聊 + 简单问题 | Mid-tier (GPT-4o-mini) |
+| 群聊主动介入 + 高 confidence | Mid-tier |
+| 群聊主动介入 + 低 confidence | Cheap (Gemini Flash) |
+| 定时任务（Playbook 生成等） | SOTA |
+| Recording Pipeline | Cheap |
+| Triage 初筛 | Cheap |
+| Feedback 评估 | Cheap |
 
 **复杂度评估信号**：
 - 消息长度
@@ -1833,7 +1823,7 @@ npx tsx src/cli.ts dry-run --file chat.json --days 3 --model claude-opus-4-6 --m
 
 ### Phase 7：SOTA 指导 + 技能自动化（目标：~2-3 周）
 
-**背景**：Phase 6 解决了"弱模型如何被流水线引导"的问题。Phase 7 进一步解决"SOTA 模型的智慧如何持久化、下沉给弱模型复用"的问题。
+**背景**：Phase 6 完成了多群组并行感知和决策架构。Phase 7 进一步解决"SOTA 模型的智慧如何持久化、下沉给弱模型复用"的问题。
 
 #### Task 7.1 — Playbook System
 
@@ -1883,7 +1873,7 @@ interface GroupPlaybook {
 - 存储到 Memory V2 的 Playbook 表
 
 **消费方式**：
-- Guided/Enforced 模式下，`recall()` 自动加载当前有效的 Playbook
+- `recall()` 自动加载当前有效的 Playbook
 - 注入到 LLM prompt 的 memory_context 部分
 - 弱模型不需要自己判断"这个人喜欢什么"，查 Playbook 即可
 
@@ -2093,7 +2083,7 @@ interface DailyBudget {
 
 | Task | 内容 | 依赖 | 估时 | 状态 |
 |------|------|------|------|------|
-| 6B.0 | Ingress Boundary Refactor（NC schema + PlatformAdapter + TelegramAdapter + ID 迁移 + bootstrap 降责） | NC | 5天 | ✅ |
+| 6B.0 | Ingress Boundary Refactor（NC schema + PlatformAdapter + TelegramAdapter + ID 迁移） | NC | 5天 | ✅ |
 | 6.3 | Reply Pipeline Framework（三种模式 + ContextAssembler） | 6B.0 | 3天 | ✅ |
 | 6.4 | Code-First Action Surface（actions.* + host-call 桥接） | 6B.0, sandbox | 2天 | ✅ |
 | 6.5 | Agent-Skill Runtime（skills.memory / skills.social） | 6.4 | 2天 | ✅ |
@@ -2119,7 +2109,6 @@ interface DailyBudget {
 
 **Phase 6 验收标准（6A/6B/6C）**：
 - Dry-Run 在历史聊天记录上运行，输出评估报告，误触发率 < 20%
-- Guided 模式下弱模型能稳定完成回复流程（不误发消息、不无限 debug）
 - Recording Pipeline 持续运行 24h 无异常，话题提取质量人工验证通过
 - Engaged Topic Handler 在对话模式下回复延迟 < 20 秒（含自然延迟），节奏自然
 - 退出机制验证：MAX_TURNS 硬上限生效、身份探测场景能触发退出、连续被无视后自动退出
@@ -2290,7 +2279,7 @@ subagent:
 
 ## 11. 平台接入方式 [REVISED @Phase-6B.0]
 
-Telegram 连接由框架的 `TelegramAdapter` 在宿主侧负责，不再由 Agent 在 bootstrap 时自己建立。
+Telegram 连接由框架的 `TelegramAdapter` 在宿主侧负责。
 
 **环境变量配置**：
 - `TG_API_ID`
@@ -2301,9 +2290,8 @@ Telegram 连接由框架的 `TelegramAdapter` 在宿主侧负责，不再由 Age
 1. `main.ts` 启动时创建 `TelegramAdapter`，读取配置并连接 mtcute
 2. Adapter 监听新消息，标准化为 `NCEvent` 推入 NotificationCenter
 3. Adapter 同时向 sandbox 暴露发送能力（`ctx.tg.sendText()` 等），通过 host-call 桥接
-4. Agent 不再需要在 bootstrap 中写代码连接 Telegram 或设置监听器
 
-**未来扩展**：新增平台接入 = 新增 adapter + scene + action surface，不是只新增一个 scene。
+**未来扩展**：新增平台接入 = 新增 adapter + scene + action surface。
 
 ---
 
@@ -2442,17 +2430,16 @@ Recording Pipeline 缓冲区满 50 条，触发 flush。
 │                                                   │
 │  路由结果:                                         │
 │  - model: "gpt-4o-mini"                           │
-│  - pipelineMode: "GUIDED"                         │
-│  - reason: "中等复杂度群聊介入, GUIDED 模式足够"    │
+│  - reason: "中等复杂度群聊介入"                       │
 └───────────────────────────────────────────────────┘
 ```
 
-**Phase ④：Reply Pipeline（Guided 模式）**
+**Phase ④：Reply Pipeline（ContextAssembler 注入上下文）**
 
 话题状态转换：`PRELOADING → ENGAGED`。对话模式启动。
 
 ```
-┌─ Reply Pipeline: GUIDED Mode ──────────────────────────────────────┐
+┌─ Reply Pipeline (Dynamic API Surface) ──────────────────────────────┐
 │                                                                     │
 │  Stage 1: PERCEIVE (系统自动注入)                                     │
 │  ┌─────────────────────────────────────────────────────────────┐    │
@@ -2474,7 +2461,7 @@ Recording Pipeline 缓冲区满 50 条，触发 flush。
 │  │ System prompt 含:                                            │    │
 │  │ - 人格描述（从 config.yaml）                                  │    │
 │  │ - Playbook 片段                                              │    │
-│  │ - Guided 模式指引: "请基于以下上下文生成回复计划"              │    │
+│  │ - 指引: "请基于以下上下文生成回复计划"                      │    │
 │  │                                                              │    │
 │  │ LLM 输出:                                                    │    │
 │  │ {                                                            │    │
@@ -2540,7 +2527,7 @@ t=6:50   [3 分钟窗口结束]
 | 话题提取 + Triage | ~4.5 sec |
 | Preload | ~0.3 sec（与 Triage 并行） |
 | Model Router | ~10 ms |
-| Reply Pipeline (Guided) | ~3-5 sec |
+| Reply Pipeline | ~3-5 sec |
 | **从缓冲触发到消息发出** | **~8 sec** |
 | **从第一条消息到介入** | **~3 min 28 sec** |
 
@@ -2603,7 +2590,7 @@ t=3:55   alice: 那岚山一天够玩吗？还是要住一晚
 │  }                                                │
 └───────────────────────────────────────────────────┘
 
-→ Reply Pipeline (Guided, turnCount=2)
+→ Reply Pipeline (turnCount=2)
 → 生成回复: "一天够的 岚山+嵯峨野半天 下午可以去金阁寺 不用住那边"
 → 发出 (sent_message_id: 93)
 
@@ -2618,7 +2605,7 @@ t=4:28   [最后回复发出, turnCount=3]
 
 ---
 
-### 场景 3：直接 @ → Fast Path → SOTA + FULL_CODEACT 模式
+### 场景 3：直接 @ → SOTA 模型处理复杂任务
 
 **触发**：有人直接 @ agent 问了一个复杂问题。
 
@@ -2649,26 +2636,25 @@ t=0:00   alice: @CyberGroupmate 你能帮我查一下上周三群里讨论过的
 │                                                           │
 │  路由结果:                                                 │
 │  - model: "claude-sonnet-4" (SOTA)                        │
-│  - pipelineMode: "FULL_CODEACT"                           │
 │  - reason: "复杂检索任务, 需要 SOTA 自由度"                 │
 └───────────────────────────────────────────────────────────┘
 ```
 
-**Phase ③：CodeAct Session（FULL_CODEACT 模式）**
+**Phase ③：CodeAct Session（SOTA 模型）**
 
 SOTA 模型拿到完整的 CodeAct 自由度，自主写代码完成任务。
 
 ```
 ┌─ CodeAct Session (Claude Sonnet 4) ────────────────────────────────┐
 │                                                                     │
-│  [System Prompt 注入 Advisory 流程提示，但不强制]                     │
+│  [根据角色动态注入的 API 类型定义]                                 │
 │                                                                     │
 │  Turn 1 — Agent 思考 + 代码:                                        │
 │  "alice 想找上周三关于 Rust/Go 性能对比的讨论。我需要先搜索           │
 │   记忆，再拉历史消息确认。"                                          │
 │                                                                     │
 │  ```typescript                                                      │
-│  scene.enter("memory")                                              │
+│  // memory API 根据角色自动可用，无需切换场景                              │
 │  const results = await memory.search("Rust Go 性能 benchmark")      │
 │  console.log(results)                                               │
 │  ```                                                                │
@@ -2681,7 +2667,7 @@ SOTA 模型拿到完整的 CodeAct 自由度，自主写代码完成任务。
 │  "找到记忆了，是 2/19 的讨论。让我去拉那天的历史消息找到具体链接。"    │
 │                                                                     │
 │  ```typescript                                                      │
-│  scene.enter("telegram")                                            │
+│  // 搜索指定日期范围内含 benchmark 关键词的消息——telegram API 根据角色自动可用   │
 │  // 搜索指定日期范围内含 benchmark 关键词的消息                       │
 │  const msgs = await ctx.tg.searchMessages(-100123456, {              │
 │    query: "benchmark",                                               │
@@ -2712,7 +2698,7 @@ SOTA 模型拿到完整的 CodeAct 自由度，自主写代码完成任务。
 │                                                                     │
 │  Turn 4 — Agent 存记忆:                                              │
 │  ```typescript                                                      │
-│  scene.enter("memory")                                              │
+│  // memory API 根据角色自动可用                                        │
 │  await memory.updatePerson(alice.id, {                               │
 │    notes: "对 Rust/Go 性能对比感兴趣，可能在做技术选型"               │
 │  })                                                                  │
@@ -2755,7 +2741,7 @@ t=0:00   eve: 话说你怎么什么都知道啊
 │    exitStyle: GRADUAL_WITHDRAWAL                      │
 └───────────────────────────────────────────────────────┘
 
-→ Reply Pipeline (Guided, 延迟 × 2 ≈ 16 秒)
+→ Reply Pipeline (延迟 × 2 ≈ 16 秒)
 → 生成回复: "哈哈没有啦 之前正好看过相关的帖子而已"
 → 发出 (turnCount=4, 后续 Triage 阈值提高到 0.8)
 
@@ -2911,9 +2897,9 @@ Turn 3 回复后: 没人接话 → engagement -1 (gotIgnored)
 │                                                     │
 │  Reply Pipeline:                                     │
 │    实际发出回复: 47 条                                │
-│    FULL_CODEACT: 3 次 (直接 @)                       │
-│    GUIDED: 38 次 (主动介入 + 简单 @)                  │
-│    ENFORCED: 6 次 (低 confidence)                    │
+│    SOTA 模型: 3 次 (直接 @)                          │
+│    Mid-tier: 38 次 (主动介入 + 简单 @)               │
+│    Cheap: 6 次 (低 confidence)                     │
 │    Token 消耗: ~380K                                 │
 │    费用: $0.12 (GPT-4o-mini 主力)                    │
 │                                                     │
@@ -2969,80 +2955,4 @@ Turn 3 回复后: 没人接话 → engagement -1 (gotIgnored)
 5. **依赖极简**：仅 `@mtcute/node`、`better-sqlite3`、`ulid`。其他手写。
 6. **Git 操作**：每完成一个逻辑单元就 commit（Conventional Commits 格式）。每个 Phase 结束后打 tag。详见第 9 节。
 7. **文档**：每个源文件有文件头注释。所有 public 接口有 JSDoc。每个 Phase 结束后更新 README 和 CHANGELOG。详见第 8 节。
-8. **Phase 1 结束时运行集成测试**确认全链路可用。
-9. **Phase 2 结束时做端到端测试**：启动 → bootstrap → @ agent → 确认回复。
-10. **每个 Phase 结束后在「实施日志」追加总结**，记录关键决策、问题、对后续影响。
-
----
-
-## 实施日志
-
-> Claude Code 在完成每个 Phase 后在此追加总结。
-
-### Phase 1 总结 — 2026-02-25
-
-**完成情况**：所有 6 个 Task 完成，55 个单元测试全部通过。
-
-**关键决策与发现**：
-
-1. **ULID 单调性**：`ulid` 库的默认 `ulid()` 函数在同一毫秒内不保证单调递增。改用 `monotonicFactory()` 解决。`[REVISED @Phase-1.1]`
-
-2. **FTS5 CJK 支持**：SQLite FTS5 的 `unicode61` tokenizer 会将中文字符逐字拆分，导致多字词搜索（如"抹茶"）失败。实现了双重策略：先尝试 FTS5 搜索，无结果时回退到 `LIKE` 子串匹配。`[REVISED @Phase-1.4]`
-
-3. **Sandbox IPC 设计**：使用 JSON 行协议（每条消息一行 JSON）通过 stdin/stdout 通信，简单可靠。Worker 发送 `__ready__` 信号确认启动完成。
-
-4. **任务执行顺序调整**：实际按 1.6 → 1.1 → 1.2 → 1.3 → 1.4 → 1.5 顺序执行（先搭脚手架），与计划略有偏差但更合理。
-
-**对后续影响**：
-- Memory 的 FTS5 + LIKE 双重搜索对大数据量可能有性能问题，Phase 3 中需关注
-- BackgroundManager 的 cron 功能尚未实现，需在 Phase 2 补充
-
-### Phase 2 总结 — 2026-02-25
-
-**完成情况**：所有 4 个 Task 完成，63 个测试全部通过。
-
-**关键决策与发现**：
-
-1. **YAML 解析**：为避免引入 `yaml` 依赖，手写了简单的 YAML 解析器（只支持一层嵌套 key-value）。足以满足 config.yaml 的需求。
-
-2. **代码块解析**：使用正则匹配 ` ```javascript ` / ` ```ts ` / ` ```js ` / ` ```javascript ` 围栏。忽略其他语言的代码块（如 python、json）。
-
-3. **Bootstrap 重放**：Bootstrap 成功后，所有成功执行的代码块保存到 `data/bootstrap-code.json`。Sandbox 重启后先尝试重放，失败才回退到完整 LLM bootstrap。
-
-4. **Main Loop 容错**：Sandbox 崩溃时自动重启并重放 bootstrap。事件不会丢失（推回 NC 队列）。
-
-5. **cron 功能推迟**：BackgroundManager 的 cron 尚未实现，计划在 Phase 4 补充。`[REVISED @Phase-2.3]`
-
-**对后续影响**：
-- Session compaction (Phase 3.1) 需要在 main loop 的 session 完成后调用
-- Agent state 文件 (Phase 3.2) 的读写逻辑已在 main.ts 中预留
-
-### Phase 3 总结 — 2026-02-25
-
-**完成情况**：Phase 3 全部 4 个 Task + Phase 4 的 Task 4.1 和 4.3 完成，73 个测试全部通过。
-
-**关键决策与发现**：
-
-1. **Compaction JSON 解析**：LLM 有时会在 JSON 外包裹 markdown 代码块（` ```json `），因此 `parseCompactionResult` 先尝试直接 `JSON.parse`，失败后提取代码块内容再解析。
-
-2. **Agent State 大小控制**：`agent-state.md` 设置 3500 字符上限，超出时只保留最后 3000 字符并加截断提示。防止 context window 被状态文件占满。
-
-3. **安全模块设计**：Rate limiter 同时限制 session 内发送量（默认 10）和每分钟发送量（默认 5），双重保护。所有发出的消息 ID 记录到 JSONL 文件用于事后审计和批量撤回。
-
-4. **错误恢复提前完成**：Task 4.1（sandbox 重启 + bootstrap 重放）在 Phase 2 的 `main.ts` 中已实现。
-
-### Phase 4 总结 — 2026-02-26
-
-**完成情况**：Phase 4 全部 6 个 Task 完成，73 个测试全部通过。
-
-**关键决策与发现**：
-
-1. **正式 YAML 解析**：从自写的 regex YAML 解析迁移到 `yaml` 库。新建 `config.ts` 统一管理 LLM/Persona/Telegram 三块配置，`llm.ts` 只保留纯 LLM 调用逻辑。
-2. **Agent 文档系统**：`docs.ts` 在 sandbox 启动时注入 `docs.read()`/`docs.list()`，Agent 可以读取 `docs/mtcute-guide.md` 等参考资料，避免联网搜索浪费 token。
-3. **Bootstrap 改进**：根据 `config.telegram.mode` 动态生成 bot/userbot 两种登录示例代码，包含完整的 OTP 交互流程（通过 `runtime.notify` 请求人类输入验证码）。
-4. **CLI 完善**：6 个子命令覆盖调试场景——`sandbox` REPL 可直接执行代码、`config` 检查全部配置、`memory` 子命令支持 search/person/todos/sql。
-5. **TG 配置自动注入**：`config.ts` 在加载时将 `config.yaml` 中的 Telegram 配置自动注入 `process.env`，sandbox 中的代码可以直接通过 `process.env.TG_*` 访问。
-
-**下一步**：
-- 实际启动 agent，验证 Telegram 连接和 bootstrap 流程
-- 根据实际运行中发现的问题迭代
+8. **每个 Phase 结束后在「实施日志」追加总结**，记录关键决策、问题、对后续影响。
