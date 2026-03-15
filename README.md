@@ -22,4 +22,4 @@ CyberGroupmate is an autonomous AI agent that participates in Telegram group cha
 
 ## 🏗 Architecture Overview
 
-WIP
+WIP, refer to docs for detailed information.
