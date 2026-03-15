@@ -7,7 +7,7 @@ RUN apt-get update && \
 
 WORKDIR /app
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev
+RUN npm ci
 
 # ── Stage 2: Runtime ──
 FROM node:22-slim
@@ -26,7 +26,4 @@ COPY system-prompts ./system-prompts
 RUN mkdir -p /app/workspace
 VOLUME /app/workspace
 
-# tsx is in devDependencies, install it globally for runtime
-RUN npm i -g tsx
-
-ENTRYPOINT ["tsx", "src/main.ts"]
+ENTRYPOINT ["npx", "tsx", "src/main.ts"]
