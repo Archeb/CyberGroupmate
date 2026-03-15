@@ -13,6 +13,7 @@
 import { NotificationCenter, type NotificationEvent } from "./event/notification-center.js";
 import { MessageLogWriter } from "./event/message-log-writer.js";
 import { SandboxPool } from "./sandbox/sandbox-pool.js";
+import { createTaskListSkill, buildTaskListHostCalls } from "./sandbox/skills/task-list.js";
 import { MemoryStoreV2 } from "./memory-v2/index.js";
 import { loadConfig, resolveTierProfile, type AppConfig, type LLMConfig } from "./core/config.js";
 import {
@@ -160,8 +161,15 @@ async function main(): Promise<void> {
                             ...(args[1] as Record<string, unknown> ?? {}),
                         } as any);
                     }
-                    default:
+                    default: {
+                        // skills.taskList.* host calls
+                        const taskListSkill = createTaskListSkill(globalState);
+                        const taskListCalls = buildTaskListHostCalls(taskListSkill);
+                        if (method in taskListCalls) {
+                            return taskListCalls[method](args[0]);
+                        }
                         throw new Error(`Unsupported host call: ${method}`);
+                    }
                 }
             });
             sandbox.on("stderr", (data: string) => {
@@ -422,6 +430,7 @@ async function main(): Promise<void> {
         const depth = calculateDepth(
             entry.attendCount,
             subagent.stickiness.depthCyclePeriod,
+            entry.alert ? { forceMinDepth: 2 } : undefined,
         );
 
         const contextPkg = buildGroupContext({
@@ -496,7 +505,14 @@ async function main(): Promise<void> {
             const attentionPrompt = renderPrompt("ATTENTION", promptVars);
             const decisionPrompt = renderPrompt("DECISION", promptVars);
 
-            // ➋ 主 Agent 系统 Prompt — 纯静态，便于 prefix caching (subagent.md §12.2 ➋)
+            // ➋ 主 Agent 系统 Prompt — 含全局状态注入 (subagent.md §12.2 ➋)
+            const recentDecisionsText = globalState.getRecentDecisions().slice(-5)
+                .map(d => `- [${d.chatId}] ${d.decision}`).join("\n") || "（无）";
+            const activeTasksText = globalState.getTaskList()
+                .filter(t => t.status !== "DONE" && t.status !== "CANCELLED")
+                .map(t => `- [${t.priority}][${t.status}] ${t.description}${t.chatId ? ` (群:${t.chatId})` : ""}`)
+                .join("\n") || "（无待办任务）";
+
             const mainSystemPrompt = `你是 CyberGroupmate 的主调度 Agent「${appConfig.persona.name}」。你的职责是快速审视多个群组的消息状态，做出是否回复、怎么回复的决策，并将执行任务分派给各群组的 Subagent。
 
 ${appConfig.persona.description}
@@ -509,6 +525,15 @@ ${appConfig.persona.description}
 5. 对于简单和复杂回复，都通过 CODEACT_REPLY 分派给 subagent 执行。你在 contentDirection 中给出明确的内容方向。
 6. 只有在高 engagement 场景下才授权 FastPath。
 7. 对话历史中的 [Callback] 消息是上一轮 subagent 执行的结果反馈，请参考它们避免重复决策。
+
+## 当前全局状态
+${globalState.getAttentionSummary() || "（无）"}
+
+## 最近决策记录
+${recentDecisionsText}
+
+## 当前任务列表
+${activeTasksText}
 
 仅返回 JSON，不要包含其他文本。`;
 

@@ -193,6 +193,14 @@ export interface GroupStickiness {
     overactiveThreshold: number;
     /** 上次更新时间 */
     updatedAt: string;
+    /** 回复频率控制 (0.0-1.0)，越高越倾向回复 */
+    replyFrequency: number;
+    /** 主动发起程度 (0.0-1.0)，越高越主动参与话题 */
+    initiativeLevel: number;
+    /** 每小时最大干预次数 */
+    maxInterventionsPerHour: number;
+    /** 干预后冷却时间 (ms) */
+    cooldownAfterIntervention: number;
 }
 
 // ─── 主 Agent 上下文 ───

@@ -314,5 +314,20 @@ describe("S5: 主 Agent 注意力循环", () => {
             assert.ok(!result.includes("EXTRA"));
             assert.ok(result.includes("Start") && result.includes("End"));
         });
+
+        it("#28 CosineDecay: forceMinDepth boosts shallow depth", () => {
+            // count=10 in period=20 gives L0 (cos(π)=-1 → shallowest)
+            assert.equal(calculateDepth(10, 20), 0, "without force: L0");
+            assert.equal(calculateDepth(10, 20, { forceMinDepth: 2 }), 2, "with forceMinDepth=2: boosted to L2");
+        });
+
+        it("#29 CosineDecay: forceMinDepth does not lower deep depth", () => {
+            // count=0 in period=20 gives L3 (cos(0)=1 → deepest)
+            assert.equal(calculateDepth(0, 20, { forceMinDepth: 1 }), 3, "L3 should not be lowered to L1");
+        });
+
+        it("#30 CosineDecay: cyclePeriod=0 with forceMinDepth returns forced depth", () => {
+            assert.equal(calculateDepth(5, 0, { forceMinDepth: 2 }), 2, "cyclePeriod=0 should use forceMinDepth");
+        });
     });
 });

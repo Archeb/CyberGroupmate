@@ -24,6 +24,12 @@ export interface CosineDecayConfig {
     depthWeights?: [number, number, number, number]; // L0, L1, L2, L3
 }
 
+/** calculateDepth 可选参数 */
+export interface DepthOptions {
+    /** 强制最小深度（用于 alert / urgentSignals 场景） */
+    forceMinDepth?: ContextDepth;
+}
+
 const DEFAULT_CONFIG: CosineDecayConfig = {
     cyclePeriod: 20,
     depthWeights: [1, 1, 1, 1],
@@ -42,17 +48,27 @@ export type ContextDepth = 0 | 1 | 2 | 3;
  * @param cyclePeriod - 一个完整周期需要的 attend 次数
  * @returns 上下文深度 (0-3)
  */
-export function calculateDepth(attendCount: number, cyclePeriod: number = DEFAULT_CONFIG.cyclePeriod): ContextDepth {
-    if (cyclePeriod <= 0) return 0;
+export function calculateDepth(
+    attendCount: number,
+    cyclePeriod: number = DEFAULT_CONFIG.cyclePeriod,
+    options?: DepthOptions,
+): ContextDepth {
+    if (cyclePeriod <= 0) return (options?.forceMinDepth ?? 0) as ContextDepth;
 
     // cos(2π × count / period) 在 [−1, 1] 之间振荡
     // (1 + cos) / 2 映射到 [0, 1]
     // × 3 映射到 [0, 3]
     const t = (2 * Math.PI * attendCount) / cyclePeriod;
     const raw = (1 + Math.cos(t)) / 2; // [0, 1]
-    const depth = Math.round(raw * 3) as ContextDepth; // [0, 3]
+    let depth = Math.round(raw * 3) as ContextDepth; // [0, 3]
+    depth = Math.min(3, Math.max(0, depth)) as ContextDepth;
 
-    return Math.min(3, Math.max(0, depth)) as ContextDepth;
+    // Alert / urgentSignals 场景强制最小深度
+    if (options?.forceMinDepth !== undefined && depth < options.forceMinDepth) {
+        depth = options.forceMinDepth;
+    }
+
+    return depth;
 }
 
 /**

@@ -108,4 +108,31 @@ describe("S7: GroupStickiness", () => {
         const result = evaluateStickiness(gm, 61, "ACQUAINTANCE");
         assert.equal(result, "STRANGER");
     });
+
+    // ─── New fields (audit fix 3.5) ───
+
+    it("#16 createStickiness includes replyFrequency and initiativeLevel", () => {
+        const core = createStickiness("CORE");
+        assert.equal(core.replyFrequency, 0.8);
+        assert.equal(core.initiativeLevel, 0.7);
+        assert.equal(core.maxInterventionsPerHour, 20);
+        assert.equal(core.cooldownAfterIntervention, 30_000);
+    });
+
+    it("#17 createStickiness STRANGER has conservative behavioral defaults", () => {
+        const stranger = createStickiness("STRANGER");
+        assert.equal(stranger.replyFrequency, 0.1);
+        assert.equal(stranger.initiativeLevel, 0.05);
+        assert.equal(stranger.maxInterventionsPerHour, 2);
+        assert.equal(stranger.cooldownAfterIntervention, 300_000);
+    });
+
+    it("#18 all levels have monotonically increasing replyFrequency", () => {
+        const levels: Array<"STRANGER" | "ACQUAINTANCE" | "FAMILIAR" | "CORE"> = 
+            ["STRANGER", "ACQUAINTANCE", "FAMILIAR", "CORE"];
+        const freqs = levels.map(l => createStickiness(l).replyFrequency);
+        for (let i = 1; i < freqs.length; i++) {
+            assert.ok(freqs[i] > freqs[i - 1], `${levels[i]} should have higher replyFrequency than ${levels[i - 1]}`);
+        }
+    });
 });

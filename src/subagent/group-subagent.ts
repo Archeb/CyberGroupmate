@@ -19,6 +19,7 @@ import type {
     StickinessLevel,
     TopicDigest,
 } from "./types.js";
+import { createStickiness } from "./stickiness.js";
 import { createLogger } from "../core/logger.js";
 
 const log = createLogger("group-subagent");
@@ -61,14 +62,7 @@ export class GroupSubagent {
     constructor(options: GroupSubagentOptions) {
         this.chatId = options.chatId;
         this.observer = new Observer(options.chatId, options.observerConfig);
-        this.stickiness = options.stickiness ?? {
-            level: "STRANGER" as StickinessLevel,
-            priorityMultiplier: 0.2,
-            depthCyclePeriod: 50,
-            fastPathEligible: false,
-            overactiveThreshold: 100,
-            updatedAt: new Date().toISOString(),
-        };
+        this.stickiness = options.stickiness ?? createStickiness("STRANGER");
     }
 
     /**

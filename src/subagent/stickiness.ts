@@ -71,11 +71,15 @@ const DEFAULT_STICKINESS_CONFIG: StickinessConfig = {
 const LEVEL_PRESETS: Record<StickinessLevel, {
     fastPathEligible: boolean;
     overactiveThreshold: number;
+    replyFrequency: number;
+    initiativeLevel: number;
+    maxInterventionsPerHour: number;
+    cooldownAfterIntervention: number;
 }> = {
-    CORE: { fastPathEligible: true, overactiveThreshold: 200 },
-    FAMILIAR: { fastPathEligible: true, overactiveThreshold: 150 },
-    ACQUAINTANCE: { fastPathEligible: false, overactiveThreshold: 100 },
-    STRANGER: { fastPathEligible: false, overactiveThreshold: 50 },
+    CORE: { fastPathEligible: true, overactiveThreshold: 200, replyFrequency: 0.8, initiativeLevel: 0.7, maxInterventionsPerHour: 20, cooldownAfterIntervention: 30_000 },
+    FAMILIAR: { fastPathEligible: true, overactiveThreshold: 150, replyFrequency: 0.5, initiativeLevel: 0.4, maxInterventionsPerHour: 10, cooldownAfterIntervention: 60_000 },
+    ACQUAINTANCE: { fastPathEligible: false, overactiveThreshold: 100, replyFrequency: 0.3, initiativeLevel: 0.2, maxInterventionsPerHour: 5, cooldownAfterIntervention: 120_000 },
+    STRANGER: { fastPathEligible: false, overactiveThreshold: 50, replyFrequency: 0.1, initiativeLevel: 0.05, maxInterventionsPerHour: 2, cooldownAfterIntervention: 300_000 },
 };
 
 /**
@@ -95,6 +99,10 @@ export function createStickiness(
         depthCyclePeriod: defaults.depthCyclePeriod,
         fastPathEligible: presets.fastPathEligible,
         overactiveThreshold: presets.overactiveThreshold,
+        replyFrequency: presets.replyFrequency,
+        initiativeLevel: presets.initiativeLevel,
+        maxInterventionsPerHour: presets.maxInterventionsPerHour,
+        cooldownAfterIntervention: presets.cooldownAfterIntervention,
         updatedAt: new Date().toISOString(),
     };
 }
