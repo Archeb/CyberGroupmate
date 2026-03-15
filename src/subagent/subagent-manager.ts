@@ -3,37 +3,47 @@
  *
  * 管理所有群组的 GroupSubagent 实例生命周期：
  * - 按需创建（getOrCreate）
- * - 空闲回收（releaseIdle）
+ * - 持久保留（chat-bound，不做空闲回收）
+ * - 启动时恢复（restoreAll）
  * - 获取全部实例列表
+ *
+ * Subagent 实例绑定到 chat，通过 compaction 和 context quota 管理内存。
+ * Sandbox 空闲回收由 SandboxPool 独立管理。
  *
  * 参考设计：subagent.md §2
  */
 
 import { GroupSubagent, type GroupSubagentOptions, type RecordingPipelineDeps } from "./group-subagent.js";
+import { CodeActExecutor } from "./code-act-executor.js";
 import type { SubagentConfig, GroupStickiness, StickinessLevel } from "./types.js";
 import { DEFAULT_SUBAGENT_CONFIG } from "./types.js";
 import { createLogger } from "../core/logger.js";
+import { existsSync, readdirSync, mkdirSync } from "node:fs";
+import { join, basename } from "node:path";
 
 const log = createLogger("subagent-manager");
 
 /** SubagentManager 配置 */
 export interface SubagentManagerConfig {
-    /** Subagent 空闲超时 (ms)。默认 600,000 (10min) */
-    idleTimeout: number;
     /** Observer 配置 */
     observerConfig?: ConstructorParameters<typeof GroupSubagent>[0]["observerConfig"];
     /** 默认 stickiness 工厂（可注入 MemoryV2 lookup） */
     stickinessProvider?: (chatId: string) => GroupStickiness | undefined;
     /** RecordingPipeline 依赖（注入每个 GroupSubagent） */
     recordingDeps?: RecordingPipelineDeps;
+    /** Session 持久化根目录（默认 workspace/sessions） */
+    sessionsDir?: string;
+    /** 平台名称（用于持久化路径，如 "telegram"） */
+    platformName?: string;
 }
 
-const DEFAULT_MANAGER_CONFIG: SubagentManagerConfig = {
-    idleTimeout: DEFAULT_SUBAGENT_CONFIG.sandboxIdleTimeout,
-};
+const DEFAULT_MANAGER_CONFIG: SubagentManagerConfig = {};
 
 /**
  * SubagentManager — 群组 Subagent 实例管理器
+ *
+ * Subagent 实例是 chat-bound 的，不会被空闲回收。
+ * 通过 restoreAll() 在启动时从磁盘恢复已有 session。
  */
 export class SubagentManager {
     private subagents = new Map<string, GroupSubagent>();
@@ -41,6 +51,15 @@ export class SubagentManager {
 
     constructor(config?: Partial<SubagentManagerConfig>) {
         this.config = { ...DEFAULT_MANAGER_CONFIG, ...config };
+    }
+
+    /**
+     * 获取指定 chatId 的 session 文件路径
+     */
+    getSessionFilePath(chatId: string): string {
+        const sessionsDir = this.config.sessionsDir ?? "workspace/sessions";
+        const platformName = this.config.platformName ?? "telegram";
+        return join(sessionsDir, platformName, `${chatId}.json`);
     }
 
     /**
@@ -87,27 +106,69 @@ export class SubagentManager {
     }
 
     /**
-     * 释放空闲超时的 Subagent
-     * @returns 释放的 chatId 列表
+     * 从磁盘恢复所有已保存的 session
+     *
+     * 扫描 {sessionsDir}/{platformName}/ 目录下的 *.json 文件，
+     * 为每个 chatId 创建 GroupSubagent + CodeActExecutor，恢复 session 状态。
+     *
+     * @returns 恢复的 chatId 列表
      */
-    releaseIdle(maxIdleMs?: number): string[] {
-        const timeout = maxIdleMs ?? this.config.idleTimeout;
-        const released: string[] = [];
+    restoreAll(): string[] {
+        const sessionsDir = this.config.sessionsDir ?? "workspace/sessions";
+        const platformName = this.config.platformName ?? "telegram";
+        const dir = join(sessionsDir, platformName);
 
-        for (const [chatId, subagent] of this.subagents.entries()) {
-            if (subagent.isIdle(timeout)) {
-                subagent.dispose();
-                this.subagents.delete(chatId);
-                released.push(chatId);
-                log.info("releaseIdle: 释放 Subagent", { chatId });
+        if (!existsSync(dir)) {
+            log.info("restoreAll: session 目录不存在，跳过", { dir });
+            return [];
+        }
+
+        const restored: string[] = [];
+
+        try {
+            const files = readdirSync(dir).filter(f => f.endsWith(".json"));
+
+            for (const file of files) {
+                const chatId = basename(file, ".json");
+                const filePath = join(dir, file);
+
+                try {
+                    // 创建 SubagentManager 实例（如果不存在）
+                    const subagent = this.getOrCreate(chatId);
+
+                    // 创建 CodeActExecutor 并恢复 session
+                    if (!subagent.codeActExecutor) {
+                        const executor = new CodeActExecutor(chatId);
+                        const loaded = executor.loadSession(filePath);
+
+                        if (loaded) {
+                            subagent.codeActExecutor = executor;
+                            restored.push(chatId);
+                            log.info("restoreAll: 恢复 session", {
+                                chatId,
+                                sessionSize: executor.getSessionSize(),
+                                executionCount: executor.getExecutionCount(),
+                            });
+                        }
+                    }
+                } catch (err) {
+                    log.warn("restoreAll: 恢复单个 session 失败", {
+                        chatId,
+                        file,
+                        error: String(err),
+                    });
+                }
             }
+        } catch (err) {
+            log.error("restoreAll: 扫描目录失败", { dir, error: String(err) });
         }
 
-        if (released.length > 0) {
-            log.info("releaseIdle: 完成", { released: released.length, remaining: this.subagents.size });
-        }
+        log.info("restoreAll: 完成", {
+            restored: restored.length,
+            total: this.subagents.size,
+        });
 
-        return released;
+        return restored;
     }
 
     /**

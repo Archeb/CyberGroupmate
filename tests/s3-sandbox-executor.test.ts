@@ -209,4 +209,78 @@ describe("S3: Sandbox 多实例 + CodeActExecutor", () => {
             assert.equal(cbs.length, 5, "所有 5 个任务应被处理");
         });
     });
+
+    // ─── S3.4: Session 持久化 ───
+
+    describe("S3.4: Session 持久化", () => {
+        it("#15 saveSession() / loadSession() round-trip", async () => {
+            const { join } = await import("node:path");
+            const { rmSync } = await import("node:fs");
+
+            const tmpDir = join("/tmp", `test-session-rt-${Date.now()}`);
+            const filePath = join(tmpDir, "telegram", "chat1.json");
+
+            // 创建 executor 并执行一个任务
+            const exec1 = new CodeActExecutor("chat1");
+            exec1.setSessionFilePath(filePath);
+            await exec1.execute(makeTask("chat1", [{ action: "REPLY", reason: "test" }]));
+
+            // 保存到磁盘
+            exec1.saveSession();
+
+            // 创建新 executor，从磁盘恢复
+            const exec2 = new CodeActExecutor("chat1");
+            const loaded = exec2.loadSession(filePath);
+
+            assert.ok(loaded, "loadSession 应返回 true");
+            assert.equal(exec2.getSessionSize(), exec1.getSessionSize(), "session 大小应一致");
+            assert.equal(exec2.getExecutionCount(), exec1.getExecutionCount(), "executionCount 应一致");
+
+            rmSync(tmpDir, { recursive: true, force: true });
+        });
+
+        it("#16 processNext 后自动 saveSession 到磁盘", async () => {
+            const { join } = await import("node:path");
+            const { existsSync, rmSync } = await import("node:fs");
+
+            const tmpDir = join("/tmp", `test-session-auto-${Date.now()}`);
+            const filePath = join(tmpDir, "telegram", "chat1.json");
+
+            const exec = new CodeActExecutor("chat1");
+            exec.setSessionFilePath(filePath);
+
+            // 通过 enqueue 触发 processNext（自动 save）
+            exec.enqueue(makeTask("chat1"));
+            await new Promise(r => setTimeout(r, 200));
+
+            assert.ok(existsSync(filePath), "session 文件应在 execute 后自动创建");
+
+            rmSync(tmpDir, { recursive: true, force: true });
+        });
+
+        it("#17 loadSession() chatId 不匹配时拒绝恢复", async () => {
+            const { join } = await import("node:path");
+            const { writeFileSync, mkdirSync, rmSync } = await import("node:fs");
+
+            const tmpDir = join("/tmp", `test-session-mismatch-${Date.now()}`);
+            mkdirSync(tmpDir, { recursive: true });
+            const filePath = join(tmpDir, "wrong.json");
+
+            // 写入 chatId 不匹配的 session 文件
+            writeFileSync(filePath, JSON.stringify({
+                chatId: "other_chat",
+                session: [{ role: "user", content: "test", timestamp: new Date().toISOString() }],
+                executionRecords: [],
+                executionCount: 5,
+            }));
+
+            const exec = new CodeActExecutor("chat1");
+            const loaded = exec.loadSession(filePath);
+
+            assert.equal(loaded, false, "chatId 不匹配时应拒绝恢复");
+            assert.equal(exec.getSessionSize(), 0, "session 应为空");
+
+            rmSync(tmpDir, { recursive: true, force: true });
+        });
+    });
 });

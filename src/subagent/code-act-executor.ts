@@ -23,7 +23,7 @@ import { renderPrompt } from "../main-agent/prompt-renderer.js";
 import type { LLMConfig } from "../core/config.js";
 import type { ChatMessage } from "../core/llm.js";
 import { createLogger } from "../core/logger.js";
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { shouldCompact, compact as contextManagerCompact } from "../memory-v2/context-manager.js";
@@ -175,6 +175,8 @@ export class CodeActExecutor {
     private nc: NotificationCenter | null = null;
     private llmConfig: LLMConfig | null = null;
     private sessionsDir: string = "workspace/sessions";
+    /** 持久化文件路径（由外部注入） */
+    private sessionFilePath: string | null = null;
     private personaName: string = "赛博群友";
     private personaDescription: string = "";
 
@@ -194,6 +196,20 @@ export class CodeActExecutor {
             this.personaDescription = persona.description;
         }
         log.info("setDependencies", { chatId: this.chatId, hasSandboxPool: true });
+    }
+
+    /**
+     * 设置持久化文件路径
+     */
+    setSessionFilePath(filePath: string): void {
+        this.sessionFilePath = filePath;
+    }
+
+    /**
+     * 获取持久化文件路径
+     */
+    getSessionFilePath(): string | null {
+        return this.sessionFilePath;
     }
 
     /** 检查是否已注入依赖 */
@@ -548,9 +564,102 @@ export class CodeActExecutor {
                 if (this.callbackHandler) {
                     this.callbackHandler(callback);
                 }
+
+                // 每次任务完成后自动持久化 session
+                this.saveSession();
             }
         } finally {
             this.processing = false;
+        }
+    }
+
+    // ─── 持久化方法 ───
+
+    /**
+     * 将 session 状态持久化到磁盘
+     *
+     * 保存内容：session 历史、executionRecords、executionCount、lastCompactedAt
+     * 文件格式：JSON，路径由 sessionFilePath 决定
+     */
+    saveSession(): void {
+        if (!this.sessionFilePath) return;
+
+        try {
+            const dir = dirname(this.sessionFilePath);
+            if (!existsSync(dir)) {
+                mkdirSync(dir, { recursive: true });
+            }
+
+            const state = {
+                chatId: this.chatId,
+                session: this.session,
+                executionRecords: this.executionRecords,
+                executionCount: this.executionCount,
+                lastCompactedAt: this.lastCompactedAt,
+                savedAt: new Date().toISOString(),
+            };
+
+            writeFileSync(this.sessionFilePath, JSON.stringify(state, null, 2), "utf-8");
+            log.debug("saveSession: 已保存", {
+                chatId: this.chatId,
+                sessionSize: this.session.length,
+                executionCount: this.executionCount,
+                path: this.sessionFilePath,
+            });
+        } catch (err) {
+            log.warn("saveSession: 保存失败", {
+                chatId: this.chatId,
+                error: String(err),
+            });
+        }
+    }
+
+    /**
+     * 从磁盘恢复 session 状态
+     *
+     * @param filePath - 可选，覆盖当前 sessionFilePath
+     * @returns 是否成功恢复
+     */
+    loadSession(filePath?: string): boolean {
+        const path = filePath ?? this.sessionFilePath;
+        if (!path) return false;
+
+        // 同时设置 sessionFilePath
+        this.sessionFilePath = path;
+
+        if (!existsSync(path)) return false;
+
+        try {
+            const raw = readFileSync(path, "utf-8");
+            const state = JSON.parse(raw);
+
+            if (state.chatId && state.chatId !== this.chatId) {
+                log.warn("loadSession: chatId 不匹配", {
+                    expected: this.chatId,
+                    got: state.chatId,
+                });
+                return false;
+            }
+
+            this.session = Array.isArray(state.session) ? state.session : [];
+            this.executionRecords = Array.isArray(state.executionRecords) ? state.executionRecords : [];
+            this.executionCount = typeof state.executionCount === "number" ? state.executionCount : 0;
+            this.lastCompactedAt = state.lastCompactedAt ?? null;
+
+            log.info("loadSession: 已恢复", {
+                chatId: this.chatId,
+                sessionSize: this.session.length,
+                executionCount: this.executionCount,
+                savedAt: state.savedAt,
+            });
+            return true;
+        } catch (err) {
+            log.warn("loadSession: 恢复失败", {
+                chatId: this.chatId,
+                path,
+                error: String(err),
+            });
+            return false;
         }
     }
 

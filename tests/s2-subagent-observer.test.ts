@@ -50,18 +50,35 @@ describe("S2: SubagentManager + Observer", () => {
             mgr.dispose();
         });
 
-        it("#3 releaseIdle() 回收超时实例", () => {
-            const mgr = new SubagentManager({ idleTimeout: 50 });
-            const sub = mgr.getOrCreate("chatA");
+        it("#3 restoreAll() 从磁盘恢复 session", async () => {
+            const { mkdirSync, writeFileSync, rmSync } = await import("node:fs");
+            const { join } = await import("node:path");
 
-            // 手动设置 lastActivityAt 到过去
-            sub.lastActivityAt = Date.now() - 100;
+            // 准备临时 session 目录
+            const tmpDir = join("/tmp", `test-sessions-${Date.now()}`);
+            const platformDir = join(tmpDir, "telegram");
+            mkdirSync(platformDir, { recursive: true });
 
-            const released = mgr.releaseIdle();
-            assert.deepEqual(released, ["chatA"]);
-            assert.equal(mgr.size, 0);
+            // 写入一个模拟的 session 文件
+            writeFileSync(join(platformDir, "chatA.json"), JSON.stringify({
+                chatId: "chatA",
+                session: [{ role: "user", content: "test", timestamp: new Date().toISOString() }],
+                executionRecords: [],
+                executionCount: 3,
+                lastCompactedAt: null,
+                savedAt: new Date().toISOString(),
+            }));
+
+            const mgr = new SubagentManager({ sessionsDir: tmpDir, platformName: "telegram" });
+            const restored = mgr.restoreAll();
+
+            assert.deepEqual(restored, ["chatA"]);
+            assert.equal(mgr.size, 1);
+            const sub = mgr.get("chatA");
+            assert.ok(sub, "chatA should exist");
 
             mgr.dispose();
+            rmSync(tmpDir, { recursive: true, force: true });
         });
     });
 

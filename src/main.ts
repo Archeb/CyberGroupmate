@@ -246,7 +246,14 @@ async function main(): Promise<void> {
             personaDescription: appConfig.persona?.description ?? "赛博群友",
             memory,
         },
+        sessionsDir: SESSIONS_DIR,
+        platformName: "telegram",
     });
+    // 启动时恢复已保存的 subagent sessions
+    const restoredChatIds = subagentManager.restoreAll();
+    if (restoredChatIds.length > 0) {
+        log.info("已恢复 subagent sessions", { count: restoredChatIds.length, chatIds: restoredChatIds });
+    }
     const q3 = new DynamicAttentionQueue({
         timeDecayPerSecond: appConfig.subagent?.attentionQueue?.timeDecayPerSecond ?? 0.001,
         maxSize: appConfig.subagent?.attentionQueue?.maxSize ?? 100,
@@ -317,15 +324,8 @@ async function main(): Promise<void> {
         }
     }, 60_000);
 
-    // SubagentManager 定时空闲回收
-    setInterval(() => {
-        const released = subagentManager.releaseIdle();
-        if (released.length > 0) {
-            for (const chatId of released) {
-                q3.remove(chatId);
-            }
-        }
-    }, 300_000);
+    // Subagent 实例是 chat-bound 的，不做空闲回收。
+    // Sandbox 空闲回收由 SandboxPool 独立管理。
 
     // ─── Reflection 定时器 ───
     const reflectionCfg = appConfig.reflection ?? {};
@@ -655,6 +655,9 @@ ${activeTasksText}
                 let executor = subagent.codeActExecutor as CodeActExecutor | null;
                 if (!executor) {
                     executor = new CodeActExecutor(result.chatId);
+                    executor.setSessionFilePath(subagentManager.getSessionFilePath(result.chatId));
+                    // 尝试从磁盘加载已有 session
+                    executor.loadSession();
                     executor.setCallbackHandler((cb: SubagentCallback) => {
                         q5.enqueue(cb);
                         log.info("Subagent 执行完成 → Q5", {

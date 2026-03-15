@@ -570,12 +570,12 @@ describe("Subagent Architecture: 跨节点集成测试", () => {
         mgr.dispose();
     });
 
-    // ━━━ Test 10: SubagentManager 空闲回收不影响活跃实例 ━━━
-    it("#10 生命周期: 空闲回收保留活跃 + Q3/CodeActExecutor 状态独立", async () => {
-        const mgr = new SubagentManager({ idleTimeout: 100 });
+    // ━━━ Test 10: SubagentManager 不做空闲回收 + CodeActExecutor 状态独立 ━━━
+    it("#10 生命周期: Subagent 实例持久保留 + CodeActExecutor 状态独立", async () => {
+        const mgr = new SubagentManager();
         const q3 = new DynamicAttentionQueue();
 
-        // Create 3 active subagents
+        // Create 3 subagents
         const active1 = mgr.getOrCreate("active1");
         const active2 = mgr.getOrCreate("active2");
         const idle1 = mgr.getOrCreate("idle1");
@@ -585,20 +585,16 @@ describe("Subagent Architecture: 跨节点集成测试", () => {
         q3.enqueueOrUpdate(active2.buildQueueEntry());
         q3.enqueueOrUpdate(idle1.buildQueueEntry());
 
-        // Mark idle1 as old
+        // Mark idle1 as old — but it should NOT be released (no idle GC)
         idle1.lastActivityAt = Date.now() - 200;
 
         // Keep active ones fresh
         active1.touch();
         active2.touch();
 
-        // Release idle
-        const released = mgr.releaseIdle();
-        assert.deepEqual(released, ["idle1"], "Only idle1 should be released");
-        assert.equal(mgr.size, 2, "2 active subagents remain");
-
-        // Q3 still has idle1 entry (orphaned, but that's expected - Q3 manages its own lifecycle)
-        assert.equal(q3.size, 3, "Q3 still has all 3 entries (lifecycle independent)");
+        // All 3 should still exist (no idle GC)
+        assert.equal(mgr.size, 3, "All 3 subagents should persist (no idle GC)");
+        assert.ok(mgr.get("idle1"), "idle1 should still exist");
 
         // Verify independent CodeActExecutor sessions
         const exec1 = new CodeActExecutor("active1");
