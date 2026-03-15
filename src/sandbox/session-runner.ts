@@ -55,9 +55,7 @@ export interface SessionResult {
     /** 完整的消息历史 */
     messages: ChatMessage[];
     /** 结束原因 */
-    endReason: "no_code" | "max_turns" | "error" | "scene_changed" | "interrupted";
-    /** 当 endReason == scene_changed 时的新场景 */
-    nextScene?: string;
+    endReason: "no_code" | "max_turns" | "error" | "interrupted";
     /** 如果因为 error 结束，错误信息 */
     error?: string;
 }
@@ -134,7 +132,6 @@ export function shouldInterruptForEvent(event: Record<string, unknown>): boolean
  */
 export async function runCodeActSession(
     messages: ChatMessage[],
-    currentScene: string,
     sandbox: Sandbox,
     nc: NotificationCenter,
     llmConfig: LLMConfig,
@@ -155,10 +152,7 @@ export async function runCodeActSession(
         // ─── 调用 LLM ───
         let llmResponse: LLMResponse;
         try {
-            const visibleMessages = messages.filter(m =>
-                !m.scope || m.scope === "global" || m.scope === `scene:${currentScene}`
-            );
-            llmResponse = await callLLM(visibleMessages, llmConfig);
+            llmResponse = await callLLM(messages, llmConfig);
         } catch (err: unknown) {
             const errorMsg =
                 err instanceof Error ? err.message : String(err);
@@ -176,7 +170,7 @@ export async function runCodeActSession(
         }
 
         const assistantText = llmResponse.content;
-        messages.push({ role: "assistant", content: assistantText, scope: `scene:${currentScene}` });
+        messages.push({ role: "assistant", content: assistantText });
 
         // ─── 解析 response ───
         const { thinking, codeBlocks } = parseResponse(assistantText);
@@ -191,11 +185,11 @@ export async function runCodeActSession(
         };
 
         // ─── Debug: 输出本轮的思考和代码 ───
-        log.debug(`[${currentScene}] Turn ${turnNum}: thinking`, { text: thinking });
+        log.debug(`Turn ${turnNum}: thinking`, { text: thinking });
 
         // ─── 无代码块 → session 结束 ───
         if (codeBlocks.length === 0) {
-            log.debug(`[${currentScene}] Turn ${turnNum}: 无代码块，session 结束`);
+            log.debug(`Turn ${turnNum}: 无代码块，session 结束`);
             turns.push(turn);
             appendTranscript(transcriptPath, turn);
             return {
@@ -211,7 +205,7 @@ export async function runCodeActSession(
 
         for (const code of codeBlocks) {
             const codeIndex = codeBlocks.indexOf(code);
-            log.debug(`[${currentScene}] Turn ${turnNum}: code[${codeIndex}]`, { code });
+            log.debug(`Turn ${turnNum}: code[${codeIndex}]`, { code });
 
             let errorOccurred = false;
 
@@ -220,7 +214,7 @@ export async function runCodeActSession(
                 turn.executionResults.push(result);
 
                 // Debug: 输出执行结果
-                log.debug(`[${currentScene}] Turn ${turnNum}: exec[${codeIndex}]`, {
+                log.debug(`Turn ${turnNum}: exec[${codeIndex}]`, {
                     error: result.error,
                     output: result.output,
                 });
@@ -246,7 +240,6 @@ export async function runCodeActSession(
                 turn.executionResults.push({
                     output: errorMsg,
                     error: true,
-                    sceneState: turn.executionResults[turn.executionResults.length - 1]?.sceneState
                 });
                 outputParts.push(`[⚠ Sandbox Error]\n${errorMsg}`);
                 errorOccurred = true;
@@ -263,29 +256,9 @@ export async function runCodeActSession(
         // ─── 组装 observation ───
         let observation = outputParts.join("\n\n");
 
-        // --- 根据最终的 sceneState 决定是否结束 Session 交给新 Scene ---
-        const lastResult = turn.executionResults[turn.executionResults.length - 1];
-        if (lastResult?.sceneState && lastResult.sceneState !== currentScene) {
-            if (observation.trim()) {
-                messages.push({ role: "user", content: observation, scope: `scene:${currentScene}` });
-            }
-            messages.push({
-                role: "user",
-                content: `[系统] 已控制权转移至新场景: ${lastResult.sceneState}`,
-                scope: "global"
-            });
-            return {
-                sessionId,
-                turns,
-                messages,
-                endReason: "scene_changed",
-                nextScene: lastResult.sceneState
-            };
-        }
-
         // 将 observation 作为 user 消息追加
         if (observation.trim()) {
-            messages.push({ role: "user", content: observation, scope: `scene:${currentScene}` });
+            messages.push({ role: "user", content: observation });
         }
 
         if (nc.pendingCount > 0) {
@@ -302,7 +275,6 @@ export async function runCodeActSession(
                     messages.push({
                         role: "user",
                         content: `[系统] 发现新的外部消息或回复任务，当前 session 已中断并把控制权交还主循环。`,
-                        scope: "global",
                     });
                     return {
                         sessionId,
@@ -321,7 +293,6 @@ export async function runCodeActSession(
                 messages.push({
                     role: "user",
                     content: `[📬 新通知到达 (${newEvents.length} 条)]\n${eventSummary}`,
-                    scope: "global"
                 });
             }
         }

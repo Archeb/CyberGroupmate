@@ -62,8 +62,7 @@ export function registerBuiltinScenes(sm: SceneManager): void {
         ]),
         contextSetup:
             "你现在在 Home 场景。这是你的起始点。\n" +
-            "你可以通过 scene.list() 查看所有可用场景，\n" +
-            "通过 scene.enter(name) 切换到其他场景来执行操作。",
+            "所有核心 API（tg, memory, actions, skills）已经注入，你可以直接使用。",
     });
 
     // ─── Telegram 场景 ───
@@ -81,7 +80,7 @@ export function registerBuiltinScenes(sm: SceneManager): void {
         contextSetup:
             "你现在在 Telegram 场景。ctx.tg 是 TelegramClient 实例。\n" +
             "Telegram 已经由系统完成连接与消息监听。\n" +
-            "你可以读取和发送消息、获取对话列表、搜索消息历史，但不要自行建立平台监听。",
+            "你可以直接通过 ctx.tg 读取和发送消息、获取对话列表、搜索消息历史。",
     });
 
     // ─── Memory 场景 ───

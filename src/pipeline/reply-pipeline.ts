@@ -12,7 +12,7 @@
 import { createLogger } from "../core/logger.js";
 import type { LLMConfig } from "../core/config.js";
 import type { MemoryStoreV2, RecallResult } from "../memory-v2/index.js";
-import type { Message, Topic, TriageDecision, PipelineMode, ModelRouteResult } from "./types.js";
+import type { Message, Topic, TriageDecision, ModelRouteResult } from "./types.js";
 import type { ModelRouter } from "./model-router.js";
 import type { TopicRegistry } from "./topic-registry.js";
 import { ContextAssembler } from "./context-assembler.js";
@@ -27,7 +27,6 @@ export interface ReplyTask {
     scene: string;
     chatId: string;
     topicId?: string;
-    pipelineMode: PipelineMode;
     modelRoute: ModelRouteResult;
     title: string;
     prompt: string;
@@ -127,7 +126,6 @@ export class ReplyPipeline {
                 source: "FAST_PATH",
                 scene: "telegram",
                 chatId: String(chatId),
-                pipelineMode: route.pipelineMode,
                 modelRoute: route,
                 title: `FAST_PATH chat=${chatId}`,
                 prompt: this.buildDirectPrompt(group, route, assembled.sceneFocusBlock, assembled.latentMemoryBlock),
@@ -158,7 +156,6 @@ export class ReplyPipeline {
             scene: "telegram",
             chatId: String(topic.chatId),
             topicId: topic.id,
-            pipelineMode: route.pipelineMode,
             modelRoute: route,
             title: `TOPIC_TRIAGE ${topic.label}`,
             prompt: this.buildTopicPrompt(topic, topic.decision, recall, route, assembled.sceneFocusBlock, assembled.latentMemoryBlock),
@@ -178,7 +175,6 @@ export class ReplyPipeline {
             reason: "engaged conversation",
             intervention_type: "CASUAL_CHAT",
             confidence: 0.8,
-            pipelineMode: "GUIDED" as PipelineMode,
         };
         const recall = await this.recallForTopic(topic);
         const route = this.modelRouter.route(true, decision, messages);
@@ -195,7 +191,6 @@ export class ReplyPipeline {
             scene: "telegram",
             chatId: String(topic.chatId),
             topicId: topic.id,
-            pipelineMode: route.pipelineMode,
             modelRoute: route,
             title: `ENGAGED ${topic.label}`,
             prompt: this.buildEngagedPrompt(topic, messages, replyHint, recall, route, assembled.sceneFocusBlock, assembled.latentMemoryBlock),
@@ -234,7 +229,6 @@ export class ReplyPipeline {
 
         return [
             `[Reply Pipeline] 来源: FAST_PATH`,
-            `模式: ${route.pipelineMode}`,
             `建议模型: ${route.model}`,
             "",
             sceneFocus,
@@ -243,7 +237,7 @@ export class ReplyPipeline {
             "",
             "以下消息需要立即处理。你仍然通过写 TypeScript 代码来行动，不使用 tool calling。",
             "优先直接使用当前已注入的类型定义、来源信息和潜意识上下文；只有当你需要高级能力或不确定 API 细节时，再去读 docs。",
-            `如需发消息，请先调用 scene.enter("${messages[messages.length - 1]?.scene ?? "telegram"}", { chatId: "${messages[messages.length - 1]?.chatId ?? ""}" })；场景切换后本轮会立即结束，不要在同一代码块里继续执行发送逻辑。`,
+            "如需发消息，直接使用 ctx.tg.sendText() 发送，不需要切换场景。",
             "不要写未 await 的 async IIFE；优先直接顶层 await，或写成 await (async () => { ... })()。",
             "如需读取历史或记忆，请主动调用 memory.recall() / memory.browseHistory()；不要为了确认基础 API 而默认先读 docs。",
             "",
@@ -262,7 +256,6 @@ export class ReplyPipeline {
     ): string {
         return [
             `[Reply Pipeline] 来源: TOPIC_TRIAGE`,
-            `模式: ${route.pipelineMode}`,
             `建议模型: ${route.model}`,
             `话题: ${topic.label}`,
             `chatId: ${topic.chatId}`,
@@ -280,7 +273,7 @@ export class ReplyPipeline {
             "",
             this.formatRecall(recall),
             "",
-            "请判断是否需要进入 telegram / memory 场景，并自行写代码完成检索、补充上下文、生成回复、发送消息。",
+            "请判断是否需要读取 memory 或查看话题上下文，并自行写代码完成检索、补充上下文、生成回复、发送消息。",
         ].join("\n");
     }
 
@@ -297,7 +290,6 @@ export class ReplyPipeline {
 
         return [
             `[Reply Pipeline] 来源: ENGAGED`,
-            `模式: ${route.pipelineMode}`,
             `建议模型: ${route.model}`,
             `话题: ${topic.label}`,
             `chatId: ${topic.chatId}`,
@@ -309,7 +301,7 @@ export class ReplyPipeline {
             latentMemory,
             "",
             "优先直接使用已注入的类型定义和上下文；只有在需要高级能力或不确定 API 细节时才读 docs。",
-            `如需切到 telegram scene，请使用 scene.enter("telegram", { chatId: "${topic.chatId}" })，切换后本轮立即结束。`,
+            "如需发消息，直接使用 ctx.tg.sendText() 发送，不需要切换场景。",
             "",
             `新消息:\n${lines}`,
             "",

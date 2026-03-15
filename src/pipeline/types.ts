@@ -69,13 +69,7 @@ export type InterventionType =
     | "CASUAL_CHAT"          // 闲聊参与
     | "NOT_APPLICABLE";      // 不适合介入
 
-// ─── Pipeline 模式 ───
 
-/** Reply Pipeline 的执行模式 */
-export type PipelineMode =
-    | "FULL_CODEACT"  // SOTA 模型 + 完全自由
-    | "GUIDED"        // 中等模型 + 分步引导
-    | "ENFORCED";     // 弱模型 + 系统硬编码流程
 
 // ─── Triage 决策 ───
 
@@ -89,8 +83,6 @@ export interface TriageDecision {
     intervention_type: InterventionType;
     /** 置信度 0-1 */
     confidence: number;
-    /** 推荐的 Pipeline 模式 */
-    pipelineMode: PipelineMode;
 }
 
 // ─── 退出信号 ───
@@ -240,8 +232,6 @@ export type EngagedRelevance =
 export interface ModelRouteResult {
     /** 推荐使用的模型名称 */
     model: string;
-    /** Pipeline 模式 */
-    pipelineMode: PipelineMode;
     /** 对应的 LLM 配置覆盖 */
     overrides: {
         model?: string;
@@ -264,7 +254,6 @@ export interface ModelRouteRule {
     /** 路由结果 */
     route: {
         model: string;
-        pipelineMode: PipelineMode;
     };
 }
 
@@ -278,8 +267,6 @@ export interface DryRunConfig {
     daysBack: number;
     /** 使用哪个模型 */
     model: string;
-    /** 使用哪种 pipeline 模式 */
-    pipelineMode: PipelineMode;
     /** 是否实际发送消息 */
     send: boolean;
     /** 消息来源：file = JSON 文件, live = 实时运行 */

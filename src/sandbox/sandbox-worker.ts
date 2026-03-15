@@ -45,7 +45,6 @@ interface ResultMessage {
     id: string;
     output: string;
     error: boolean;
-    sceneState?: string;
 }
 
 /** Worker → Host: 后台任务推送事件 */
@@ -81,7 +80,6 @@ type OutgoingMessage = ResultMessage | NotifyMessage | InputRequestMessage | Pri
 // ─── 全局上下文 ───
 
 const ctx: Record<string, unknown> = {};
-let globalSceneState = "home";
 
 // ─── Docs 系统 ───
 
@@ -244,10 +242,6 @@ async function executeCode(id: string, code: string): Promise<void> {
             killTask,
             listTasks,
             callHost,
-            getSceneState: () => globalSceneState,
-            setSceneState: (name) => {
-                globalSceneState = name;
-            },
         }) as {
             runtime: unknown;
             memory: unknown;
@@ -275,20 +269,8 @@ async function executeCode(id: string, code: string): Promise<void> {
             id,
             output: outputLines.join("\n"),
             error: false,
-            sceneState: globalSceneState,
         });
     } catch (err: unknown) {
-        const errorWithCode = err as Error & { code?: string };
-        if (errorWithCode?.code === "SCENE_TRANSITION") {
-            sendToHost({
-                type: "result",
-                id,
-                output: outputLines.join("\n"),
-                error: false,
-                sceneState: globalSceneState,
-            });
-            return;
-        }
 
         const errorMsg =
             err instanceof Error
@@ -302,7 +284,6 @@ async function executeCode(id: string, code: string): Promise<void> {
             id,
             output: outputLines.join("\n"),
             error: true,
-            sceneState: globalSceneState,
         });
     } finally {
         console.log = originalConsole.log;

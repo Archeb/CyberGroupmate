@@ -512,7 +512,6 @@ async function cmdDryRun(args: string[]): Promise<void> {
         chatId,
         daysBack,
         model: 'dry-run',
-        pipelineMode: "GUIDED",
         send: false,
         source: "file",
         filePath,

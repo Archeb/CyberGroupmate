@@ -352,10 +352,9 @@ async function mainEventLoop(
                 source: "FAST_PATH",
                 scene: "home",
                 chatId: String((regularEvents[0] as any)?.chatId ?? ""),
-                pipelineMode: "FULL_CODEACT",
-                modelRoute: { model: llmConfig.model, pipelineMode: "FULL_CODEACT", overrides: {} },
+                modelRoute: { model: llmConfig.model, overrides: {} },
                 title: "legacy-event-batch",
-                prompt: `[新事件到达] (${regularEvents.length} 条)\n${formatEvents(regularEvents)}\n请处理以上事件。你可以切换场景来使用不同的 API。处理完毕后不要输出代码块即可。`,
+                prompt: `[新事件到达] (${regularEvents.length} 条)\n${formatEvents(regularEvents)}\n请处理以上事件。处理完毕后不要输出代码块即可。`,
                 messages: [],
             });
         }
@@ -384,122 +383,89 @@ async function mainEventLoop(
 
         for (const task of replyTasks) {
             const taskMessages: ChatMessage[] = [];
-            let activeScene = sceneManager.current;
-            let isFirstTurnOfTask = true;
 
-            while (true) {
-                if (taskMessages.length > 0 && taskMessages[0].role === "system") {
-                    taskMessages.shift();
-                }
+            const agentState = loadAgentState();
+            const sceneDef = sceneManager.getScene("telegram");
+            const baseTypeDefs = sceneDef?.typeDefs ?? "";
+            const typeDefs = telegramAdapter.getSceneTypeDefs?.("telegram", baseTypeDefs) ?? baseTypeDefs;
+            const sceneFocus = task.sceneFocus
+                ? `\n${task.sceneFocus}\n${task.latentMemory ?? ""}`
+                : "";
+            const currentSystemPrompt = `${systemPrompt}\n\n[System Inject] 当前场景: telegram\n类型定义:\n\`\`\`typescript\n${typeDefs}\n\`\`\`${sceneFocus}\nAgent State:\n${agentState}`;
 
-                const agentState = loadAgentState();
-                const sceneDef = sceneManager.getScene(activeScene);
-                const baseTypeDefs = sceneDef?.typeDefs ?? "";
-                const typeDefs = telegramAdapter.getSceneTypeDefs?.(activeScene, baseTypeDefs) ?? baseTypeDefs;
-                const sceneFocus = activeScene === task.scene && task.sceneFocus
-                    ? `\n${task.sceneFocus}\n${task.latentMemory ?? ""}`
-                    : "";
-                const currentSystemPrompt = `${systemPrompt}\n\n[System Inject] 当前场景: ${activeScene}\n类型定义:\n\`\`\`typescript\n${typeDefs}\n\`\`\`${sceneFocus}\nAgent State:\n${agentState}`;
+            taskMessages.push({ role: "system", content: currentSystemPrompt });
+            taskMessages.push({
+                role: "user",
+                content: task.prompt,
+            });
 
-                taskMessages.unshift({ role: "system", content: currentSystemPrompt, scope: "global" });
+            try {
+                const taskConfig = replyPipeline ? replyPipeline.getTaskLLMConfig(task) : llmConfig;
+                const result = await runCodeActSession(
+                    taskMessages,
+                    sandbox,
+                    nc,
+                    taskConfig,
+                    SESSIONS_DIR
+                );
 
-                if (isFirstTurnOfTask) {
-                    taskMessages.push({
-                        role: "user",
-                        content: task.prompt,
-                        scope: "global",
+                if (result.endReason === "error") {
+                    log.error(`Session 失败`, {
+                        error: result.error,
+                        turns: result.turns.length,
+                        taskId: task.id,
+                        taskSource: task.source,
                     });
-                    isFirstTurnOfTask = false;
+                } else if (result.endReason === "interrupted") {
+                    log.info(`Session 中断`, {
+                        turns: result.turns.length,
+                        taskId: task.id,
+                        taskSource: task.source,
+                    });
+                } else {
+                    log.info(`Session 完成`, {
+                        turns: result.turns.length,
+                        reason: result.endReason,
+                        taskId: task.id,
+                        taskSource: task.source,
+                    });
                 }
 
                 try {
-                    const taskConfig = replyPipeline ? replyPipeline.getTaskLLMConfig(task) : llmConfig;
-                    const result = await runCodeActSession(
-                        taskMessages,
-                        activeScene,
-                        sandbox,
-                        nc,
-                        taskConfig,
-                        SESSIONS_DIR
-                    );
-
-                    if (result.endReason === "scene_changed" && result.nextScene) {
-                        try {
-                            sceneManager.enter(result.nextScene);
-                            activeScene = result.nextScene;
-                            continue;
-                        } catch {
-                            taskMessages.push({
-                                role: "user",
-                                content: `[⚠ 严重错误] 尝试进入场景 ${result.nextScene} 失败。场景不存在！`,
-                                scope: "global",
-                            });
-                            continue;
-                        }
-                    }
-
-                    if (result.endReason === "error") {
-                        log.error(`Session 失败 in scene ${activeScene}`, {
-                            error: result.error,
-                            turns: result.turns.length,
-                            taskId: task.id,
-                            taskSource: task.source,
-                        });
-                    } else if (result.endReason === "interrupted") {
-                        log.info(`Session 中断 in scene ${activeScene}`, {
-                            turns: result.turns.length,
-                            taskId: task.id,
-                            taskSource: task.source,
-                        });
-                    } else {
-                        log.info(`Session 完成 in scene ${activeScene}`, {
-                            turns: result.turns.length,
-                            reason: result.endReason,
-                            taskId: task.id,
-                            taskSource: task.source,
-                        });
-                    }
-
-                    try {
-                        await runCompaction(result, memory, llmConfig, task.chatId);
-                    } catch (compErr: unknown) {
-                        const compErrMsg = compErr instanceof Error ? compErr.message : String(compErr);
-                        log.error("Compaction 失败", { error: compErrMsg, taskId: task.id });
-                    }
-
-                    const contextBudget = mergeContextBudget(appConfig.contextBudget);
-                    if (shouldCompact(taskMessages, contextBudget)) {
-                        try {
-                            const compacted = await compact(taskMessages, cheapConfig, contextBudget);
-                            taskMessages.length = 0;
-                            taskMessages.push(...compacted);
-                        } catch (compactErr) {
-                            log.error("Context Compaction 失败，回退到简单截断", { error: String(compactErr) });
-                            const sys = taskMessages[0];
-                            const tail = taskMessages.slice(-10);
-                            const omitted = taskMessages.length - 11;
-                            taskMessages.length = 0;
-                            taskMessages.push(sys);
-                            taskMessages.push({
-                                role: "user",
-                                content: `[系统] 由于上下文长度限制，在此之前的 ${omitted} 条场景对话记录已被压缩归档并从上下文中移除。`,
-                                scope: "global",
-                            });
-                            taskMessages.push(...tail);
-                        }
-                    }
-
-                    break;
-                } catch (err: unknown) {
-                    const errorMsg = err instanceof Error ? err.message : String(err);
-                    log.error("Session 异常", { error: errorMsg, taskId: task.id, taskSource: task.source });
-
-                    nc.push({
-                        type: "system.session_error",
-                        error: errorMsg,
-                    });
-                    break;
+                    await runCompaction(result, memory, llmConfig, task.chatId);
+                } catch (compErr: unknown) {
+                    const compErrMsg = compErr instanceof Error ? compErr.message : String(compErr);
+                    log.error("Compaction 失败", { error: compErrMsg, taskId: task.id });
                 }
+
+                const contextBudget = mergeContextBudget(appConfig.contextBudget);
+                if (shouldCompact(taskMessages, contextBudget)) {
+                    try {
+                        const compacted = await compact(taskMessages, cheapConfig, contextBudget);
+                        taskMessages.length = 0;
+                        taskMessages.push(...compacted);
+                    } catch (compactErr) {
+                        log.error("Context Compaction 失败，回退到简单截断", { error: String(compactErr) });
+                        const sys = taskMessages[0];
+                        const tail = taskMessages.slice(-10);
+                        const omitted = taskMessages.length - 11;
+                        taskMessages.length = 0;
+                        taskMessages.push(sys);
+                        taskMessages.push({
+                            role: "user",
+                            content: `[系统] 由于上下文长度限制，在此之前的 ${omitted} 条场景对话记录已被压缩归档并从上下文中移除。`,
+                        });
+                        taskMessages.push(...tail);
+                    }
+                }
+            } catch (err: unknown) {
+                const errorMsg = err instanceof Error ? err.message : String(err);
+                log.error("Session 异常", { error: errorMsg, taskId: task.id, taskSource: task.source });
+
+                nc.push({
+                    type: "system.session_error",
+                    error: errorMsg,
+                });
             }
         }
     }

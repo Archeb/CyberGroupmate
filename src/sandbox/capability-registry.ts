@@ -8,21 +8,6 @@ export interface CapabilityRegistryEnv {
     killTask: (name: string) => void;
     listTasks: () => string[];
     callHost: (method: string, args?: unknown[]) => Promise<unknown>;
-    getSceneState: () => string;
-    setSceneState: (name: string) => void;
-}
-
-export interface SceneFocusRequest {
-    scene?: string;
-    chatId?: string;
-    userId?: string;
-    messageId?: string;
-}
-
-function createSceneTransitionError(): Error {
-    const error = new Error("Scene transition requested");
-    (error as Error & { code?: string }).code = "SCENE_TRANSITION";
-    return error;
 }
 
 interface CapabilityRegistration {
@@ -176,28 +161,13 @@ const REGISTRY: CapabilityRegistration[] = [
     {
         key: "scene",
         install: (env) => ({
-            get current() { return env.getSceneState(); },
-            enter: (name: string, focus?: SceneFocusRequest) => {
-                if (focus && Object.keys(focus).length > 0) {
-                    env.ctx.__sceneFocus = { scene: name, ...focus };
-                    env.emitOutput(`[Scene switched to: ${name} focus=${JSON.stringify(env.ctx.__sceneFocus)}]`);
-                } else {
-                    delete env.ctx.__sceneFocus;
-                    env.emitOutput(`[Scene switched to: ${name}]`);
-                }
-                env.setSceneState(name);
-                throw createSceneTransitionError();
-            },
-            focus: (focus: SceneFocusRequest) => {
-                const nextScene = focus.scene ?? env.getSceneState();
-                env.ctx.__sceneFocus = { ...focus, scene: nextScene };
-                env.emitOutput(`[Scene switched to: ${nextScene} focus=${JSON.stringify(env.ctx.__sceneFocus)}]`);
-                env.setSceneState(nextScene);
-                throw createSceneTransitionError();
-            },
+            /** 当前场景名称（框架自动设置，agent 无需切换） */
+            current: "telegram",
+            /** 列出所有可用场景 */
             list: () => {
                 env.emitOutput("[Available scenes: home, telegram, memory]");
             },
+            /** 展示当前场景完整类型定义 */
             showFullTypes: () => {
                 env.emitOutput("[Full type definitions for current scene]");
             },

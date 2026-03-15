@@ -639,7 +639,6 @@ export class RecordingPipeline extends EventEmitter {
                         reason: "already handled via fast path",
                         intervention_type: "NOT_APPLICABLE",
                         confidence: 1.0,
-                        pipelineMode: "ENFORCED",
                     };
 
                     this.registry.transition(topic.id, "TRIAGING");
@@ -655,7 +654,6 @@ export class RecordingPipeline extends EventEmitter {
                     reason: triage.reason,
                     intervention_type: triage.intervention_type,
                     confidence: triage.confidence,
-                    pipelineMode: triage.confidence > 0.8 ? "GUIDED" : "ENFORCED",
                 };
 
                 // 冷却增强：提高置信度阈值

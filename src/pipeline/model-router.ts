@@ -1,12 +1,12 @@
 /**
- * phase6/model-router.ts — 事件→模型+Pipeline 模式路由
+ * phase6/model-router.ts — 事件→模型路由
  *
- * 根据事件的复杂度和特征，选择合适的 LLM 模型及 Pipeline 模式。
+ * 根据事件的复杂度和特征，选择合适的 LLM 模型。
  *
  * 路由逻辑：
- * - 直接 @ / 私聊 / 复杂问题 → SOTA + FULL_CODEACT
- * - 一般介入（问答、知识补充）→ Mid-tier + GUIDED
- * - 简单场景（闲聊、共识总结）→ Cheap + ENFORCED
+ * - 直接 @ / 私聊 / 复杂问题 → SOTA 模型
+ * - 一般介入（问答、知识补充）→ Mid-tier 模型
+ * - 简单场景（闲聊、共识总结）→ Cheap 模型
  */
 
 import { createLogger } from "../core/logger.js";
@@ -14,7 +14,6 @@ import type { LLMConfig } from "../core/llm.js";
 import type {
     Message,
     TriageDecision,
-    PipelineMode,
     ModelRouteResult,
     ModelRouteRule,
     InterventionType,
@@ -28,17 +27,17 @@ const DEFAULT_RULES: ModelRouteRule[] = [
     {
         name: "direct_mention_complex",
         match: { isDirect: true, isComplex: true },
-        route: { model: "sota", pipelineMode: "FULL_CODEACT" },
+        route: { model: "sota" },
     },
     {
         name: "direct_mention_simple",
         match: { isDirect: true },
-        route: { model: "mid", pipelineMode: "GUIDED" },
+        route: { model: "mid" },
     },
     {
         name: "factual_correction",
         match: { interventionType: ["FACTUAL_CORRECTION"] },
-        route: { model: "mid", pipelineMode: "GUIDED" },
+        route: { model: "mid" },
     },
     {
         name: "question_answer",
@@ -46,22 +45,22 @@ const DEFAULT_RULES: ModelRouteRule[] = [
             interventionType: ["QUESTION_ANSWER", "KNOWLEDGE_GAP"],
             confidenceRange: [0.7, 1.0],
         },
-        route: { model: "mid", pipelineMode: "GUIDED" },
+        route: { model: "mid" },
     },
     {
         name: "resource_sharing",
         match: { interventionType: ["RESOURCE_SHARING"] },
-        route: { model: "mid", pipelineMode: "GUIDED" },
+        route: { model: "mid" },
     },
     {
         name: "conflict_mediation",
         match: { interventionType: ["CONFLICT_MEDIATION"] },
-        route: { model: "sota", pipelineMode: "FULL_CODEACT" },
+        route: { model: "sota" },
     },
     {
         name: "casual_chat",
         match: { interventionType: ["CASUAL_CHAT", "CONSENSUS_SUMMARY"] },
-        route: { model: "cheap", pipelineMode: "ENFORCED" },
+        route: { model: "cheap" },
     },
 ];
 
@@ -80,7 +79,7 @@ const DEFAULT_MODEL_TIERS: ModelTierConfig = {
 };
 
 /**
- * ModelRouter — 事件→模型+Pipeline 模式路由器
+ * ModelRouter — 事件→模型路由器
  */
 export class ModelRouter {
     private rules: ModelRouteRule[];
@@ -119,22 +118,19 @@ export class ModelRouter {
                 log.debug("路由匹配", {
                     rule: rule.name,
                     model: modelName,
-                    mode: rule.route.pipelineMode,
                 });
                 return {
                     model: modelName,
-                    pipelineMode: rule.route.pipelineMode,
                     overrides: { model: modelName },
                 };
             }
         }
 
-        // 默认：mid + GUIDED
+        // 默认：mid
         const fallbackModel = this.modelTiers.mid;
-        log.debug("路由回退", { model: fallbackModel, mode: "GUIDED" });
+        log.debug("路由回退", { model: fallbackModel });
         return {
             model: fallbackModel,
-            pipelineMode: "GUIDED",
             overrides: { model: fallbackModel },
         };
     }

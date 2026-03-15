@@ -73,7 +73,6 @@ export async function runDryRun(
     log.info("Dry-Run 开始", {
         chatId: config.chatId,
         model: config.model,
-        pipelineMode: config.pipelineMode,
         reflect: config.reflect ?? false,
     });
 
@@ -167,7 +166,6 @@ export async function runDryRun(
                 `intervention_type=${decision.intervention_type}`,
                 `confidence=${decision.confidence}`,
                 `model=${route.model}`,
-                `mode=${route.pipelineMode}`,
             ],
         });
     });

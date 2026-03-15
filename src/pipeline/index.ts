@@ -10,7 +10,7 @@ export type {
     TopicState,
     Topic,
     InterventionType,
-    PipelineMode,
+
     TriageDecision,
     ExitSignalType,
     ExitSignal,
