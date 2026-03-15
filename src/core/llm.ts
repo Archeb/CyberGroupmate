@@ -133,15 +133,9 @@ async function callOpenAI(
             messages: messages.map(m => ({ role: m.role, content: m.content })),
             temperature,
             max_tokens: maxTokens,
-            // Gemini thinking 参数（OpenAI 兼容格式）
+            // Gemini thinking 参数（OpenAI 兼容格式：reasoning_effort）
             ...(thinkingLevel && thinkingLevel !== "none" ? {
-                thinking: {
-                    type: "enabled",
-                    budget_tokens: thinkingLevel === "low" ? 1024
-                        : thinkingLevel === "medium" ? 4096
-                        : thinkingLevel === "high" ? 16384
-                        : 4096,
-                },
+                reasoning_effort: thinkingLevel,  // "low" | "medium" | "high"
             } : {}),
         }),
     });

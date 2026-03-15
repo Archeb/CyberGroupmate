@@ -14,22 +14,11 @@ import { NotificationCenter, type NotificationEvent } from "./event/notification
 import { MessageLogWriter } from "./event/message-log-writer.js";
 import { SandboxPool } from "./sandbox/sandbox-pool.js";
 import { MemoryStoreV2 } from "./memory-v2/index.js";
-import { SceneManager } from "./scenes/scene-manager.js";
-import { registerBuiltinScenes } from "./scenes/index.js";
-import { runCodeActSession } from "./sandbox/session-runner.js";
-import { runCompaction } from "./event/compaction.js";
 import { loadConfig, resolveTierProfile, type AppConfig, type LLMConfig } from "./core/config.js";
-import { ChatMessage } from "./core/llm.js";
-import { shouldCompact, compact, mergeContextBudget } from "./memory-v2/context-manager.js";
 import {
     TopicRegistry,
     RecordingPipeline,
-    FastRouter,
-    EngagedTopicHandler,
-    ModelRouter,
-    ReplyPipeline,
     FeedbackLoop,
-    type ReplyTask,
     type AgentMessageSentEvent,
 } from "./pipeline/index.js";
 import {
@@ -52,7 +41,7 @@ import { calculateDepth } from "./main-agent/cosine-decay.js";
 import { estimateReplyMode, buildReplyDecisions, buildObserveDecision } from "./main-agent/decision-maker.js";
 import { buildGroupContext } from "./main-agent/context-builder.js";
 import { renderPrompt, buildAttentionVariables } from "./main-agent/prompt-renderer.js";
-import { callLLM } from "./core/llm.js";
+import { callLLM, type ChatMessage } from "./core/llm.js";
 import type { AttendResult, CodeActReplyTask, SubagentCallback, TopicDigest } from "./subagent/types.js";
 import type { FastPathEvent } from "./subagent/fast-path-handler.js";
 
@@ -74,9 +63,6 @@ const SESSIONS_DIR = join(DATA_DIR, "sessions");
 
 /** Agent state 最大字符数 */
 const MAX_AGENT_STATE_CHARS = 4000;
-
-/** Reply task 事件类型 */
-const REPLY_TASK_EVENT_TYPE = "system.reply_task";
 
 // ─── 辅助函数 ───
 
@@ -183,7 +169,7 @@ async function main(): Promise<void> {
         onAcquire: (sandbox, chatId) => {
             // 每个新建的 sandbox 实例注册事件处理和 host call handler
             sandbox.on("notify", (event: Record<string, unknown>) => {
-                nc.push(event as { type: string; [key: string]: unknown });
+                nc.push(event as { type: string;[key: string]: unknown });
             });
             sandbox.setHostCallHandler(async (method, args) => {
                 if (telegramAdapter.canHandle(method)) {
@@ -236,8 +222,6 @@ async function main(): Promise<void> {
         },
     });
     const memory = new MemoryStoreV2(join(DATA_DIR, "memory.db"));
-    const sceneManager = new SceneManager();
-    registerBuiltinScenes(sceneManager);
     const { createInterface: createRL } = await import("node:readline");
     const hostRL = createRL({ input: process.stdin, output: process.stdout });
 
@@ -255,17 +239,9 @@ async function main(): Promise<void> {
         (message) => console.log(`🤖 ${message}`),
     );
 
-    // ─── Phase 6 Pipeline 组件（供 Observer 和 Recording 使用） ───
+    // ─── Pipeline 组件（话题聚类 + 反馈追踪） ───
     const topicRegistry = new TopicRegistry();
-    const engagedHandler = new EngagedTopicHandler(topicRegistry, llmConfig);
     const recordingPipeline = new RecordingPipeline(topicRegistry, cheapConfig, appConfig.persona?.description ?? "赛博群友", memory);
-    const fastRouter = new FastRouter(topicRegistry, engagedHandler, recordingPipeline, "");
-    const modelRouter = new ModelRouter(midConfig, undefined, {
-        cheap: cheapConfig.model,
-        mid: midConfig.model,
-        sota: sotaConfig.model,
-    });
-    const replyPipeline = new ReplyPipeline(memory, topicRegistry, modelRouter, llmConfig);
     const feedbackLoop = new FeedbackLoop(topicRegistry, memory, nc);
 
     // Phase 6 TopicRegistry 事件
@@ -332,8 +308,6 @@ async function main(): Promise<void> {
             });
         }
 
-        // Recording Pipeline 话题聚类仍由旧管线驱动（Observer 通过 bridge 消费）
-        // 注意：fastRouter.routeEvents() 已移除以避免双重处理
         // TODO [AUDIT]: 将 RecordingPipeline 话题聚类内嵌到 Observer (subagent.md §3.1)
     });
 
@@ -349,10 +323,6 @@ async function main(): Promise<void> {
                 timestamp: String(sentEvent.timestamp ?? new Date().toISOString()),
                 replyToMessageId: sentEvent.replyToMessageId ? String(sentEvent.replyToMessageId) : undefined,
             } satisfies AgentMessageSentEvent);
-
-            if (fastRouter && sentEvent.messageId !== undefined) {
-                fastRouter.recordAgentMessage(String(sentEvent.messageId));
-            }
         }
     });
 
@@ -382,11 +352,7 @@ async function main(): Promise<void> {
                 q3.enqueueOrUpdate(sub.buildQueueEntry());
             }
         }
-        // NOTE: 旧的 replyPipeline.buildTopicTask() 路径已移除
-        // 在 Subagent 架构中，回复由 MainAgentLoop → CodeActExecutor 驱动
     });
-    // NOTE: engagedHandler 的 "engaged:response-ready" 和 "engaged:exit" 事件监听已移除
-    // 在 Subagent 架构中，对话模式回复由 MainAgentLoop 决策驱动
 
     // TopicRegistry 定时清理
     setInterval(() => topicRegistry.cleanup(), 60_000);
@@ -533,7 +499,7 @@ async function main(): Promise<void> {
                 const recentMsgs = memory.getRecentMessages(entry.chatId, 20);
                 if (recentMsgs.length > 0) {
                     messagesText = recentMsgs.map(
-                        (m: any) => `[${m.timestamp ?? ""}] ${m.display_name ?? m.user_id ?? "?"}: ${m.text ?? ""}`
+                        (m: any) => `[${m.timestamp ?? ""}] ${m.displayName ?? "(uid:" + m.userId + ")"}: ${m.text ?? ""}`
                     ).join("\n");
                 }
             }
@@ -594,7 +560,7 @@ ${appConfig.persona.description}
 
             const llmResponse = await callLLM(
                 messages,
-                cheapConfig,
+                sotaConfig,
                 { temperature: 0.3 },
             );
 
