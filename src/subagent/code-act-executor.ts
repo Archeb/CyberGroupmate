@@ -64,6 +64,30 @@ function loadApiTypeDefs(): string {
 }
 
 /** CodeActExecutor 配置 */
+
+/**
+ * 剥离 task prompt 中的冗余大段原文，用于保存到 session 历史时精简体积。
+ * 被剥离的内容在下次执行时会从 memory.getRecentMessages() 重新获取。
+ */
+function stripVerboseSections(content: string): string {
+    let result = content;
+    // 剥离 "## 目标消息" 区段（从标题到下一个 ## 或文档末尾）
+    result = result.replace(
+        /## 目标消息\n[\s\S]*?(?=\n## |$)/,
+        "## 目标消息\n[见当前任务的消息原文]"
+    );
+    // 剥离 "## 相关人物背景" 区段
+    result = result.replace(
+        /## 相关人物背景\n[\s\S]*?(?=\n## |$)/,
+        "## 相关人物背景\n[见当前任务]"
+    );
+    // 剥离已发送消息确认段落
+    result = result.replace(
+        /\[📤 已发送消息确认\]\n[\s\S]*?(?=\n\[|$)/g,
+        "[📤 已发送消息 - 请看消息原文]"
+    );
+    return result;
+}
 export interface CodeActExecutorConfig {
     /** 单次执行最大超时 (ms)。默认 60000 */
     maxExecutionTimeMs: number;
@@ -372,9 +396,14 @@ export class CodeActExecutor {
         const historyOffset = 1 + this.session.length; // 1 for system prompt + existing history
         const newMessages = sessionResult.messages.slice(historyOffset);
         for (const msg of newMessages) {
+            let content = msg.content;
+            // 对 user 消息剥离冗余原文段落，避免历史 session 中消息/人物/发送确认重复
+            if (msg.role === "user") {
+                content = stripVerboseSections(content);
+            }
             this.session.push({
                 role: msg.role as "system" | "user" | "assistant",
-                content: msg.content,
+                content,
                 timestamp: new Date().toISOString(),
             });
         }

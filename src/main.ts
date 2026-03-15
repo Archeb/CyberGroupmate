@@ -252,7 +252,9 @@ async function main(): Promise<void> {
 
     // ─── Subagent 架构组件初始化 ───
     const messageLogWriter = new MessageLogWriter(memory, {
-        eventTypes: ["nc.message", "telegram.message"],
+        eventTypes: ["nc.message", "telegram.message", "system.agent_message_sent"],
+        agentUserId: "agent",
+        agentDisplayName: appConfig.persona?.name ?? "赛博群友",
     });
     const subagentManager = new SubagentManager({
         observerConfig: {
@@ -645,9 +647,7 @@ ${appConfig.persona.description}
                 let personContext = "";
                 try {
                     const persons = await memory.recall(result.chatId, { type: "person", limit: 5 } as any);
-                    if (Array.isArray(persons) && persons.length > 0) {
-                        personContext = persons.map((p: any) => `${p.name ?? p.id}: ${p.summary ?? ""}`).join("; ");
-                    }
+                    personContext = JSON.stringify(persons, null, 2);
                 } catch { /* 非关键路径 */ }
 
                 const contextSnapshot = buildGroupContext({

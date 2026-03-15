@@ -20,10 +20,16 @@ const log = createLogger("message-log-writer");
 export interface MessageLogWriterConfig {
     /** 要处理的事件类型前缀列表。默认 ["telegram.message"] */
     eventTypes?: string[];
+    /** Agent 自己的 userId 标识（写入 message_log 时使用）。默认 "agent" */
+    agentUserId?: string;
+    /** Agent 显示名称。默认 "赛博群友" */
+    agentDisplayName?: string;
 }
 
 const DEFAULT_CONFIG: Required<MessageLogWriterConfig> = {
     eventTypes: ["telegram.message"],
+    agentUserId: "agent",
+    agentDisplayName: "赛博群友",
 };
 
 /**
@@ -120,26 +126,42 @@ export class MessageLogWriter {
     /**
      * 从 NC 事件中提取 MessageLogEntry。
      * 
-     * NC 事件中 telegram.message 的典型字段：
-     * - chatId / chat_id: 群组 ID
-     * - userId / user_id / senderId / sender_id: 发送者 ID
-     * - displayName / display_name / senderName / sender_name: 显示名称
-     * - text / message: 消息文本
-     * - messageId / message_id: 消息 ID
-     * - replyToMessageId / reply_to_message_id: 回复消息 ID
-     * - timestamp / _ts: 时间戳
+     * 支持两种事件格式：
+     * 1. telegram.message / nc.message — 常规用户消息
+     * 2. system.agent_message_sent — Agent 自己发出的消息
      */
     private extractMessageLogEntry(event: NotificationEvent): MessageLogEntry | null {
+        const isAgentSent = event.type === "system.agent_message_sent";
+
         const chatId = String(event.chatId ?? event.chat_id ?? "");
-        const userId = String(event.userId ?? event.user_id ?? event.senderId ?? event.sender_id ?? "");
         const messageId = String(event.messageId ?? event.message_id ?? "");
         const text = String(event.text ?? event.message ?? "");
-        const displayName = String(event.displayName ?? event.display_name ?? event.senderName ?? event.sender_name ?? "");
-        const replyToMessageId = event.replyToMessageId ?? event.reply_to_message_id;
         const timestamp = String(event.timestamp ?? event._ts ?? new Date().toISOString());
+
+        // Agent 发出的消息使用配置的 agentUserId/agentDisplayName
+        const userId = isAgentSent
+            ? this.config.agentUserId
+            : String(event.userId ?? event.user_id ?? event.senderId ?? event.sender_id ?? "");
+        const displayName = isAgentSent
+            ? this.config.agentDisplayName
+            : String(event.displayName ?? event.display_name ?? event.senderName ?? event.sender_name ?? "");
+        const replyToMessageId = event.replyToMessageId ?? event.reply_to_message_id;
 
         // 必要字段校验
         if (!chatId || !messageId) {
+            // Agent 消息可能没有 messageId（发送失败等），生成一个临时 ID
+            if (isAgentSent && chatId) {
+                const fallbackId = `agent-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+                return {
+                    messageId: fallbackId,
+                    chatId,
+                    userId,
+                    displayName,
+                    text,
+                    replyToMessageId: replyToMessageId ? String(replyToMessageId) : undefined,
+                    timestamp,
+                };
+            }
             return null;
         }
 
