@@ -190,6 +190,10 @@ export class GroupSubagent {
             newMessageCount: this.observer.getBufferSize(),
             topicDigests: this.observer.getDigest(),
             stickinessLevel: this.stickiness.level,
+            // subagent.md §2.2 补齐
+            engagementScore: engagement,
+            urgentSignals: this.observer.getMentionCount() > 0 ? ["@mention"] : undefined,
+            snapshotTimestamp: new Date().toISOString(),
         };
     }
 

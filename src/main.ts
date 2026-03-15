@@ -409,6 +409,7 @@ async function main(): Promise<void> {
         maxAttendsPerTick: 3,
         cosineDecayCyclePeriod: appConfig.subagent?.cosineDecay?.defaultCyclePeriod ?? 20,
     }, globalState);
+    mainLoop.setLLMConfig(cheapConfig);  // 对话历史 compact 使用 cheapConfig
 
     // Attend handler: 主 Agent LLM 决策逻辑（Fix 8: subagent.md §12.2 ➛➜➝）
     mainLoop.setAttendHandler(async (entry): Promise<AttendResult | null> => {
@@ -562,8 +563,8 @@ ${activeTasksText}
             };
 
             // ═══ 追加本轮对话到历史（下轮 LLM 可见） ═══
-            mainLoop.appendToHistory({ role: "user", content: currentTurnPrompt });
-            mainLoop.appendToHistory({ role: "assistant", content: jsonContent });
+            await mainLoop.appendToHistory({ role: "user", content: currentTurnPrompt });
+            await mainLoop.appendToHistory({ role: "assistant", content: jsonContent });
 
             globalState.recordDecision(entry.chatId,
                 `LLM_DECISION: ${llmResult.replyMode} (${llmResult.decisions.length} decisions, engagement=${Math.round(entry.priority)}, depth=L${depth})`);

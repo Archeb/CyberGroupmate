@@ -31,6 +31,8 @@ import { buildGroupContext, type ContextBuildInput } from "./context-builder.js"
 import { estimateReplyMode, estimateReplyCount, buildObserveDecision, buildReplyDecisions } from "./decision-maker.js";
 import { renderPrompt, buildAttentionVariables } from "./prompt-renderer.js";
 import type { ChatMessage } from "../core/llm.js";
+import type { LLMConfig } from "../core/config.js";
+import { shouldCompact, compact as contextManagerCompact } from "../memory-v2/context-manager.js";
 import { createLogger } from "../core/logger.js";
 import { randomUUID } from "node:crypto";
 
@@ -83,9 +85,12 @@ export class MainAgentLoop {
     /**
      * 主 Agent LLM 对话历史
      * 按时间顺序存放：attend 上下文 (user) → 决策 (assistant) → callback (user) → ...
-     * 超过 maxHistoryMessages 时从头部截断。
+     * 超过 maxHistoryMessages 时先截断，后使用 LLM compact。
      */
     private conversationHistory: ChatMessage[] = [];
+
+    /** LLM 配置（用于对话历史 compact） */
+    private llmConfig: LLMConfig | null = null;
 
     /** 外部 attend handler（由 main.ts 集成注入） */
     private attendHandler: ((entry: AttentionQueueEntry) => Promise<AttendResult | null>) | null = null;
@@ -170,7 +175,7 @@ export class MainAgentLoop {
                 );
             }
             // 追加到对话历史（LLM 可见）
-            this.appendToHistory({
+            await this.appendToHistory({
                 role: "user",
                 content: formatCallbackMessage(cb),
             });
@@ -243,7 +248,7 @@ export class MainAgentLoop {
                             `CALLBACK: ${cb.executionType} ${cb.status} (${cb.summary})`,
                         );
                     }
-                    this.appendToHistory({
+                    await this.appendToHistory({
                         role: "user",
                         content: formatCallbackMessage(cb),
                     });
@@ -336,19 +341,50 @@ export class MainAgentLoop {
         this.globalState = gs;
     }
 
+    /**
+     * 设置 LLM 配置（用于对话历史 compact）
+     */
+    setLLMConfig(config: LLMConfig): void {
+        this.llmConfig = config;
+    }
+
     // ─── 对话历史管理 ───
 
     /**
-     * 追加消息到主 Agent 对话历史，超限时从头部截断。
-     * attendHandler 产生的 attend prompt (user) 和 LLM 决策 (assistant)
-     * 以及 callback 反馈 (user) 都通过此方法追加。
+     * 追加消息到主 Agent 对话历史。
+     *
+     * 超限时进行两层 compact：
+     * Layer 1（确定性）：保留最近 maxHistoryMessages 条
+     * Layer 2（LLM）：如果 token 仍超预算，调用 context-manager.compact()
      */
-    appendToHistory(msg: ChatMessage): void {
+    async appendToHistory(msg: ChatMessage): Promise<void> {
         this.conversationHistory.push(msg);
+
+        // Layer 1: 基础截断
         if (this.conversationHistory.length > this.config.maxHistoryMessages) {
             this.conversationHistory = this.conversationHistory.slice(
                 -this.config.maxHistoryMessages,
             );
+        }
+
+        // Layer 2: token-budget LLM compact
+        if (this.llmConfig && shouldCompact(this.conversationHistory)) {
+            try {
+                log.info("主 Agent 对话历史 compact: token 超预算", {
+                    messageCount: this.conversationHistory.length,
+                });
+                this.conversationHistory = await contextManagerCompact(
+                    this.conversationHistory,
+                    this.llmConfig,
+                );
+                log.info("主 Agent 对话历史 compact 完成", {
+                    afterCount: this.conversationHistory.length,
+                });
+            } catch (err) {
+                log.warn("主 Agent 对话历史 compact 失败，保留 Layer 1 结果", {
+                    error: String(err),
+                });
+            }
         }
     }
 

@@ -77,12 +77,20 @@ export interface AttentionQueueEntry {
     hasFastPathRequest: boolean;
     /** 最新 Observer 告警 */
     alert?: ObserverAlert;
-    /** 消息计数（自上次 attend 以来） */
+    /** 消息计数（自上次 attend 以来） — 即 pendingMessageCount */
     newMessageCount: number;
-    /** 话题摘要列表 */
+    /** 话题摘要列表 — 即 topicDigest */
     topicDigests: TopicDigest[];
     /** GroupStickiness 类别 */
     stickinessLevel: StickinessLevel;
+
+    // ─── subagent.md §2.2 补齐字段 ───
+    /** Engagement 评分 (0-100) */
+    engagementScore?: number;
+    /** 紧急信号列表（如 @mention、关键词命中等） */
+    urgentSignals?: string[];
+    /** 快照时间戳 */
+    snapshotTimestamp?: string;
 }
 
 /** AttentionQueue 评估结果 */
@@ -114,7 +122,23 @@ export interface CodeActReplyTask {
     replyMode: "SINGLE" | "BATCH";
     /** 创建时间 */
     createdAt: string;
+
+    // ─── subagent.md §2.2 B1 补齐字段 ───
+    /** 目标消息 ID 列表（需要回复的消息） */
+    targetMessageIds?: string[];
+    /** 回复策略 */
+    replyStrategy?: ReplyStrategy;
+    /** 最大响应时间 (ms) */
+    maxResponseTime?: number;
 }
+
+/** 回复策略 (subagent.md §2.2 B1) */
+export type ReplyStrategy =
+    | "DIRECT_REPLY"
+    | "TOPIC_CONTINUATION"
+    | "NEW_CONTRIBUTION"
+    | "CLARIFICATION"
+    | "CASUAL";
 
 /** FastPath 授权任务 */
 export interface FastPathAuthTask {
@@ -132,9 +156,9 @@ export interface SubagentCallback {
     taskId: string;
     /** 来源群组 */
     chatId: string;
-    /** 执行类型 */
+    /** 执行类型 — spec 中为 source: 'CODE_ACT' | 'FAST_PATH' */
     executionType: "CODEACT" | "FAST_PATH";
-    /** 执行状态 */
+    /** 执行状态 — spec 中为 type: 'COMPLETED' | 'FAILED' | 'TIMEOUT' */
     status: "COMPLETED" | "ERROR" | "SKIPPED" | "TIMEOUT";
     /** 结果摘要 */
     summary: string;
@@ -150,10 +174,14 @@ export interface SubagentCallback {
     tokensUsed?: number;
     /** 错误信息 */
     error?: string;
-    /** 执行耗时 (ms) */
+    /** 执行耗时 (ms) — spec 中为 duration */
     durationMs: number;
     /** 创建时间 */
     createdAt: string;
+
+    // ─── subagent.md §2.2 C1/C2 补齐字段 ───
+    /** Session 摘要（CodeAct session 的结构化摘要） */
+    sessionSummary?: string;
 }
 
 // ─── FastPath ───
@@ -225,6 +253,18 @@ export interface GroupContextPackage {
     messages?: SnapshotMessage[];
     /** L3+: 深度摘要 */
     deepSummary?: string;
+
+    // ─── subagent.md §4.1 补齐字段 ───
+    /** 群组标题/名称 */
+    chatTitle?: string;
+    /** 群组亲密度配置 */
+    stickiness?: GroupStickiness;
+    /** FastPath 是否已启用 */
+    fastPathEnabled?: boolean;
+    /** 待执行的 CodeAct 任务数 */
+    pendingCodeActTasks?: number;
+    /** 活跃参与者概况 */
+    activePersons?: Array<{ userId: string; displayName: string; recentMessageCount: number }>;
 }
 
 /** 主 Agent attend 后的决策结果 */

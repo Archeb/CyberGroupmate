@@ -216,6 +216,36 @@ export class Observer {
     }
 
     /**
+     * Flush buffer — 触发 RecordingPipeline 消费 (subagent.md §3.1)
+     *
+     * 在 per-group 架构中，RecordingPipeline 在 onMessage() 时直接
+     * 接收消息到自己的 buffer，此方法仅标记 Observer buffer 已消费。
+     */
+    async flushBuffer(): Promise<void> {
+        // RecordingPipeline 独立管理 flush 定时逻辑，
+        // Observer 的 buffer 在 clearBuffer() 时由 attend 流程清理
+        log.debug("flushBuffer", { chatId: this.chatId, bufferSize: this.buffer.length });
+    }
+
+    /**
+     * 获取消息快照 (subagent.md §3.1)
+     *
+     * 返回最近 upTo 条 buffer 中的消息事件，供上下文构建使用。
+     */
+    getMessageSnapshot(upTo: number = 20): Array<{
+        userId: string;
+        text: string;
+        timestamp: number;
+    }> {
+        const slice = this.buffer.slice(-upTo);
+        return slice.map(m => ({
+            userId: String(m.event.userId ?? m.event.user_id ?? m.event.senderId ?? ""),
+            text: String(m.event.text ?? m.event.message ?? ""),
+            timestamp: m.timestamp,
+        }));
+    }
+
+    /**
      * 清空 buffer（attend 后调用）
      */
     clearBuffer(): void {
