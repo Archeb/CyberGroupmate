@@ -19,7 +19,7 @@ import { loadConfig, resolveTierProfile, resolveEmbeddingConfig } from "./core/c
 import { createLogger } from "./core/logger.js";
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
-import { runDryRun, saveDryRunReport, type DryRunConfig } from "./pipeline/index.js";
+
 
 const log = createLogger("cli");
 const DATA_DIR = "workspace";
@@ -471,106 +471,11 @@ const HELP = `
   memory <subcmd>        记忆系统查询（recall/browse/reflect/status）
   config                 检查配置加载结果
   status                 查看 agent 运行状态和统计
-  dry-run <file.jsonl>   历史消息回放评估
 
 环境变量:
   LOG_LEVEL=debug|info|warn|error   日志级别（默认: info）
   LOG_FORMAT=text|json              日志格式（默认: text）
 `;
-
-/**
- * dry-run — 历史回放评估
- */
-async function cmdDryRun(args: string[]): Promise<void> {
-    const filePath = args[0];
-    if (!filePath || !existsSync(filePath)) {
-        console.log("用法: npx tsx src/cli.ts dry-run <history.jsonl> [options]");
-        console.log("\n  history.jsonl: 每行一个 JSON 的历史消息文件");
-        console.log("  格式: {id, chat_id, user_id, user_name, text, date, reply_to?}");
-        console.log("\n选项:");
-        console.log("  --chat-id <id>       只处理指定群组的消息");
-        console.log("  --days <n>           只处理最近 N 天的消息（默认 30，0=全部）");
-        console.log("  --reflect            处理完后触发 Reflection（反思总结）");
-        console.log("  --memory-db <path>   自定义 memory DB 路径（默认 workspace/dry-run-memory.db）");
-        if (filePath && !existsSync(filePath)) {
-            console.log(`\n  ❌ 文件不存在: ${filePath}`);
-        }
-        process.exit(1);
-    }
-
-    const chatIdArg = args.indexOf("--chat-id");
-    const daysArg = args.indexOf("--days");
-    const memoryDbArg = args.indexOf("--memory-db");
-    const chatId = chatIdArg >= 0 ? String(args[chatIdArg + 1]) : "";
-    const daysBack = daysArg >= 0 ? Number(args[daysArg + 1]) : 30;
-    const reflect = args.includes("--reflect");
-    const memoryDbPath = memoryDbArg >= 0 ? args[memoryDbArg + 1] : undefined;
-
-    const appConfig = loadConfig();
-
-    const config: DryRunConfig = {
-        chatId,
-        daysBack,
-        model: 'dry-run',
-        send: false,
-        source: "file",
-        filePath,
-        reflect,
-        memoryDbPath,
-    };
-
-    console.log(`🔄 Dry-Run 开始 (文件: ${filePath}, chatId: ${chatId || 'all'}, 天数: ${daysBack}, reflect: ${reflect})`);
-
-    const result = await runDryRun(config, appConfig, appConfig.persona?.description ?? "赛博群友");
-
-    console.log("\n📊 Dry-Run 结果:");
-    console.log(`  总消息数: ${result.totalMessages}`);
-    console.log(`  会回复: ${result.wouldReply} (${result.totalMessages > 0 ? (result.wouldReply / result.totalMessages * 100).toFixed(1) : 0}%)`);
-    console.log(`  会沉默: ${result.wouldIgnore}`);
-    console.log(`  耗时: ${result.totalTimeMs}ms`);
-
-    if (result.decisions.length > 0) {
-        console.log("\n  📝 回复决策列表:");
-        for (const d of result.decisions.slice(0, 20)) {
-            console.log(`    [${d.decision}] ${d.triggerMessage.from}: ${d.triggerMessage.text.slice(0, 60)} — ${d.reason}`);
-        }
-        if (result.decisions.length > 20) {
-            console.log(`    ... 还有 ${result.decisions.length - 20} 条`);
-        }
-    }
-
-    // Memory 统计
-    if (result.memoryStats) {
-        const ms = result.memoryStats;
-        console.log("\n  🧠 Memory V2 统计:");
-        console.log(`    话题:     ${ms.topics} 个`);
-        console.log(`    事实:     ${ms.facts} 条`);
-        console.log(`    消息日志: ${ms.messages} 条`);
-        console.log(`    用户身份: ${ms.persons} 个`);
-        console.log(`    群内画像: ${ms.profiles} 个`);
-        console.log(`    数据库:   ${ms.dbPath}`);
-    }
-
-    // Reflection 结果
-    if (result.reflectionResults && result.reflectionResults.length > 0) {
-        console.log("\n  🔮 Reflection 结果:");
-        for (const r of result.reflectionResults) {
-            console.log(`    群组 ${r.chatId}:`);
-            console.log(`      话题摘要: ${r.topicsSummary} 条`);
-            console.log(`      画像更新: ${r.personUpdates} 人`);
-            console.log(`      新事实:   ${r.newFacts} 条`);
-            console.log(`      合并记忆: ${r.mergedEpisodes} 条`);
-            if (r.insights) {
-                console.log(`      洞察: ${r.insights.slice(0, 200)}`);
-            }
-        }
-    }
-
-    // 保存报告
-    const reportPath = filePath.replace(/\.jsonl?$/, "") + ".dry-run-report.json";
-    saveDryRunReport(result, reportPath);
-    console.log(`\n  💾 详细报告已保存到: ${reportPath}`);
-}
 
 async function main(): Promise<void> {
     const [_node, _script, command, ...args] = process.argv;
@@ -594,10 +499,6 @@ async function main(): Promise<void> {
             break;
         case "status":
             await cmdStatus();
-            break;
-        case "dry-run":
-        case "dryrun":
-            await cmdDryRun(args);
             break;
         default:
             console.log(HELP);
