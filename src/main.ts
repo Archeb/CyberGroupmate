@@ -391,7 +391,7 @@ async function mainEventLoop(
             const sceneFocus = task.sceneFocus
                 ? `\n${task.sceneFocus}\n${task.latentMemory ?? ""}`
                 : "";
-            const currentSystemPrompt = `${systemPrompt}\n\n[System Inject] 当前场景: telegram\n类型定义:\n\`\`\`typescript\n${typeDefs}\n\`\`\`${sceneFocus}\nAgent State:\n${agentState}`;
+            const currentSystemPrompt = `${systemPrompt}\n\n[可用 API 类型定义]\n\`\`\`typescript\n${typeDefs}\n\`\`\`${sceneFocus}\nAgent State:\n${agentState}`;
 
             taskMessages.push({ role: "system", content: currentSystemPrompt });
             taskMessages.push({

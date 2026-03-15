@@ -166,7 +166,6 @@ graph TB
     SB -- "host_call 桥接" --> MEM
     SB -- "host_call 桥接" --> TA
     SB -- "host_call 桥接" --> TR
-    SR -- "场景切换" --> SM
 
     %% Feedback Loop
     NC -- "system.agent_message_sent" --> FL
@@ -295,7 +294,7 @@ Host → Worker：
 - `{ type: "host_call_result", id: string, ok: boolean, value?: any, error?: string }` — 返回 host-call 执行结果
 
 Worker → Host：
-- `{ type: "result", id: string, output: string, error: boolean, sceneState?: string }` — 代码执行结果（`sceneState` 携带切换后的当前 scene）
+- `{ type: "result", id: string, output: string, error: boolean }` — 代码执行结果
 - `{ type: "notify", event: object }` — 后台任务推送事件（转发给 NC）
 - `{ type: "input_request", id: string, prompt: string }` — 请求用户交互式输入（如 OTP 验证码）
 - `{ type: "print", message: string }` — `runtime.print()` 直接输出（不经过 console.log 劫持）
@@ -520,7 +519,7 @@ MVP 不做 dashboard，但所有关键数据以结构化方式记录。
 
 ### 6.1 Event Log
 
-`workspace/events.jsonl`，所有事件的 append-only 日志：外部事件、代码执行事件（`system.code_execution`，含代码和输出）、系统事件（后台任务启停、sandbox 重启、场景切换）、agent 发出的消息（含消息 ID）。
+`workspace/events.jsonl`，所有事件的 append-only 日志：外部事件、代码执行事件（`system.code_execution`，含代码和输出）、系统事件（后台任务启停、sandbox 重启）、agent 发出的消息（含消息 ID）。
 
 ### 6.2 Session Transcripts
 
