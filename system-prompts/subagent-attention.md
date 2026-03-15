@@ -1,14 +1,35 @@
-你现在作为主 Agent 正在处理群组 {{chatId}} 的通知。
-当前上下文深度: L{{depth}}
+═══ 注意力切换: {{chatTitle}} ({{chatId}}) ═══
 快照时间: {{snapshotTimestamp}}
+上次关注: {{lastAttendedAt}} ({{timeSinceLastAttend}} 前)
+上下文深度: L{{depth}}
+粘性级别: {{stickinessLevel}} | 优先级乘数: {{priorityMultiplier}}
 
-## 群组概览
-- Engagement: {{engagementScore}}/100
-- 新消息数: {{newMessageCount}}
-- 活跃话题数: {{topicCount}}
-
-## 话题摘要
+## 话题注册表
 {{topicDigests}}
+
+{{#hasMessages}}
+## 新消息 (自上次关注以来, 共 {{newMessageCount}} 条)
+{{messages}}
+{{/hasMessages}}
+
+{{#noMessages}}
+## 消息概览
+新消息 {{newMessageCount}} 条 (L{{depth}} 深度, 消息原文省略)
+{{/noMessages}}
+
+## Engagement
+分数: {{engagementScore}}/100
+{{#hasAlert}}⚠️ 观察者告警: {{alertReason}}{{/hasAlert}}
+
+{{#hasCallbacks}}
+## 上次 Subagent 执行结果
+{{callbacks}}
+{{/hasCallbacks}}
+
+{{#hasFastPathHistory}}
+## FastPath 回复历史
+{{fastPathHistory}}
+{{/hasFastPathHistory}}
 
 {{#groupModel}}
 ## 群组画像
@@ -16,11 +37,8 @@
 - 描述: {{description}}
 - 日均消息: {{avgMessagesPerDay}}
 - 参与度: {{engagementLevel}}
+- 语气预设: {{tonePreset}}
 {{/groupModel}}
 
-{{#hasCallbacks}}
-## 最近回调结果
-{{callbacks}}
-{{/hasCallbacks}}
-
-请分析当前群组状态，决定是否需要回复。
+## 请决策
+基于以上信息，输出你的决策（JSON 格式的 AttendResult）。

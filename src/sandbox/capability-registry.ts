@@ -47,11 +47,30 @@ function createTelegramClientProxy(env: CapabilityRegistryEnv) {
         sendText: async (chatId: number | string, text: string, opts?: { replyTo?: number }) => {
             const sent = hydrateTelegramMessage(await env.callHost("telegram.sendText", [chatId, text, opts]));
             env.emitOutput(formatTelegramAck("[Telegram] sendText ok", sent));
+            // 发射 agent_message_sent 通知，供 SentMessageCollector 捕获
+            env.notifyHost({
+                type: "system.agent_message_sent",
+                scene: "telegram",
+                chatId: String(chatId),
+                messageId: typeof sent === "object" && sent && "id" in sent ? (sent as { id?: unknown }).id : undefined,
+                text,
+                replyToMessageId: opts?.replyTo,
+                timestamp: new Date().toISOString(),
+            });
             return sent;
         },
         sendMedia: async (chatId: number | string, media: unknown, opts?: { replyTo?: number; caption?: string }) => {
             const sent = hydrateTelegramMessage(await env.callHost("telegram.sendMedia", [chatId, media, opts]));
             env.emitOutput(formatTelegramAck("[Telegram] sendMedia ok", sent));
+            // 发射 agent_message_sent 通知
+            env.notifyHost({
+                type: "system.agent_message_sent",
+                scene: "telegram",
+                chatId: String(chatId),
+                messageId: typeof sent === "object" && sent && "id" in sent ? (sent as { id?: unknown }).id : undefined,
+                text: opts?.caption ?? "[media]",
+                timestamp: new Date().toISOString(),
+            });
             return sent;
         },
         getChat: async (chatId: number | string) =>
@@ -142,16 +161,8 @@ const REGISTRY: CapabilityRegistration[] = [
                         text: string,
                         opts?: { replyTo?: number }
                     ) => {
+                        // tg.sendText 内部已经发射 system.agent_message_sent 通知
                         const sent = await tg.sendText(chatId, text, opts);
-                        env.notifyHost({
-                            type: "system.agent_message_sent",
-                            scene: "telegram",
-                            chatId: String(chatId),
-                            messageId: typeof sent === "object" && sent && "id" in sent ? (sent as { id?: unknown }).id : undefined,
-                            text,
-                            replyToMessageId: opts?.replyTo,
-                            timestamp: new Date().toISOString(),
-                        });
                         return sent;
                     },
                 },

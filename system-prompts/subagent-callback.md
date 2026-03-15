@@ -1,17 +1,18 @@
-以下是来自群组 {{chatId}} 的 Subagent 执行结果：
-
-任务 ID: {{taskId}}
+═══ Subagent 执行结果 ═══
+群组: {{chatTitle}} ({{chatId}})
+任务: {{taskId}} ({{executionType}})
 状态: {{status}}
-摘要: {{summary}}
+耗时: {{durationMs}}ms | Token: {{tokensUsed}}
 
-{{#hasSentMessages}}
-## 已发送消息
+{{#isCompleted}}
+已发送消息:
 {{sentMessages}}
-{{/hasSentMessages}}
+回复内容: "{{replyContent}}"
+Session 摘要: {{summary}}
+{{/isCompleted}}
 
 {{#hasError}}
-## 错误信息
-{{error}}
+错误: {{error}}
 {{/hasError}}
 
 请更新全局状态并决定后续动作。

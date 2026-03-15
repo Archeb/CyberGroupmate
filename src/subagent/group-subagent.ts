@@ -55,6 +55,9 @@ export class GroupSubagent {
     codeActExecutor: unknown = null;
     fastPathHandler: unknown = null;
 
+    /** 已完成任务 ID 集合（用于状态追踪） */
+    private completedTaskIds = new Set<string>();
+
     constructor(options: GroupSubagentOptions) {
         this.chatId = options.chatId;
         this.observer = new Observer(options.chatId, options.observerConfig);
@@ -74,19 +77,28 @@ export class GroupSubagent {
     buildQueueEntry(): AttentionQueueEntry {
         const engagement = this.observer.getEngagementScore();
         const alert = this.observer.checkAlert();
+        const hasFastPathRequest = this.observer.checkFastPathRequest();
         const basePriority = engagement * this.stickiness.priorityMultiplier;
+
+        // 来源标记 (subagent.md §2.2)
+        const source: AttentionQueueEntry["source"] = alert
+            ? "OBSERVER_ALERT"
+            : hasFastPathRequest
+                ? "FAST_PATH_REQUEST"
+                : "DIGEST_UPDATE";
 
         return {
             chatId: this.chatId,
+            source,
             priority: basePriority,
             basePriority,
             enqueuedAt: Date.now(),
             lastAttendedAt: this.lastAttendedAt,
             attendCount: this.attendCount,
             blocked: false,
-            hasFastPathRequest: this.observer.checkFastPathRequest(),
+            hasFastPathRequest,
             alert: alert ?? undefined,
-            newMessageCount: this.observer.getTotalMessageCount(),
+            newMessageCount: this.observer.getBufferSize(),
             topicDigests: this.observer.getDigest(),
             stickinessLevel: this.stickiness.level,
         };
@@ -100,6 +112,21 @@ export class GroupSubagent {
         this.attendCount++;
         this.observer.clearBuffer();
         log.debug("markAttended", { chatId: this.chatId, attendCount: this.attendCount });
+    }
+
+    /**
+     * 标记任务已完成（主循环 Phase 1 回调处理时调用）
+     */
+    markTaskComplete(taskId: string): void {
+        this.completedTaskIds.add(taskId);
+        log.debug("markTaskComplete", { chatId: this.chatId, taskId });
+    }
+
+    /**
+     * 检查任务是否已完成
+     */
+    isTaskCompleted(taskId: string): boolean {
+        return this.completedTaskIds.has(taskId);
     }
 
     /**

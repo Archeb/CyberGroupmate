@@ -32,6 +32,7 @@ const PROMPT_FILE_MAP: Record<string, string> = {
     ATTENTION: "subagent-attention.md",
     DECISION: "subagent-decision.md",
     EXECUTION: "subagent-execution.md",
+    EXECUTION_TASK: "subagent-execution-task.md",
     FAST_PATH: "subagent-fast-path.md",
     CALLBACK: "subagent-callback.md",
 };
@@ -144,8 +145,23 @@ export function renderTemplate(template: string, variables: Record<string, unkno
 export function buildAttentionVariables(
     pkg: GroupContextPackage,
     newMessageCount: number,
-    callbacks?: SubagentCallback[],
+    options?: {
+        persona?: string;
+        lastAttendedAt?: string | null;
+        timeSinceLastAttend?: string;
+        stickinessLevel?: string;
+        priorityMultiplier?: number;
+        tonePreset?: string;
+        callbacks?: SubagentCallback[];
+        fastPathHistory?: string;
+        alertReason?: string;
+        messages?: string;
+        suggestedReplyMode?: string;
+    },
 ): Record<string, unknown> {
+    const opts = options ?? {};
+    const hasMessages = !!opts.messages;
+
     return {
         chatId: pkg.chatId,
         depth: pkg.depth,
@@ -154,15 +170,48 @@ export function buildAttentionVariables(
         newMessageCount,
         topicCount: pkg.topicDigests.length,
         topicDigests: formatTopicDigests(pkg.topicDigests),
+
+        // Persona
+        persona: opts.persona ?? "",
+
+        // Timing
+        lastAttendedAt: opts.lastAttendedAt ?? "无记录",
+        timeSinceLastAttend: opts.timeSinceLastAttend ?? "未知",
+
+        // Stickiness
+        stickinessLevel: opts.stickinessLevel ?? "STRANGER",
+        priorityMultiplier: opts.priorityMultiplier ?? 0.2,
+        tonePreset: opts.tonePreset ?? "礼貌得体",
+
+        // Group model
         groupModel: !!pkg.groupModel,
         chatTitle: pkg.groupModel?.chatTitle ?? "",
         description: pkg.groupModel?.description ?? "",
         avgMessagesPerDay: pkg.groupModel?.avgMessagesPerDay ?? 0,
         engagementLevel: pkg.groupModel?.engagementLevel ?? "",
-        hasCallbacks: !!callbacks?.length,
-        callbacks: callbacks?.map(cb => `- [${cb.status}] ${cb.summary}`).join("\n") ?? "",
+
+        // Callbacks
+        hasCallbacks: !!opts.callbacks?.length,
+        callbacks: opts.callbacks?.map(cb => `- [${cb.status}] ${cb.summary}`).join("\n") ?? "",
+
+        // Messages (L2+)
+        hasMessages,
+        noMessages: !hasMessages,
+        messages: opts.messages ?? "",
+
+        // Alert
+        hasAlert: !!opts.alertReason,
+        alertReason: opts.alertReason ?? "",
+
+        // FastPath history
+        hasFastPathHistory: !!opts.fastPathHistory,
+        fastPathHistory: opts.fastPathHistory ?? "",
+
+        // Decision hint
+        suggestedReplyMode: opts.suggestedReplyMode ?? "NONE",
     };
 }
+
 
 /**
  * 格式化 TopicDigest 列表为可读字符串

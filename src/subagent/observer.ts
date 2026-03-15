@@ -221,6 +221,10 @@ export class Observer {
     clearBuffer(): void {
         this.buffer = [];
         this.mentionCount = 0;
+        // 重算 engagement：buffer 清空后 engagement 归零，
+        // 防止陈旧的高 engagement 导致群组被重复 enqueue 到 Q3
+        this.cachedEngagement = 0;
+        this.recentSenders.clear();
     }
 
     /**

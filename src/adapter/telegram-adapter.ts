@@ -226,25 +226,47 @@ export class TelegramAdapter implements PlatformAdapter {
         switch (method) {
             case "telegram.getMe":
                 return this.selfUser ?? this.normalizeUser(await this.client.getMe());
-            case "telegram.sendText":
+            case "telegram.sendText": {
+                const peer = await this.ensurePeerCached(args[0]);
+                const opts = this.normalizeReplyOpts(args[2]);
                 return this.normalizeMessage(
-                    await this.client.sendText(this.normalizePeerArg(args[0]), args[1], args[2]),
+                    await this.client.sendText(peer, args[1], opts),
                 );
-            case "telegram.sendMedia":
+            }
+            case "telegram.sendMedia": {
+                const peer = await this.ensurePeerCached(args[0]);
+                const opts = this.normalizeReplyOpts(args[2]);
                 return this.normalizeMessage(
-                    await this.client.sendMedia(this.normalizePeerArg(args[0]), args[1], args[2]),
+                    await this.client.sendMedia(peer, args[1], opts),
                 );
-            case "telegram.getChat":
-                return this.normalizeChat(await this.client.getChat(this.normalizePeerArg(args[0])));
+            }
+            case "telegram.getChat": {
+                const peer = await this.ensurePeerCached(args[0]);
+                return this.normalizeChat(await this.client.getChat(peer));
+            }
             case "telegram.getUser":
                 return this.normalizeUser(await this.client.getUser(this.normalizePeerArg(args[0])));
             case "telegram.getChatMembers": {
-                const peers = await this.client.getChatMembers(this.normalizePeerArg(args[0]), args[1]);
-                return peers.map((peer: any) => this.normalizePeer(peer));
+                const peer = await this.ensurePeerCached(args[0]);
+                const peers = await this.client.getChatMembers(peer, args[1]);
+                return peers.map((p: any) => this.normalizePeer(p));
             }
             case "telegram.getHistory": {
-                const messages = await this.client.getHistory(this.normalizePeerArg(args[0]), args[1]);
-                return messages.map((message: any) => this.normalizeMessage(message));
+                try {
+                    const peer = await this.ensurePeerCached(args[0]);
+                    const messages = await this.client.getHistory(peer, args[1]);
+                    return messages.map((message: any) => this.normalizeMessage(message));
+                } catch (err) {
+                    const errMsg = err instanceof Error ? err.message : String(err);
+                    // 提供可操作的错误信息，让 agent 不要反复重试 getHistory
+                    if (errMsg.includes("inputPeer") || errMsg.includes("PEER") || errMsg.includes("resolve")) {
+                        throw new Error(
+                            `getHistory 失败 (peer 未解析): ${errMsg}. ` +
+                            `请直接使用 ctx.tg.sendText(chatId, text) 发送消息，不需要先获取历史消息。`
+                        );
+                    }
+                    throw err;
+                }
             }
             case "telegram.getDialogs": {
                 const limit = this.readLimit(args[0], 20);
@@ -254,12 +276,16 @@ export class TelegramAdapter implements PlatformAdapter {
                 }
                 return dialogs;
             }
-            case "telegram.readHistory":
-                await this.client.readHistory(this.normalizePeerArg(args[0]));
+            case "telegram.readHistory": {
+                const peer = await this.ensurePeerCached(args[0]);
+                await this.client.readHistory(peer);
                 return null;
-            case "telegram.sendTyping":
-                await this.client.sendTyping(this.normalizePeerArg(args[0]));
+            }
+            case "telegram.sendTyping": {
+                const peer = await this.ensurePeerCached(args[0]);
+                await this.client.sendTyping(peer);
                 return null;
+            }
             default:
                 throw new Error(`Unsupported TelegramAdapter call: ${method}`);
         }
@@ -295,6 +321,102 @@ export class TelegramAdapter implements PlatformAdapter {
             if (Number.isSafeInteger(asNumber)) return asNumber;
         }
         return value;
+    }
+
+    /**
+     * mtcute expects replyTo to be a number (message ID), not a string.
+     * Our normalizeMessage() stringifies all IDs, so sandbox code will
+     * pass string replyTo values back. Convert them here to avoid
+     * "Cannot read properties of undefined (reading 'inputPeer')" crash.
+     */
+    private normalizeReplyOpts(opts: unknown): unknown {
+        if (!opts || typeof opts !== "object") return opts;
+        const o = opts as Record<string, unknown>;
+        if ("replyTo" in o && typeof o.replyTo === "string") {
+            const num = Number(o.replyTo);
+            if (!Number.isNaN(num) && Number.isFinite(num)) {
+                return { ...o, replyTo: num };
+            }
+        }
+        return opts;
+    }
+
+    /**
+     * 已解析的 peer 缓存（避免重复解析）
+     */
+    private resolvedPeers = new Map<number, unknown>();
+
+    /**
+     * 确保 peer 在 mtcute 内部缓存中已解析。
+     *
+     * mtcute 的某些方法（如 getHistory）需要已缓存的 InputPeer，
+     * 而 sendText 可以直接用 numeric ID。当 InputPeer 未缓存时
+     * 会报 "Cannot read properties of undefined (reading 'inputPeer')"。
+     *
+     * 解决方案：先尝试 resolvePeer，失败则 getDialogs 预热缓存。
+     */
+    private async ensurePeerCached(rawPeer: unknown): Promise<unknown> {
+        const peer = this.normalizePeerArg(rawPeer);
+
+        // 非 numeric peer（username 等）直接返回，mtcute 可自行解析
+        if (typeof peer !== "number") return peer;
+
+        // 检查本地缓存
+        if (this.resolvedPeers.has(peer)) {
+            return this.resolvedPeers.get(peer)!;
+        }
+
+        // 尝试 resolvePeer（mtcute 内部方法，解析 peer 并缓存）
+        try {
+            if (typeof this.client.resolvePeer === "function") {
+                const resolved = await this.client.resolvePeer(peer);
+                this.resolvedPeers.set(peer, resolved);
+                return resolved;
+            }
+        } catch (e) {
+            log.debug("ensurePeerCached: resolvePeer 失败", { peer, error: String(e) });
+        }
+
+        // fallback: 尝试 getInputEntity（某些 mtcute 版本使用此方法）
+        try {
+            if (typeof this.client.getInputEntity === "function") {
+                const resolved = await this.client.getInputEntity(peer);
+                this.resolvedPeers.set(peer, resolved);
+                return resolved;
+            }
+        } catch (e) {
+            log.debug("ensurePeerCached: getInputEntity 失败", { peer, error: String(e) });
+        }
+
+        // fallback: 对负 ID（群组/频道），尝试遍历 dialogs 预热 mtcute 内部缓存
+        if (peer < 0) {
+            try {
+                log.info("ensurePeerCached: 尝试 getDialogs 预热缓存", { peer });
+                if (typeof this.client.iterDialogs === "function") {
+                    for await (const dialog of this.client.iterDialogs({ limit: 100 })) {
+                        // 遍历 dialogs 会让 mtcute 内部缓存所有遇到的 peer
+                        const dialogPeer = dialog?.chat ?? dialog?.peer;
+                        if (dialogPeer && (dialogPeer.id === peer || String(dialogPeer.id) === String(peer))) {
+                            log.info("ensurePeerCached: 在 dialogs 中找到目标 peer", { peer });
+                            break;
+                        }
+                    }
+                }
+
+                // dialogs 遍历后再试一次 resolvePeer
+                if (typeof this.client.resolvePeer === "function") {
+                    const resolved = await this.client.resolvePeer(peer);
+                    this.resolvedPeers.set(peer, resolved);
+                    return resolved;
+                }
+            } catch (e) {
+                log.warn("ensurePeerCached: getDialogs 预热失败", { peer, error: String(e) });
+            }
+        }
+
+        // 所有解析方式均失败 — 返回原始 ID，让调用方自行处理错误
+        log.warn("ensurePeerCached: 所有解析方式均失败，返回原始 ID", { peer });
+        return peer;
     }
 
     private normalizeIncomingMessage(msg: any): {

@@ -43,7 +43,7 @@ export class CallbackQueue {
 
         const drained = this.queue;
         this.queue = [];
-        log.debug("drain", { count: drained.length });
+        log.debug("drain", { count: drained.length, chatIds: drained.map(cb => cb.chatId) });
         return drained;
     }
 

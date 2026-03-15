@@ -14,6 +14,17 @@ import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { join, basename, extname } from "node:path";
 import { installCapabilityRegistry } from "./capability-registry.js";
 
+// ─── 顶层安全网：防止未捕获的异常导致 worker 进程崩溃 ───
+
+process.on("unhandledRejection", (reason) => {
+    const msg = reason instanceof Error ? reason.stack ?? reason.message : String(reason);
+    process.stderr.write(`[sandbox-worker] Unhandled rejection: ${msg}\n`);
+});
+
+process.on("uncaughtException", (err) => {
+    process.stderr.write(`[sandbox-worker] Uncaught exception: ${err.stack ?? err.message}\n`);
+});
+
 // ─── IPC 消息类型 ───
 
 /** Host → Worker: 执行代码 */

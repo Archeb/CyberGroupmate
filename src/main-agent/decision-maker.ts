@@ -42,6 +42,10 @@ const DEFAULT_CONFIG: DecisionMakerConfig = {
 /**
  * 估算回复模式
  *
+ * subagent.md §4.2 — 7 维信号:
+ * engagementScore, newMessageCount, distinctTopicCount,
+ * mentionCount/hasMention, avgMessageLength, stickiness, timeSinceLastAttend
+ *
  * @returns "NONE" | "SINGLE" | "BATCH"
  */
 export function estimateReplyMode(
@@ -49,6 +53,9 @@ export function estimateReplyMode(
     newMessageCount: number,
     hasMention: boolean,
     stickinessLevel: StickinessLevel,
+    distinctTopicCount: number = 0,
+    timeSinceLastAttendMs: number = 0,
+    avgMessageLength: number = 0,
     config?: Partial<DecisionMakerConfig>,
 ): "NONE" | "SINGLE" | "BATCH" {
     const cfg = { ...DEFAULT_CONFIG, ...config };
@@ -63,8 +70,15 @@ export function estimateReplyMode(
         return pkg.engagementScore >= cfg.noneThreshold ? "SINGLE" : "NONE";
     }
 
-    // 高 engagement + 多消息 → BATCH
-    if (pkg.engagementScore >= cfg.batchThreshold && newMessageCount >= cfg.batchMessageThreshold) {
+    // BATCH 条件（subagent.md §4.2）:
+    // - 多消息积压 OR
+    // - 多话题线程 OR
+    // - 高 engagement + 长时间未关注
+    if (
+        (pkg.engagementScore >= cfg.batchThreshold && newMessageCount >= cfg.batchMessageThreshold) ||
+        distinctTopicCount >= 2 ||
+        (pkg.engagementScore >= cfg.batchThreshold && timeSinceLastAttendMs > 5 * 60_000)
+    ) {
         return "BATCH";
     }
 

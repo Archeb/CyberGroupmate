@@ -61,6 +61,8 @@ export class DynamicAttentionQueue {
                 existing.priority = entry.priority;
                 existing.basePriority = entry.basePriority ?? entry.priority;
             }
+            // 更新 source（取更高优先的来源）
+            if (entry.source) existing.source = entry.source;
             // 更新其他字段
             if (entry.topicDigests) existing.topicDigests = entry.topicDigests;
             if (entry.alert) existing.alert = entry.alert;
@@ -68,7 +70,7 @@ export class DynamicAttentionQueue {
             if (entry.hasFastPathRequest !== undefined) existing.hasFastPathRequest = entry.hasFastPathRequest;
             if (entry.stickinessLevel) existing.stickinessLevel = entry.stickinessLevel;
 
-            log.debug("enqueueOrUpdate: UPDATE", { chatId: entry.chatId, priority: existing.priority });
+            log.debug("enqueueOrUpdate: UPDATE", { chatId: entry.chatId, priority: existing.priority, source: existing.source });
         } else {
             // 新增
             if (this.entries.size >= this.config.maxSize) {
@@ -78,6 +80,7 @@ export class DynamicAttentionQueue {
 
             const newEntry: AttentionQueueEntry = {
                 chatId: entry.chatId,
+                source: entry.source ?? "DIGEST_UPDATE",
                 priority: entry.priority ?? 0,
                 basePriority: entry.basePriority ?? entry.priority ?? 0,
                 enqueuedAt: entry.enqueuedAt ?? Date.now(),
@@ -93,7 +96,7 @@ export class DynamicAttentionQueue {
             };
 
             this.entries.set(entry.chatId, newEntry);
-            log.debug("enqueueOrUpdate: INSERT", { chatId: entry.chatId, priority: newEntry.priority });
+            log.debug("enqueueOrUpdate: INSERT", { chatId: entry.chatId, priority: newEntry.priority, source: newEntry.source });
         }
     }
 

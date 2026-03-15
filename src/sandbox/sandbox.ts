@@ -15,9 +15,12 @@ import { EventEmitter } from "node:events";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { existsSync } from "node:fs";
+import { createLogger } from "../core/logger.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
+
+const log = createLogger("sandbox");
 
 /** 执行结果 */
 export interface ExecutionResult {
@@ -116,6 +119,9 @@ export class Sandbox extends EventEmitter {
         });
 
         this.child.on("exit", (code, signal) => {
+            const isExpected = signal === "SIGTERM" || signal === "SIGKILL" || code === 0;
+            const logFn = isExpected ? log.debug.bind(log) : log.warn.bind(log);
+            logFn("Worker process exited", { code, signal, pendingRequests: this.pendingRequests.size });
             this.emit("exit", code, signal);
             for (const [id, req] of this.pendingRequests) {
                 req.reject(

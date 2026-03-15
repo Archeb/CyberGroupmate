@@ -193,7 +193,7 @@ const DEFAULT_LLM: LLMConfig = {
     apiKey: "",
     model: "gpt-4o",
     temperature: 0.7,
-    maxTokens: 4096,
+    maxTokens: 8192,
 };
 
 const DEFAULT_EMBEDDING: EmbeddingConfig = {

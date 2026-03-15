@@ -20,6 +20,56 @@ import { createLogger } from "../core/logger.js";
 
 const log = createLogger("session");
 
+// ─── Sent Message Collector ───
+
+/** 收集 sandbox 执行期间发出的消息 */
+export interface SentMessageRecord {
+    chatId: string;
+    text: string;
+    messageId?: string;
+    timestamp: string;
+}
+
+/**
+ * SentMessageCollector — 在 session 执行期间收集已发送消息
+ *
+ * 用法：调用方在 runCodeActSession 前创建，注册 sandbox notify
+ * 监听器，每轮代码执行后调用 drainTurn() 取得本轮新发消息。
+ */
+export class SentMessageCollector {
+    private buffer: SentMessageRecord[] = [];
+    /** 整个 session 的累计记录 */
+    readonly allSent: SentMessageRecord[] = [];
+
+    /** 由 sandbox notify 事件回调调用 */
+    collect(event: Record<string, unknown>): void {
+        if (String(event.type ?? "") !== "system.agent_message_sent") return;
+        const record: SentMessageRecord = {
+            chatId: String(event.chatId ?? ""),
+            text: String(event.text ?? ""),
+            messageId: event.messageId != null ? String(event.messageId) : undefined,
+            timestamp: String(event.timestamp ?? new Date().toISOString()),
+        };
+        this.buffer.push(record);
+        this.allSent.push(record);
+    }
+
+    /** 取出本轮新收集的消息并清空 buffer */
+    drainTurn(): SentMessageRecord[] {
+        const drained = this.buffer.splice(0);
+        return drained;
+    }
+
+    /** 格式化为 observation 文本 */
+    static formatAsObservation(records: SentMessageRecord[]): string {
+        if (records.length === 0) return "";
+        const lines = records.map(r =>
+            `- 发送到 chat=${r.chatId}: "${r.text.length > 100 ? r.text.slice(0, 100) + '...' : r.text}"`
+        );
+        return `[📤 已发送消息确认]\n${lines.join("\n")}`;
+    }
+}
+
 // ─── 常量 ───
 
 /** 最大交互轮次 */
@@ -137,7 +187,11 @@ export async function runCodeActSession(
     llmConfig: LLMConfig,
     sessionsDir: string = "workspace/sessions",
     /** 每段代码的执行超时（毫秒），默认 30s */
-    executeTimeout: number = 30000
+    executeTimeout: number = 30000,
+    /** 禁用 NC drain 中断检查（Subagent 架构时使用，避免与 Observer 冲突） */
+    disableNcInterrupt: boolean = false,
+    /** 已发消息收集器，用于将 notify 事件中确认的消息反馈到 observation */
+    sentMessageCollector?: SentMessageCollector,
 ): Promise<SessionResult> {
     const sessionId = ulid();
     const turns: SessionTurn[] = [];
@@ -243,6 +297,20 @@ export async function runCodeActSession(
                 });
                 outputParts.push(`[⚠ Sandbox Error]\n${errorMsg}`);
                 errorOccurred = true;
+
+                // 如果 sandbox 进程已死，立即终止 session（不再重试）
+                if (!sandbox.isAlive()) {
+                    log.error("Sandbox worker died, aborting session", { sessionId, turn: turnNum, error: errorMsg });
+                    turns.push(turn);
+                    appendTranscript(transcriptPath, turn);
+                    return {
+                        sessionId,
+                        turns,
+                        messages,
+                        endReason: "error",
+                        error: `Sandbox worker died: ${errorMsg}`,
+                    };
+                }
             }
 
             if (errorOccurred) {
@@ -256,12 +324,21 @@ export async function runCodeActSession(
         // ─── 组装 observation ───
         let observation = outputParts.join("\n\n");
 
+        // Fix 1: 追加本轮已发送消息确认到 observation
+        if (sentMessageCollector) {
+            const turnSent = sentMessageCollector.drainTurn();
+            const sentConfirmation = SentMessageCollector.formatAsObservation(turnSent);
+            if (sentConfirmation) {
+                observation = observation ? `${observation}\n\n${sentConfirmation}` : sentConfirmation;
+            }
+        }
+
         // 将 observation 作为 user 消息追加
         if (observation.trim()) {
             messages.push({ role: "user", content: observation });
         }
 
-        if (nc.pendingCount > 0) {
+        if (!disableNcInterrupt && nc.pendingCount > 0) {
             const newEvents = await nc.drain(0, 5);
             if (newEvents.length > 0) {
                 const shouldInterrupt = newEvents.some(event =>

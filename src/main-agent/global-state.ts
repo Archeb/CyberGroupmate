@@ -80,6 +80,11 @@ export class GlobalState {
         return this.state.attentionSummary;
     }
 
+    /** 获取跨群待办列表 (subagent.md 场景 5) */
+    getPendingFollowups(): ReadonlyArray<MainAgentGlobalState["pendingFollowups"][number]> {
+        return this.state.pendingFollowups;
+    }
+
     // ─── 写入 ───
 
     /** 添加任务 */
@@ -173,7 +178,6 @@ export class GlobalState {
             }
             writeFileSync(this.config.filePath, JSON.stringify(this.state, null, 2), "utf-8");
             this.dirty = false;
-            log.debug("save: 成功", { filePath: this.config.filePath });
         } catch (err) {
             log.error("save: 失败", { error: String(err) });
         }

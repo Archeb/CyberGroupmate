@@ -27,6 +27,12 @@ export interface SandboxPoolConfig {
     workerScript?: string;
     /** Sandbox 工作目录 */
     workDir?: string;
+    /**
+     * 新 sandbox 实例创建后的初始化回调。
+     * 用于注册 hostCallHandler、event listener 等。
+     * 在 sandbox.start() 之后调用。
+     */
+    onAcquire?: (sandbox: Sandbox, chatId: string) => void;
 }
 
 const DEFAULT_POOL_CONFIG: SandboxPoolConfig = {
@@ -103,6 +109,11 @@ export class SandboxPool {
             this.config.workDir,
         );
         await sandbox.start();
+
+        // 调用 onAcquire 初始化新实例（注册 hostCallHandler、event listener 等）
+        if (this.config.onAcquire) {
+            this.config.onAcquire(sandbox, chatId);
+        }
 
         this.pool.set(chatId, {
             sandbox,

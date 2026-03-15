@@ -16,6 +16,9 @@ import type {
     SubagentCallback,
 } from "./types.js";
 import { DEFAULT_SUBAGENT_CONFIG } from "./types.js";
+import { callLLM, type ChatMessage } from "../core/llm.js";
+import { renderPrompt } from "../main-agent/prompt-renderer.js";
+import type { LLMConfig } from "../core/config.js";
 import { createLogger } from "../core/logger.js";
 
 const log = createLogger("fast-path");
@@ -46,6 +49,11 @@ export class FastPathHandler {
     private repliesSent = 0;
     private sentMessages: Array<{ text: string; timestamp: string }> = [];
 
+    /** LLM 配置（用于生成回复） */
+    private llmConfig: LLMConfig | null = null;
+    private personaName: string = "赛博群友";
+    private personaDescription: string = "";
+
     /** 发送回调（由外部注入，实际发送消息到 Telegram） */
     private sendFn: ((chatId: string, text: string) => Promise<string | undefined>) | null = null;
 
@@ -68,6 +76,15 @@ export class FastPathHandler {
      */
     setCallbackHandler(handler: (cb: SubagentCallback) => void): void {
         this.callbackHandler = handler;
+    }
+
+    /**
+     * 注入 LLM 配置和 persona
+     */
+    setLLMConfig(llmConfig: LLMConfig, persona: { name: string; description: string }): void {
+        this.llmConfig = llmConfig;
+        this.personaName = persona.name;
+        this.personaDescription = persona.description;
     }
 
     /**
@@ -146,7 +163,7 @@ export class FastPathHandler {
         }
 
         // 生成回复（骨架，完整版由 LLM prompt 驱动）
-        const reply = this.generateReply(event, auth);
+        const reply = await this.generateReply(event, auth);
 
         // __SKIP__ 检查
         if (reply === "__SKIP__" || reply.includes("__SKIP__")) {
@@ -215,17 +232,43 @@ export class FastPathHandler {
 
     // ─── 内部方法 ───
 
-    private generateReply(event: FastPathEvent, auth: FastPathConfig): string {
-        // 基础模板回复（完整 LLM 生成在 S5 集成中实现）
-        // 检查预授权动作
+    private async generateReply(event: FastPathEvent, auth: FastPathConfig): Promise<string> {
+        // 尝试使用 LLM 生成回复 (subagent.md §12.2 ➆)
+        if (this.llmConfig) {
+            try {
+                const prompt = renderPrompt("FAST_PATH", {
+                    personaName: this.personaName,
+                    personaDescription: this.personaDescription,
+                    chatTitle: this.chatId,
+                    preauthorizedActions: auth.preauthorizedActions.map(a => `- ${a}`).join("\n"),
+                    blockedActions: auth.blockedActions.map(a => `- ❌ ${a}`).join("\n"),
+                    maxReplyLength: 150,
+                    tonePreset: auth.tonePreset,
+                    repliesSent: this.repliesSent,
+                    maxReplies: auth.maxRepliesBeforeReauth,
+                    senderName: event.userId,
+                    messageText: event.text,
+                });
+
+                const response = await callLLM(
+                    [{ role: "user", content: prompt }],
+                    this.llmConfig,
+                    { temperature: 0.7, maxTokens: 256 },
+                );
+
+                return response.content.trim();
+            } catch (err) {
+                log.warn("generateReply: LLM 失败，fallback 到模板", { error: String(err) });
+            }
+        }
+
+        // Fallback: 无 LLM 时使用简单模板
         for (const action of auth.preauthorizedActions) {
             if (event.text.toLowerCase().includes(action.toLowerCase())) {
                 return `[FastPath:${auth.tonePreset}] ${action}`;
             }
         }
-
-        // 默认回复
-        return `[FastPath:${auth.tonePreset}] Acknowledged`;
+        return "__SKIP__";
     }
 
     private emitCallback(

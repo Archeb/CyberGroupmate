@@ -285,7 +285,6 @@ export class NotificationCenter {
             this.watcher = watch(this.logPath, () => {
                 // 忽略自己的写入
                 if (this.selfWriting) return;
-                log.debug("fs.watch 触发");
                 this.readNewEntries();
             });
 

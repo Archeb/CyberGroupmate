@@ -57,6 +57,8 @@ export interface ObserverAlert {
 export interface AttentionQueueEntry {
     /** 群组 chatId */
     chatId: string;
+    /** 来源标记 (subagent.md §2.2) */
+    source: 'DIGEST_UPDATE' | 'OBSERVER_ALERT' | 'FAST_PATH_REQUEST' | 'DEFERRED_RE_ENTRY';
     /** 当前优先级分数 (0-100) */
     priority: number;
     /** 基础优先级（不含时间衰减） */
@@ -136,12 +138,16 @@ export interface SubagentCallback {
     status: "COMPLETED" | "ERROR" | "SKIPPED" | "TIMEOUT";
     /** 结果摘要 */
     summary: string;
+    /** 回复内容（spec §2.2 result.replyContent） */
+    replyContent?: string;
     /** 发送的消息列表 */
     sentMessages?: Array<{
         messageId?: string;
         text: string;
         timestamp: string;
     }>;
+    /** Token 使用量（spec §2.2 result.tokensUsed） */
+    tokensUsed?: number;
     /** 错误信息 */
     error?: string;
     /** 执行耗时 (ms) */
