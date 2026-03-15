@@ -16,7 +16,6 @@ import { rmSync, existsSync, mkdirSync } from "node:fs";
 
 import { NotificationCenter } from "../src/event/notification-center.js";
 import { MessageLogWriter } from "../src/event/message-log-writer.js";
-import { GroupDispatcher } from "../src/event/group-dispatcher.js";
 import { MemoryStoreV2 } from "../src/memory-v2/index.js";
 
 import { SubagentManager } from "../src/subagent/subagent-manager.js";

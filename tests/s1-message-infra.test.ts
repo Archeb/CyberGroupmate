@@ -18,7 +18,6 @@ import { rmSync, existsSync, mkdirSync } from "node:fs";
 
 import { NotificationCenter } from "../src/event/notification-center.js";
 import { MessageLogWriter } from "../src/event/message-log-writer.js";
-import { GroupDispatcher } from "../src/event/group-dispatcher.js";
 import { buildMessageSnapshot } from "../src/memory-v2/message-snapshot.js";
 import { MemoryStoreV2 } from "../src/memory-v2/index.js";
 
@@ -149,71 +148,6 @@ describe("S1: 消息基础设施改造", () => {
             assert.equal(rows[0].text, "Real-time test");
 
             memory.close();
-        });
-    });
-
-    // ─── S1.2: GroupDispatcher ───
-
-    describe("S1.2: GroupDispatcher", () => {
-        it("#5 subscribe(chatId) 只收到指定群消息", () => {
-            const dispatcher = new GroupDispatcher();
-            const received: string[] = [];
-
-            dispatcher.subscribe("chatA", (event) => {
-                received.push(String(event.chatId));
-            });
-
-            const { nc } = makeTestEnv();
-
-            // 模拟 dispatch
-            const eventA = nc.push({ type: "telegram.message", chatId: "chatA", text: "A" });
-            const eventB = nc.push({ type: "telegram.message", chatId: "chatB", text: "B" });
-
-            dispatcher.dispatch(eventA);
-            dispatcher.dispatch(eventB);
-
-            assert.deepEqual(received, ["chatA"], "chatA 订阅者只应收到 chatA 消息");
-        });
-
-        it("#6 subscribeCatchAll() 收到所有消息", () => {
-            const dispatcher = new GroupDispatcher();
-            const allReceived: string[] = [];
-
-            dispatcher.subscribeCatchAll((event) => {
-                allReceived.push(String(event.chatId));
-            });
-
-            const { nc } = makeTestEnv();
-
-            const eventA = nc.push({ type: "telegram.message", chatId: "chatA", text: "A" });
-            const eventB = nc.push({ type: "telegram.message", chatId: "chatB", text: "B" });
-
-            dispatcher.dispatch(eventA);
-            dispatcher.dispatch(eventB);
-
-            assert.deepEqual(allReceived, ["chatA", "chatB"], "catchAll 应该收到全部");
-        });
-
-        it("#7 动态注册/注销", () => {
-            const dispatcher = new GroupDispatcher();
-            const received: string[] = [];
-
-            const unsub = dispatcher.subscribe("chatX", (event) => {
-                received.push("got:" + event.type);
-            });
-
-            const { nc } = makeTestEnv();
-
-            const e1 = nc.push({ type: "telegram.message", chatId: "chatX", text: "1" });
-            dispatcher.dispatch(e1);
-            assert.equal(received.length, 1, "注册后应收到消息");
-
-            // 注销
-            unsub();
-
-            const e2 = nc.push({ type: "telegram.message", chatId: "chatX", text: "2" });
-            dispatcher.dispatch(e2);
-            assert.equal(received.length, 1, "注销后不应再收到消息");
         });
     });
 

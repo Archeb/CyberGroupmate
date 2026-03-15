@@ -12,7 +12,6 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 
 import { CodeActExecutor } from "../src/subagent/code-act-executor.js";
-import { ExecutionQueue } from "../src/subagent/execution-queue.js";
 import { CallbackQueue } from "../src/subagent/callback-queue.js";
 import type { CodeActReplyTask, SubagentCallback, GroupContextPackage, Decision } from "../src/subagent/types.js";
 
@@ -129,56 +128,6 @@ describe("S3: Sandbox 多实例 + CodeActExecutor", () => {
         });
     });
 
-    // ─── S3.3: ExecutionQueue ───
-
-    describe("S3.3: ExecutionQueue", () => {
-        it("#7 串行执行保证顺序", async () => {
-            const q = new ExecutionQueue<string>();
-            const order: number[] = [];
-
-            q.enqueue({
-                id: "t1",
-                execute: async () => {
-                    await new Promise(r => setTimeout(r, 50));
-                    order.push(1);
-                    return "r1";
-                },
-            });
-
-            q.enqueue({
-                id: "t2",
-                execute: async () => {
-                    order.push(2);
-                    return "r2";
-                },
-            });
-
-            await q.waitForCompletion();
-
-            assert.deepEqual(order, [1, 2], "应按入队顺序串行执行");
-        });
-
-        it("#8 执行错误不中断队列", async () => {
-            const q = new ExecutionQueue<string>();
-
-            q.enqueue({
-                id: "t_fail",
-                execute: async () => { throw new Error("test error"); },
-            });
-
-            q.enqueue({
-                id: "t_ok",
-                execute: async () => "success",
-            });
-
-            await q.waitForCompletion();
-
-            const results = q.getResults();
-            assert.equal(results.length, 2);
-            assert.ok(results[0].error?.includes("test error"));
-            assert.equal(results[1].result, "success");
-        });
-    });
 
     // ─── S3.3: CallbackQueue (Q5) ───
 
@@ -251,13 +200,7 @@ describe("S3: Sandbox 多实例 + CodeActExecutor", () => {
             assert.equal(cbs[0].chatId, "g99");
         });
 
-        it("#14 ExecutionQueue empty waitForCompletion resolves immediately", async () => {
-            const q = new ExecutionQueue<string>();
-            await q.waitForCompletion();
-            assert.equal(q.getResults().length, 0);
-        });
-
-        it("#15 CodeActExecutor rapid successive enqueue processes all", async () => {
+        it("#14 CodeActExecutor rapid successive enqueue processes all", async () => {
             const exec = new CodeActExecutor("g1");
             const cbs: SubagentCallback[] = [];
             exec.setCallbackHandler(cb => cbs.push(cb));

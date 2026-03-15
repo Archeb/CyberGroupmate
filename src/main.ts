@@ -22,7 +22,6 @@ import {
     type AgentMessageSentEvent,
 } from "./pipeline/index.js";
 import {
-    readFileSync,
     existsSync,
     mkdirSync,
 } from "node:fs";
@@ -55,14 +54,8 @@ const DATA_DIR = "workspace";
 /** 事件日志路径 */
 const EVENTS_PATH = join(DATA_DIR, "events.jsonl");
 
-/** Agent 状态文件路径 */
-const AGENT_STATE_PATH = join(DATA_DIR, "agent-state.md");
-
 /** Session transcript 目录 */
 const SESSIONS_DIR = join(DATA_DIR, "sessions");
-
-/** Agent state 最大字符数 */
-const MAX_AGENT_STATE_CHARS = 4000;
 
 // ─── 辅助函数 ───
 
@@ -82,40 +75,7 @@ function ensureDataDirs(): void {
     }
 }
 
-/**
- * 读取 system prompt 模板并注入 persona 配置
- */
-function loadSystemPrompt(appConfig: AppConfig): string {
-    const promptPath = join(DATA_DIR, "agent-docs", "system-prompt.md");
-    if (!existsSync(promptPath)) {
-        return "You are a helpful AI assistant running in a CodeAct environment.";
-    }
 
-    let prompt = readFileSync(promptPath, "utf-8");
-
-    // 从配置中注入 persona
-    const persona = appConfig.persona.description || "";
-    prompt = prompt.replace("{{PERSONA}}", persona);
-
-    return prompt;
-}
-
-/**
- * 读取 agent state（如果存在）
- */
-function loadAgentState(): string {
-    if (!existsSync(AGENT_STATE_PATH)) {
-        return "（agent 刚启动，暂无状态记录）";
-    }
-    const state = readFileSync(AGENT_STATE_PATH, "utf-8");
-    if (state.length > MAX_AGENT_STATE_CHARS) {
-        return (
-            state.slice(0, MAX_AGENT_STATE_CHARS) +
-            "\n...[truncated]"
-        );
-    }
-    return state;
-}
 
 function serializeTopic(topic: ReturnType<TopicRegistry["get"]>): Record<string, unknown> | null {
     if (!topic) return null;
@@ -161,7 +121,7 @@ async function main(): Promise<void> {
         botToken: appConfig.telegram.botToken ? "✓" : "✗",
     });
 
-    const systemPrompt = loadSystemPrompt(appConfig);
+
     const nc = new NotificationCenter(EVENTS_PATH);
     const sandboxPool = new SandboxPool({
         maxInstances: appConfig.subagent?.maxSandboxInstances ?? 5,
