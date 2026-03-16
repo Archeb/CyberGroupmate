@@ -23,7 +23,9 @@ CyberGroupmate 系统的核心设计哲学是 **速度分层：快决策 + 慢�
 
 ### 2.1 主 Agent (Main Agent)
 **核心概念**：系统最高指挥官。通过一套 **7-Phase 的串行注意力循环** (Main Event Loop) 来分配其"注意力"。它从不做实际的沙盒操作或消息拉取，而是通过观察发上来的摘要做宏观调度。
+
 **上下文深度 (Cosine Decay)**：主 Agent 不会每次都去读取群里的全部信息。它使用余弦衰减算法，根据每个群组的 attend 次数在固定周期内自动切换上下文深度。深度周期 (`depthCyclePeriod`) 由群组的 Stickiness 等级决定（越亲密，深度巡检越频繁）。当有告警等紧急信号时，强制提升最低深度。四级深度为：只看摘要和分数 (L0)、加载群画像和历史回调 (L1)、追加消息原文 (L2)、全量深度摘要 (L3)。
+
 **对话历史管理**：主 Agent 维护自身的 LLM 对话历史 (`conversationHistory`)。每轮 attend 的上下文注入和 LLM 决策结果、以及 Phase 1 收到的 Callback 都会追加到历史中。超限时先做消息截断 (Layer 1)，再调用 `ContextManager.compact()` 做 LLM 压缩 (Layer 2)。
 
 #### 主 Agent 注意力状态机
