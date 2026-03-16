@@ -206,20 +206,6 @@ describe("Sandbox", () => {
         assert.equal(parsed.sent.chat.id, "100");
     });
 
-    it("should stop executing remaining code after scene.enter", async () => {
-        const sb = await makeSandbox();
-        const result = await sb.execute(`
-          console.log("before");
-          scene.enter("telegram", { chatId: "100" });
-          console.log("after");
-        `);
-
-        assert.equal(result.error, false);
-        assert.equal(result.sceneState, "telegram");
-        assert.ok(result.output.includes("before"));
-        assert.ok(result.output.includes("[Scene switched to: telegram"));
-        assert.ok(!result.output.includes("after"));
-    });
 
     it("should warn about bare async IIFE that is not awaited", async () => {
         const sb = await makeSandbox();

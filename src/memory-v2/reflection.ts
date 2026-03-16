@@ -260,11 +260,31 @@ export async function runReflection(
         }
     }
 
-    // 4b. 写入新事实
-    for (const fact of llmOutput.newFacts) {
-        memory.storeFact(fact.subject, fact.content, fact.category, "reflection");
+    // 4b. 写入新事实（含 embedding — 使向量检索可达）
+    let factEmbeddings: Float32Array[] = [];
+    const embCfg = memory.getEmbeddingConfig();
+    if (embCfg && llmOutput.newFacts.length > 0) {
+        try {
+            const { embed } = await import("./embedding.js");
+            const texts = llmOutput.newFacts.map(f => `${f.subject}: ${f.content}`);
+            factEmbeddings = await embed(texts, embCfg);
+            log.debug("Reflection 4b: 事实 embedding 生成完成", { count: factEmbeddings.length });
+        } catch (err) {
+            log.warn("Reflection 4b: 事实 embedding 生成失败，写入无 embedding 的事实", { error: String(err) });
+        }
+    }
+    for (let i = 0; i < llmOutput.newFacts.length; i++) {
+        const fact = llmOutput.newFacts[i];
+        memory.storeFact(
+            fact.subject, fact.content, fact.category, "reflection",
+            undefined,
+            factEmbeddings[i] ?? undefined,
+        );
         newCoreFacts.push(fact.content);
-        log.debug("Reflection 4b: 写入事实", { subject: fact.subject, category: fact.category });
+        log.debug("Reflection 4b: 写入事实", {
+            subject: fact.subject, category: fact.category,
+            hasEmbedding: !!factEmbeddings[i],
+        });
     }
 
     // 4b′. 回写话题情感到 topics 表

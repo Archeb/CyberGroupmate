@@ -32,17 +32,12 @@ import { TelegramAdapter } from "./adapter/telegram-adapter.js";
 import { SubagentManager } from "./subagent/subagent-manager.js";
 import { DynamicAttentionQueue } from "./subagent/attention-queue.js";
 import { CallbackQueue } from "./subagent/callback-queue.js";
-import { CodeActExecutor } from "./subagent/code-act-executor.js";
-import { FastPathHandler } from "./subagent/fast-path-handler.js";
 import { MainAgentLoop } from "./main-agent/main-agent-loop.js";
 import { GlobalState } from "./main-agent/global-state.js";
-import { calculateDepth } from "./main-agent/cosine-decay.js";
-import { estimateReplyMode, buildReplyDecisions, buildObserveDecision } from "./main-agent/decision-maker.js";
-import { buildGroupContext } from "./main-agent/context-builder.js";
-import { renderPrompt, buildAttentionVariables } from "./main-agent/prompt-renderer.js";
-import { callLLM, type ChatMessage } from "./core/llm.js";
-import type { AttendResult, CodeActReplyTask, SubagentCallback } from "./subagent/types.js";
+import { createAttendHandler } from "./main-agent/attend-handler.js";
+import { createDispatchHandler } from "./main-agent/dispatch-handler.js";
 import type { FastPathEvent } from "./subagent/fast-path-handler.js";
+import { FastPathHandler } from "./subagent/fast-path-handler.js";
 
 const log = createLogger("main");
 
@@ -411,351 +406,30 @@ async function main(): Promise<void> {
     }, globalState);
     mainLoop.setLLMConfig(cheapConfig);  // 对话历史 compact 使用 cheapConfig
 
-    // Attend handler: 主 Agent LLM 决策逻辑（Fix 8: subagent.md §12.2 ➛➜➝）
-    mainLoop.setAttendHandler(async (entry): Promise<AttendResult | null> => {
-        const subagent = subagentManager.get(entry.chatId);
-        if (!subagent) return buildObserveDecision(entry.chatId);
-
-
-
-        const depth = calculateDepth(
-            entry.attendCount,
-            subagent.stickiness.depthCyclePeriod,
-            entry.alert ? { forceMinDepth: 2 } : undefined,
-        );
-
-        const contextPkg = buildGroupContext({
-            chatId: entry.chatId,
-            depth,
-            snapshotTimestamp: new Date().toISOString(),
-            topicDigests: entry.topicDigests,
-            engagementScore: entry.priority,
-        });
-
-        // 算法预估 replyMode（作为 LLM 参考信号 + fallback）
-        const suggestedReplyMode = estimateReplyMode(
-            contextPkg,
-            entry.newMessageCount,
-            entry.hasFastPathRequest,
-            entry.stickinessLevel,
-            entry.topicDigests.filter(d => d.state === "ACTIVE").length,
-            entry.lastAttendedAt ? Date.now() - new Date(entry.lastAttendedAt).getTime() : Infinity,
-            0,
-        );
-
-        // 算法 fallback 结果（LLM 失败时使用）
-        const algorithmicResult = suggestedReplyMode === "NONE"
-            ? buildObserveDecision(entry.chatId)
-            : buildReplyDecisions(
-                entry.chatId,
-                suggestedReplyMode,
-                entry.topicDigests.map(d => ({ topicId: d.topicId, label: d.label })),
-                `${suggestedReplyMode} (engagement=${Math.round(entry.priority)}, depth=L${depth})`,
-            );
-
-        // ═══ Fix 8: LLM 决策路径 (subagent.md §12.2 ➋➌➍) ═══
-        try {
-            // 构建消息原文（L2+ 深度）
-            let messagesText = "";
-            if (depth >= 2) {
-                const recentMsgs = memory.getRecentMessages(entry.chatId, 20);
-                if (recentMsgs.length > 0) {
-                    // 构建 messageId → displayName 映射，用于解析 replyTo 关系
-                    const msgIdToName = new Map<string, string>();
-                    for (const m of recentMsgs) {
-                        msgIdToName.set(m.messageId, m.displayName || `(uid:${m.userId})`);
-                    }
-                    messagesText = recentMsgs.map(
-                        (m: any) => {
-                            const sender = m.displayName ?? `(uid:${m.userId})`;
-                            const replyTag = m.replyToMessageId
-                                ? ` (↩ reply to ${msgIdToName.get(m.replyToMessageId) ?? `msg#${m.replyToMessageId}`})`
-                                : "";
-                            return `[${m.timestamp ?? ""}] ${sender}${replyTag}: ${m.text ?? ""}`;
-                        }
-                    ).join("\n");
-                }
-            }
-
-            // 构建 FastPath 历史
-            const fpHandler = subagent.fastPathHandler as FastPathHandler | null;
-            const fpHistory = fpHandler?.getSentMessages()
-                .map(m => `- [${m.timestamp}] ${m.text}`)
-                .join("\n") ?? "";
-
-            // 计算时间差
-            const timeSinceLastAttend = entry.lastAttendedAt
-                ? `${Math.round((Date.now() - new Date(entry.lastAttendedAt).getTime()) / 60_000)}分钟`
-                : "从未关注";
-
-            // ➌ Attend 上下文注入 + ➍ Decision 输出格式
-            const promptVars = buildAttentionVariables(contextPkg, entry.newMessageCount, {
-                persona: `你是「${appConfig.persona.name}」。${appConfig.persona.description}`,
-                lastAttendedAt: entry.lastAttendedAt,
-                timeSinceLastAttend,
-                stickinessLevel: entry.stickinessLevel,
-                priorityMultiplier: subagent.stickiness.priorityMultiplier,
-                tonePreset: subagent.stickiness.level === "CORE" ? "随意友好" :
-                    subagent.stickiness.level === "FAMILIAR" ? "轻松" : "礼貌得体",
-                callbacks: undefined, // TODO: 从 globalState 获取最近 callbacks
-                fastPathHistory: fpHistory,
-                alertReason: entry.alert?.reason,
-                messages: messagesText || undefined,
-                suggestedReplyMode,
-            });
-
-            const attentionPrompt = renderPrompt("ATTENTION", promptVars);
-            const decisionPrompt = renderPrompt("DECISION", promptVars);
-
-            // ➋ 主 Agent 系统 Prompt — 含全局状态注入 (subagent.md §12.2 ➋)
-            const recentDecisionsText = globalState.getRecentDecisions().slice(-5)
-                .map(d => `- [${d.chatId}] ${d.decision}`).join("\n") || "（无）";
-            const activeTasksText = globalState.getTaskList()
-                .filter(t => t.status !== "DONE" && t.status !== "CANCELLED")
-                .map(t => `- [${t.priority}][${t.status}] ${t.description}${t.chatId ? ` (群:${t.chatId})` : ""}`)
-                .join("\n") || "（无待办任务）";
-
-            const mainSystemPrompt = `你是 CyberGroupmate 的主调度 Agent「${appConfig.persona.name}」。你的职责是快速审视多个群组的消息状态，做出是否回复、怎么回复的决策，并将执行任务分派给各群组的 Subagent。
-
-${appConfig.persona.description}
-
-## 核心规则
-1. 你是唯一的决策者。审视消息 → 判断 → 分派。不亲自回复消息。
-2. 你的注意力是串行的。一次只处理一个群组。
-3. 你看到的消息截止至 snapshotTimestamp，处理期间的新消息你看不到。
-4. 你可以一次生成多条回复指令（BATCH 模式），模拟用户看完一段对话后批量回复。
-5. 对于简单和复杂回复，都通过 CODEACT_REPLY 分派给 subagent 执行。你在 contentDirection 中给出明确的内容方向。
-6. 只有在高 engagement 场景下才授权 FastPath。
-7. 对话历史中的 [Callback] 消息是上一轮 subagent 执行的结果反馈，请参考它们避免重复决策。
-
-## 当前全局状态
-${globalState.getAttentionSummary() || "（无）"}
-
-## 最近决策记录
-${recentDecisionsText}
-
-## 当前任务列表
-${activeTasksText}
-
-仅返回 JSON，不要包含其他文本。`;
-
-            // ➝ 构建 messages: [system, ...历史对话, 当前轮 attend prompt]
-            const currentTurnPrompt = `${attentionPrompt}\n\n${decisionPrompt}`;
-            const messages: ChatMessage[] = [
-                { role: "system", content: mainSystemPrompt },
-                ...(mainLoop.getConversationHistory() as ChatMessage[]),
-                { role: "user", content: currentTurnPrompt },
-            ];
-
-            const llmResponse = await callLLM(
-                messages,
-                sotaConfig,
-                { temperature: 0.3 },
-            );
-
-
-            // 解析 LLM 返回的 JSON
-            const jsonContent = llmResponse.content.trim();
-            // 尝试提取 JSON（处理 markdown 围栏情况）
-            const jsonMatch = jsonContent.match(/```(?:json)?\s*\n?([\s\S]*?)```/) ?? [null, jsonContent];
-            const parsed = JSON.parse(jsonMatch[1] ?? jsonContent);
-
-            const llmResult: AttendResult = {
-                chatId: entry.chatId,
-                replyMode: parsed.replyMode ?? suggestedReplyMode,
-                decisions: Array.isArray(parsed.decisions) ? parsed.decisions.map((d: any) => ({
-                    action: d.action ?? "REPLY",
-                    topicId: d.topicId,
-                    contentDirection: d.contentDirection,
-                    confidence: d.confidence ?? 0.5,
-                    reason: d.reason ?? "",
-                })) : algorithmicResult.decisions,
-                reasoning: parsed.reasoning ?? "",
-            };
-
-            // ═══ 追加本轮对话到历史（下轮 LLM 可见） ═══
-            await mainLoop.appendToHistory({ role: "user", content: currentTurnPrompt });
-            await mainLoop.appendToHistory({ role: "assistant", content: jsonContent });
-
-            globalState.recordDecision(entry.chatId,
-                `LLM_DECISION: ${llmResult.replyMode} (${llmResult.decisions.length} decisions, engagement=${Math.round(entry.priority)}, depth=L${depth})`);
-            log.info("LLM 决策完成", {
-                chatId: entry.chatId,
-                replyMode: llmResult.replyMode,
-                decisions: llmResult.decisions.length,
-                reasoning: llmResult.reasoning,
-                decisionDetails: llmResult.decisions.map(d =>
-                    `[${d.action}] ${d.contentDirection ?? d.reason ?? "(无方向)"} (topic=${d.topicId ?? "N/A"}, conf=${d.confidence})`
-                ),
-            });
-            return llmResult;
-
-        } catch (err) {
-            // LLM 决策失败 → fallback 到算法结果
-            log.warn("LLM 决策失败，fallback 到算法", {
-                chatId: entry.chatId,
-                error: String(err),
-            });
-            globalState.recordDecision(entry.chatId,
-                `ALGO_FALLBACK: ${suggestedReplyMode} (engagement=${Math.round(entry.priority)}, depth=L${depth}, llm_error=${String(err).slice(0, 100)})`);
-            return algorithmicResult;
-        }
-    });
+    // Attend handler: 主 Agent LLM 决策逻辑（subagent.md §12.2 ➛➜➝）
+    mainLoop.setAttendHandler(createAttendHandler({
+        memory,
+        globalState,
+        subagentManager,
+        mainLoop,
+        sotaConfig,
+        persona: appConfig.persona,
+    }));
 
     // Dispatch handler: 分派任务到 CodeActExecutor / FastPath / Deferred Re-entry
-    mainLoop.setDispatchHandler(async (result) => {
-        const subagent = subagentManager.get(result.chatId);
-        if (!subagent) return;
-
-        let hasCodeActTask = false;
-
-        for (const decision of result.decisions) {
-            if (decision.action === "REPLY") {
-                // Fix 3: 构建符合 subagent.md §13.2 B1 规格的 contextSnapshot
-                // 获取话题摘要
-                const activeTopics = subagent?.topicRegistry.getActive(result.chatId) ?? [];
-                const topicForDecision = decision.topicId
-                    ? activeTopics.find((t: any) => String(t.id) === decision.topicId)
-                    : activeTopics[0];
-                const topicSummary = topicForDecision
-                    ? `${topicForDecision.label ?? ""}: ${topicForDecision.recentContext ?? ""}`
-                    : "";
-
-                // 获取最近消息
-                const recentMsgs = memory.getRecentMessages(result.chatId, 20);
-                // 构建 messageId → displayName 映射，用于解析 replyTo 关系
-                const dispatchMsgIdToName = new Map<string, string>();
-                for (const m of recentMsgs) {
-                    dispatchMsgIdToName.set(m.messageId, m.displayName || `(uid:${m.userId})`);
-                }
-                const formattedMessages = recentMsgs.map((m: any) => ({
-                    id: String(m.messageId ?? m.id ?? m.message_id ?? ""),
-                    sender: String(m.displayName ?? m.display_name ?? m.sender ?? m.user_id ?? "?"),
-                    text: String(m.text ?? ""),
-                    timestamp: String(m.timestamp ?? ""),
-                    replyTo: m.replyToMessageId
-                        ? (dispatchMsgIdToName.get(m.replyToMessageId) ?? `msg#${m.replyToMessageId}`)
-                        : undefined,
-                }));
-
-                // 获取人物信息
-                let personContext = "";
-                try {
-                    const persons = await memory.recall(result.chatId, { type: "person", limit: 5 } as any);
-                    personContext = JSON.stringify(persons, null, 2);
-                } catch { /* 非关键路径 */ }
-
-                const contextSnapshot = buildGroupContext({
-                    chatId: result.chatId,
-                    depth: 2, // 提供足够上下文
-                    snapshotTimestamp: new Date().toISOString(),
-                    topicDigests: subagent.observer.getDigest(),
-                    engagementScore: subagent.observer.getEngagementScore(),
-                });
-
-                // 增强 contextSnapshot：注入 spec 要求的额外上下文
-                (contextSnapshot as any).topicSummary = topicSummary;
-                (contextSnapshot as any).recentMessages = formattedMessages;
-                (contextSnapshot as any).personContext = personContext;
-                (contextSnapshot as any).toneGuidance = subagent.stickiness.level === "CORE" ? "随意友好" : "礼貌得体";
-                (contextSnapshot as any).contentDirection = decision.contentDirection ?? "";
-
-                // 构建 CodeActReplyTask
-                const task: CodeActReplyTask = {
-                    type: "CODEACT_REPLY",
-                    chatId: result.chatId,
-                    taskId: `task-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-                    decisions: [decision],
-                    contextSnapshot,
-                    replyMode: result.replyMode === "BATCH" ? "BATCH" : "SINGLE",
-                    createdAt: new Date().toISOString(),
-                };
-
-                // 获取或创建 CodeActExecutor
-                let executor = subagent.codeActExecutor as CodeActExecutor | null;
-                if (!executor) {
-                    executor = new CodeActExecutor(result.chatId);
-                    executor.setSessionFilePath(subagentManager.getSessionFilePath(result.chatId));
-                    // 尝试从磁盘加载已有 session
-                    executor.loadSession();
-                    subagent.codeActExecutor = executor;
-                }
-
-                // 确保依赖已注入（restoreAll 恢复的 executor 可能缺少依赖）
-                if (!executor.hasDependencies()) {
-                    executor.setCallbackHandler((cb: SubagentCallback) => {
-                        q5.enqueue(cb);
-                        log.info("Subagent 执行完成 → Q5", {
-                            chatId: cb.chatId,
-                            taskId: cb.taskId,
-                            status: cb.status,
-                            summary: cb.summary,
-                            sentMessages: cb.sentMessages?.length ?? 0,
-                            sentPreviews: cb.sentMessages?.map(m => m.text.length > 60 ? m.text.slice(0, 60) + "..." : m.text),
-                            durationMs: cb.durationMs,
-                        });
-                        // Unblock in Q3 when callback arrives
-                        q3.unblock(cb.chatId);
-                        globalState.recordDecision(cb.chatId, `CALLBACK: ${cb.executionType} ${cb.status} (${cb.summary})`);
-                    });
-                    // Fix 9: 注入 Sandbox + NC + LLM 依赖
-                    executor.setDependencies(sandboxPool, nc, llmConfig, join(DATA_DIR, "sessions"), appConfig.persona);
-                }
-
-                executor.enqueue(task);
-                hasCodeActTask = true;
-
-                log.info("分派 CodeActReplyTask", {
-                    chatId: result.chatId,
-                    taskId: task.taskId,
-                    replyMode: task.replyMode,
-                    action: decision.action,
-                    topicId: decision.topicId,
-                    contentDirection: decision.contentDirection ?? "(无)",
-                    reason: decision.reason ?? "",
-                    confidence: decision.confidence,
-                    contextMessageCount: formattedMessages.length,
-                    topicSummary: topicSummary ? topicSummary.slice(0, 100) : "(无)",
-                });
-            } else if (decision.action === "FAST_PATH_AUTH" && result.fastPathAuth) {
-                // 授权 FastPath
-                let fp = subagent.fastPathHandler as FastPathHandler | null;
-                if (!fp) {
-                    fp = new FastPathHandler(result.chatId);
-                    fp.setCallbackHandler((cb: SubagentCallback) => q5.enqueue(cb));
-                    fp.setLLMConfig(cheapConfig, appConfig.persona);
-                    subagent.fastPathHandler = fp;
-                }
-                fp.authorize(result.fastPathAuth);
-                log.info("授权 FastPath", { chatId: result.chatId });
-            } else if (decision.action === "DEFER") {
-                // Fix 2: DEFERRED_RE_ENTRY — 延迟重新入队 (subagent.md §13.1 D1)
-                q3.enqueueOrUpdate({
-                    chatId: result.chatId,
-                    source: "DEFERRED_RE_ENTRY",
-                    priority: Math.max(0, (subagent.observer.getEngagementScore() * subagent.stickiness.priorityMultiplier) * 0.5),
-                    basePriority: Math.max(0, (subagent.observer.getEngagementScore() * subagent.stickiness.priorityMultiplier) * 0.5),
-                });
-                log.info("DEFER → 重新入队", {
-                    chatId: result.chatId,
-                    reason: decision.reason,
-                    topicId: decision.topicId,
-                });
-                globalState.recordDecision(result.chatId, `DEFERRED: ${decision.reason}`);
-            } else if (decision.action === "OBSERVE" || decision.action === "IGNORE") {
-                // 仅记录，不分派
-                log.debug("决策: 不操作", {
-                    chatId: result.chatId,
-                    action: decision.action,
-                    reason: decision.reason,
-                });
-            }
-        }
-
-        if (hasCodeActTask) {
-            q3.block(result.chatId, "CodeAct executing");
-        }
-    });
+    mainLoop.setDispatchHandler(createDispatchHandler({
+        memory,
+        globalState,
+        subagentManager,
+        sandboxPool,
+        nc,
+        q3,
+        q5,
+        llmConfig,
+        cheapConfig,
+        persona: appConfig.persona,
+        sessionsDir: SESSIONS_DIR,
+    }));
 
     log.info("MainAgentLoop 配置完成");
 

@@ -164,6 +164,11 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
         });
     }
 
+    /** 获取当前 embedding 配置（供 reflection 等外部模块使用） */
+    getEmbeddingConfig(): EmbeddingConfig | undefined {
+        return this.embeddingConfig;
+    }
+
     /**
      * 动态加载 sqlite-vec 扩展
      * 如果不可用（未安装 / 编译失败），透明 fallback 到纯 JS。

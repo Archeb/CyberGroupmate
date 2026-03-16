@@ -20,21 +20,13 @@ import { GlobalState } from "./global-state.js";
 import type {
     AttentionQueueEntry,
     SubagentCallback,
-    GroupContextPackage,
     AttendResult,
-    CodeActReplyTask,
-    SubagentConfig,
 } from "../subagent/types.js";
 import { DEFAULT_SUBAGENT_CONFIG } from "../subagent/types.js";
-import { calculateDepth, type ContextDepth } from "./cosine-decay.js";
-import { buildGroupContext, type ContextBuildInput } from "./context-builder.js";
-import { estimateReplyMode, estimateReplyCount, buildObserveDecision, buildReplyDecisions } from "./decision-maker.js";
-import { renderPrompt, buildAttentionVariables } from "./prompt-renderer.js";
 import type { ChatMessage } from "../core/llm.js";
 import type { LLMConfig } from "../core/config.js";
 import { shouldCompact, compact as contextManagerCompact } from "../memory-v2/context-manager.js";
 import { createLogger } from "../core/logger.js";
-import { randomUUID } from "node:crypto";
 
 const log = createLogger("main-agent-loop");
 
@@ -272,7 +264,7 @@ export class MainAgentLoop {
             if (this.attendHandler) {
                 result = await this.attendHandler(entry);
             } else {
-                result = this.defaultAttend(entry);
+                log.warn("attendHandler 未设置，跳过", { chatId: entry.chatId });
             }
 
             if (result) {
@@ -403,59 +395,6 @@ export class MainAgentLoop {
     }
 
     // ─── 内部方法 ───
-
-    /**
-     * 默认 attend 逻辑（无外部 handler 时）
-     */
-    private defaultAttend(entry: AttentionQueueEntry): AttendResult {
-        const subagent = this.subagentManager.get(entry.chatId);
-        if (!subagent) {
-            return buildObserveDecision(entry.chatId);
-        }
-
-
-
-        // 计算上下文深度
-        const depth = calculateDepth(
-            entry.attendCount,
-            this.config.cosineDecayCyclePeriod,
-        );
-
-        // 构建上下文
-        const contextInput: ContextBuildInput = {
-            chatId: entry.chatId,
-            depth,
-            snapshotTimestamp: new Date().toISOString(),
-            topicDigests: entry.topicDigests,
-            engagementScore: entry.priority,
-        };
-        const contextPkg = buildGroupContext(contextInput);
-
-        // 决策 (Fix 4: 传入丰富信号)
-        const timeSinceLastAttendMs = entry.lastAttendedAt
-            ? Date.now() - new Date(entry.lastAttendedAt).getTime()
-            : Infinity;
-        const replyMode = estimateReplyMode(
-            contextPkg,
-            entry.newMessageCount,
-            entry.hasFastPathRequest,
-            entry.stickinessLevel,
-            entry.topicDigests.filter(d => d.state === "ACTIVE").length,
-            timeSinceLastAttendMs,
-            0, // avgMessageLength: 不在 queue entry 中，后续由 Observer 提供
-        );
-
-        if (replyMode === "NONE") {
-            return buildObserveDecision(entry.chatId);
-        }
-
-        return buildReplyDecisions(
-            entry.chatId,
-            replyMode,
-            entry.topicDigests.map(d => ({ topicId: d.topicId, label: d.label })),
-            `Auto-decision: ${replyMode} (engagement=${entry.priority}, depth=L${depth})`,
-        );
-    }
 
     private scheduleNext(): void {
         if (!this.running) return;
