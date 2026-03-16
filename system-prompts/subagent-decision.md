@@ -1,4 +1,4 @@
-输出格式要求（JSON）:
+以纯JSON格式输出:
 ```json
 {
   "replyMode": "NONE | SINGLE | BATCH",

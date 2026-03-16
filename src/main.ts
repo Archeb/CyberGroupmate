@@ -270,6 +270,27 @@ async function main(): Promise<void> {
         const eventType = String(event.type ?? "");
         if (eventType !== "nc.message" && eventType !== "telegram.message") return;
 
+        // ─── 即时落盘：确保 message_log 实时可查 ───
+        // RecordingPipeline 的 flush 是延迟触发的（50 条消息 OR 2 分钟静默），
+        // 但 attend-handler 在每个 tick（~5s）就会通过 memory.getRecentMessages()
+        // 从 message_log 表读取最近消息构建 LLM 上下文。
+        // 如果不在此处即时写入，最新消息在 flush 之前对 attend-handler 不可见。
+        // storeMessageBatch 内部使用 INSERT OR IGNORE，所以 RecordingPipeline
+        // 后续 flush 时的重复写入不会冲突。
+        try {
+            memory.storeMessageBatch([{
+                messageId: String(event.messageId ?? event.id ?? `msg_${Date.now()}`),
+                chatId,
+                userId: String(event.userId ?? event.user_id ?? event.senderId ?? ""),
+                displayName: String(event.displayName ?? event.senderName ?? event.userName ?? ""),
+                text: String(event.text ?? event.message ?? ""),
+                replyToMessageId: event.replyToMessageId ? String(event.replyToMessageId) : undefined,
+                timestamp: new Date().toISOString(),
+            }]);
+        } catch (err) {
+            log.warn("即时消息落盘失败", { chatId, error: String(err) });
+        }
+
         const sub = subagentManager.getOrCreate(chatId);
         // Per-group: Observer + RecordingPipeline 同时处理消息 (subagent.md §3.1)
         sub.onMessage(event);

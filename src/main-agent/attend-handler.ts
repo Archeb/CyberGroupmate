@@ -182,10 +182,11 @@ ${recentDecisionsText}
 ## 当前任务列表
 ${activeTasksText}
 
-仅返回 JSON，不要包含其他文本。`;
+## 输出格式要求
+${decisionPrompt}`;
 
             // ➝ 构建 messages: [system, ...历史对话, 当前轮 attend prompt]
-            const currentTurnPrompt = `${attentionPrompt}\n\n${decisionPrompt}`;
+            const currentTurnPrompt = `${attentionPrompt}`;
             const messages: ChatMessage[] = [
                 { role: "system", content: mainSystemPrompt },
                 ...(mainLoop.getConversationHistory() as ChatMessage[]),
