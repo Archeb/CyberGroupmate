@@ -1352,7 +1352,7 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
             { role: "user", content: `查询：${query}\n\n相关记忆：\n${topicSummaries}\n${factSummaries}` },
         ];
 
-        const response = await callLLM(messages, this.cheapLlmConfig, { temperature: 0.3 });
+        const response = await callLLM(messages, this.cheapLlmConfig);
         return response.content.trim();
     }
 
@@ -1519,7 +1519,7 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
             { role: "user", content: intent },
         ];
 
-        const response = await callLLM(messages, this.cheapLlmConfig, { temperature: 0.1 });
+        const response = await callLLM(messages, this.cheapLlmConfig);
         try {
             const parsed = JSON.parse(response.content.replace(/```json?\s*/g, "").replace(/```/g, "").trim());
             return {
@@ -1555,7 +1555,7 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
             { role: "user", content: `问题：${intent}\n\n对话记录：\n${contextParts.join("\n\n---\n\n")}` },
         ];
 
-        const response = await callLLM(messages, this.cheapLlmConfig, { temperature: 0.3 });
+        const response = await callLLM(messages, this.cheapLlmConfig);
         return response.content.trim();
     }
 

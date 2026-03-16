@@ -396,9 +396,7 @@ export class RecordingPipeline extends EventEmitter {
             { role: "user", content: prompt },
         ];
 
-        const response = await callLLM(llmMessages, this.llmConfig, {
-            temperature: 0.5,
-        });
+        const response = await callLLM(llmMessages, this.llmConfig);
 
         try {
             // 提取 JSON（处理可能的 markdown 包裹）
@@ -453,9 +451,7 @@ export class RecordingPipeline extends EventEmitter {
             { role: "user", content: prompt },
         ];
 
-        const response = await callLLM(llmMessages, this.llmConfig, {
-            temperature: 0.5,
-        });
+        const response = await callLLM(llmMessages, this.llmConfig);
 
         let result: TopicSummaryTriageResult;
         try {
@@ -492,9 +488,7 @@ export class RecordingPipeline extends EventEmitter {
             ];
 
             try {
-                const retryResponse = await callLLM(retryMessages, this.llmConfig, {
-                    temperature: 0.3,
-                });
+                const retryResponse = await callLLM(retryMessages, this.llmConfig);
                 const retryJson = retryResponse.content
                     .replace(/```json\s*/g, "")
                     .replace(/```\s*/g, "")

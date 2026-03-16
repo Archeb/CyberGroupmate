@@ -195,8 +195,7 @@ ${decisionPrompt}`;
 
             const llmResponse = await callLLM(
                 messages,
-                sotaConfig,
-                { temperature: 0.3 },
+                sotaConfig
             );
 
             // 解析 LLM 返回的 JSON

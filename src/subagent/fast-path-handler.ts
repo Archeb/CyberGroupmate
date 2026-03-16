@@ -253,7 +253,6 @@ export class FastPathHandler {
                 const response = await callLLM(
                     [{ role: "user", content: prompt }],
                     this.llmConfig,
-                    { temperature: 0.7, maxTokens: 256 },
                 );
 
                 return response.content.trim();
