@@ -33,7 +33,7 @@ describe("FeedbackLoop", () => {
         const memory = new MemoryStoreV2(join(dir, "memory.db"));
         const nc = new NotificationCenter(join(dir, "events.jsonl"), false);
         const registry = new TopicRegistry();
-        const loop = new FeedbackLoop(registry, memory, nc, 20);
+        const loop = new FeedbackLoop(memory, nc, () => registry, 20);
 
         const topic = registry.create("-1001", "测试话题", ["测试"], [{
             id: "1",

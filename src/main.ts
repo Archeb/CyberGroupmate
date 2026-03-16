@@ -11,7 +11,7 @@
  */
 
 import { NotificationCenter, type NotificationEvent } from "./event/notification-center.js";
-import { MessageLogWriter } from "./event/message-log-writer.js";
+
 import { SandboxPool } from "./sandbox/sandbox-pool.js";
 import { createTaskListSkill, buildTaskListHostCalls } from "./sandbox/skills/task-list.js";
 import { MemoryStoreV2 } from "./memory-v2/index.js";
@@ -217,18 +217,8 @@ async function main(): Promise<void> {
         (message) => console.log(`🤖 ${message}`),
     );
 
-    // ─── Pipeline 组件（反馈追踪 — 话题聚类已下沉到 per-group RecordingPipeline） ───
-    // FeedbackLoop 使用一个轻量级的全局 TopicRegistry 作为 fallback，
-    // 但优先通过 registryLookup 查找 per-group TopicRegistry（解决全局实例不同步问题）
-    const globalTopicRegistryForFeedback = new TopicRegistry();
-    // feedbackLoop 延迟创建，需要在 subagentManager 之后（见下方初始化块）
-
     // ─── Subagent 架构组件初始化 ───
-    const messageLogWriter = new MessageLogWriter(memory, {
-        eventTypes: ["nc.message", "telegram.message", "system.agent_message_sent"],
-        agentUserId: "agent",
-        agentDisplayName: appConfig.persona?.name ?? "赛博群友",
-    });
+    // 注意: message_log 落盘由 RecordingPipeline Step 4 负责，不再需要独立的 MessageLogWriter hook
     const subagentManager = new SubagentManager({
         observerConfig: {
             engagementWindowMs: 5 * 60 * 1000,
@@ -265,17 +255,12 @@ async function main(): Promise<void> {
 
     // FeedbackLoop 创建（需要在 subagentManager 之后，以支持 per-group registryLookup）
     const feedbackLoop = new FeedbackLoop(
-        globalTopicRegistryForFeedback,
         memory,
         nc,
-        undefined, // 使用默认 evaluationDelayMs
-        (chatId) => subagentManager.get(chatId)?.topicRegistry ?? null,
+        (chatId: string) => subagentManager.get(chatId)?.topicRegistry ?? null,
     );
 
     // ─── NC.onPush: 消息实时处理管线 ───
-
-    // Hook 1: 消息实时落盘到 message_log
-    nc.onPush(event => messageLogWriter.write(event));
 
     // Hook 2: 消息分发到 per-group GroupSubagent (Observer + RecordingPipeline) → 更新 Q3
     nc.onPush(event => {
