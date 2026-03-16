@@ -11,19 +11,20 @@ CyberGroupmate 系统的核心设计哲学是 **速度分层：快决策 + 慢�
 
 ### 1.1 系统分层
 1. **基础设施接入层 (Platform Adapter)**: 将不同来源（如 Telegram）的事件标准化并推入系统。代理层只做收发，没有任何智能决策。
-2. **全局事件总线 (Notification Center, Q1)**: 系统的心脏。负责所有事件的实时落盘 (`message_log`)与跨组件分发 (`GroupDispatcher`)。
+2. **全局事件总线 (NotificationCenter)**: 系统的心脏。负责所有事件的实时落盘 (`MessageLogWriter` → `message_log`)与同步 Hook 分发到 `GroupSubagent Observer` + `FeedbackLoop` 等。
 3. **感知与智能层 (Main Agent & Subagents)**:
-   - **Main Agent (决策层)**: 拥有全局视野。它像一个高速运转的单线程大脑，不断从优先队列 (Q3) 中获取最需要关注的群组，统览全局上下文后做出决策（忽略、回复、授权快速通道），并将任务分派下去。
-   - **Subagents (执行与感知层)**: 每个群组拥有一个独立的 Subagent 实例。它默默在后台监听本群消息（Observer），将复杂的需要深度推理的动作放在独立的沙盒中执行（CodeActExecutor），并在高潮迭起时自主应答短平快的问题（FastPathHandler）。
-4. **统一记忆层 (Memory V2)**: SQLite 构筑的三层记忆（短期上下文、中期基于情景的话题及群画像、长期核心事实），结合定时或冷场触发的 `Reflection` 反思机制，让 Agent 拥有类似人类的记忆衰减与认知。
+   - **Main Agent (决策层)**: 拥有全局视野。它像一个高速运转的单线程大脑，不断从注意力队列 (Q3) 中获取最需要关注的群组，统览全局上下文后做出决策（忽略、回复、延迟重审、授权快速通道），并将任务分派下去。自身维护一份 LLM 对话历史（经两层 Compact 防止膨胀），让 LLM 在跨 tick 时可以"记住"之前的决策和回调情况。
+   - **Subagents (执行与感知层)**: 每个群组拥有一个独立的 `GroupSubagent` 容器实例。它是下设组件的宿主：`Observer`（感知器——计算活跃度、缓冲消息）、`TopicRegistry` + `RecordingPipeline`（话题聚类与记忆沉淀）、`CodeActExecutor`（深度执行器——独立沙盒）、`FastPathHandler`（快回应急）。
+4. **统一记忆层 (Memory V2)**: SQLite 构筑的多层记忆（消息日志、话题节点、群组画像、人物画像、核心事实），结合定时/冷场/作息触发的 `Reflection` 反思机制与向量检索 (`sqlite-vec` / 纯 JS fallback)，以及上下文预算管理器 (`ContextManager`)，让 Agent 拥有类似人类的记忆衰减与认知。
 
 ---
 
 ## 2. 关键组件设计思路
 
 ### 2.1 主 Agent (Main Agent)
-**核心概念**：系统最高指挥官。通过一套 **7-Phase 的串行注意力循环** (Main Event Loop) 来分配其“注意力”。它从不做实际的沙盒操作或消息拉取，而是通过观察发上来的摘要做宏观调度。
-**上下文深度 (Cosine Decay)**：主 Agent 不会每次都去读取群里的所有历史。它使用余弦衰减算法结合群组粘性 (Stickiness)，动态决定在看一个群时，是只看一眼摘要 (L0)，还是深度研读完整上下文 (L3)。
+**核心概念**：系统最高指挥官。通过一套 **7-Phase 的串行注意力循环** (Main Event Loop) 来分配其"注意力"。它从不做实际的沙盒操作或消息拉取，而是通过观察发上来的摘要做宏观调度。
+**上下文深度 (Cosine Decay)**：主 Agent 不会每次都去读取群里的全部信息。它使用余弦衰减算法，根据每个群组的 attend 次数在固定周期内自动切换上下文深度。深度周期 (`depthCyclePeriod`) 由群组的 Stickiness 等级决定（越亲密，深度巡检越频繁）。当有告警等紧急信号时，强制提升最低深度。四级深度为：只看摘要和分数 (L0)、加载群画像和历史回调 (L1)、追加消息原文 (L2)、全量深度摘要 (L3)。
+**对话历史管理**：主 Agent 维护自身的 LLM 对话历史 (`conversationHistory`)。每轮 attend 的上下文注入和 LLM 决策结果、以及 Phase 1 收到的 Callback 都会追加到历史中。超限时先做消息截断 (Layer 1)，再调用 `ContextManager.compact()` 做 LLM 压缩 (Layer 2)。
 
 #### 主 Agent 注意力状态机
 ```mermaid
@@ -32,7 +33,7 @@ stateDiagram-v2
     
     state POLLING {
         DrainCallbacks: Phase 1 清空 Callback (Q5)
-        UpdateQueue: Phase 2 动态队列评估 (Q3)
+        UpdateQueue: Phase 2 动态队列评估 (Q3) + 告警提权 + Followup 提权
         Dequeue: Phase 3 取最高优先级群组
         
         DrainCallbacks --> UpdateQueue
@@ -44,10 +45,10 @@ stateDiagram-v2
     Sleep --> POLLING
     
     state ATTENDING {
-        BuildCtx: Phase 4 依照深度组装上下文 (L0-L3)
-        Decide: Phase 5 批量决策 (LLM)
-        Dispatch: Phase 6 分派任务 (Q4)
-        UpdateState: Phase 7 更新全局状态
+        BuildCtx: Phase 4 依照 Cosine Decay 深度组装上下文 (L0-L3)
+        Decide: Phase 5 主 Agent LLM 决策 (含算法 fallback)
+        Dispatch: Phase 6 分派任务 (REPLY→CodeAct / FAST_PATH_AUTH / DEFER / OBSERVE)
+        UpdateState: Phase 7 更新全局状态 (GlobalState 持久化)
         
         BuildCtx --> Decide
         Decide --> Dispatch
@@ -57,42 +58,55 @@ stateDiagram-v2
     ATTENDING --> POLLING
 ```
 
-### 2.2 群组子代理 (Subagent)
-**核心概念**：被 Main Agent 调配的打工机。针对每个 Telegram 群，系统都动态孵化一个 Subagent。包含三个核心零部件：
-1. **Observer (感知器)**：永远在运行。监听该群的消息、归档话题 (TopicRegistry) 以及录制 (RecordingPipeline)，并且不调用复杂的 LLM，仅靠轻量级算法计算**活跃度 (Engagement)**，在达到阈值时向主 Agent 发出告警。
-2. **CodeActExecutor (深度执行器)**：拥有完全隔离的对话 Session 与沙盒 Worker。收到主 Agent 发给该群的 `CODEACT_REPLY` 后，它才被激活，自己调用 LLM 写代码、查数据库、发送长篇分析等，完事后上报。
-3. **FastPathHandler (应急反射神经)**：**全系统唯一允许跳过主 Agent 决定回复内容的组件**，但必须由主 Agent 预授权。只针对高强度互动的活跃期，调用较快、较便宜的模型做简单的打招呼或附和。
+### 2.2 群组子代理 (GroupSubagent)
+**核心概念**：被 Main Agent 调配的执行单元。针对每个 Telegram 群，系统都动态孵化一个 `GroupSubagent` 容器。容器持有以下核心组件：
+1. **Observer (感知器)**：永远在运行。监听该群的消息，将它们放入内部 Q2 缓冲区。它**不调用 LLM**，纯靠算法计算**活跃度 (Engagement)**（基于消息频率 × 20 + 独立发言者 × 15 + @提及加成 20，上限 100）。当 Engagement 超阈值时向 Q3 发出高优告警；当条件满足时推荐 FastPath 授权。
+2. **TopicRegistry + RecordingPipeline (话题系统)**：与 Observer 同级，由 `GroupSubagent` 直接持有。`RecordingPipeline` 独立维护消息缓冲与 LLM-based 话题聚类/摘要/Triage，通过事件桥接 (`topic:triage-passed`) 将话题摘要自动同步到 Observer 的 `topicDigests`。话题归档 (`topic:archived`) 时通知 Memory 做 `finalizeTopic()`。
+3. **CodeActExecutor (深度执行器)**：拥有完全隔离的 LLM 对话 Session 与通过 `SandboxPool` 按需获取的独立 Sandbox Worker。收到主 Agent 分派的 `CODEACT_REPLY` 任务后才被激活。它有自己的 Q4 任务队列实现串行执行，每个任务调用 `runCodeActSession()` 在沙盒中多轮 LLM 交互（可调用 Telegram API、Memory API、Web 搜索等 Host Call），完事后产出 Callback 到 Q5。Session 具备持久化与恢复能力（磁盘 JSON），以及两层 Compact 机制（Layer 1 结构化快速截断 + Layer 2 LLM token-budget 压缩）。
+4. **FastPathHandler (应急反射神经)**：仅在主 Agent 显式预授权 (`FAST_PATH_AUTH`) 后才生效。收到授权后，用 `cheapConfig` LLM 自主生成快回复（受 `maxReplies` 次数与过期时间约束，支持 `preauthorizedActions` / `blockedActions` 以及 `__SKIP__` 跳过标记）。每次发送后产出 Callback 到 Q5 回报主 Agent。次数用尽或过期后自动禁用。
+
+**Stickiness (群组亲密度)**：每个群组有一个 `GroupStickiness`，维护四个等级 `CORE → FAMILIAR → ACQUAINTANCE → STRANGER`。不同等级直接影响：优先级乘数 (`priorityMultiplier`)、Cosine Decay 深度周期 (`depthCyclePeriod`)、FastPath 资格 (`fastPathEligible`)、回复频率 (`replyFrequency`)、主动介入级别 (`initiativeLevel`) 等行为参数。亲密度可基于 `GroupModel` 的日均消息量与无交互天数自动升降级。
 
 #### Subagent 状态流转图
 ```mermaid
 stateDiagram-v2
     state Observer_始终运行 {
-        收到消息 --> 缓冲
-        缓冲 --> 计算活跃度
-        计算活跃度 --> 告警入队 : 满足阈值
-        缓冲 --> 记录归档 : 流水线触发
+        收到消息 --> 缓冲(Q2)
+        缓冲(Q2) --> 计算活跃度
+        计算活跃度 --> 告警入队(Q3) : 满足阈值
+    }
+
+    state TopicRegistry_RecordingPipeline {
+        收到消息_RP --> 话题聚类LLM
+        话题聚类LLM --> Triage决策
+        Triage决策 --> 更新Observer摘要 : triage_passed事件桥接
+        Triage决策 --> 归档到Memory : topic_archived
     }
 
     state 异步待命的执行终端 {
         state CodeActExecutor {
-            Q4_收到复杂任务 --> 唤醒沙盒
-            唤醒沙盒 --> LLM循环思考与打字
-            LLM循环思考与打字 --> 上报结果(Q5)
+            Q4_收到复杂任务 --> 从SandboxPool获取沙盒
+            从SandboxPool获取沙盒 --> LLM多轮沙盒交互
+            LLM多轮沙盒交互 --> 上报结果(Q5)
+            上报结果(Q5) --> 释放沙盒回池
         }
         
         state FastPathHandler {
-            被MainAgent授权 --> 监听特定触发词
-            监听特定触发词 --> 调用便宜模型快回
-            调用便宜模型快回 --> 次数满或过期退出
+            被MainAgent授权 --> 监听消息触发
+            监听消息触发 --> LLM生成快回(cheapConfig)
+            LLM生成快回(cheapConfig) --> 次数满或过期退出
         }
     }
 ```
 
 ### 2.3 记忆系统 V2 (Memory V2)
-**核心概念**：不再是一股脑地把全量对话灌给 LLM，而建立“人类层级”的检索体系：
-1. **短期计算空间 (Working Memory)**：自动在 Session token 即将溢出时采取 Compaction 压缩历史消息，使用轻模型抽摘要，但不截断当前正在激烈交流的核心话题 (Active Turn Protection)。
-2. **中期记忆与画像 (Episodic & Social Memory)**：群聊内容映射为一个个具有始末的话题节点 (`TopicNode`)；同时维护每个人的群组画像 (`PersonGroupProfile`)。该画像的细腻度与此人在 Agent 心中的 **邓巴圈层 (Dunbar Tier)** (1=核心~4=陌生) 直接挂钩，层级越高，画像特征捕获越多。
-3. **长期与合并记忆 (Merged Memory)**：在 Agent 定期发呆（冷场触发/就寝模式触发）时进入 **Reflection**。由 Reflection 引擎把大量零散的话题交互合并提炼为年、季度、月度的关系变迁，只留下最深的影响。
+**核心概念**：不再是一股脑地把全量对话灌给 LLM，而建立"人类层级"的记忆管理体系：
+1. **消息日志 (Message Log)**：由 `MessageLogWriter` 通过 NC Hook 实时将消息落盘到 SQLite `message_log` 表。`message_log` 是最底层的原始事实来源，决策时通过 `memory.getRecentMessages()` 获取时间对齐的快照。
+2. **话题节点与中期记忆 (TopicNode / Episodic)**：群聊内容由 per-group `RecordingPipeline` 映射为一个个具有始末的 `TopicNode`（含摘要、关键词、参与者、情感等），存入 `topics` 表。同时维护每个人的群组画像 (`PersonGroupProfile`)。该画像的细腻度与此人在 Agent 心中的 **邓巴圈层 (`dunbar_tier`)** (1=核心~4=陌生) 直接挂钩，层级越高，画像特征捕获越多。
+3. **核心事实 (Core Facts)**：长期有效的知识片段，由 Reflection 或手动存入 `core_facts` 表，支持 FTS5 全文检索和向量检索（`sqlite-vec` 可用时走 `vec0` 虚拟表，否则纯 JS `cosineSimilarity` fallback）。
+4. **群组画像 (GroupModel)**：每个群组一份画像，记录群名、Agent 角色、活跃度、热点话题、禁忌话题、沟通规范等，在 Reflection 中动态更新。
+5. **Reflection 反思引擎**：在冷场达标（沉默超阈值）、最大间隔到期、或处于非清醒时段时定时触发。Reflection 5 步流程：(a) 收集上次反思后的话题与交互数据 → (b) 量化统计每位参与者 → (c) LLM 生成结构化 JSON → (d) 写入画像增量/核心事实/群组模型更新/情感记忆合并/邓巴裁剪 → (e) 返回结果。合并机制支持渐进级联：>7天→周、>30天→月、>90天→季、>365天→年，只保留高显著性事件。
+6. **上下文预算管理 (ContextManager)**：为 CodeActExecutor 和主 Agent 提供对话历史的智能压缩。核心能力包括：token 预算估算、消息分类（protected/compactable/disposable）、话题保护与 reply chain 保护（确保当前活跃话题上下文不被截断），以及 LLM 生成的 Context Briefing。
 
 ---
 
@@ -108,36 +122,42 @@ graph TD
     classDef qfill fill:#f39c12,stroke:#333,stroke-width:2px,color:#fff,stroke-dasharray: 5 5;
 
     PA(外部平台 / Telegram) -->|最新消息| NC[(事件总线 Q1)]:::qfill
-    NC -.->|实时落盘| ML[message_log DB]:::memfill
+    NC -.->|实时落盘 MessageLogWriter| ML[message_log DB]:::memfill
     
-    NC -->|按群路由| OBS[Subagent: Observer]:::subfill
+    NC -->|onPush Hook 按群路由| OBS[GroupSubagent: Observer + TopicRegistry]:::subfill
     
     OBS -->|生成摘要/评估活跃度| MQ3[(注意力队列 Q3)]:::qfill
     
     MQ3 -->|优先出队| MA[Main Agent Decision]:::mainfill
     ML -.->|组装时间一致快照| MA
     
-    MA -->|忽略/延迟| Q3[将低级事项重排回队列]
+    MA -->|忽略/延迟| Q3[DEFER 重排回队列]
     MA -->|分配高难任务| MQ4[(执行队列 Q4)]:::qfill
-    MA -->|预授权快速通道| FH[Subagent: FastPath]:::subfill
+    MA -->|预授权快速通道| FH[GroupSubagent: FastPath]:::subfill
     
-    MQ4 -->|拉起独立沙盒| CAE[Subagent: CodeActExecutor]:::subfill
+    MQ4 -->|从 SandboxPool 获取沙盒| CAE[GroupSubagent: CodeActExecutor]:::subfill
     
-    CAE <-->|调用/查询| MEM[Memory V2: Topic/Facts]:::memfill
+    CAE <-->|Host Call 调用/查询| MEM[Memory V2: Topic/Facts/Recall]:::memfill
     CAE -->|发出真实消息| PA
     FH -->|发出快回| PA
     
     CAE -->|完成/失败| MQ5[(回调队列 Q5)]:::qfill
     FH -->|使用一次额度| MQ5
     
-    MQ5 -->|重整全局状态/解阻| MA
+    MQ5 -->|Phase1: 重整全局状态/解阻| MA
+
+    NC -.->|FeedbackLoop 追踪| FL[FeedbackLoop: 反馈评估]:::subfill
 ```
 
-### 关键队列梳理
-*   **Q1 (NG/Global Bus)**: 广纳一切输入，提供实时记录保障。
-*   **Q3 (Attention Queue)**: 主 Agent 专属收件箱。Observer 往里头扔战报 (Digest Update/Alert)。
-*   **Q4 (Execution Queue)**: 分配给局部各群的局部“厂长”任务单。
-*   **Q5 (Callback Queue)**: Subagent 向主 Agent 呈报完成结果的回执箱。
+### 关键队列与组件梳理
+*   **Q1 (NotificationCenter, NC)**: 事件总线。接纳一切输入并通过 `onPush` Hook 同步分发到 `MessageLogWriter`（实时落盘）、`GroupSubagent.onMessage()`（Observer + RecordingPipeline）、`FeedbackLoop`（反馈追踪）。NC 同时支持 JSONL 文件持久化和跨进程事件注入（CLI 可追加 JSONL，NC 通过 `fs.watch` 检测并读入）。
+*   **Q2 (Observer 内部 Buffer)**: Observer 的消息缓冲区。所有消息进入后参与 Engagement 计算，attend 后自动清空（`clearBuffer()`）。
+*   **Q3 (DynamicAttentionQueue)**: 主 Agent 专属注意力队列。Observer 的 Engagement 分析和告警通过 `buildQueueEntry()` 入队，支持时间衰减、block/unblock（CodeAct 执行中阻塞该群）、priority boost（告警/Followup 提权）。
+*   **Q4 (CodeActExecutor 内部 Task Queue)**: 每个群组的 CodeActExecutor 内部的串行任务队列。主 Agent 分派 `CODEACT_REPLY` 后 enqueue，按序执行。
+*   **Q5 (CallbackQueue)**: Subagent 向主 Agent 呈报完成结果的回执箱。CodeActExecutor 和 FastPathHandler 完成后将 `SubagentCallback` push 到此，由主 Agent Phase 1 drain。
+*   **SandboxPool**: 全局 Sandbox 实例池，管理最大并发数和空闲超时回收。CodeActExecutor 执行时 acquire，完成后 release。每个 Sandbox 实例上注册了 Host Call 路由（Telegram API、Memory API、TaskList 等）。
+*   **GlobalState**: 全局状态持久化（JSON 文件），记录最近决策日志、任务列表、pendingFollowups 等。主 Agent 系统 Prompt 中注入全局状态，确保跨 tick 状态一致感。
+*   **FeedbackLoop**: 追踪 Agent 已发消息的后续群聊反响，用于评估 Agent 发言的效果。
 
 ---
 
@@ -147,27 +167,27 @@ graph TD
 
 | 目标 Prompt | 注水管道 (从何处拼装数据) | 核心变量呈现 (举例) |
 | :--- | :--- | :--- |
-| **主 Agent 系统指令** | 全局静态配置库、长事务维护清单 | `{persona}` (底层人格设定), `{globalTasks}` (跨群追踪的事务) |
-| **主 Agent 决策输入** (Attend Context) | 群消息的数据库快照 + Observer 产出的话题注册表 + 群组粘性预设值 | `{topicRegistry}`, `{newMessagesSinceLastAttend}`, `{engagementScore}`, `{lastCallbacks}` |
-| **CodeActExecutor 任务指派** | Main Agent 派发到 Q4 的包含明确方向的回复任务 | `{contextSnapshot.topicSummary}`, `{targetMessageIds}`, `{contentDirection}` (主脑指示的方向) |
-| **FastPath 越权快速指令** | Main Agent 授权时圈定的配置选项 | `{preauthorizedActions}` (允许说什么如"只发表情"), `{blockedActions}` (绝对不可涉及的话题) |
-| **Reflection 定期反思输入** | MemoryV2 查出的昨日至今零散互动与长期存储的用户级别 | `{unmergedEpisodes}`, `{currentDunbarTiers}` |
+| **主 Agent 系统指令** | 全局静态配置库 (`persona`)、全局状态 (`GlobalState`) | `{persona}` (底层人格设定), `{recentDecisions}` (最近决策记录), `{activeTasks}` (当前任务列表), `{attentionSummary}` (全局状态摘要) |
+| **主 Agent 决策输入** (Attend Context) | 群消息的数据库快照 + Observer 产出的话题注册表 + 群组画像 + 历史 Callback | `{topicDigests}`, `{messages}` (L2+深度消息原文), `{engagementScore}`, `{lastCallbacks}`, `{fastPathHistory}`, `{suggestedReplyMode}` (算法预估), `{alertReason}`, `{groupModel}`, `{stickinessLevel}`, `{timeSinceLastAttend}` |
+| **CodeActExecutor 任务指派** | Main Agent 派发到 Q4 的含明确方向的回复任务 + Memory 查询 | `{targetMessages}` (含 reply-to 关系的消息原文), `{topicSummary}`, `{personContext}` (人物背景), `{contentDirection}` (主脑指示的方向), `{toneGuidance}` (语气指导), `{apiTypeDefs}` (沙盒 API 类型定义) |
+| **FastPath 快速指令** | Main Agent 授权时圈定的配置选项 | `{preauthorizedActions}` (允许的行动), `{blockedActions}` (绝对不可涉及的话题), `{tonePreset}` (语气预设), `{maxReplyLength}`, `{repliesSent}` / `{maxReplies}` (已用/总额度) |
+| **Reflection 定期反思输入** | MemoryV2 查出的上次反思后的话题与交互数据 + 已有画像 + 群组画像 | `{topics}` (带摘要/情感/AI介入状态), `{interactions}`, `{participantStats}` (量化统计), `{existingProfiles}`, `{groupModel}` |
 
 ---
 
 ## 5. 穿透式聊天演练 (End-to-End Chat Scenario)
 
-**背景设定**：一个被 Agent 设置为 "FAMILIAR" 级别的游戏讨论群。
+**背景设定**：一个被 Agent 的 Stickiness 设置为 "FAMILIAR" 级别 (priorityMultiplier=1.2, depthCyclePeriod=15, fastPathEligible=true) 的游戏讨论群。
 
 1. **[感知流入]** 群友 A 连续发了 3 张新游戏截图，群友 B 紧跟着发了一句 "**@CyberGroupmate 这画质可以啊，你觉得呢？你的配置跑得起来不？**"
-2. **[底层总线]** 消息毫秒级从 Telegram 适配器进入 **全局总线事件队列 (Q1)**，并被同步落盘到 SQLite 数据库的 `message_log`。
-3. **[静默观察]** 专门为该群体实例化的 **Observer (感知器)** 接收并开始测算。由于短时间刷屏图片且带有专属艾特（高频强关注），该群 `Engagement` 算分飙升。Observer 立即生成一条高级告警丢进 **注意力队列 (Q3)**。
-4. **[主脑调度]** **Main Agent** 正处于串行循环中，查阅 Q3 发现这个群优先级被强制拉满。主脑从数据库提取出与此时刻完全对齐的**快照 (MessageSnapshot)**，避免了处理期间新消息引发的精神错乱。
-5. **[深思熟虑]** 主 Agent 评判当前需要深度上下文 (L3)。它将群友的截图事件、B 的发难以及此群过往是 "游戏老炮交流为主" 的人设属性打入 Prompt，提交大规模模型进行最终裁判。
-6. **[战略分发]** 大模型判定后，主脑下达两份具体指令落入执行队列：
-   - **决策 1 (深度解析)**: 下发一则必须用代码执行的任务 (`CODEACT_REPLY`)：“回忆一下我们以前推荐过的显卡，用代码联网验证最新天梯图参数，给他们一个专业的调侃”。
-   - **决策 2 (防冷场)**: 考虑到联网耗时较长，同步下发快速通道授权 (`FAST_PATH_AUTH`)，允许 FastPath 随便找个硬件梗预热。
-7. **[执行双响炮]** 本群的子进程在各自的轨道上并行启动：
-   - **FastPathHandler** 拿到权限，瞬间用更快的轻频模型发了一张【猫猫震惊.jpg】并在群里回了一句：“这画质，显卡在起火的边缘试探了属于是”。紧接着产生成功流转凭证放入 Q5 回调区。
-   - 同一时刻，**CodeActExecutor** 拉起独立的沙盒进程，执行自主编程。用其独立的会话查阅了 `MemoryV2` ("上次给这哥们推的是 4070")，然后获取 Web 搜索结果，最终在半分钟后于群内发出详尽的技术整活回复。随后产生最终通过凭证送入 Q5。
-8. **[收拢善后]** 凭证被主脑在下一次巡查之初 (Phase 1) 回收核销，系统解除该群的专注占用分配。直到深夜发呆时间，**记忆中的 Reflection (反思引擎)** 启动，它将白天这段看图聊硬件的对话记作了一次增加感情积累的标志性事件。
+2. **[底层总线]** 消息毫秒级从 Telegram 适配器进入 **NotificationCenter**，通过 `onPush` Hook 同步路由到 `MessageLogWriter` 实时落盘至 SQLite `message_log`，以及对应群组的 `GroupSubagent.onMessage()`。
+3. **[静默观察]** 消息同时被分发给 **Observer**（计算 Engagement：高频消息 + 多发言者 + @提及 → 飙升）和 **RecordingPipeline**（话题聚类 + LLM Triage）。Observer Engagement 超过告警阈值，通过 `buildQueueEntry()` 生成高级告警条目入队 **Q3**。
+4. **[主脑调度]** **MainAgentLoop** 正处于串行 tick 循环中。Phase 2 遍历所有 Subagent 更新 Q3，检测到该群告警并 boost 优先级 +20。Phase 3 dequeue 发现该群优先级最高。
+5. **[深思熟虑]** Phase 4 调用 `calculateDepth()` 根据 attendCount 和 depthCyclePeriod 计算 Cosine Decay 深度，因存在 alert 强制最低 L2。`buildGroupContext()` 组装含消息原文、群画像、历史 Callback 的上下文包。Phase 5 将系统 Prompt（含全局状态、最近决策、活跃任务）+ attend 上下文 + 对话历史拼装后交给 SOTA 模型做最终裁判。
+6. **[战略分发]** Phase 6 根据 LLM 返回的 JSON 决策分派：
+   - **决策 1 (深度解析)**: REPLY 动作，下发 `CODEACT_REPLY` 任务，`contentDirection`: "回忆以前推荐过的显卡，联网验证最新天梯图参数，给他们一个专业的调侃"。Q3 同时 block 该群防止重复 attend。
+   - **决策 2 (防冷场)**: FAST_PATH_AUTH 动作，下发快速通道授权（`maxReplies=3, expiresAt=5分钟后, tonePreset=轻松`），允许 FastPath 随便找个硬件梗预热。
+7. **[执行双响炮]** 本群的 Subagent 在各自的轨道上并行启动：
+   - **FastPathHandler** 拿到授权，下一条消息到达时通过 `cheapConfig` LLM 生成一句快回并发送。产出成功 Callback 放入 Q5。
+   - 同一时刻，**CodeActExecutor** 从 `SandboxPool` acquire 一个沙盒实例，将历史 Session + 本次任务 Prompt 注入，执行 `runCodeActSession()` 多轮 CodeAct 交互（调用 `memory.recall` 查 "上次给这哥们推的是 4070"、调用 Web 搜索获取最新数据），最终通过 Telegram Host Call 在群内发出详尽整活回复。完成后释放沙盒、持久化 Session、产出 Callback 送入 Q5。
+8. **[收拢善后]** Callback 被主脑在下一 tick 的 Phase 1 drain：记录到 GlobalState、追加到 LLM 对话历史、标记任务完成、Q3 unblock 该群。直到深夜处于非清醒时段，**Reflection 引擎** 被定时器触发。它将白天这段看图聊硬件的对话收集为话题，量化统计参与者，调用 LLM 生成结构化反思 JSON，更新群友画像特征、存储核心事实、级联合并老旧情感记忆，并对邓巴层级超限的用户做精度裁剪和降级处理。
