@@ -33,11 +33,19 @@ interface PendingFeedback {
 export class FeedbackLoop {
     private timers = new Map<string, ReturnType<typeof setTimeout>>();
 
+    /**
+     * @param registry - 默认 TopicRegistry（fallback）
+     * @param memory - 记忆存储
+     * @param nc - 通知中心
+     * @param evaluationDelayMs - 评估延迟
+     * @param registryLookup - 可选，按 chatId 查找 per-group TopicRegistry（解决全局 vs per-group 同步问题）
+     */
     constructor(
         private registry: TopicRegistry,
         private memory: MemoryStoreV2,
         private nc: NotificationCenter,
         private evaluationDelayMs: number = 3 * 60 * 1000,
+        private registryLookup?: (chatId: string) => TopicRegistry | null,
     ) {}
 
     recordAgentMessage(event: AgentMessageSentEvent): void {
@@ -84,9 +92,11 @@ export class FeedbackLoop {
 
     private async evaluate(pending: PendingFeedback): Promise<void> {
         try {
+            // 使用 per-group registryLookup（如果可用），否则 fallback 到全局 registry
+            const effectiveRegistry = (this.registryLookup?.(pending.chatId)) ?? this.registry;
             const topics = pending.chatId
-                ? this.registry.getByChat(pending.chatId)
-                : this.registry.getAll();
+                ? effectiveRegistry.getByChat(pending.chatId)
+                : effectiveRegistry.getAll();
 
             const followUp = topics.some(topic => topic.lastActivityAt > pending.sentAtMs);
             const recentFeedback = followUp ? "agent 发言后群里有后续互动" : "agent 发言后暂无明显互动";

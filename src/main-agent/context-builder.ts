@@ -8,6 +8,7 @@
 
 import type {
     GroupContextPackage,
+    GroupStickiness,
     TopicDigest,
     SubagentCallback,
 } from "../subagent/types.js";
@@ -35,6 +36,16 @@ export interface ContextBuildInput {
     messages?: SnapshotMessage[];
     /** L3+: 深度摘要 */
     deepSummary?: string;
+    /** 群组标题 */
+    chatTitle?: string;
+    /** 群组亲密度 */
+    stickiness?: GroupStickiness;
+    /** FastPath 是否启用 */
+    fastPathEnabled?: boolean;
+    /** 待执行任务数 */
+    pendingCodeActTasks?: number;
+    /** 活跃参与者 */
+    activePersons?: Array<{ userId: string; displayName: string; recentMessageCount: number }>;
 }
 
 /**
@@ -58,6 +69,11 @@ export function buildGroupContext(input: ContextBuildInput): GroupContextPackage
     if (input.depth >= 1) {
         pkg.groupModel = input.groupModel ?? undefined;
         pkg.lastCallbacks = input.lastCallbacks;
+        pkg.chatTitle = input.chatTitle;
+        pkg.stickiness = input.stickiness;
+        pkg.fastPathEnabled = input.fastPathEnabled;
+        pkg.pendingCodeActTasks = input.pendingCodeActTasks;
+        pkg.activePersons = input.activePersons;
     }
 
     if (input.depth >= 2) {

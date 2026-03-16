@@ -67,6 +67,11 @@ export function createAttendHandler(
             topicDigests: entry.topicDigests,
             engagementScore: entry.priority,
             groupModel,
+            lastCallbacks: subagent.lastCallbacks,
+            chatTitle: groupModel?.chatTitle,
+            stickiness: subagent.stickiness,
+            fastPathEnabled: !!(subagent.fastPathHandler as any)?.isAuthorized?.(),
+            pendingCodeActTasks: (subagent.codeActExecutor as any)?.getQueueSize?.() ?? 0,
         });
 
         // 算法预估 replyMode（作为 LLM 参考信号 + fallback）
@@ -135,7 +140,9 @@ export function createAttendHandler(
                 priorityMultiplier: subagent.stickiness.priorityMultiplier,
                 tonePreset: subagent.stickiness.level === "CORE" ? "随意友好" :
                     subagent.stickiness.level === "FAMILIAR" ? "轻松" : "礼貌得体",
-                callbacks: undefined, // TODO: 从 globalState 获取最近 callbacks
+                callbacks: subagent.lastCallbacks.length > 0
+                    ? subagent.lastCallbacks.slice(-3)
+                    : undefined,
                 fastPathHistory: fpHistory,
                 alertReason: entry.alert?.reason,
                 messages: messagesText || undefined,

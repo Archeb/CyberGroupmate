@@ -265,6 +265,18 @@ export interface GroupContextPackage {
     pendingCodeActTasks?: number;
     /** 活跃参与者概况 */
     activePersons?: Array<{ userId: string; displayName: string; recentMessageCount: number }>;
+
+    // ─── Dispatch handler 注入的执行上下文（CodeActExecutor prompt 使用） ───
+    /** 话题摘要文本 */
+    topicSummary?: string;
+    /** 格式化的最近消息（含 reply-to 关系） */
+    recentMessages?: Array<{ id: string; sender: string; text: string; timestamp: string; replyTo?: string }>;
+    /** 人物背景 JSON */
+    personContext?: string;
+    /** 语气指导 */
+    toneGuidance?: string;
+    /** 回复方向 */
+    contentDirection?: string;
 }
 
 /** 主 Agent attend 后的决策结果 */

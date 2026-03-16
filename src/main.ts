@@ -218,10 +218,10 @@ async function main(): Promise<void> {
     );
 
     // ─── Pipeline 组件（反馈追踪 — 话题聚类已下沉到 per-group RecordingPipeline） ───
-    // FeedbackLoop 使用一个轻量级的全局 TopicRegistry 仅用于追踪 agent 消息
-    // 实际话题聚类在 per-group GroupSubagent.topicRegistry 中完成
+    // FeedbackLoop 使用一个轻量级的全局 TopicRegistry 作为 fallback，
+    // 但优先通过 registryLookup 查找 per-group TopicRegistry（解决全局实例不同步问题）
     const globalTopicRegistryForFeedback = new TopicRegistry();
-    const feedbackLoop = new FeedbackLoop(globalTopicRegistryForFeedback, memory, nc);
+    // feedbackLoop 延迟创建，需要在 subagentManager 之后（见下方初始化块）
 
     // ─── Subagent 架构组件初始化 ───
     const messageLogWriter = new MessageLogWriter(memory, {
@@ -262,6 +262,15 @@ async function main(): Promise<void> {
     log.info("Subagent 组件初始化完成", {
         attentionQueueMaxSize: appConfig.subagent?.attentionQueue?.maxSize ?? 100,
     });
+
+    // FeedbackLoop 创建（需要在 subagentManager 之后，以支持 per-group registryLookup）
+    const feedbackLoop = new FeedbackLoop(
+        globalTopicRegistryForFeedback,
+        memory,
+        nc,
+        undefined, // 使用默认 evaluationDelayMs
+        (chatId) => subagentManager.get(chatId)?.topicRegistry ?? null,
+    );
 
     // ─── NC.onPush: 消息实时处理管线 ───
 

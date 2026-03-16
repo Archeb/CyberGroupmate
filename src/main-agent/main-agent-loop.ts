@@ -175,6 +175,7 @@ export class MainAgentLoop {
             const cbSubagent = this.subagentManager.get(cb.chatId);
             if (cbSubagent) {
                 cbSubagent.markTaskComplete(cb.taskId);
+                cbSubagent.addCallback(cb);
             }
             // 解除阻塞
             this.attentionQueue.unblock(cb.chatId);
@@ -247,6 +248,7 @@ export class MainAgentLoop {
                     const cbSubagent = this.subagentManager.get(cb.chatId);
                     if (cbSubagent) {
                         cbSubagent.markTaskComplete(cb.taskId);
+                        cbSubagent.addCallback(cb);
                     }
                     this.attentionQueue.unblock(cb.chatId);
                 }

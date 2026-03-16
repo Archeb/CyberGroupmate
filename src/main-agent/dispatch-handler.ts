@@ -105,14 +105,17 @@ export function createDispatchHandler(
                     topicDigests: subagent.observer.getDigest(),
                     engagementScore: subagent.observer.getEngagementScore(),
                     groupModel,
+                    lastCallbacks: subagent.lastCallbacks,
+                    chatTitle: groupModel?.chatTitle,
+                    stickiness: subagent.stickiness,
                 });
 
-                // 增强 contextSnapshot：注入 spec 要求的额外上下文
-                (contextSnapshot as any).topicSummary = topicSummary;
-                (contextSnapshot as any).recentMessages = formattedMessages;
-                (contextSnapshot as any).personContext = personContext;
-                (contextSnapshot as any).toneGuidance = subagent.stickiness.level === "CORE" ? "随意友好" : "礼貌得体";
-                (contextSnapshot as any).contentDirection = decision.contentDirection ?? "";
+                // 增强 contextSnapshot：注入 spec 要求的额外上下文（类型安全）
+                contextSnapshot.topicSummary = topicSummary;
+                contextSnapshot.recentMessages = formattedMessages;
+                contextSnapshot.personContext = personContext;
+                contextSnapshot.toneGuidance = subagent.stickiness.level === "CORE" ? "随意友好" : "礼貌得体";
+                contextSnapshot.contentDirection = decision.contentDirection ?? "";
 
                 // 构建 CodeActReplyTask
                 const task: CodeActReplyTask = {

@@ -19,6 +19,7 @@ import type {
     AttentionQueueEntry,
     GroupStickiness,
     StickinessLevel,
+    SubagentCallback,
     TopicDigest,
 } from "./types.js";
 import { createStickiness } from "./stickiness.js";
@@ -83,6 +84,9 @@ export class GroupSubagent {
 
     /** 已完成任务 ID 集合（用于状态追踪） */
     private completedTaskIds = new Set<string>();
+
+    /** 最近的 Subagent 回调结果（保留最近 5 条） */
+    lastCallbacks: SubagentCallback[] = [];
 
     constructor(options: GroupSubagentOptions) {
         this.chatId = options.chatId;
@@ -213,6 +217,16 @@ export class GroupSubagent {
     markTaskComplete(taskId: string): void {
         this.completedTaskIds.add(taskId);
         log.debug("markTaskComplete", { chatId: this.chatId, taskId });
+    }
+
+    /**
+     * 记录最近的 Subagent 回调结果（保留最近 5 条）
+     */
+    addCallback(cb: SubagentCallback): void {
+        this.lastCallbacks.push(cb);
+        if (this.lastCallbacks.length > 5) {
+            this.lastCallbacks = this.lastCallbacks.slice(-5);
+        }
     }
 
     /**

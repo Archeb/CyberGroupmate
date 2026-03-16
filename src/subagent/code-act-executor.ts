@@ -307,8 +307,8 @@ export class CodeActExecutor {
         task: CodeActReplyTask,
         startTime: number,
     ): Promise<SubagentCallback> {
-        // 1. 提取 contextSnapshot 中注入的额外字段 (main.ts dispatch handler 设置)
-        const ctx = task.contextSnapshot as any;
+        // 1. 提取 contextSnapshot 中的执行上下文字段（dispatch-handler 类型安全注入）
+        const ctx = task.contextSnapshot;
         const topicSummary = ctx.topicSummary ?? "";
         const personContext = ctx.personContext ?? "";
         const toneGuidance = ctx.toneGuidance ?? "";
@@ -316,7 +316,7 @@ export class CodeActExecutor {
 
         // 2. 格式化目标消息（含 reply-to 关系）
         const targetMessages = (ctx.recentMessages ?? []).map(
-            (m: any) => {
+            (m) => {
                 const replyTag = m.replyTo ? ` (↩ reply to ${m.replyTo})` : "";
                 return `[${m.timestamp ?? ""}] ${m.sender ?? "?"}${replyTag}: ${m.text ?? ""}`;
             }
@@ -338,7 +338,7 @@ export class CodeActExecutor {
         // 5. 渲染任务 prompt (每次任务不同)
         const taskVars = {
             chatId: this.chatId,
-            chatTitle: ctx.groupModel?.chatTitle ?? this.chatId,
+            chatTitle: ctx.chatTitle ?? ctx.groupModel?.chatTitle ?? this.chatId,
             taskId: task.taskId,
             replyMode: task.replyMode,
             targetMessages,
