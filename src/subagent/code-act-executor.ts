@@ -318,7 +318,7 @@ export class CodeActExecutor {
         const targetMessages = (ctx.recentMessages ?? []).map(
             (m) => {
                 const replyTag = m.replyTo ? ` (↩ reply to ${m.replyTo})` : "";
-                return `[${m.timestamp ?? ""}] ${m.sender ?? "?"}${replyTag}: ${m.text ?? ""}`;
+                return `[${m.timestamp ?? ""}] [msgId:${m.id ?? "?"}] ${m.sender ?? "?"}${replyTag}: ${m.text ?? ""}`;
             }
         ).join("\n") || "(无目标消息原文)";
 
