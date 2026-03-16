@@ -11,6 +11,9 @@
 export { type LLMConfig } from "./config.js";
 
 import type { LLMConfig } from "./config.js";
+import { createLogger } from "./logger.js";
+
+const log = createLogger("llm");
 
 // ─── 类型定义 ───
 
@@ -67,6 +70,16 @@ export async function callLLM(
     config: LLMConfig,
     options?: LLMCallOptions
 ): Promise<LLMResponse> {
+    // ── 擦屁股：清洗空 assistant 消息 ──
+    for (const msg of messages) {
+        if (msg.role === "assistant" && (!msg.content || !msg.content.trim())) {
+            log.warn("Empty assistant message detected, filling with placeholder", {
+                original: msg.content ?? "(undefined)",
+            });
+            msg.content = "(no response)";
+        }
+    }
+
     const model = options?.model ?? config.model;
     const temperature = options?.temperature ?? config.temperature;
     const maxTokens = options?.maxTokens ?? config.maxTokens;
