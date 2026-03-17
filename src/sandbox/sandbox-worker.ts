@@ -235,10 +235,29 @@ async function executeCode(id: string, code: string): Promise<void> {
 
     try {
         const hasBareAsyncIife =
-            /\(\s*async\s*\(\)\s*=>[\s\S]*?\)\s*\(\s*\)\s*;?/m.test(code) &&
-            !/await\s+\(\s*async\s*\(\)\s*=>[\s\S]*?\)\s*\(\s*\)\s*;?/m.test(code);
+            /\(\s*async\s*\(\)\s*=>\s*[\s\S]*?\)\s*\(\s*\)\s*;?/m.test(code) &&
+            !/await\s+\(\s*async\s*\(\)\s*=>\s*[\s\S]*?\)\s*\(\s*\)\s*;?/m.test(code);
         if (hasBareAsyncIife) {
             outputLines.push("[Warning] 检测到未 await 的 async IIFE。异步发送可能在 observation 回写前悬空，导致模型误判为“没发出去”。优先直接顶层 await，或写成 await (async () => { ... })().");
+        }
+
+        // 检测未 await 的 async 函数调用模式（如 `async function main(){...} main();`）
+        // 推一个警告让 LLM 知道消息可能已发出，避免重试导致重复发送
+        {
+            const asyncFuncNames: string[] = [];
+            const asyncFuncDeclRe = /async\s+function\s+(\w+)\s*\(/g;
+            let afm;
+            while ((afm = asyncFuncDeclRe.exec(code)) !== null) {
+                asyncFuncNames.push(afm[1]);
+            }
+            if (asyncFuncNames.length > 0) {
+                const callPattern = new RegExp(
+                    `(?<!await\\s)\\b(${asyncFuncNames.join("|")})\\s*\\([^)]*\\)\\s*;?\\s*$`
+                );
+                if (callPattern.test(code)) {
+                    outputLines.push("[Warning] 检测到未 await 的异步函数调用。你的代码中的异步操作可能已经执行并发送了消息，但由于未 await，本次执行的 output 为空。请勿重复发送相同内容。下次请直接在顶层 await 调用。");
+                }
+            }
         }
 
         const { runtime, memory, scene, actions, skills } = installCapabilityRegistry({
