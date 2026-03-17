@@ -302,6 +302,8 @@ async function main(): Promise<void> {
                 text: String(event.text ?? event.message ?? ""),
                 replyToMessageId: event.replyToMessageId ? String(event.replyToMessageId) : undefined,
                 timestamp: new Date().toISOString(),
+                mediaType: (event as any).mediaInfo?.type ?? undefined,
+                mediaInfo: (event as any).mediaInfo ? JSON.stringify((event as any).mediaInfo) : undefined,
             }]);
         } catch (err) {
             log.warn("即时消息落盘失败", { chatId, error: String(err) });
@@ -509,6 +511,8 @@ async function main(): Promise<void> {
         cheapConfig,
         persona: appConfig.persona,
         sessionsDir: SESSIONS_DIR,
+        appConfig,
+        telegramAdapter,
     }));
 
     log.info("MainAgentLoop 配置完成");

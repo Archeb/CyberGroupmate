@@ -41,6 +41,7 @@ interface TelegramClientLike {
     sendTyping?(chatId: unknown): Promise<void>;
     joinChat?(chatId: unknown): Promise<unknown>;
     leaveChat?(chatId: unknown): Promise<unknown>;
+    downloadBuffer?(media: unknown): Promise<Buffer>;
 }
 
 type TelegramClientFactory = (config: TelegramConfig) => Promise<TelegramClientLike>;
@@ -62,6 +63,18 @@ interface PlainChat {
     type: "private" | "group" | "supergroup" | "channel";
 }
 
+/** 结构化媒体元数据（从 mtcute msg.media 提取） */
+export interface MediaInfo {
+    type: "photo" | "sticker" | "video" | "document" | "animation" | "other";
+    fileId?: string;
+    uniqueFileId?: string;
+    emoji?: string;
+    mimeType?: string;
+    width?: number;
+    height?: number;
+    fileSize?: number;
+}
+
 interface PlainMessage {
     id: string;
     text: string;
@@ -71,6 +84,7 @@ interface PlainMessage {
     isMention: boolean;
     replyToMessage?: { id: string } | null;
     media?: unknown;
+    mediaInfo?: MediaInfo;
 }
 
 interface PlainDialog {
@@ -127,6 +141,7 @@ export class TelegramAdapter implements PlatformAdapter {
                 isDirectMessage: normalized.isDirectMessage,
                 mentionsAgent: normalized.mentionsAgent,
                 textPreview: normalized.text.slice(0, 80),
+                mediaType: normalized.mediaInfo?.type,
             });
 
             this.nc.push({
@@ -165,6 +180,7 @@ export class TelegramAdapter implements PlatformAdapter {
                     chatType: normalized.chatType,
                     isDirectMessage: normalized.isDirectMessage,
                     mentionsAgent: normalized.mentionsAgent,
+                    mediaInfo: normalized.mediaInfo,
                     source: {
                         scene: "telegram",
                         platform: "telegram",
@@ -309,6 +325,16 @@ export class TelegramAdapter implements PlatformAdapter {
                     throw new Error("leaveChat is not supported by the current Telegram client");
                 }
                 return null;
+            }
+            case "telegram.downloadMedia": {
+                // args[0] = fileId string (mtcute file ID)
+                const fileIdOrMedia = args[0];
+                if (!fileIdOrMedia) throw new Error("downloadMedia: fileId is required");
+                if (typeof this.client.downloadBuffer !== "function") {
+                    throw new Error("downloadMedia: client.downloadBuffer not available");
+                }
+                const buffer = await this.client.downloadBuffer(fileIdOrMedia);
+                return { buffer: buffer.toString("base64"), size: buffer.length };
             }
             default:
                 throw new Error(`Unsupported TelegramAdapter call: ${method}`);
@@ -455,6 +481,7 @@ export class TelegramAdapter implements PlatformAdapter {
         chatType?: string;
         isDirectMessage?: boolean;
         mentionsAgent?: boolean;
+        mediaInfo?: MediaInfo;
     } | null {
         const plain = this.normalizeMessage(msg);
         if (!plain.chat?.id) return null;
@@ -464,11 +491,39 @@ export class TelegramAdapter implements PlatformAdapter {
         const isDirectMessage = plain.chat.type === "private" || (!Number.isNaN(numericChatId) && numericChatId > 0);
         const mentionsAgent = Boolean(plain.isMention);
 
+        // ── 媒体元数据提取 ──
+        const mediaInfo = plain.mediaInfo;
+
+        // 对纯 media 消息生成占位文本，确保 text 非空
+        let text = plain.text ?? "";
+        if (!text && mediaInfo) {
+            switch (mediaInfo.type) {
+                case "photo":
+                    text = "[📷 图片]";
+                    break;
+                case "sticker":
+                    text = mediaInfo.emoji ? `[🎭 贴纸: ${mediaInfo.emoji}]` : "[🎭 贴纸]";
+                    break;
+                case "video":
+                    text = "[🎬 视频]";
+                    break;
+                case "animation":
+                    text = "[🎞 GIF]";
+                    break;
+                case "document":
+                    text = "[📎 文件]";
+                    break;
+                default:
+                    text = "[📎 媒体]";
+                    break;
+            }
+        }
+
         return {
             chatId: plain.chat.id,
             userId: senderId,
             displayName: plain.sender?.displayName ?? plain.sender?.firstName ?? "Unknown",
-            text: plain.text ?? "",
+            text,
             timestamp: plain.date,
             messageId: plain.id,
             replyToMessageId: plain.replyToMessage?.id ?? undefined,
@@ -476,6 +531,7 @@ export class TelegramAdapter implements PlatformAdapter {
             chatType: plain.chat.type,
             isDirectMessage,
             mentionsAgent,
+            mediaInfo,
         };
     }
 
@@ -497,6 +553,42 @@ export class TelegramAdapter implements PlatformAdapter {
             isMention: Boolean(message?.isMention),
             replyToMessage: message?.replyToMessage ? { id: String(message.replyToMessage.id ?? "") } : undefined,
             media: message?.media,
+            mediaInfo: this.extractMediaInfo(message?.media),
+        };
+    }
+
+    /**
+     * 从 mtcute msg.media 对象提取结构化媒体元数据。
+     * mtcute media 对象有 .type 字段: "photo", "sticker", "video", "document", "animation" 等。
+     */
+    private extractMediaInfo(media: any): MediaInfo | undefined {
+        if (!media) return undefined;
+
+        const rawType = String(media.type ?? "");
+        let type: MediaInfo["type"];
+        switch (rawType) {
+            case "photo": type = "photo"; break;
+            case "sticker": type = "sticker"; break;
+            case "video": type = "video"; break;
+            case "document": type = "document"; break;
+            case "animation": type = "animation"; break;
+            default:
+                // 未知类型但有 media 对象 → 标记为 other
+                if (!rawType) return undefined;
+                type = "other";
+                break;
+        }
+
+        return {
+            type,
+            fileId: typeof media.fileId === "string" ? media.fileId : undefined,
+            uniqueFileId: typeof media.uniqueFileId === "string" ? media.uniqueFileId : undefined,
+            emoji: typeof media.emoji === "string" ? media.emoji : undefined,
+            mimeType: typeof media.mimeType === "string" ? media.mimeType : undefined,
+            width: typeof media.width === "number" ? media.width : undefined,
+            height: typeof media.height === "number" ? media.height : undefined,
+            fileSize: typeof media.fileSize === "number" ? media.fileSize
+                : typeof media.size === "number" ? media.size : undefined,
         };
     }
 

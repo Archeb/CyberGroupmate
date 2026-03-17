@@ -380,6 +380,21 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
         } catch {
             // FTS5 表已存在时忽略
         }
+
+        // ── 媒体相关表 ──
+
+        // message_log 新增 media 列（兼容旧数据库）
+        try { this.db.exec(`ALTER TABLE message_log ADD COLUMN media_type TEXT`); } catch { /* 列已存在 */ }
+        try { this.db.exec(`ALTER TABLE message_log ADD COLUMN media_info TEXT`); } catch { /* 列已存在 */ }
+
+        // Sticker 描述缓存表
+        this.db.exec(`
+            CREATE TABLE IF NOT EXISTS sticker_descriptions (
+                unique_file_id TEXT PRIMARY KEY,
+                description TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+        `);
     }
 
     // ─── 写入方法 ───
@@ -633,8 +648,8 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
 
         const insert = this.db.prepare(`
             INSERT OR IGNORE INTO message_log
-                (message_id, chat_id, user_id, display_name, text, reply_to_message_id, timestamp)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+                (message_id, chat_id, user_id, display_name, text, reply_to_message_id, timestamp, media_type, media_info)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         `);
 
         const batch = this.db.transaction((msgs: MessageLogEntry[]) => {
@@ -642,6 +657,7 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
                 insert.run(
                     m.messageId, m.chatId, m.userId, m.displayName,
                     m.text, m.replyToMessageId ?? null, m.timestamp,
+                    m.mediaType ?? null, m.mediaInfo ?? null,
                 );
             }
         });
@@ -1614,7 +1630,7 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
 
     getRecentMessages(chatId: string, limit: number = 5): RecentMessageEntry[] {
         const rows = this.db.prepare(
-            `SELECT message_id, chat_id, user_id, display_name, text, reply_to_message_id, timestamp
+            `SELECT message_id, chat_id, user_id, display_name, text, reply_to_message_id, timestamp, media_type, media_info
              FROM message_log
              WHERE chat_id = ?
              ORDER BY timestamp DESC
@@ -1629,7 +1645,27 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
             text: (row.text as string) ?? "",
             replyToMessageId: (row.reply_to_message_id as string) ?? undefined,
             timestamp: row.timestamp as string,
+            mediaType: (row.media_type as string) ?? undefined,
+            mediaInfo: (row.media_info as string) ?? undefined,
         }));
+    }
+
+    // ── Sticker 描述缓存 ──
+
+    getStickerDescription(uniqueFileId: string): string | null {
+        const row = this.db.prepare(
+            "SELECT description FROM sticker_descriptions WHERE unique_file_id = ?"
+        ).get(uniqueFileId) as { description: string } | undefined;
+        return row?.description ?? null;
+    }
+
+    setStickerDescription(uniqueFileId: string, description: string): void {
+        const ts = now();
+        this.db.prepare(`
+            INSERT OR REPLACE INTO sticker_descriptions (unique_file_id, description, created_at)
+            VALUES (?, ?, ?)
+        `).run(uniqueFileId, description, ts);
+        log.debug("setStickerDescription", { uniqueFileId, descPreview: description.slice(0, 50) });
     }
 
     // ─── Reflection (M2.4: 调用 reflection.ts) ───

@@ -342,6 +342,10 @@ export interface MessageLogEntry {
     replyToMessageId?: string;
     /** 消息时间 (ISO 8601) */
     timestamp: string;
+    /** 媒体类型: "photo" | "sticker" | "video" | "document" | "animation" | "other" */
+    mediaType?: string;
+    /** 媒体元数据 JSON（含 fileId, uniqueFileId, emoji 等） */
+    mediaInfo?: string;
 }
 
 export interface RecentMessageEntry {
@@ -352,6 +356,10 @@ export interface RecentMessageEntry {
     text: string;
     replyToMessageId?: string;
     timestamp: string;
+    /** 媒体类型 */
+    mediaType?: string;
+    /** 媒体元数据 JSON */
+    mediaInfo?: string;
 }
 
 // ─── MemoryStoreV2 接口 ───

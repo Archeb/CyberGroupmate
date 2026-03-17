@@ -17,12 +17,21 @@ const log = createLogger("llm");
 
 // ─── 类型定义 ───
 
+/** 多模态图片附件 */
+export interface ImagePart {
+    /** data:image/jpeg;base64,... 或 URL */
+    url: string;
+    detail?: "auto" | "low" | "high";
+}
+
 /** OpenAI 格式消息 */
 export interface ChatMessage {
     role: "system" | "user" | "assistant";
     content: string;
-    /** 可选作用域：用于在多场景设计下过滤消息. 例如 "global", "scene:telegram", "scene:home" */
+    /** 可选作用域：用于在多场景设计下过滤消息 */
     scope?: string;
+    /** 多模态图片附件（仅 role=user 生效） */
+    imageParts?: ImagePart[];
 }
 
 /** LLM 调用选项（可覆盖默认配置） */
@@ -143,12 +152,30 @@ async function callOpenAI(
         headers,
         body: JSON.stringify({
             model,
-            messages: messages.map(m => ({ role: m.role, content: m.content })),
+            messages: messages.map(m => {
+                // 有 imageParts 时组装为多模态 content parts
+                if (m.imageParts && m.imageParts.length > 0 && m.role === "user") {
+                    const parts: Array<Record<string, unknown>> = [
+                        { type: "text", text: m.content },
+                    ];
+                    for (const img of m.imageParts) {
+                        parts.push({
+                            type: "image_url",
+                            image_url: {
+                                url: img.url,
+                                ...(img.detail ? { detail: img.detail } : {}),
+                            },
+                        });
+                    }
+                    return { role: m.role, content: parts };
+                }
+                return { role: m.role, content: m.content };
+            }),
             temperature,
             max_tokens: maxTokens,
             // Gemini thinking 参数（OpenAI 兼容格式：reasoning_effort）
             ...(thinkingLevel && thinkingLevel !== "none" ? {
-                reasoning_effort: thinkingLevel,  // "low" | "medium" | "high"
+                reasoning_effort: thinkingLevel,
             } : {}),
         }),
     });
@@ -204,10 +231,39 @@ async function callAnthropic(
 
     const body: Record<string, unknown> = {
         model,
-        messages: nonSystemMsgs.map((m) => ({
-            role: m.role,
-            content: m.content,
-        })),
+        messages: nonSystemMsgs.map((m) => {
+            // 有 imageParts 时组装为 Anthropic 多模态格式
+            if (m.imageParts && m.imageParts.length > 0 && m.role === "user") {
+                const parts: Array<Record<string, unknown>> = [
+                    { type: "text", text: m.content },
+                ];
+                for (const img of m.imageParts) {
+                    // Anthropic 需要 base64 source 格式
+                    const dataMatch = img.url.match(/^data:([^;]+);base64,(.+)$/);
+                    if (dataMatch) {
+                        parts.push({
+                            type: "image",
+                            source: {
+                                type: "base64",
+                                media_type: dataMatch[1],
+                                data: dataMatch[2],
+                            },
+                        });
+                    } else {
+                        // URL 格式（Anthropic 也支持）
+                        parts.push({
+                            type: "image",
+                            source: {
+                                type: "url",
+                                url: img.url,
+                            },
+                        });
+                    }
+                }
+                return { role: m.role, content: parts };
+            }
+            return { role: m.role, content: m.content };
+        }),
         temperature,
         max_tokens: maxTokens,
     };

@@ -13,6 +13,7 @@ llm_profiles:
     model: gemini-3-flash-preview
     temperature: 0.7
     max_tokens: 8192
+    # vision: true  # 启用后此 profile 支持多模态图片输入
 
   gemini-pro:
     provider: openai
@@ -59,8 +60,22 @@ model_tiers:
   mid: gemini-flash
   # sota — 复杂场景：直接 @ 复杂问题、冲突调解
   sota: gemini-pro
-  # vision — 未来扩展 (图片理解)
-  # vision: gemini-pro
+  # vision — 图片理解 (看图/贴纸识别)
+  # vision: gemini-flash
+
+# ─── Vision 看图设置 ───
+# 控制图片和贴纸的处理行为。需要配合 model_tiers.vision 或 llm_profiles 中设置 vision: true 使用。
+# 所有字段可选，缺省使用括号内默认值
+# vision:
+#   # 以 file 形式发送的大图压缩阈值（长边像素）(1024)
+#   max_image_size: 1024
+#   # 单轮上下文最多内联几张图片，超出走 vision 描述 (3)
+#   max_images_per_context: 3
+#   # Sticker 处理模式:
+#   #   emoji_only — 仅显示 emoji 代表含义（默认，不消耗 LLM）
+#   #   vision_cache — 首次识别后缓存描述，相同贴纸复用
+#   #   vision_each — 每次发送都用 vision 模型识别
+#   sticker_mode: emoji_only
 
 # ─── 人格设置 ───
 persona:

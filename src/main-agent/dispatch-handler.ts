@@ -13,7 +13,7 @@
 import type { AttendResult, CodeActReplyTask, SubagentCallback } from "../subagent/types.js";
 import type { SubagentManager } from "../subagent/subagent-manager.js";
 import type { MemoryStoreV2 } from "../memory-v2/index.js";
-import type { LLMConfig } from "../core/config.js";
+import type { LLMConfig, VisionConfig } from "../core/config.js";
 import type { SandboxPool } from "../sandbox/sandbox-pool.js";
 import type { NotificationCenter } from "../event/notification-center.js";
 import type { DynamicAttentionQueue } from "../subagent/attention-queue.js";
@@ -22,8 +22,11 @@ import type { GlobalState } from "./global-state.js";
 import { CodeActExecutor } from "../subagent/code-act-executor.js";
 import { FastPathHandler } from "../subagent/fast-path-handler.js";
 import { buildGroupContext } from "./context-builder.js";
+import { processMediaBatch, type MediaAttachment } from "../core/vision-processor.js";
 import { createLogger } from "../core/logger.js";
 import { formatTsForDisplay } from "../core/timezone.js";
+import { resolveTierProfile } from "../core/config.js";
+import type { AppConfig } from "../core/config.js";
 
 const log = createLogger("dispatch-handler");
 
@@ -40,6 +43,10 @@ export interface DispatchHandlerDeps {
     cheapConfig: LLMConfig;
     persona: { name: string; description: string };
     sessionsDir: string;
+    /** 完整 AppConfig（用于解析 vision tier 和 vision config） */
+    appConfig: AppConfig;
+    /** Telegram Adapter 引用（用于下载媒体） */
+    telegramAdapter?: { handleCall(method: string, args: unknown[]): Promise<unknown> };
 }
 
 /**
@@ -50,7 +57,16 @@ export interface DispatchHandlerDeps {
 export function createDispatchHandler(
     deps: DispatchHandlerDeps,
 ): (result: AttendResult) => Promise<void> {
-    const { memory, globalState, subagentManager, sandboxPool, nc, q3, q5, llmConfig, cheapConfig, persona, sessionsDir } = deps;
+    const { memory, globalState, subagentManager, sandboxPool, nc, q3, q5, llmConfig, cheapConfig, persona, sessionsDir, appConfig, telegramAdapter: tgAdapter } = deps;
+    const visionConfig = appConfig.vision;
+    const visionTierConfig = (() => {
+        try { return resolveTierProfile("vision", appConfig); } catch { return undefined; }
+    })();
+    // 构建下载函数（如果有 adapter）
+    const downloadFn = tgAdapter ? async (fileId: string): Promise<Buffer> => {
+        const result = await tgAdapter.handleCall("telegram.downloadMedia", [fileId]) as { buffer: string; size: number };
+        return Buffer.from(result.buffer, "base64");
+    } : undefined;
 
     return async (result: AttendResult): Promise<void> => {
         const subagent = subagentManager.get(result.chatId);
@@ -85,7 +101,58 @@ export function createDispatchHandler(
                     replyTo: m.replyToMessageId
                         ? (dispatchMsgIdToName.get(m.replyToMessageId) ?? `msg#${m.replyToMessageId}`)
                         : undefined,
+                    mediaType: m.mediaType ?? undefined,
+                    mediaInfo: m.mediaInfo ?? undefined,
                 }));
+
+                // ── Vision 处理：下载 + 识图（只在确认 REPLY 后执行）──
+                const mediaAttachments: MediaAttachment[] = [];
+                for (let i = 0; i < formattedMessages.length; i++) {
+                    const fm = formattedMessages[i];
+                    if (fm.mediaInfo) {
+                        try {
+                            const info = JSON.parse(fm.mediaInfo);
+                            if (info.fileId && info.type) {
+                                mediaAttachments.push({
+                                    type: info.type,
+                                    fileId: info.fileId,
+                                    uniqueFileId: info.uniqueFileId ?? info.fileId,
+                                    emoji: info.emoji,
+                                    mimeType: info.mimeType,
+                                    width: info.width,
+                                    height: info.height,
+                                    fileSize: info.fileSize,
+                                    messageIndex: i,
+                                });
+                            }
+                        } catch { /* JSON 解析失败，跳过 */ }
+                    }
+                }
+
+                if (mediaAttachments.length > 0) {
+                    log.info("Vision 处理开始", { chatId: result.chatId, mediaCount: mediaAttachments.length });
+                    try {
+                        const processed = await processMediaBatch(
+                            mediaAttachments,
+                            visionConfig,
+                            llmConfig,
+                            visionTierConfig,
+                            downloadFn,
+                            memory, // sticker cache
+                        );
+                        // 将处理结果写回 formattedMessages
+                        for (const pm of processed) {
+                            if (pm.index >= 0 && pm.index < formattedMessages.length) {
+                                const fm = formattedMessages[pm.index] as any;
+                                if (!fm.processedMedia) fm.processedMedia = [];
+                                fm.processedMedia.push(pm);
+                            }
+                        }
+                        log.info("Vision 处理完成", { chatId: result.chatId, processed: processed.length });
+                    } catch (err) {
+                        log.warn("Vision 处理失败，继续使用占位符", { chatId: result.chatId, error: String(err) });
+                    }
+                }
 
                 // 获取人物信息
                 let personContext = "";

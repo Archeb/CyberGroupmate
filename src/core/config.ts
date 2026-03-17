@@ -22,6 +22,8 @@ export interface LLMConfig {
     maxTokens: number;
     /** Gemini thinking level: "none" | "low" | "medium" | "high" */
     thinkingLevel?: string;
+    /** 此 profile 是否支持多模态图片输入。默认 false */
+    vision?: boolean;
 }
 
 /** 相似度度量方法 */
@@ -172,6 +174,16 @@ export interface SubagentExternalConfig {
     };
 }
 
+/** Vision 处理配置 */
+export interface VisionConfig {
+    /** 以 file 形式发送的大图压缩阈值（长边像素）。默认 1024 */
+    maxImageSize?: number;
+    /** 单轮上下文最多内联几张图片，超出走 vision 描述。默认 3 */
+    maxImagesPerContext?: number;
+    /** Sticker 处理模式。默认 "emoji_only" */
+    stickerMode?: "vision_each" | "vision_cache" | "emoji_only";
+}
+
 /** Dashboard 外部配置 */
 export interface DashboardExternalConfig {
     /** 是否启用。默认 true */
@@ -195,6 +207,7 @@ export interface AppConfig {
     embedding: EmbeddingConfig;
     subagent?: SubagentExternalConfig;
     dashboard?: DashboardExternalConfig;
+    vision?: VisionConfig;
 }
 
 // ─── 默认值 ───
@@ -338,6 +351,7 @@ export function loadConfig(configPath?: string, forceReload?: boolean): AppConfi
         embedding: parseEmbeddingConfig(fileConfig),
         subagent: parseSubagentConfig(fileConfig),
         dashboard: parseDashboardConfig(fileConfig),
+        vision: parseVisionConfig(fileConfig),
     };
 
     _cached = config;
@@ -495,6 +509,18 @@ function parseSubagentConfig(fileConfig: Record<string, unknown>): SubagentExter
     };
 }
 
+// ─── Vision 配置解析 ───
+
+function parseVisionConfig(fileConfig: Record<string, unknown>): VisionConfig | undefined {
+    const raw = fileConfig.vision as Record<string, unknown> | undefined;
+    if (!raw || typeof raw !== "object") return undefined;
+    return {
+        maxImageSize: raw.max_image_size != null ? num(raw.max_image_size, 1024) : undefined,
+        maxImagesPerContext: raw.max_images_per_context != null ? num(raw.max_images_per_context, 3) : undefined,
+        stickerMode: (str(raw.sticker_mode) as VisionConfig["stickerMode"]) ?? undefined,
+    };
+}
+
 // ─── 内部辅助 ───
 
 function parseLLMProfile(raw: Record<string, unknown>): LLMConfig {
@@ -506,6 +532,7 @@ function parseLLMProfile(raw: Record<string, unknown>): LLMConfig {
         temperature: num(raw.temperature, DEFAULT_LLM.temperature),
         maxTokens: num(raw.max_tokens, DEFAULT_LLM.maxTokens),
         thinkingLevel: str(raw.thinking_level),
+        vision: raw.vision === true ? true : undefined,
     };
 }
 

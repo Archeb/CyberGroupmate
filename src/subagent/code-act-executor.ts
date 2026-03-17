@@ -322,11 +322,31 @@ export class CodeActExecutor {
         const toneGuidance = ctx.toneGuidance ?? "";
         const contentDirection = ctx.contentDirection ?? task.decisions.map(d => d.contentDirection ?? "").filter(Boolean).join("; ");
 
-        // 2. 格式化目标消息（含 reply-to 关系）
+        // 2. 格式化目标消息（含 reply-to 关系 + 媒体描述）
+        const imageParts: Array<{ url: string }> = [];
         const targetMessages = (ctx.recentMessages ?? []).map(
             (m) => {
                 const replyTag = m.replyTo ? ` (↩ reply to ${m.replyTo})` : "";
-                return `[${formatTsForDisplay(m.timestamp) ?? ""}] [msgId:${m.id ?? "?"}] ${m.sender ?? "?"}${replyTag}: ${m.text ?? ""}`;
+                let textPart = m.text ?? "";
+
+                // 注入媒体描述（路径 B/C）
+                if (m.processedMedia && m.processedMedia.length > 0) {
+                    for (const pm of m.processedMedia) {
+                        if (pm.description) {
+                            // 如果文本中有占位符则替换，否则追加
+                            textPart = textPart + ` ${pm.description}`;
+                        }
+                        if (pm.base64Data && pm.mimeType) {
+                            // 路径 A: 收集 base64 图片，稍后注入 LLM messages
+                            imageParts.push({
+                                url: `data:${pm.mimeType};base64,${pm.base64Data}`,
+                            });
+                            textPart = textPart.replace("[📷 图片]", `[📷 图片${imageParts.length}]`);
+                        }
+                    }
+                }
+
+                return `[${formatTsForDisplay(m.timestamp) ?? ""}] [msgId:${m.id ?? "?"}] ${m.sender ?? "?"}${replyTag}: ${textPart}`;
             }
         ).join("\n") || "(无目标消息原文)";
 
@@ -375,8 +395,12 @@ export class CodeActExecutor {
             }
         }
 
-        // 当前任务 prompt 放在最后
-        messages.push({ role: "user", content: taskPrompt });
+        // 当前任务 prompt 放在最后（路径 A 时附加图片）
+        messages.push({
+            role: "user",
+            content: taskPrompt,
+            ...(imageParts.length > 0 ? { imageParts } : {}),
+        });
 
         // ═══ Fix 1: 注册 SentMessageCollector ═══
         // 清空 pending buffer（层 1 已经刷新了 recentMessages，此处 drain 掉残留）

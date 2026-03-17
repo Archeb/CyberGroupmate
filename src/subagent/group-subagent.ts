@@ -183,6 +183,8 @@ export class GroupSubagent extends EventEmitter {
                 text: String(event.text ?? event.message ?? ""),
                 timestamp: Date.now(),
                 replyToMessageId: event.replyToMessageId ? String(event.replyToMessageId) : undefined,
+                mediaType: (event as any).mediaInfo?.type ?? undefined,
+                mediaInfo: (event as any).mediaInfo ? JSON.stringify((event as any).mediaInfo) : undefined,
             };
             this.recordingPipeline.onMessage(msg);
         }

@@ -273,6 +273,8 @@ export class RecordingPipeline extends EventEmitter {
                         text: m.text,
                         replyToMessageId: m.replyToMessageId,
                         timestamp: new Date(m.timestamp).toISOString(),
+                        mediaType: m.mediaType,
+                        mediaInfo: m.mediaInfo,
                     })));
 
                     // 更新参与者身份信息 + 群内画像统计

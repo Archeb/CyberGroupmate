@@ -1,0 +1,270 @@
+/**
+ * vision-processor.ts — Vision 处理管线
+ *
+ * 协调图片下载、识别、和缓存。根据配置走三种路径：
+ * - A: 原生多模态（base64 内联，≤maxImagesPerContext 张）
+ * - B: Vision 辅助（调用 vision tier LLM 描述）
+ * - C: 无 Vision（占位文本）
+ *
+ * 超出 maxImagesPerContext 张的图片一律走 B 路径描述。
+ * Sticker 支持 emoji_only / vision_cache / vision_each 三种模式。
+ */
+
+import { callLLM, type ChatMessage } from "./llm.js";
+import type { LLMConfig, VisionConfig } from "./config.js";
+import { createLogger } from "./logger.js";
+
+const log = createLogger("vision-processor");
+
+// ─── 类型定义 ───
+
+/** 待处理的媒体附件（从 message_log.media_info 解析） */
+export interface MediaAttachment {
+    type: "photo" | "sticker" | "video" | "document" | "animation" | "other";
+    fileId: string;
+    uniqueFileId: string;
+    emoji?: string;       // sticker only
+    mimeType?: string;
+    width?: number;
+    height?: number;
+    fileSize?: number;
+    /** 对应消息在上下文中的序号 */
+    messageIndex: number;
+}
+
+/** 处理后的媒体结果 */
+export interface ProcessedMedia {
+    /** 对应 MediaAttachment 的序号 */
+    index: number;
+    /** 路径 A: base64 图片数据 */
+    base64Data?: string;
+    mimeType?: string;
+    /** 路径 B/C 或溢出的图片: 文本描述 */
+    description?: string;
+}
+
+/** Sticker 描述缓存接口 */
+export interface StickerCache {
+    getStickerDescription(uniqueFileId: string): string | null;
+    setStickerDescription(uniqueFileId: string, description: string): void;
+}
+
+/** 下载函数类型 */
+export type DownloadFn = (fileId: string) => Promise<Buffer>;
+
+// ─── 默认配置 ───
+
+const DEFAULT_MAX_IMAGES = 3;
+const DEFAULT_MAX_IMAGE_SIZE = 1024;
+
+// ─── 核心处理函数 ───
+
+/**
+ * 批量处理一组消息中的媒体附件
+ *
+ * @param attachments 按消息顺序排列的媒体附件列表
+ * @param config Vision 配置
+ * @param llmConfig 主模型配置（检查 vision:true）
+ * @param visionLlmConfig 独立 vision tier 配置
+ * @param downloadFn 图片下载函数（委托给 adapter）
+ * @param stickerCache sticker 描述缓存
+ */
+export async function processMediaBatch(
+    attachments: MediaAttachment[],
+    config: VisionConfig | undefined,
+    llmConfig: LLMConfig,
+    visionLlmConfig?: LLMConfig,
+    downloadFn?: DownloadFn,
+    stickerCache?: StickerCache,
+): Promise<ProcessedMedia[]> {
+    const maxImages = config?.maxImagesPerContext ?? DEFAULT_MAX_IMAGES;
+    const results: ProcessedMedia[] = [];
+
+    // 分类
+    const photos: MediaAttachment[] = [];
+    const stickers: MediaAttachment[] = [];
+
+    for (const att of attachments) {
+        if (att.type === "photo" || (att.type === "document" && att.mimeType?.startsWith("image/"))) {
+            photos.push(att);
+        } else if (att.type === "sticker") {
+            stickers.push(att);
+        }
+        // video / animation / other → 跳过（保留占位文本）
+    }
+
+    // 确定处理路径
+    const isPathA = llmConfig.vision === true;
+    const isPathB = !isPathA && !!visionLlmConfig;
+    // 如果既不是 A 也不是 B，就是 C
+
+    // ─── 处理 Sticker ───
+    for (const sticker of stickers) {
+        const processed = await processSingleSticker(
+            sticker,
+            config,
+            isPathA || isPathB,
+            isPathA ? llmConfig : visionLlmConfig,
+            downloadFn,
+            stickerCache,
+        );
+        results.push(processed);
+    }
+
+    // ─── 处理 Photo ───
+    let inlineCount = 0;
+    for (const photo of photos) {
+        if (isPathA && inlineCount < maxImages && downloadFn) {
+            // 路径 A: 内联 base64
+            try {
+                const buffer = await downloadFn(photo.fileId);
+                const mime = photo.mimeType ?? "image/jpeg";
+                results.push({
+                    index: photo.messageIndex,
+                    base64Data: buffer.toString("base64"),
+                    mimeType: mime,
+                });
+                inlineCount++;
+                continue;
+            } catch (err) {
+                log.warn("路径 A 下载失败，降级为描述", { fileId: photo.fileId, error: String(err) });
+            }
+        }
+
+        if ((isPathA || isPathB) && downloadFn) {
+            // 路径 A 溢出 或 路径 B: 调用 vision LLM 描述
+            const visionConfig = isPathA ? llmConfig : visionLlmConfig!;
+            try {
+                const buffer = await downloadFn(photo.fileId);
+                const mime = photo.mimeType ?? "image/jpeg";
+                const desc = await describeImage(buffer, mime, visionConfig);
+                results.push({
+                    index: photo.messageIndex,
+                    description: desc,
+                });
+                continue;
+            } catch (err) {
+                log.warn("Vision 描述失败，使用占位符", { fileId: photo.fileId, error: String(err) });
+            }
+        }
+
+        // 路径 C 或降级兜底
+        results.push({
+            index: photo.messageIndex,
+            description: "[📷 图片]",
+        });
+    }
+
+    return results;
+}
+
+// ─── 内部函数 ───
+
+/**
+ * 处理单个 Sticker
+ */
+async function processSingleSticker(
+    sticker: MediaAttachment,
+    config: VisionConfig | undefined,
+    hasVision: boolean,
+    visionLlmConfig?: LLMConfig,
+    downloadFn?: DownloadFn,
+    stickerCache?: StickerCache,
+): Promise<ProcessedMedia> {
+    const mode = config?.stickerMode ?? "emoji_only";
+
+    // emoji_only 或无 vision 能力
+    if (mode === "emoji_only" || !hasVision || !downloadFn || !visionLlmConfig) {
+        return {
+            index: sticker.messageIndex,
+            description: sticker.emoji
+                ? `[🎭 贴纸: ${sticker.emoji}]`
+                : "[🎭 贴纸]",
+        };
+    }
+
+    // vision_cache: 查缓存
+    if (mode === "vision_cache" && stickerCache) {
+        const cached = stickerCache.getStickerDescription(sticker.uniqueFileId);
+        if (cached) {
+            log.debug("Sticker 缓存命中", { uniqueFileId: sticker.uniqueFileId });
+            return {
+                index: sticker.messageIndex,
+                description: `[🎭 贴纸: ${cached}]`,
+            };
+        }
+    }
+
+    // vision_each 或 vision_cache miss: 下载+识别
+    try {
+        const buffer = await downloadFn(sticker.fileId);
+        const mime = sticker.mimeType ?? "image/webp";
+        const desc = await describeSticker(buffer, mime, visionLlmConfig, sticker.emoji);
+
+        // 写入缓存 (vision_cache mode)
+        if (mode === "vision_cache" && stickerCache) {
+            stickerCache.setStickerDescription(sticker.uniqueFileId, desc);
+        }
+
+        return {
+            index: sticker.messageIndex,
+            description: `[🎭 贴纸: ${desc}]`,
+        };
+    } catch (err) {
+        log.warn("Sticker 识别失败，降级为 emoji", { uniqueFileId: sticker.uniqueFileId, error: String(err) });
+        return {
+            index: sticker.messageIndex,
+            description: sticker.emoji
+                ? `[🎭 贴纸: ${sticker.emoji}]`
+                : "[🎭 贴纸]",
+        };
+    }
+}
+
+/**
+ * 调用 Vision LLM 描述图片
+ */
+async function describeImage(
+    imageBuffer: Buffer,
+    mimeType: string,
+    visionConfig: LLMConfig,
+): Promise<string> {
+    const b64 = imageBuffer.toString("base64");
+    const dataUri = `data:${mimeType};base64,${b64}`;
+
+    const messages: ChatMessage[] = [
+        {
+            role: "user",
+            content: "请简洁描述这张图片的内容。用一两句话概括主要内容。",
+            imageParts: [{ url: dataUri }],
+        },
+    ];
+
+    const response = await callLLM(messages, visionConfig, { maxTokens: 200 });
+    return response.content.trim();
+}
+
+/**
+ * 调用 Vision LLM 描述 Sticker
+ */
+async function describeSticker(
+    stickerBuffer: Buffer,
+    mimeType: string,
+    visionConfig: LLMConfig,
+    emoji?: string,
+): Promise<string> {
+    const b64 = stickerBuffer.toString("base64");
+    const dataUri = `data:${mimeType};base64,${b64}`;
+
+    const emojiHint = emoji ? `（这个贴纸的 emoji 是 ${emoji}）` : "";
+    const messages: ChatMessage[] = [
+        {
+            role: "user",
+            content: `这是一个 Telegram 贴纸图片${emojiHint}。请用几个词简短描述贴纸表情/动作/含义。`,
+            imageParts: [{ url: dataUri }],
+        },
+    ];
+
+    const response = await callLLM(messages, visionConfig, { maxTokens: 100 });
+    return response.content.trim();
+}

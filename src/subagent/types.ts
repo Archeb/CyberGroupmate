@@ -269,8 +269,23 @@ export interface GroupContextPackage {
     // ─── Dispatch handler 注入的执行上下文（CodeActExecutor prompt 使用） ───
     /** 话题摘要文本 */
     topicSummary?: string;
-    /** 格式化的最近消息（含 reply-to 关系） */
-    recentMessages?: Array<{ id: string; sender: string; text: string; timestamp: string; replyTo?: string }>;
+    /** 格式化的最近消息（含 reply-to 关系 + 媒体信息） */
+    recentMessages?: Array<{
+        id: string;
+        sender: string;
+        text: string;
+        timestamp: string;
+        replyTo?: string;
+        mediaType?: string;
+        mediaInfo?: string;
+        /** Vision 处理后的媒体结果 */
+        processedMedia?: Array<{
+            index: number;
+            base64Data?: string;
+            mimeType?: string;
+            description?: string;
+        }>;
+    }>;
     /** 人物背景 JSON */
     personContext?: string;
     /** 语气指导 */
