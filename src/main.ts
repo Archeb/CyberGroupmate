@@ -304,12 +304,17 @@ async function main(): Promise<void> {
 
         // Q3 入队策略（architecture_v2.md §3）：
         // - 正常路径：RecordingPipeline flush → triage → triage-engage 事件 → Q3 入队
-        // - 紧急路径：Observer 检测到高 engagement / @mention → 立即 Q3 入队
+        // - 紧急路径：Observer 告警 / DM / @mention → 立即 Q3 入队
         // 不对每条消息无条件入队，避免绕过 triage 看门人
-        if (sub.observer.checkAlert()) {
+        const isDM = !!event.isDirectMessage;
+        const isMention = !!event.mentionsAgent;
+        const alert = sub.observer.checkAlert();
+
+        if (alert || isDM || isMention) {
             q3.enqueueOrUpdate(sub.buildQueueEntry());
-            log.info("Observer 告警 → Q3 即时入队", {
+            log.info("即时 → Q3 入队", {
                 chatId,
+                reason: isDM ? "DM" : isMention ? "@mention" : "Observer 告警",
                 engagement: sub.observer.getEngagementScore(),
             });
         }
