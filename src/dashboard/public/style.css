@@ -1,5 +1,92 @@
 /* Dashboard 自定义样式 */
 
+/* ── Tab Navigation ── */
+.tab-nav {
+    border: 1px solid color-mix(in srgb, var(--color-base-content) 12%, transparent);
+    border-radius: 0.75rem;
+    padding: 0.25rem;
+    background: var(--color-base-100);
+    box-shadow: 0 1px 3px color-mix(in srgb, var(--color-base-content) 6%, transparent);
+    gap: 0.25rem;
+}
+
+.tab-nav .tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.5rem 1rem;
+    border-radius: 0.5rem;
+    border: 1px solid transparent;
+    font-weight: 500;
+    font-size: 0.85rem;
+    color: color-mix(in srgb, var(--color-base-content) 65%, transparent);
+    position: relative;
+    transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    overflow: hidden;
+}
+
+.tab-nav .tab::after {
+    content: '';
+    position: absolute;
+    bottom: 0;
+    left: 50%;
+    width: 0;
+    height: 2px;
+    background: var(--color-primary);
+    border-radius: 1px;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    transform: translateX(-50%);
+}
+
+.tab-nav .tab:hover {
+    color: var(--color-base-content);
+    background: color-mix(in srgb, var(--color-primary) 8%, transparent);
+    border-color: color-mix(in srgb, var(--color-primary) 15%, transparent);
+}
+
+.tab-nav .tab:hover .tab-icon svg {
+    transform: scale(1.15);
+}
+
+.tab-nav .tab:active {
+    transform: scale(0.97);
+}
+
+.tab-nav .tab.tab-active {
+    color: var(--color-primary);
+    background: color-mix(in srgb, var(--color-primary) 12%, transparent);
+    border-color: color-mix(in srgb, var(--color-primary) 25%, transparent);
+    font-weight: 600;
+    box-shadow: 0 0 8px color-mix(in srgb, var(--color-primary) 10%, transparent);
+    animation: tab-pop 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.tab-nav .tab.tab-active::after {
+    width: 60%;
+}
+
+@keyframes tab-pop {
+    0% { transform: scale(0.95); opacity: 0.7; }
+    50% { transform: scale(1.02); }
+    100% { transform: scale(1); opacity: 1; }
+}
+
+/* Tab icon */
+.tab-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.tab-icon svg {
+    transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1), color 0.25s;
+}
+
+.tab-nav .tab.tab-active .tab-icon svg {
+    filter: drop-shadow(0 0 2px color-mix(in srgb, var(--color-primary) 40%, transparent));
+}
+
 /* 消息流时间戳 */
 .msg-time {
     color: var(--color-secondary);
