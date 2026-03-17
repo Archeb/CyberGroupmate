@@ -132,7 +132,7 @@ const App = (() => {
         el.innerHTML = filtered.slice(-200).map(m => {
             const time = new Date(m.timestamp).toLocaleTimeString();
             const isAgent = m.userId === "agent" || m.userId === "self";
-            const isMention = m.mentionsAgent;
+            const isMention = m.mentionsAgent || m.isDirectMessage;
             const cls = [isAgent ? "is-agent" : "", isMention ? "is-mention" : ""].join(" ");
             const text = escapeHtml(m.text || "").slice(0, 500);
             const nameLink = isAgent ? `<span class="msg-user">🤖 Agent</span>` :
