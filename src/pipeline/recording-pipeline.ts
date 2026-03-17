@@ -121,6 +121,9 @@ export class RecordingPipeline extends EventEmitter {
     private isFlushing = false;
     private disposed = false;
 
+    /** Agent 最后回复时间戳（由 GroupSubagent 同步写入），用于 triage 防重复 */
+    lastAgentReplyAt: number = 0;
+
     constructor(
         private registry: TopicRegistry,
         private llmConfig: LLMConfig,
@@ -627,10 +630,27 @@ export class RecordingPipeline extends EventEmitter {
                 topic.lastKeyPoints = triage.keyPoints;
 
                 const wasAlreadyHandledByFastPath = topicMsgs.some(msg => msg._viaFastPath);
-                if (wasAlreadyHandledByFastPath) {
+
+                // 时间戳防重复：如果话题的所有消息都在 agent 上次回复之前，
+                // 说明 agent 已通过其他路径（alert→CodeAct/FastPath）回复过，不再重复介入
+                const latestMsgTs = Math.max(...topicMsgs.map(m => m.timestamp));
+                const wasAlreadyRepliedByAgent = this.lastAgentReplyAt > 0
+                    && latestMsgTs <= this.lastAgentReplyAt;
+
+                if (wasAlreadyHandledByFastPath || wasAlreadyRepliedByAgent) {
+                    const reason = wasAlreadyHandledByFastPath
+                        ? "already handled via fast path"
+                        : `agent already replied at ${new Date(this.lastAgentReplyAt).toISOString()}, topic last msg at ${new Date(latestMsgTs).toISOString()}`;
+                    log.info("话题跳过 triage（已回复）", {
+                        topicId: topic.id,
+                        label: topic.label,
+                        reason,
+                        lastAgentReplyAt: this.lastAgentReplyAt,
+                        latestMsgTs,
+                    });
                     const decision: TriageDecision = {
                         should_intervene: false,
-                        reason: "already handled via fast path",
+                        reason,
                         intervention_type: "NOT_APPLICABLE",
                         confidence: 1.0,
                     };

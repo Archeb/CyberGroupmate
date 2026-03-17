@@ -9,11 +9,12 @@
  * - FastPathHandler: 快速回复处理器（S4 实现后注入）
  *
  * RecordingPipeline 的 topic:triage-passed 事件自动更新 Observer
- * 的 topicDigests，不再需要 main.ts 中的外部 bridge。
+ * 的 topicDigests，同时 emit triage-engage 事件驱动 Q3 入队。
  *
- * 参考设计：subagent.md §3
+ * 参考设计：subagent.md §3, architecture_v2.md §2.2
  */
 
+import { EventEmitter } from "node:events";
 import { Observer } from "./observer.js";
 import type {
     AttentionQueueEntry,
@@ -56,7 +57,7 @@ export interface GroupSubagentOptions {
 /**
  * GroupSubagent — 群组级 Subagent 容器
  */
-export class GroupSubagent {
+export class GroupSubagent extends EventEmitter {
     readonly chatId: string;
     readonly observer: Observer;
 
@@ -88,7 +89,17 @@ export class GroupSubagent {
     /** 最近的 Subagent 回调结果（保留最近 5 条） */
     lastCallbacks: SubagentCallback[] = [];
 
+    /** 自上次 attend 以来，是否有话题通过 triage（ENGAGE），用于 Phase 2 守卫 */
+    hasTriageEngaged: boolean = false;
+
+    /** 已分派回复任务的 topicId 集合（防重复分派） */
+    private dispatchedTopicIds = new Set<string>();
+
+    /** Agent 最后一次回复时间戳（毫秒），用于 triage 防重复 */
+    lastAgentReplyAt: number = 0;
+
     constructor(options: GroupSubagentOptions) {
+        super();
         this.chatId = options.chatId;
         this.observer = new Observer(options.chatId, options.observerConfig);
         this.stickiness = options.stickiness ?? createStickiness("STRANGER");
@@ -108,8 +119,13 @@ export class GroupSubagent {
 
             // 自动桥接：RecordingPipeline triage → Observer topicDigests
             this.recordingPipeline.on("topic:triage-passed", (topic: any, decision: any) => {
-                log.info("话题通过 Triage", { chatId: this.chatId, topicId: topic.id, label: topic.label });
-                const activeTopics = this.topicRegistry.getActive(this.chatId);
+                log.info("话题通过 Triage", {
+                    chatId: this.chatId,
+                    topicId: topic.id,
+                    label: topic.label,
+                    interventionType: decision?.intervention_type,
+                    confidence: decision?.confidence,
+                });
                 const allNonArchived = this.topicRegistry.getByChat(this.chatId);
                 const digests: TopicDigest[] = allNonArchived.map((t: any) => ({
                     topicId: String(t.id),
@@ -124,6 +140,16 @@ export class GroupSubagent {
                     triageConfidence: decision?.confidence ?? 0,
                 }));
                 this.observer.setTopicDigests(digests);
+
+                // 标记有话题需要介入，触发 Q3 重新入队
+                this.hasTriageEngaged = true;
+                log.info("triage-engage: 话题需要介入，触发 Q3 重入队", {
+                    chatId: this.chatId,
+                    topicId: topic.id,
+                    label: topic.label,
+                    digestCount: digests.length,
+                });
+                this.emit("triage-engage", this.chatId);
             });
 
             // TopicRegistry archived 事件：话题归档时通知 memory
@@ -208,7 +234,13 @@ export class GroupSubagent {
         this.lastAttendedAt = new Date().toISOString();
         this.attendCount++;
         this.observer.clearBuffer();
-        log.debug("markAttended", { chatId: this.chatId, attendCount: this.attendCount });
+        this.hasTriageEngaged = false;  // attend 后重置 triage-engage 标记
+        this.pruneDispatchedTopics();   // 清理已归档话题的 dispatched 记录
+        log.debug("markAttended", {
+            chatId: this.chatId,
+            attendCount: this.attendCount,
+            dispatchedTopics: this.dispatchedTopicIds.size,
+        });
     }
 
     /**
@@ -227,6 +259,21 @@ export class GroupSubagent {
         if (this.lastCallbacks.length > 5) {
             this.lastCallbacks = this.lastCallbacks.slice(-5);
         }
+        // 有实际发送的消息时，更新 lastAgentReplyAt
+        if (cb.sentMessages && cb.sentMessages.length > 0) {
+            this.updateLastAgentReplyAt();
+        }
+    }
+
+    /**
+     * 更新 Agent 最后回复时间（同步到 RecordingPipeline）
+     */
+    updateLastAgentReplyAt(ts: number = Date.now()): void {
+        this.lastAgentReplyAt = ts;
+        if (this.recordingPipeline) {
+            this.recordingPipeline.lastAgentReplyAt = ts;
+        }
+        log.debug("updateLastAgentReplyAt", { chatId: this.chatId, ts });
     }
 
     /**
@@ -248,6 +295,43 @@ export class GroupSubagent {
      */
     isIdle(maxIdleMs: number): boolean {
         return Date.now() - this.lastActivityAt > maxIdleMs;
+    }
+
+    // ─── 已分派话题追踪 ───
+
+    /**
+     * 标记话题已分派回复任务（dispatch-handler 调用）
+     */
+    markTopicDispatched(topicId: string): void {
+        this.dispatchedTopicIds.add(topicId);
+        log.info("markTopicDispatched", { chatId: this.chatId, topicId, total: this.dispatchedTopicIds.size });
+    }
+
+    /**
+     * 检查话题是否已被分派
+     */
+    isTopicDispatched(topicId: string): boolean {
+        return this.dispatchedTopicIds.has(topicId);
+    }
+
+    /**
+     * 获取所有已分派话题 ID
+     */
+    getDispatchedTopicIds(): ReadonlySet<string> {
+        return this.dispatchedTopicIds;
+    }
+
+    /**
+     * 清理已归档/过期的 dispatched 记录（attend 后调用）
+     */
+    private pruneDispatchedTopics(): void {
+        for (const id of this.dispatchedTopicIds) {
+            const topic = this.topicRegistry.get(id);
+            if (!topic || topic.state === "ARCHIVED" || topic.state === "STALE") {
+                this.dispatchedTopicIds.delete(id);
+                log.debug("pruneDispatchedTopics: 清理", { chatId: this.chatId, topicId: id, state: topic?.state ?? "NOT_FOUND" });
+            }
+        }
     }
 
     /**

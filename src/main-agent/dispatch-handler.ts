@@ -162,6 +162,11 @@ export function createDispatchHandler(
                 executor.enqueue(task);
                 hasCodeActTask = true;
 
+                // 记录已分派的 topicId（防重复分派）
+                if (decision.topicId) {
+                    subagent.markTopicDispatched(decision.topicId);
+                }
+
                 log.info("分派 CodeActReplyTask", {
                     chatId: result.chatId,
                     taskId: task.taskId,

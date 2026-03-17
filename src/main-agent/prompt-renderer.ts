@@ -157,6 +157,7 @@ export function buildAttentionVariables(
         alertReason?: string;
         messages?: string;
         suggestedReplyMode?: string;
+        dispatchedTopicIds?: string[];
     },
 ): Record<string, unknown> {
     const opts = options ?? {};
@@ -209,6 +210,10 @@ export function buildAttentionVariables(
 
         // Decision hint
         suggestedReplyMode: opts.suggestedReplyMode ?? "NONE",
+
+        // Dispatched topics (防重复分派)
+        hasDispatchedTopics: !!opts.dispatchedTopicIds?.length,
+        dispatchedTopicIds: opts.dispatchedTopicIds?.join(", ") ?? "",
     };
 }
 

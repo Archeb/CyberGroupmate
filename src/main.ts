@@ -292,9 +292,27 @@ async function main(): Promise<void> {
         }
 
         const sub = subagentManager.getOrCreate(chatId);
+        // 监听 triage-engage 事件：RecordingPipeline flush 后 triage 通过时触发 Q3 重入队
+        if (!sub.listenerCount("triage-engage")) {
+            sub.on("triage-engage", (cid: string) => {
+                q3.enqueueOrUpdate(sub.buildQueueEntry());
+                log.info("triage-engage → Q3 入队", { chatId: cid });
+            });
+        }
         // Per-group: Observer + RecordingPipeline 同时处理消息 (subagent.md §3.1)
         sub.onMessage(event);
-        q3.enqueueOrUpdate(sub.buildQueueEntry());
+
+        // Q3 入队策略（architecture_v2.md §3）：
+        // - 正常路径：RecordingPipeline flush → triage → triage-engage 事件 → Q3 入队
+        // - 紧急路径：Observer 检测到高 engagement / @mention → 立即 Q3 入队
+        // 不对每条消息无条件入队，避免绕过 triage 看门人
+        if (sub.observer.checkAlert()) {
+            q3.enqueueOrUpdate(sub.buildQueueEntry());
+            log.info("Observer 告警 → Q3 即时入队", {
+                chatId,
+                engagement: sub.observer.getEngagementScore(),
+            });
+        }
 
         // Fix 7: FastPath 触发路径 — 消息到达时检查是否有已授权的 FastPath
         const fp = sub.fastPathHandler as FastPathHandler | null;

@@ -40,5 +40,10 @@
 - 语气预设: {{tonePreset}}
 {{/groupModel}}
 
+{{#hasDispatchedTopics}}
+## ⚠️ 已分派回复任务的话题
+以下话题已有进行中或已完成的回复任务，请勿重复分派: {{dispatchedTopicIds}}
+{{/hasDispatchedTopics}}
+
 ## 请决策
 基于以上信息，输出你的决策（JSON 格式的 AttendResult）。

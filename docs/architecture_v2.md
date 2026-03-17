@@ -25,6 +25,7 @@ CyberGroupmate 系统的核心设计哲学是 **速度分层：快决策 + 慢�
 **核心概念**：系统最高指挥官。通过一套 **7-Phase 的串行注意力循环** (Main Event Loop) 来分配其"注意力"。它从不做实际的沙盒操作或消息拉取，而是通过观察发上来的摘要做宏观调度。
 
 **上下文深度 (Cosine Decay)**：主 Agent 不会每次都去读取群里的全部信息。它使用余弦衰减算法，根据每个群组的 attend 次数在固定周期内自动切换上下文深度。深度周期 (`depthCyclePeriod`) 由群组的 Stickiness 等级决定（越亲密，深度巡检越频繁）。当有告警等紧急信号时，强制提升最低深度。四级深度为：只看摘要和分数 (L0)、加载群画像和历史回调 (L1)、追加消息原文 (L2)、全量深度摘要 (L3)。
+**深度自动提升**：当 `topicDigests` 为空且无 `groupModel` 时（如新群/低活跃群），L0/L1 深度下 LLM 几乎无可用信息做决策，此时自动升级到 L2 以获取消息原文。
 
 **对话历史管理**：主 Agent 维护自身的 LLM 对话历史 (`conversationHistory`)。每轮 attend 的上下文注入和 LLM 决策结果、以及 Phase 1 收到的 Callback 都会追加到历史中。超限时先做消息截断 (Layer 1)，再调用 `ContextManager.compact()` 做 LLM 压缩 (Layer 2)。
 
@@ -63,7 +64,11 @@ stateDiagram-v2
 ### 2.2 群组子代理 (GroupSubagent)
 **核心概念**：被 Main Agent 调配的执行单元。针对每个 Telegram 群，系统都动态孵化一个 `GroupSubagent` 容器。容器持有以下核心组件：
 1. **Observer (感知器)**：永远在运行。监听该群的消息，将它们放入内部 Q2 缓冲区。它**不调用 LLM**，纯靠算法计算**活跃度 (Engagement)**（基于消息频率 × 20 + 独立发言者 × 15 + @提及加成 20，上限 100）。当 Engagement 超阈值时向 Q3 发出高优告警；当条件满足时推荐 FastPath 授权。
-2. **TopicRegistry + RecordingPipeline (话题系统)**：与 Observer 同级，由 `GroupSubagent` 直接持有。`RecordingPipeline` 独立维护消息缓冲与 LLM-based 话题聚类/摘要/Triage，通过事件桥接 (`topic:triage-passed`) 将话题摘要自动同步到 Observer 的 `topicDigests`。话题归档 (`topic:archived`) 时通知 Memory 做 `finalizeTopic()`。
+2. **TopicRegistry + RecordingPipeline (话题系统)**：与 Observer 同级，由 `GroupSubagent` 直接持有。`RecordingPipeline` 独立维护消息缓冲与 LLM-based 话题聚类/摘要/Triage，通过事件桥接 (`topic:triage-passed`) 将话题摘要自动同步到 Observer 的 `topicDigests`，同时触发 `triage-engage` 事件将群组重新入队 Q3 拉起主 Agent 重评估（解决 flush 延迟导致的注意力盲区）。话题归档 (`topic:archived`) 时通知 Memory 做 `finalizeTopic()`。
+
+**已分派话题追踪 (dispatchedTopicIds)**：`GroupSubagent` 维护一个 `dispatchedTopicIds: Set<string>` 集合。当 dispatch-handler 为某个话题分派 CodeAct 任务时，将 `topicId` 记入此集合。主 Agent 下次 attend 时将已分派话题列表注入 LLM prompt，明确提示 LLM 不要对同一话题重复分派回复任务。话题归档后自动清理。
+
+**跨路径防重复 (lastAgentReplyAt)**：紧急路径（Observer 告警→CodeAct/FastPath）的回复发生在 triage 之前，因此 triage 不知道 agent 已回复过。`GroupSubagent` 维护 `lastAgentReplyAt` 时间戳，每当 callback 包含已发送消息时更新并同步到 `RecordingPipeline`。Pipeline 在 triage 决策阶段检查：如果某话题的最后一条消息早于 `lastAgentReplyAt`，自动标记为"已回复、不介入"，与 `_viaFastPath` 标记并列生效。
 3. **CodeActExecutor (深度执行器)**：拥有完全隔离的 LLM 对话 Session 与通过 `SandboxPool` 按需获取的独立 Sandbox Worker。收到主 Agent 分派的 `CODEACT_REPLY` 任务后才被激活。它有自己的 Q4 任务队列实现串行执行，每个任务调用 `runCodeActSession()` 在沙盒中多轮 LLM 交互（可调用 Telegram API、Memory API、Web 搜索等 Host Call），完事后产出 Callback 到 Q5。Session 具备持久化与恢复能力（磁盘 JSON），以及两层 Compact 机制（Layer 1 结构化快速截断 + Layer 2 LLM token-budget 压缩）。
 4. **FastPathHandler (应急反射神经)**：仅在主 Agent 显式预授权 (`FAST_PATH_AUTH`) 后才生效。收到授权后，用 `cheapConfig` LLM 自主生成快回复（受 `maxReplies` 次数与过期时间约束，支持 `preauthorizedActions` / `blockedActions` 以及 `__SKIP__` 跳过标记）。每次发送后产出 Callback 到 Q5 回报主 Agent。次数用尽或过期后自动禁用。
 
@@ -128,7 +133,8 @@ graph TD
     
     NC -->|onPush Hook 按群路由| OBS[GroupSubagent: Observer + TopicRegistry]:::subfill
     
-    OBS -->|生成摘要/评估活跃度| MQ3[(注意力队列 Q3)]:::qfill
+    OBS -->|"Observer 告警 (紧急路径)"| MQ3[(注意力队列 Q3)]:::qfill
+    OBS -.->|"triage-engage (正常路径)"| MQ3
     
     MQ3 -->|优先出队| MA[Main Agent Decision]:::mainfill
     ML -.->|组装时间一致快照| MA
@@ -154,7 +160,7 @@ graph TD
 ### 关键队列与组件梳理
 *   **Q1 (NotificationCenter, NC)**: 事件总线。接纳一切输入并通过 `onPush` Hook 同步分发到 `MessageLogWriter`（实时落盘）、`GroupSubagent.onMessage()`（Observer + RecordingPipeline）、`FeedbackLoop`（反馈追踪）。NC 同时支持 JSONL 文件持久化和跨进程事件注入（CLI 可追加 JSONL，NC 通过 `fs.watch` 检测并读入）。
 *   **Q2 (Observer 内部 Buffer)**: Observer 的消息缓冲区。所有消息进入后参与 Engagement 计算，attend 后自动清空（`clearBuffer()`）。
-*   **Q3 (DynamicAttentionQueue)**: 主 Agent 专属注意力队列。Observer 的 Engagement 分析和告警通过 `buildQueueEntry()` 入队，支持时间衰减、block/unblock（CodeAct 执行中阻塞该群）、priority boost（告警/Followup 提权）。
+*   **Q3 (DynamicAttentionQueue)**: 主 Agent 专属注意力队列。入队来源有三条路径：(1) Observer 检测到高 engagement/@mention 告警时即时入队（紧急路径）；(2) RecordingPipeline flush 后 triage 通过触发 `triage-engage` 事件入队（正常路径——triage 是 Q3 的核心看门人）；(3) DEFER 决策半优先级重新入队。**不对每条消息无条件入队**，确保 Main Agent 的决策基于 triage 的结构化分析而非原始消息。支持时间衰减、block/unblock（CodeAct 执行中阻塞该群）、priority boost（告警/Followup 提权）。
 *   **Q4 (CodeActExecutor 内部 Task Queue)**: 每个群组的 CodeActExecutor 内部的串行任务队列。主 Agent 分派 `CODEACT_REPLY` 后 enqueue，按序执行。
 *   **Q5 (CallbackQueue)**: Subagent 向主 Agent 呈报完成结果的回执箱。CodeActExecutor 和 FastPathHandler 完成后将 `SubagentCallback` push 到此，由主 Agent Phase 1 drain。
 *   **SandboxPool**: 全局 Sandbox 实例池，管理最大并发数和空闲超时回收。CodeActExecutor 执行时 acquire，完成后 release。每个 Sandbox 实例上注册了 Host Call 路由（Telegram API、Memory API、TaskList 等）。
@@ -170,7 +176,7 @@ graph TD
 | 目标 Prompt | 注水管道 (从何处拼装数据) | 核心变量呈现 (举例) |
 | :--- | :--- | :--- |
 | **主 Agent 系统指令** | 全局静态配置库 (`persona`)、全局状态 (`GlobalState`) | `{persona}` (底层人格设定), `{recentDecisions}` (最近决策记录), `{activeTasks}` (当前任务列表), `{attentionSummary}` (全局状态摘要) |
-| **主 Agent 决策输入** (Attend Context) | 群消息的数据库快照 + Observer 产出的话题注册表 + 群组画像 + 历史 Callback | `{topicDigests}`, `{messages}` (L2+深度消息原文), `{engagementScore}`, `{lastCallbacks}`, `{fastPathHistory}`, `{suggestedReplyMode}` (算法预估), `{alertReason}`, `{groupModel}`, `{stickinessLevel}`, `{timeSinceLastAttend}` |
+| **主 Agent 决策输入** (Attend Context) | 群消息的数据库快照 + Observer 产出的话题注册表 + 群组画像 + 历史 Callback + 已分派话题集 | `{topicDigests}`, `{messages}` (L2+深度消息原文), `{engagementScore}`, `{lastCallbacks}`, `{fastPathHistory}`, `{suggestedReplyMode}` (算法预估), `{alertReason}`, `{groupModel}`, `{stickinessLevel}`, `{timeSinceLastAttend}`, `{dispatchedTopicIds}` (已分派回复任务的话题ID，防重复) |
 | **CodeActExecutor 任务指派** | Main Agent 派发到 Q4 的含明确方向的回复任务 + Memory 查询 | `{targetMessages}` (含 reply-to 关系的消息原文), `{topicSummary}`, `{personContext}` (人物背景), `{contentDirection}` (主脑指示的方向), `{toneGuidance}` (语气指导), `{apiTypeDefs}` (沙盒 API 类型定义) |
 | **FastPath 快速指令** | Main Agent 授权时圈定的配置选项 | `{preauthorizedActions}` (允许的行动), `{blockedActions}` (绝对不可涉及的话题), `{tonePreset}` (语气预设), `{maxReplyLength}`, `{repliesSent}` / `{maxReplies}` (已用/总额度) |
 | **Reflection 定期反思输入** | MemoryV2 查出的上次反思后的话题与交互数据 + 已有画像 + 群组画像 | `{topics}` (带摘要/情感/AI介入状态), `{interactions}`, `{participantStats}` (量化统计), `{existingProfiles}`, `{groupModel}` |

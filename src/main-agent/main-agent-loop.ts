@@ -182,13 +182,12 @@ export class MainAgentLoop {
         }
 
         // ═══ Phase 2: 动态队列评估 (Q3) ═══
-        // subagent.md §4.5: 遍历所有 subagent → enqueueOrUpdate → alert boost → evaluate
+        // 仅在信号级条件下入队：Observer 告警、FastPath 请求、或 triage-engage
+        // 不按 newMessageCount 入队——正常触发依赖 RecordingPipeline flush → triage
         let boostedAlerts = 0;
         for (const sa of this.subagentManager.getAllSubagents()) {
-            // 只有当 Observer 有新数据时才入队（buffer 非空、告警、FastPath 请求）
-            // 避免空闲群组被反复 enqueue → dequeue → 白白调用 LLM
             const entry = sa.buildQueueEntry();
-            if (entry.newMessageCount === 0 && !entry.alert && !entry.hasFastPathRequest) {
+            if (!entry.alert && !entry.hasFastPathRequest && !sa.hasTriageEngaged) {
                 continue;
             }
             this.attentionQueue.enqueueOrUpdate(entry);

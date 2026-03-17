@@ -51,7 +51,7 @@ export function createAttendHandler(
 
         // ─── Phase 4: 构建上下文 ───
 
-        const depth = calculateDepth(
+        let depth = calculateDepth(
             entry.attendCount,
             subagent.stickiness.depthCyclePeriod,
             entry.alert ? { forceMinDepth: 2 } : undefined,
@@ -59,6 +59,13 @@ export function createAttendHandler(
 
         // 获取群组画像和最近 callbacks（L1+ 深度可见）
         const groupModel = memory.getGroupModel(entry.chatId) ?? undefined;
+
+        // 自动深度提升：当 topicDigests 和 groupModel 都为空时，
+        // L0/L1 深度下 LLM 几乎没有可用信息来做决策，自动升级到 L2 以获取消息原文
+        if (depth < 2 && entry.topicDigests.length === 0 && !groupModel) {
+            log.info("深度自动提升: topicDigests 和 groupModel 均为空", { chatId: entry.chatId, from: `L${depth}`, to: "L2" });
+            depth = 2 as import("./cosine-decay.js").ContextDepth;
+        }
 
         const contextPkg = buildGroupContext({
             chatId: entry.chatId,
@@ -147,6 +154,7 @@ export function createAttendHandler(
                 alertReason: entry.alert?.reason,
                 messages: messagesText || undefined,
                 suggestedReplyMode,
+                dispatchedTopicIds: [...subagent.getDispatchedTopicIds()],
             });
 
             const attentionPrompt = renderPrompt("ATTENTION", promptVars);
