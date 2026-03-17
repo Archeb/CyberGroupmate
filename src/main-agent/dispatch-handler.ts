@@ -155,8 +155,8 @@ export function createDispatchHandler(
                         q3.unblock(cb.chatId);
                         globalState.recordDecision(cb.chatId, `CALLBACK: ${cb.executionType} ${cb.status} (${cb.summary})`);
                     });
-                    // Fix 9: 注入 Sandbox + NC + LLM 依赖
-                    executor.setDependencies(sandboxPool, nc, llmConfig, sessionsDir, persona);
+                    // Fix 9: 注入 Sandbox + NC + LLM 依赖 + Memory（层 1 消息刷新）
+                    executor.setDependencies(sandboxPool, nc, llmConfig, sessionsDir, persona, memory);
                 }
 
                 executor.enqueue(task);

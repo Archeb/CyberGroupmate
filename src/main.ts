@@ -334,6 +334,17 @@ async function main(): Promise<void> {
             });
         }
 
+        // 层 2 消息前送：如果该 chatId 的 CodeActExecutor 正在执行，推入 pending buffer
+        const executor = sub.codeActExecutor as import("./subagent/code-act-executor.js").CodeActExecutor | null;
+        if (executor?.isProcessing()) {
+            executor.pushPendingMessage({
+                id: String(event.messageId ?? event.id ?? `msg_${Date.now()}`),
+                sender: String(event.displayName ?? event.senderName ?? event.userName ?? "?"),
+                text: String(event.text ?? event.message ?? ""),
+                timestamp: String(event.timestamp ?? new Date().toISOString()),
+            });
+        }
+
         // Fix 7: FastPath 触发路径 — 消息到达时检查是否有已授权的 FastPath
         const fp = sub.fastPathHandler as FastPathHandler | null;
         if (fp && fp.isAuthorized()) {

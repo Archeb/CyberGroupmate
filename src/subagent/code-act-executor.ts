@@ -16,6 +16,7 @@ import type {
     SubagentCallback,
     GroupContextPackage,
 } from "./types.js";
+import type { MemoryStoreV2 } from "../memory-v2/index.js";
 import { SandboxPool } from "../sandbox/sandbox-pool.js";
 import { NotificationCenter } from "../event/notification-center.js";
 import { runCodeActSession, SentMessageCollector, type SessionResult, type SentMessageRecord } from "../sandbox/session-runner.js";
@@ -147,6 +148,12 @@ export class CodeActExecutor {
     /** Callback handler（由 GroupSubagent 或 S8 集成时注入） */
     private callbackHandler: ((cb: SubagentCallback) => void) | null = null;
 
+    /** 层 2: 消息前送缓冲区 — NC hook 在 session 执行期间推入新消息 */
+    private pendingMessages: Array<{ id: string; sender: string; text: string; timestamp: string }> = [];
+
+    /** Memory 引用（层 1 用于刷新目标消息） */
+    private memory: MemoryStoreV2 | null = null;
+
     constructor(chatId: string, config?: Partial<CodeActExecutorConfig>) {
         this.chatId = chatId;
         this.config = { ...DEFAULT_EXECUTOR_CONFIG, ...config };
@@ -184,6 +191,7 @@ export class CodeActExecutor {
         llmConfig: LLMConfig,
         sessionsDir?: string,
         persona?: { name: string; description: string },
+        memory?: MemoryStoreV2,
     ): void {
         this.sandboxPool = sandboxPool;
         this.nc = nc;
@@ -193,6 +201,7 @@ export class CodeActExecutor {
             this.personaName = persona.name;
             this.personaDescription = persona.description;
         }
+        if (memory) this.memory = memory;
         log.info("setDependencies", { chatId: this.chatId, hasSandboxPool: true });
     }
 
@@ -369,6 +378,9 @@ export class CodeActExecutor {
         messages.push({ role: "user", content: taskPrompt });
 
         // ═══ Fix 1: 注册 SentMessageCollector ═══
+        // 清空 pending buffer（层 1 已经刷新了 recentMessages，此处 drain 掉残留）
+        this.pendingMessages = [];
+
         const sentCollector = new SentMessageCollector();
         const sandbox = await this.sandboxPool!.acquire(this.chatId);
 
@@ -398,6 +410,7 @@ export class CodeActExecutor {
                 this.sessionsDir,
                 this.config.maxExecutionTimeMs,
                 sentCollector, // Fix 1: 传入 collector
+                () => this.drainPendingMessages(), // 层 2: turn 间消息注入
             );
         } finally {
             // 清理监听器，释放 sandbox
@@ -539,6 +552,82 @@ export class CodeActExecutor {
         return this.processing;
     }
 
+    // ─── 消息前送方法 ───
+
+    /**
+     * 层 2: 推入一条新消息到 pending buffer
+     * 由 NC hook 在 session 执行期间调用
+     */
+    pushPendingMessage(msg: { id: string; sender: string; text: string; timestamp: string }): void {
+        this.pendingMessages.push(msg);
+        log.debug("pushPendingMessage", {
+            chatId: this.chatId,
+            msgId: msg.id,
+            sender: msg.sender,
+            textPreview: msg.text.length > 50 ? msg.text.slice(0, 50) + "..." : msg.text,
+            bufferSize: this.pendingMessages.length,
+        });
+    }
+
+    /**
+     * 层 2: 取出并格式化 pending messages，清空 buffer
+     * 由 session-runner 在每个 turn 的 LLM 调用前调用
+     * @returns 格式化的消息文本，无新消息时返回 null
+     */
+    drainPendingMessages(): string | null {
+        if (this.pendingMessages.length === 0) return null;
+        const drained = this.pendingMessages.splice(0);
+        const lines = drained.map(m =>
+            `[${m.timestamp}] ${m.sender}: ${m.text}`
+        ).join("\n");
+        log.info("drainPendingMessages", {
+            chatId: this.chatId,
+            count: drained.length,
+        });
+        return `[📩 新消息到达]\n${lines}`;
+    }
+
+    /**
+     * 层 1: 刷新 task 的目标消息列表
+     * 在 processNext() 取出 task 后、execute() 前调用
+     */
+    private refreshTaskMessages(task: CodeActReplyTask): void {
+        if (!this.memory) return;
+        try {
+            const freshMessages = this.memory.getRecentMessages(this.chatId, 20);
+            if (freshMessages.length === 0) return;
+
+            const msgIdToName = new Map<string, string>();
+            for (const m of freshMessages) {
+                msgIdToName.set(m.messageId, m.displayName || `(uid:${m.userId})`);
+            }
+
+            task.contextSnapshot.recentMessages = freshMessages.map((m: any) => ({
+                id: String(m.messageId ?? m.id ?? ""),
+                sender: String(m.displayName ?? m.sender ?? m.userId ?? "?"),
+                text: String(m.text ?? ""),
+                timestamp: String(m.timestamp ?? ""),
+                replyTo: m.replyToMessageId
+                    ? (msgIdToName.get(m.replyToMessageId) ?? `msg#${m.replyToMessageId}`)
+                    : undefined,
+                mediaType: m.mediaType ?? undefined,
+                mediaInfo: m.mediaInfo ?? undefined,
+            }));
+
+            log.info("refreshTaskMessages: 已刷新目标消息", {
+                chatId: this.chatId,
+                taskId: task.taskId,
+                messageCount: task.contextSnapshot.recentMessages.length,
+            });
+        } catch (err) {
+            log.warn("refreshTaskMessages: 刷新失败", {
+                chatId: this.chatId,
+                taskId: task.taskId,
+                error: String(err),
+            });
+        }
+    }
+
     /**
      * 清空 session（用于测试）
      */
@@ -558,6 +647,10 @@ export class CodeActExecutor {
         try {
             while (this.taskQueue.length > 0) {
                 const task = this.taskQueue.shift()!;
+
+                // 层 1: 执行前刷新目标消息
+                this.refreshTaskMessages(task);
+
                 const callback = await this.execute(task);
 
                 // 通知 callback handler (Q5)

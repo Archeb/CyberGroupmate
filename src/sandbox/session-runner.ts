@@ -217,6 +217,8 @@ export async function runCodeActSession(
     executeTimeout: number = 30000,
     /** 已发消息收集器，用于将 notify 事件中确认的消息反馈到 observation */
     sentMessageCollector?: SentMessageCollector,
+    /** 层 2 消息前送：每轮 LLM 调用前检查是否有新消息到达 */
+    pendingMessagesDrain?: () => string | null,
 ): Promise<SessionResult> {
     const sessionId = ulid();
     const turns: SessionTurn[] = [];
@@ -228,6 +230,15 @@ export async function runCodeActSession(
     const transcriptPath = join(sessionsDir, `${sessionId}.jsonl`);
 
     for (let turnNum = 0; turnNum < MAX_TURNS; turnNum++) {
+        // ─── 层 2: turn 间消息注入 ───
+        if (pendingMessagesDrain) {
+            const newMessages = pendingMessagesDrain();
+            if (newMessages) {
+                log.info(`Turn ${turnNum}: 注入前送消息`, { length: newMessages.length });
+                messages.push({ role: "user", content: newMessages });
+            }
+        }
+
         // ─── 调用 LLM ───
         let llmResponse: LLMResponse;
         try {
