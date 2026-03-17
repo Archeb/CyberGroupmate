@@ -261,6 +261,7 @@ async function main(): Promise<void> {
     );
 
     // ─── NC.onPush: 消息实时处理管线 ───
+    const personaName = appConfig.persona?.name ?? "";
 
     // Hook 2: 消息分发到 per-group GroupSubagent (Observer + RecordingPipeline) → 更新 Q3
     nc.onPush(event => {
@@ -304,17 +305,21 @@ async function main(): Promise<void> {
 
         // Q3 入队策略（architecture_v2.md §3）：
         // - 正常路径：RecordingPipeline flush → triage → triage-engage 事件 → Q3 入队
-        // - 紧急路径：Observer 告警 / DM / @mention → 立即 Q3 入队
+        // - 紧急路径：Observer 告警 / DM / @mention / 文本提及 agent 名字 → 立即 Q3 入队
         // 不对每条消息无条件入队，避免绕过 triage 看门人
         const isDM = !!event.isDirectMessage;
         const isMention = !!event.mentionsAgent;
         const alert = sub.observer.checkAlert();
+        // 文本提及检测：检查消息内容是否包含 agent 的名字
+        // 注意：不使用完整的 urgentWords 列表（含 ?/呢/吗 等常见词会导致误触发）
+        const messageText = String(event.text ?? event.message ?? "").toLowerCase();
+        const hasNameMention = personaName.length > 0 && messageText.includes(personaName.toLowerCase());
 
-        if (alert || isDM || isMention) {
+        if (alert || isDM || isMention || hasNameMention) {
             q3.enqueueOrUpdate(sub.buildQueueEntry());
             log.info("即时 → Q3 入队", {
                 chatId,
-                reason: isDM ? "DM" : isMention ? "@mention" : "Observer 告警",
+                reason: isDM ? "DM" : isMention ? "@mention" : hasNameMention ? "文本提及" : "Observer 告警",
                 engagement: sub.observer.getEngagementScore(),
             });
         }

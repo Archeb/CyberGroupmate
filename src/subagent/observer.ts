@@ -187,6 +187,16 @@ export class Observer {
     }
 
     /**
+     * 检查文本是否包含 mentionKeywords 中的任意关键字
+     * 用于 Q3 即时入队判定（文本提及 agent 名字等）
+     */
+    hasMentionKeyword(text: string): boolean {
+        if (this.config.mentionKeywords.length === 0) return false;
+        const lower = text.toLowerCase();
+        return this.config.mentionKeywords.some(kw => lower.includes(kw.toLowerCase()));
+    }
+
+    /**
      * 获取 buffer 中的消息数
      */
     getBufferSize(): number {
