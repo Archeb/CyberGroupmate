@@ -2,6 +2,7 @@
  * app.js — Dashboard 前端应用
  *
  * 纯 JS，无框架。WebSocket 实时推送 + REST API 拉取。
+ * 支持：自动滚动、自动更新、JSON 高亮、CodeAct 角色区分。
  */
 
 const App = (() => {
@@ -10,15 +11,17 @@ const App = (() => {
     const TOKEN = params.get("token") || "";
     const API = `/api`;
     const WS_URL = `ws://${location.host}/ws?token=${TOKEN}`;
+    const REFRESH_INTERVAL = 5000; // 5s
 
     // ─── State ───
     let ws = null;
-    let state = { groups: [], queue: [], pendingCallbacks: [], globalState: {}, sandboxPool: {}, mainLoop: {}, feedbackLoop: {} };
+    let state = { groups: [], queue: { active: [], dequeued: [] }, pendingCallbacks: [], globalState: {}, sandboxPool: {}, mainLoop: {}, feedbackLoop: {} };
     let messages = []; // ring buffer of recent messages
     const MAX_MESSAGES = 500;
     let selectedChatId = null; // for messages tab
     let selectedCodeActChatId = null;
     let refreshTimer = null;
+    let activeTab = "messages";
 
     // ─── API Helpers ───
     async function api(path, opts = {}) {
@@ -30,6 +33,25 @@ const App = (() => {
             body: opts.body ? JSON.stringify(opts.body) : undefined,
         });
         return res.json();
+    }
+
+    // ─── Auto-scroll utility ───
+    function isAtBottom(el) {
+        return el.scrollTop + el.clientHeight >= el.scrollHeight - 50;
+    }
+    function scrollToBottom(el) {
+        el.scrollTop = el.scrollHeight;
+    }
+    function autoScrollAfterRender(el, wasAtBottom) {
+        if (wasAtBottom) requestAnimationFrame(() => scrollToBottom(el));
+    }
+
+    // ─── JSON Highlighting ───
+    function renderJsonHighlighted(el, data) {
+        const json = typeof data === "string" ? data : JSON.stringify(data, null, 2);
+        el.innerHTML = `<code class="language-json hljs">${json}</code>`;
+        try { hljs.highlightElement(el.querySelector("code")); } catch {}
+        scrollToBottom(el);
     }
 
     // ─── WebSocket ───
@@ -57,13 +79,22 @@ const App = (() => {
         switch (event.type) {
             case "snapshot":
                 state = event.data;
+                // Normalize queue format
+                if (Array.isArray(state.queue)) {
+                    state.queue = { active: state.queue, dequeued: [] };
+                }
                 renderAll();
+                refreshActiveTab();
                 break;
             case "nc:message":
                 addMessage(event.data, event.timestamp);
                 break;
             case "queue:update":
-                state.queue = event.data;
+                if (Array.isArray(event.data)) {
+                    state.queue = { active: event.data, dequeued: state.queue?.dequeued || [] };
+                } else {
+                    state.queue = event.data;
+                }
                 renderQueue();
                 break;
         }
@@ -87,9 +118,9 @@ const App = (() => {
         list.innerHTML = `<div class="chat-item ${!selectedChatId ? 'active' : ''}" onclick="App.selectChat(null)">全部</div>` +
             chatIds.map(id => {
                 const count = messages.filter(m => m.chatId === id).length;
-                const short = id.length > 15 ? id.slice(-12) : id;
+                const label = getGroupLabel(id);
                 return `<div class="chat-item ${selectedChatId === id ? 'active' : ''}" onclick="App.selectChat('${id}')" title="${id}">
-                    <span>${short}</span><span class="badge badge-sm">${count}</span>
+                    <span>${escapeHtml(label)}</span><span class="badge badge-sm">${count}</span>
                 </div>`;
             }).join("");
     }
@@ -97,7 +128,7 @@ const App = (() => {
     function renderMessageStream() {
         const filtered = selectedChatId ? messages.filter(m => m.chatId === selectedChatId) : messages;
         const el = document.getElementById("message-stream");
-        const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 50;
+        const wasBottom = isAtBottom(el);
         el.innerHTML = filtered.slice(-200).map(m => {
             const time = new Date(m.timestamp).toLocaleTimeString();
             const isAgent = m.userId === "agent" || m.userId === "self";
@@ -105,56 +136,115 @@ const App = (() => {
             const cls = [isAgent ? "is-agent" : "", isMention ? "is-mention" : ""].join(" ");
             const text = escapeHtml(m.text || "").slice(0, 500);
             const nameLink = isAgent ? `<span class="msg-user">🤖 Agent</span>` :
-                `<span class="msg-user cursor-pointer hover:underline" onclick="App.quickQueryUser('${m.userId}','${m.chatId}')">${escapeHtml(m.displayName || m.userId)}</span>`;
+                `<span class="msg-user clickable-link" onclick="App.quickQueryUser('${m.userId}','${m.chatId}')">${escapeHtml(m.displayName || m.userId)}</span>`;
+            // Group tag in "全部" view
+            const groupTag = !selectedChatId ? `<span class="msg-group-tag" title="${m.chatId}">${escapeHtml(getGroupLabel(m.chatId))}</span>` : "";
             return `<div class="msg-item ${cls}">
                 <span class="msg-time">${time}</span>
+                ${groupTag}
                 ${nameLink}
                 <span class="msg-text">${text}</span>
             </div>`;
         }).join("");
-        if (atBottom) el.scrollTop = el.scrollHeight;
+        autoScrollAfterRender(el, wasBottom);
         document.getElementById("msg-chat-label").textContent = selectedChatId ? `Chat: ${selectedChatId}` : "全部";
     }
 
-    function selectChat(chatId) {
+    async function selectChat(chatId) {
         selectedChatId = chatId;
         renderChatList();
+        // Load historical messages from memory when selecting a specific group
+        if (chatId) {
+            try {
+                const history = await api(`/messages/${chatId}?limit=100`);
+                if (Array.isArray(history) && history.length > 0) {
+                    // Merge with existing real-time messages, dedup by messageId
+                    const existingIds = new Set(messages.map(m => m.messageId || m.id));
+                    const newMsgs = history
+                        .filter(m => !existingIds.has(m.messageId))
+                        .map(m => ({
+                            chatId: m.chatId,
+                            messageId: m.messageId,
+                            userId: m.userId,
+                            displayName: m.displayName,
+                            text: m.text,
+                            timestamp: m.timestamp,
+                        }));
+                    if (newMsgs.length > 0) {
+                        messages.push(...newMsgs);
+                        messages.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+                        if (messages.length > MAX_MESSAGES) messages.splice(0, messages.length - MAX_MESSAGES);
+                    }
+                }
+            } catch {}
+        }
         renderMessageStream();
     }
 
     // ─── Topics ───
-    function renderTopics() {
+    const expandedTopicGroups = new Set(); // track which groups are expanded
+    let topicCache = {}; // chatId -> topics[]
+
+    async function renderTopics() {
         const container = document.getElementById("topics-container");
         if (!state.groups.length) { container.innerHTML = '<div class="text-sm opacity-60">暂无数据</div>'; return; }
+
+        // Preserve current expand state from DOM
+        container.querySelectorAll('.topic-group-collapse input[type="checkbox"]').forEach(input => {
+            const cid = input.dataset.chatId;
+            if (cid) {
+                if (input.checked) expandedTopicGroups.add(cid);
+                else expandedTopicGroups.delete(cid);
+            }
+        });
+
         container.innerHTML = state.groups.map(g => {
-            return `<div class="collapse collapse-arrow bg-base-200">
-                <input type="checkbox" />
+            const isExpanded = expandedTopicGroups.has(g.chatId);
+            const label = getGroupLabel(g.chatId);
+            return `<div class="collapse collapse-arrow bg-base-200 topic-group-collapse">
+                <input type="checkbox" data-chat-id="${g.chatId}" ${isExpanded ? 'checked' : ''} onchange="App.toggleTopicGroup('${g.chatId}', this.checked)" />
                 <div class="collapse-title text-sm font-medium flex justify-between items-center">
-                    <span>${escapeHtml(g.chatId)}</span>
+                    <span>${escapeHtml(label)}</span>
                     <span class="badge badge-sm">${g.topicCount} 话题</span>
                 </div>
                 <div class="collapse-content">
                     <div id="topics-${CSS.escape(g.chatId)}" class="space-y-1">
-                        <button class="btn btn-xs btn-ghost" onclick="App.loadTopics('${g.chatId}')">加载话题</button>
+                        ${topicCache[g.chatId] ? renderTopicCards(topicCache[g.chatId], g.chatId) : '<div class="text-xs opacity-60">加载中...</div>'}
                     </div>
                 </div>
             </div>`;
         }).join("");
+
+        // Auto-load topics for expanded groups
+        for (const g of state.groups) {
+            if (expandedTopicGroups.has(g.chatId) && !topicCache[g.chatId]) {
+                loadTopics(g.chatId);
+            }
+        }
     }
 
-    async function loadTopics(chatId) {
-        const topics = await api(`/topics/${chatId}`);
-        const el = document.getElementById(`topics-${CSS.escape(chatId)}`);
-        if (!topics.length) { el.innerHTML = '<div class="text-sm opacity-60">无话题</div>'; return; }
-        el.innerHTML = topics.map(t => {
+    function toggleTopicGroup(chatId, isExpanded) {
+        if (isExpanded) {
+            expandedTopicGroups.add(chatId);
+            if (!topicCache[chatId]) loadTopics(chatId);
+        } else {
+            expandedTopicGroups.delete(chatId);
+        }
+    }
+
+    function renderTopicCards(topics, chatId) {
+        if (!topics.length) return '<div class="text-sm opacity-60">无话题</div>';
+        return topics.map(t => {
             const stateClass = `state-${(t.state||"").toLowerCase()}`;
             const participants = (t.participantIds || []).map(p =>
-                `<span class="cursor-pointer hover:underline text-primary" onclick="App.quickQueryUser('${p}','${chatId}')">${escapeHtml(p)}</span>`
+                `<span class="clickable-link" onclick="App.quickQueryUser('${p}','${chatId}')">${escapeHtml(p)}</span>`
             ).join(", ");
-            return `<div class="topic-card ${stateClass}">
+            const engaged = t.wasEngaged ? `<span class="badge badge-xs badge-success">已回应 ×${t.interventionCount || 1}</span>` : '';
+            const sourceBadge = t.source === "history" ? '<span class="badge badge-xs badge-ghost">历史</span>' : '';
+            return `<div class="topic-card ${stateClass} cursor-pointer" onclick="App.viewTopicDetail('${t.id}')">
                 <div class="flex justify-between items-center">
                     <span class="font-semibold text-sm">${escapeHtml(t.label || t.id)}</span>
-                    <span class="badge badge-xs">${t.state}</span>
+                    <div class="flex gap-1">${engaged} ${sourceBadge} <span class="badge badge-xs">${t.state}</span></div>
                 </div>
                 <div class="text-xs opacity-70 mt-1">${escapeHtml(t.summary || "")}</div>
                 <div class="text-xs mt-1">
@@ -165,30 +255,63 @@ const App = (() => {
         }).join("");
     }
 
+    async function loadTopics(chatId) {
+        const topics = await api(`/topics/${chatId}`);
+        topicCache[chatId] = topics;
+        const el = document.getElementById(`topics-${CSS.escape(chatId)}`);
+        if (el) el.innerHTML = renderTopicCards(topics, chatId);
+    }
+
     // ─── Queue ───
     function renderQueue() {
+        const queueData = state.queue || { active: [], dequeued: [] };
+        const activeList = queueData.active || [];
+        const dequeuedList = queueData.dequeued || [];
+
+        // Active queue
         const tbody = document.getElementById("queue-tbody");
-        if (!state.queue.length) { tbody.innerHTML = '<tr><td colspan="8" class="text-center opacity-60">队列为空</td></tr>'; return; }
-        const sorted = [...state.queue].sort((a, b) => b.priority - a.priority);
-        tbody.innerHTML = sorted.map(e => {
-            const pClass = e.priority > 50 ? "priority-high" : e.priority > 20 ? "priority-mid" : "priority-low";
-            const blocked = e.blocked ? "is-blocked" : "";
-            return `<tr class="queue-row ${blocked}">
-                <td class="font-mono text-xs cursor-pointer hover:underline" onclick="App.quickQueryGroup('${e.chatId}')">${shortId(e.chatId)}</td>
-                <td class="${pClass}">${e.priority.toFixed(1)}</td>
-                <td><span class="badge badge-xs">${e.source}</span></td>
-                <td class="stickiness-${e.stickinessLevel}">${e.stickinessLevel}</td>
-                <td>${e.newMessageCount}</td>
-                <td>${(e.topicDigests||[]).length}</td>
-                <td>${e.blocked ? '<span class="badge badge-xs badge-error">阻塞</span>' : '<span class="badge badge-xs badge-success">活跃</span>'}</td>
-                <td>
-                    <div class="flex gap-1">
-                        <button class="btn btn-xs btn-ghost" onclick="App.boostQueue('${e.chatId}')">⬆</button>
-                        <button class="btn btn-xs btn-ghost text-error" onclick="App.removeFromQueue('${e.chatId}')">✕</button>
-                    </div>
-                </td>
-            </tr>`;
-        }).join("");
+        if (!activeList.length) { tbody.innerHTML = '<tr><td colspan="8" class="text-center opacity-60">队列为空</td></tr>'; }
+        else {
+            const sorted = [...activeList].sort((a, b) => b.priority - a.priority);
+            tbody.innerHTML = sorted.map(e => {
+                const pClass = e.priority > 50 ? "priority-high" : e.priority > 20 ? "priority-mid" : "priority-low";
+                const blocked = e.blocked ? "is-blocked" : "";
+                return `<tr class="queue-row ${blocked}">
+                    <td class="font-mono text-xs clickable-id" onclick="App.quickQueryGroup('${e.chatId}')">${shortId(e.chatId)}</td>
+                    <td class="${pClass}">${e.priority.toFixed(1)}</td>
+                    <td><span class="badge badge-xs">${e.source}</span></td>
+                    <td class="stickiness-${e.stickinessLevel}">${e.stickinessLevel}</td>
+                    <td>${e.newMessageCount}</td>
+                    <td>${(e.topicDigests||[]).length}</td>
+                    <td>${e.blocked ? '<span class="badge badge-xs badge-error">阻塞</span>' : '<span class="badge badge-xs badge-success">活跃</span>'}</td>
+                    <td>
+                        <div class="flex gap-1">
+                            <button class="btn btn-xs btn-ghost" onclick="App.boostQueue('${e.chatId}')">⬆</button>
+                            <button class="btn btn-xs btn-ghost text-error" onclick="App.removeFromQueue('${e.chatId}')">✕</button>
+                        </div>
+                    </td>
+                </tr>`;
+            }).join("");
+        }
+
+        // Dequeued history
+        const dTbody = document.getElementById("dequeued-tbody");
+        document.getElementById("dequeued-count").textContent = dequeuedList.length;
+        if (!dequeuedList.length) {
+            dTbody.innerHTML = '<tr><td colspan="5" class="text-center opacity-60">暂无历史</td></tr>';
+        } else {
+            dTbody.innerHTML = [...dequeuedList].reverse().map(d => {
+                const e = d.entry;
+                const time = new Date(d.dequeuedAt).toLocaleTimeString();
+                return `<tr class="dequeued-row">
+                    <td class="font-mono text-xs clickable-id" onclick="App.quickQueryGroup('${e.chatId}')">${shortId(e.chatId)}</td>
+                    <td>${e.priority.toFixed(1)}</td>
+                    <td><span class="badge badge-xs">${e.source}</span></td>
+                    <td class="stickiness-${e.stickinessLevel}">${e.stickinessLevel}</td>
+                    <td class="opacity-60">${time}</td>
+                </tr>`;
+            }).join("");
+        }
     }
 
     async function boostQueue(chatId) {
@@ -215,26 +338,30 @@ const App = (() => {
     async function renderDecisions() {
         const decisions = await api("/decisions");
         const el = document.getElementById("decisions-list");
+        const wasBottom = isAtBottom(el);
         el.innerHTML = (decisions || []).map((d, i) => {
             const time = d.timestamp ? new Date(d.timestamp).toLocaleTimeString() : "";
             return `<div class="decision-item">
                 <span class="opacity-50">${time}</span>
-                <span class="cursor-pointer hover:underline text-primary" onclick="App.quickQueryGroup('${d.chatId}')">${shortId(d.chatId)}</span>
+                <span class="clickable-link" onclick="App.quickQueryGroup('${d.chatId}')">${shortId(d.chatId)}</span>
                 ${escapeHtml(d.decision || d.content || JSON.stringify(d))}
             </div>`;
         }).join("");
+        autoScrollAfterRender(el, wasBottom);
 
         // Main agent history
         const history = await api("/main-agent/history");
         const hEl = document.getElementById("main-agent-history");
+        const hWasBottom = isAtBottom(hEl);
         hEl.innerHTML = (history || []).map(msg => {
             const roleColor = msg.role === "assistant" ? "text-primary" : msg.role === "system" ? "text-info" : "text-success";
             const content = typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content);
             return `<div class="codeact-msg role-${msg.role}">
-                <span class="${roleColor} font-bold text-[0.7rem]">[${msg.role}]</span>
-                <div class="whitespace-pre-wrap mt-1">${escapeHtml(content).slice(0, 2000)}</div>
+                <span class="role-label">${msg.role}</span>
+                <div class="whitespace-pre-wrap mt-1 text-xs">${escapeHtml(content).slice(0, 2000)}</div>
             </div>`;
         }).join("");
+        autoScrollAfterRender(hEl, hWasBottom);
     }
 
     // ─── CodeAct ───
@@ -250,10 +377,40 @@ const App = (() => {
         }).join("");
     }
 
+    /** Parse code blocks in text and highlight them */
+    function formatCodeActContent(rawText) {
+        const escaped = escapeHtml(rawText);
+        // Split by ```lang\n...\n``` patterns
+        const parts = escaped.split(/(```[\s\S]*?```)/g);
+        return parts.map(part => {
+            const match = part.match(/^```(\w*)\n?([\s\S]*?)```$/);
+            if (match) {
+                const lang = match[1] || "plaintext";
+                const code = match[2].replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"');
+                let highlighted;
+                try {
+                    highlighted = hljs.highlight(code, { language: lang, ignoreIllegals: true }).value;
+                } catch {
+                    highlighted = escapeHtml(code);
+                }
+                return `<pre class="code-block"><code class="hljs language-${lang}">${highlighted}</code></pre>`;
+            }
+            return `<span class="whitespace-pre-wrap">${part}</span>`;
+        }).join("");
+    }
+
+    let codeActPollTimer = null;
+
     async function selectCodeActChat(chatId) {
         selectedCodeActChatId = chatId;
-        renderCodeActChatList();
-        document.getElementById("codeact-label").textContent = chatId;
+        // Clear previous polling
+        if (codeActPollTimer) { clearInterval(codeActPollTimer); codeActPollTimer = null; }
+        document.getElementById("codeact-label").textContent = getGroupLabel(chatId);
+        await refreshCodeActSession(chatId);
+    }
+
+    async function refreshCodeActSession(chatId) {
+        if (!chatId) return;
         const data = await api(`/codeact/${chatId}`);
         document.getElementById("codeact-session-size").textContent = data.sessionSize ?? "-";
         document.getElementById("codeact-exec-count").textContent = data.executionCount ?? "-";
@@ -261,13 +418,23 @@ const App = (() => {
         const cancelBtn = document.getElementById("codeact-cancel-btn");
         cancelBtn.classList.toggle("hidden", !data.isProcessing);
         const el = document.getElementById("codeact-session");
+        const wasBottom = isAtBottom(el);
         el.innerHTML = (data.session || []).map(msg => {
-            const content = typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content);
+            const content = typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content, null, 2);
             return `<div class="codeact-msg role-${msg.role}">
-                <span class="font-bold text-[0.7rem]">[${msg.role}]</span>
-                <pre class="whitespace-pre-wrap mt-1 text-xs">${escapeHtml(content).slice(0, 5000)}</pre>
+                <span class="role-label">${msg.role}</span>
+                <div class="mt-1 text-xs">${formatCodeActContent(content.slice(0, 5000))}</div>
             </div>`;
         }).join("");
+        autoScrollAfterRender(el, wasBottom);
+
+        // Start live polling when CodeAct is actively processing
+        if (data.isProcessing && !codeActPollTimer) {
+            codeActPollTimer = setInterval(() => refreshCodeActSession(chatId), 2000);
+        } else if (!data.isProcessing && codeActPollTimer) {
+            clearInterval(codeActPollTimer);
+            codeActPollTimer = null;
+        }
     }
 
     async function cancelCodeAct() {
@@ -285,14 +452,14 @@ const App = (() => {
         let path = `/memory/user/${userId}`;
         if (chatId) path += `?chatId=${chatId}`;
         const result = await api(path);
-        document.getElementById("memory-result").textContent = JSON.stringify(result, null, 2);
+        renderJsonHighlighted(document.getElementById("memory-result"), result);
     }
 
     async function queryGroup() {
         const chatId = document.getElementById("memory-group-input").value;
         if (!chatId) return;
         const result = await api(`/memory/group/${chatId}`);
-        document.getElementById("memory-result").textContent = JSON.stringify(result, null, 2);
+        renderJsonHighlighted(document.getElementById("memory-result"), result);
     }
 
     function quickQueryUser(userId, chatId) {
@@ -308,11 +475,126 @@ const App = (() => {
         queryGroup();
     }
 
+    // ─── Memory: Recall (keyword/semantic search) ───
+    async function recallMemory() {
+        const query = document.getElementById("recall-query-input").value.trim();
+        if (!query) return;
+        const chatId = document.getElementById("recall-chatid-input").value.trim();
+        const resultEl = document.getElementById("recall-result");
+        resultEl.innerHTML = '<div class="text-xs opacity-60">搜索中...</div>';
+        try {
+            const body = { query };
+            if (chatId) body.chatId = chatId;
+            const result = await api("/memory/recall", {
+                method: "POST",
+                body: body,
+            });
+            // Render recall results
+            let html = '';
+            if (result.deepSummary) {
+                html += `<div class="mb-3 p-2 bg-base-200 rounded text-xs"><strong>摘要：</strong>${escapeHtml(result.deepSummary)}</div>`;
+            }
+            if (result.topics?.length) {
+                html += `<h4 class="text-sm font-bold mb-1">🗂 话题 (${result.topics.length})</h4>`;
+                html += result.topics.map(t => `<div class="topic-card mb-1 cursor-pointer" onclick="App.viewTopicDetail('${t.id}')">
+                    <div class="font-semibold text-xs">${escapeHtml(t.label)}</div>
+                    <div class="text-xs opacity-70">${escapeHtml(t.summary || '')}</div>
+                    <div class="text-xs">${(t.keywords||[]).map(k => '<span class="badge badge-xs">' + escapeHtml(k) + '</span>').join(' ')}</div>
+                </div>`).join('');
+            }
+            if (result.facts?.length) {
+                html += `<h4 class="text-sm font-bold mt-2 mb-1">💡 事实 (${result.facts.length})</h4>`;
+                html += '<div class="space-y-1">' + result.facts.map(f => `<div class="text-xs p-1 bg-base-200 rounded">
+                    <span class="badge badge-xs">${escapeHtml(f.category)}</span>
+                    <span class="font-mono">${escapeHtml(f.subject)}</span>: ${escapeHtml(f.content)}
+                    <span class="opacity-50">(${(f.confidence * 100).toFixed(0)}%)</span>
+                </div>`).join('') + '</div>';
+            }
+            if (result.persons?.length) {
+                html += `<h4 class="text-sm font-bold mt-2 mb-1">👤 关联人物 (${result.persons.length})</h4>`;
+                html += result.persons.map(p => `<div class="text-xs p-1 bg-base-200 rounded">
+                    <span class="clickable-link" onclick="App.quickQueryUser('${p.userId}','${p.chatId}')">${escapeHtml(p.userId)}</span>
+                    T${p.dunbarTier} | ${escapeHtml((p.traits||[]).join(', '))}
+                </div>`).join('');
+            }
+            if (!html) html = '<div class="text-xs opacity-60">未找到匹配结果</div>';
+            resultEl.innerHTML = html;
+        } catch (err) {
+            resultEl.innerHTML = `<div class="text-xs text-error">${escapeHtml(String(err))}</div>`;
+        }
+    }
+
+    // ─── Topic Detail ───
+    async function viewTopicDetail(topicId) {
+        // Show the hidden tab
+        const tab = document.getElementById("tab-topic-detail");
+        tab.classList.remove("hidden");
+        switchTab("topic-detail");
+
+        // Show loading state
+        document.getElementById("topic-detail-title").textContent = "加载中...";
+        document.getElementById("topic-detail-meta").innerHTML = '';
+        document.getElementById("topic-detail-messages").innerHTML = '<div class="opacity-60">加载中...</div>';
+        document.getElementById("topic-detail-state").textContent = '';
+        document.getElementById("topic-detail-time").textContent = '';
+
+        try {
+            const data = await api(`/topic/${topicId}`);
+            document.getElementById("topic-detail-title").textContent = `📖 ${data.label || topicId}`;
+            document.getElementById("topic-detail-state").textContent = data.state || '';
+            document.getElementById("topic-detail-time").textContent =
+                `${(data.startedAt || '').slice(0, 16)} ~ ${(data.endedAt || '进行中').slice(0, 16)}`;
+
+            // Meta info
+            let meta = '';
+            if (data.summary) {
+                meta += `<div class="p-2 bg-base-200 rounded"><strong>摘要：</strong>${escapeHtml(data.summary)}</div>`;
+            }
+            meta += `<div><strong>话题 ID：</strong><span class="font-mono">${escapeHtml(data.topicId)}</span></div>`;
+            if (data.chatId) meta += `<div><strong>群组：</strong>${escapeHtml(getGroupLabel(data.chatId))}</div>`;
+            meta += `<div><strong>消息数：</strong>${data.messageCount || 0}</div>`;
+            if (data.sentiment) meta += `<div><strong>情感：</strong>${escapeHtml(data.sentiment)}</div>`;
+            if (data.wasEngaged) meta += `<div><strong>已回应：</strong>×${data.interventionCount || 1}</div>`;
+            if (data.keywords?.length) {
+                meta += `<div><strong>关键词：</strong>${data.keywords.map(k => '<span class="badge badge-xs">' + escapeHtml(k) + '</span>').join(' ')}</div>`;
+            }
+            if (data.participants?.length) {
+                meta += `<div><strong>参与者：</strong>${data.participants.map(p =>
+                    `<span class="clickable-link" onclick="App.quickQueryUser('${p}','${data.chatId || ''}')">${escapeHtml(p)}</span>`
+                ).join(', ')}</div>`;
+            }
+            if (data.keyPoints?.length) {
+                meta += `<div><strong>要点：</strong><ul class="list-disc ml-4">${data.keyPoints.map(p => `<li>${escapeHtml(p)}</li>`).join('')}</ul></div>`;
+            }
+            document.getElementById("topic-detail-meta").innerHTML = meta;
+
+            // Messages
+            const msgs = data.messages || [];
+            if (!msgs.length) {
+                document.getElementById("topic-detail-messages").innerHTML = '<div class="opacity-60">无相关消息</div>';
+                return;
+            }
+            document.getElementById("topic-detail-messages").innerHTML = msgs.map(m => {
+                const time = m.timestamp ? m.timestamp.slice(11, 19) : '';
+                const name = m.displayName || m.userId || '?';
+                return `<div class="msg-item">
+                    <span class="msg-time">${time}</span>
+                    <span class="msg-user clickable-link" onclick="App.quickQueryUser('${m.userId || ''}','${data.chatId || ''}')">${escapeHtml(name)}</span>
+                    <span class="msg-text">${escapeHtml(m.text || '')}</span>
+                </div>`;
+            }).join('');
+        } catch (err) {
+            document.getElementById("topic-detail-title").textContent = "加载失败";
+            document.getElementById("topic-detail-messages").innerHTML =
+                `<div class="text-error text-xs">${escapeHtml(String(err))}</div>`;
+        }
+    }
+
     // ─── System Tab ───
     async function renderSystem() {
         // Global state
         const gs = await api("/global-state");
-        document.getElementById("global-state-display").textContent = JSON.stringify(gs, null, 2);
+        renderJsonHighlighted(document.getElementById("global-state-display"), gs);
 
         // Sandbox pool
         const pool = await api("/sandbox/pool");
@@ -348,7 +630,6 @@ const App = (() => {
         // Callbacks
         const callbacks = await api("/callbacks");
         const cbEl = document.getElementById("callbacks-display");
-        // Also include recent callbacks from groups
         const allCbs = [];
         for (const g of state.groups) {
             for (const cb of (g.lastCallbacks || [])) {
@@ -372,7 +653,7 @@ const App = (() => {
         tbody.innerHTML = state.groups.map(g => {
             const fp = g.fastPathStatus || {};
             return `<tr>
-                <td class="font-mono text-xs cursor-pointer hover:underline" onclick="App.quickQueryGroup('${g.chatId}')">${shortId(g.chatId)}</td>
+                <td class="font-mono text-xs clickable-id" onclick="App.quickQueryGroup('${g.chatId}')">${shortId(g.chatId)}</td>
                 <td class="stickiness-${g.stickiness}">${g.stickiness}</td>
                 <td>${(g.engagement || 0).toFixed(1)}</td>
                 <td>${g.bufferSize || 0}</td>
@@ -384,23 +665,33 @@ const App = (() => {
 
     // ─── Tab Management ───
     function switchTab(tab) {
+        activeTab = tab;
         document.querySelectorAll(".tab-panel").forEach(p => p.classList.add("hidden"));
         document.getElementById(`panel-${tab}`).classList.remove("hidden");
         document.querySelectorAll('[role="tab"]').forEach(t => {
             t.classList.toggle("tab-active", t.dataset.tab === tab);
         });
-        // Lazy load tab data
-        if (tab === "topics") renderTopics();
-        if (tab === "decisions") renderDecisions();
-        if (tab === "codeact") renderCodeActChatList();
-        if (tab === "system") renderSystem();
+        refreshActiveTab();
+    }
+
+    /** Refresh data for the currently active tab */
+    function refreshActiveTab() {
+        if (activeTab === "topics") renderTopics();
+        if (activeTab === "decisions") renderDecisions();
+        if (activeTab === "codeact") {
+            renderCodeActChatList();
+            if (selectedCodeActChatId) selectCodeActChat(selectedCodeActChatId);
+        }
+        if (activeTab === "system") renderSystem();
+        if (activeTab === "queue") renderQueue();
     }
 
     // ─── Render All ───
     function renderAll() {
         // Stats bar
         document.getElementById("stat-groups").textContent = state.groups.length;
-        document.getElementById("stat-queue").textContent = state.queue.length;
+        const queueActive = state.queue?.active || [];
+        document.getElementById("stat-queue").textContent = queueActive.length;
         const sp = state.sandboxPool || {};
         document.getElementById("stat-sandbox").textContent = `${sp.inUse || 0}/${sp.total || 0}`;
         document.getElementById("stat-callbacks").textContent = (state.pendingCallbacks || []).length;
@@ -417,9 +708,14 @@ const App = (() => {
             try {
                 const snapshot = await api("/overview");
                 state = snapshot;
+                // Normalize queue
+                if (Array.isArray(state.queue)) {
+                    state.queue = { active: state.queue, dequeued: [] };
+                }
                 renderAll();
+                refreshActiveTab();
             } catch {}
-        }, 10000);
+        }, REFRESH_INTERVAL);
     }
 
     // ─── Utilities ───
@@ -431,6 +727,13 @@ const App = (() => {
         if (!id) return "?";
         const s = String(id);
         return s.length > 15 ? "…" + s.slice(-12) : s;
+    }
+
+    /** Get display label for a group: chatTitle if available, else shortId */
+    function getGroupLabel(chatId) {
+        const g = state.groups.find(g => g.chatId === chatId);
+        if (g?.chatTitle) return g.chatTitle;
+        return shortId(chatId);
     }
 
     // ─── Init ───
@@ -447,7 +750,8 @@ const App = (() => {
 
     // Public API (for onclick handlers)
     return {
-        selectChat, loadTopics, boostQueue, removeFromQueue, showEnqueueModal, doEnqueue,
-        selectCodeActChat, cancelCodeAct, queryUser, queryGroup, quickQueryUser, quickQueryGroup,
+        selectChat, loadTopics, toggleTopicGroup, boostQueue, removeFromQueue, showEnqueueModal, doEnqueue,
+        selectCodeActChat, cancelCodeAct, queryUser, queryGroup, quickQueryUser, quickQueryGroup, recallMemory,
+        viewTopicDetail,
     };
 })();

@@ -1,5 +1,6 @@
 <!DOCTYPE html>
-<html lang="zh-CN" data-theme="dark">
+<html lang="zh-CN">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -7,8 +8,29 @@
     <link href="https://cdn.jsdelivr.net/npm/daisyui@5" rel="stylesheet" type="text/css" />
     <link href="https://cdn.jsdelivr.net/npm/daisyui@5/themes.css" rel="stylesheet" type="text/css" />
     <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+    <!-- highlight.js for JSON + code highlighting -->
+    <link rel="stylesheet"
+        href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11/build/styles/github-dark.min.css"
+        media="(prefers-color-scheme: dark)">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11/build/styles/github.min.css"
+        media="(prefers-color-scheme: light)">
+    <script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11/build/highlight.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11/build/languages/json.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11/build/languages/javascript.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11/build/languages/python.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11/build/languages/bash.min.js"></script>
     <link rel="stylesheet" href="style.css">
+    <!-- Auto dark/light mode -->
+    <script>
+        (function () {
+            const mq = window.matchMedia('(prefers-color-scheme: dark)');
+            function apply(e) { document.documentElement.setAttribute('data-theme', e.matches ? 'dark' : 'light'); }
+            apply(mq);
+            mq.addEventListener('change', apply);
+        })();
+    </script>
 </head>
+
 <body class="bg-base-300 min-h-screen">
     <!-- Navbar -->
     <div class="navbar bg-base-100 shadow-lg sticky top-0 z-50">
@@ -52,28 +74,32 @@
             <a role="tab" class="tab" data-tab="codeact">🔧 CodeAct</a>
             <a role="tab" class="tab" data-tab="memory">🧬 记忆查询</a>
             <a role="tab" class="tab" data-tab="system">⚙️ 系统状态</a>
+            <a role="tab" class="tab hidden" data-tab="topic-detail" id="tab-topic-detail">📖 话题详情</a>
         </div>
 
         <!-- Tab Panels -->
         <!-- Messages -->
         <div id="panel-messages" class="tab-panel">
-            <div class="flex gap-4 h-[calc(100vh-280px)]">
+            <div class="flex gap-4 h-[calc(100vh-280px)] overflow-hidden">
                 <!-- Chat list -->
-                <div class="w-64 shrink-0">
+                <div class="w-64 shrink-0 min-h-0">
                     <div class="card bg-base-100 h-full">
-                        <div class="card-body p-3">
+                        <div class="card-body p-3 min-h-0">
                             <h3 class="card-title text-sm">群组列表</h3>
-                            <div id="chat-list" class="space-y-1 overflow-y-auto"></div>
+                            <div id="chat-list" class="space-y-1 overflow-y-auto flex-1 min-h-0"></div>
                         </div>
                     </div>
                 </div>
                 <!-- Message stream -->
-                <div class="flex-1 card bg-base-100">
-                    <div class="card-body p-3">
-                        <h3 class="card-title text-sm">
-                            消息流 <span id="msg-chat-label" class="text-xs opacity-60">全部</span>
-                        </h3>
-                        <div id="message-stream" class="overflow-y-auto flex-1 space-y-1 font-mono text-sm"></div>
+                <div class="flex-1 min-w-0 min-h-0">
+                    <div class="card bg-base-100 h-full">
+                        <div class="card-body p-3 min-h-0 flex flex-col">
+                            <h3 class="card-title text-sm shrink-0">
+                                消息流 <span id="msg-chat-label" class="text-xs opacity-60">全部</span>
+                            </h3>
+                            <div id="message-stream" class="overflow-y-auto flex-1 min-h-0 space-y-1 font-mono text-sm">
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -91,10 +117,10 @@
 
         <!-- Queue -->
         <div id="panel-queue" class="tab-panel hidden">
-            <div class="card bg-base-100">
+            <div class="card bg-base-100 mb-4">
                 <div class="card-body p-4">
                     <div class="flex justify-between items-center mb-2">
-                        <h3 class="card-title text-sm">注意力队列 (Q3)</h3>
+                        <h3 class="card-title text-sm">注意力队列 (Q3) — 活跃</h3>
                         <div class="flex gap-2">
                             <button class="btn btn-xs btn-primary" onclick="App.showEnqueueModal()">手动入队</button>
                         </div>
@@ -118,21 +144,45 @@
                     </div>
                 </div>
             </div>
+            <!-- Dequeued History -->
+            <div class="collapse collapse-arrow bg-base-100">
+                <input type="checkbox" />
+                <div class="collapse-title text-sm font-medium">
+                    📜 已处理 (Dequeued) <span id="dequeued-count" class="badge badge-sm badge-ghost ml-2">0</span>
+                </div>
+                <div class="collapse-content">
+                    <div class="overflow-x-auto">
+                        <table class="table table-xs">
+                            <thead>
+                                <tr>
+                                    <th>ChatId</th>
+                                    <th>优先级</th>
+                                    <th>来源</th>
+                                    <th>Stickiness</th>
+                                    <th>出队时间</th>
+                                </tr>
+                            </thead>
+                            <tbody id="dequeued-tbody"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
         </div>
 
         <!-- Decisions -->
         <div id="panel-decisions" class="tab-panel hidden">
             <div class="flex gap-4">
-                <div class="flex-1 card bg-base-100">
-                    <div class="card-body p-4">
+                <div class="w-50 flex-1 card bg-base-100">
+                    <div class="card-body p-4 overflow-hidden">
                         <h3 class="card-title text-sm mb-2">最近决策</h3>
                         <div id="decisions-list" class="space-y-1 overflow-y-auto max-h-[60vh] font-mono text-xs"></div>
                     </div>
                 </div>
-                <div class="w-96 shrink-0 card bg-base-100">
-                    <div class="card-body p-4">
+                <div class="w-50 flex-1  card bg-base-100">
+                    <div class="card-body p-4 overflow-hidden">
                         <h3 class="card-title text-sm mb-2">主 Agent 对话历史</h3>
-                        <div id="main-agent-history" class="space-y-1 overflow-y-auto max-h-[60vh] font-mono text-xs"></div>
+                        <div id="main-agent-history" class="space-y-1 overflow-y-auto max-h-[60vh] font-mono text-xs">
+                        </div>
                     </div>
                 </div>
             </div>
@@ -147,11 +197,13 @@
                         <div id="codeact-chat-list" class="space-y-1 overflow-y-auto"></div>
                     </div>
                 </div>
-                <div class="flex-1 card bg-base-100">
-                    <div class="card-body p-4">
+                <div class="flex-1 min-w-0 card bg-base-100 overflow-hidden">
+                    <div class="card-body p-4 overflow-hidden">
                         <div class="flex justify-between items-center mb-2">
-                            <h3 class="card-title text-sm">CodeAct Session <span id="codeact-label" class="text-xs opacity-60"></span></h3>
-                            <button id="codeact-cancel-btn" class="btn btn-xs btn-error hidden" onclick="App.cancelCodeAct()">取消执行</button>
+                            <h3 class="card-title text-sm">CodeAct Session <span id="codeact-label"
+                                    class="text-xs opacity-60"></span></h3>
+                            <button id="codeact-cancel-btn" class="btn btn-xs btn-error hidden"
+                                onclick="App.cancelCodeAct()">取消执行</button>
                         </div>
                         <div class="stats shadow w-full mb-3 text-xs">
                             <div class="stat py-2">
@@ -167,7 +219,8 @@
                                 <div class="stat-value text-sm" id="codeact-queue-size">-</div>
                             </div>
                         </div>
-                        <div id="codeact-session" class="space-y-2 overflow-y-auto max-h-[50vh]"></div>
+                        <div id="codeact-session" class="space-y-2 overflow-y-auto overflow-x-hidden max-h-[50vh]">
+                        </div>
                     </div>
                 </div>
             </div>
@@ -176,21 +229,69 @@
         <!-- Memory -->
         <div id="panel-memory" class="tab-panel hidden">
             <div class="flex gap-4">
-                <div class="w-80 card bg-base-100">
-                    <div class="card-body p-4">
-                        <h3 class="card-title text-sm">用户查询</h3>
-                        <input id="memory-user-input" type="text" placeholder="输入 userId" class="input input-sm input-bordered w-full mb-2"/>
-                        <input id="memory-user-chat" type="text" placeholder="chatId (可选)" class="input input-sm input-bordered w-full mb-2"/>
-                        <button class="btn btn-sm btn-primary w-full" onclick="App.queryUser()">查询用户画像</button>
-                        <div class="divider text-xs">群组查询</div>
-                        <input id="memory-group-input" type="text" placeholder="输入 chatId" class="input input-sm input-bordered w-full mb-2"/>
-                        <button class="btn btn-sm btn-secondary w-full" onclick="App.queryGroup()">查询群组画像</button>
+                <div class="w-80 shrink-0 space-y-4">
+                    <!-- User / Group query -->
+                    <div class="card bg-base-100">
+                        <div class="card-body p-4">
+                            <h3 class="card-title text-sm">用户查询</h3>
+                            <input id="memory-user-input" type="text" placeholder="输入 userId"
+                                class="input input-sm input-bordered w-full mb-2" />
+                            <input id="memory-user-chat" type="text" placeholder="chatId (可选)"
+                                class="input input-sm input-bordered w-full mb-2" />
+                            <button class="btn btn-sm btn-primary w-full" onclick="App.queryUser()">查询用户画像</button>
+                            <div class="divider text-xs">群组查询</div>
+                            <input id="memory-group-input" type="text" placeholder="输入 chatId"
+                                class="input input-sm input-bordered w-full mb-2" />
+                            <button class="btn btn-sm btn-secondary w-full" onclick="App.queryGroup()">查询群组画像</button>
+                        </div>
+                    </div>
+                    <!-- Recall / Search -->
+                    <div class="card bg-base-100">
+                        <div class="card-body p-4">
+                            <h3 class="card-title text-sm">🔍 记忆搜索 (Recall)</h3>
+                            <input id="recall-query-input" type="text" placeholder="关键词 / 语义检索"
+                                class="input input-sm input-bordered w-full mb-2" />
+                            <input id="recall-chatid-input" type="text" placeholder="chatId (可选，限定群组)"
+                                class="input input-sm input-bordered w-full mb-2" />
+                            <button class="btn btn-sm btn-accent w-full" onclick="App.recallMemory()">搜索记忆</button>
+                        </div>
                     </div>
                 </div>
-                <div class="flex-1 card bg-base-100">
-                    <div class="card-body p-4">
-                        <h3 class="card-title text-sm mb-2">查询结果</h3>
-                        <pre id="memory-result" class="bg-base-300 p-3 rounded-lg overflow-auto max-h-[60vh] text-xs whitespace-pre-wrap">点击左侧按钮查询</pre>
+                <div class="flex-1 min-w-0 space-y-4">
+                    <div class="card bg-base-100">
+                        <div class="card-body p-4 overflow-hidden">
+                            <h3 class="card-title text-sm mb-2">查询结果</h3>
+                            <pre id="memory-result"
+                                class="json-display bg-base-300 p-3 rounded-lg overflow-auto max-h-[40vh] text-xs whitespace-pre-wrap">点击左侧按钮查询</pre>
+                        </div>
+                    </div>
+                    <div class="card bg-base-100">
+                        <div class="card-body p-4 overflow-hidden">
+                            <h3 class="card-title text-sm mb-2">🔍 搜索结果</h3>
+                            <div id="recall-result" class="overflow-auto max-h-[40vh] text-xs">
+                                <span class="opacity-60">输入关键词后点击搜索</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Topic Detail -->
+        <div id="panel-topic-detail" class="tab-panel hidden">
+            <div class="card bg-base-100">
+                <div class="card-body p-4">
+                    <div class="flex justify-between items-center mb-3">
+                        <h3 class="card-title text-sm" id="topic-detail-title">话题详情</h3>
+                        <div class="flex gap-2">
+                            <span class="badge" id="topic-detail-state"></span>
+                            <span class="text-xs opacity-60" id="topic-detail-time"></span>
+                        </div>
+                    </div>
+                    <div id="topic-detail-meta" class="mb-3 text-xs space-y-1"></div>
+                    <div class="divider text-xs">相关消息</div>
+                    <div id="topic-detail-messages" class="overflow-y-auto max-h-[55vh] space-y-1 font-mono text-xs">
+                        <span class="opacity-60">选择话题以查看详情</span>
                     </div>
                 </div>
             </div>
@@ -203,7 +304,8 @@
                 <div class="card bg-base-100">
                     <div class="card-body p-4">
                         <h3 class="card-title text-sm">全局状态</h3>
-                        <pre id="global-state-display" class="bg-base-300 p-3 rounded-lg overflow-auto max-h-[30vh] text-xs whitespace-pre-wrap"></pre>
+                        <pre id="global-state-display"
+                            class="json-display bg-base-300 p-3 rounded-lg overflow-auto max-h-[30vh] text-xs whitespace-pre-wrap"></pre>
                     </div>
                 </div>
                 <!-- Sandbox Pool -->
@@ -245,7 +347,8 @@
                 <div class="card bg-base-100 col-span-2">
                     <div class="card-body p-4">
                         <h3 class="card-title text-sm">最近 Callbacks (Q5)</h3>
-                        <div id="callbacks-display" class="space-y-1 overflow-y-auto max-h-[30vh] text-xs font-mono"></div>
+                        <div id="callbacks-display" class="space-y-1 overflow-y-auto max-h-[30vh] text-xs font-mono">
+                        </div>
                     </div>
                 </div>
             </div>
@@ -257,8 +360,9 @@
         <div class="modal-box">
             <h3 class="text-lg font-bold">手动入队 Q3</h3>
             <div class="py-4 space-y-3">
-                <input id="enqueue-chatid" type="text" placeholder="ChatId" class="input input-bordered w-full"/>
-                <input id="enqueue-priority" type="number" placeholder="优先级 (0-100)" class="input input-bordered w-full" value="80"/>
+                <input id="enqueue-chatid" type="text" placeholder="ChatId" class="input input-bordered w-full" />
+                <input id="enqueue-priority" type="number" placeholder="优先级 (0-100)" class="input input-bordered w-full"
+                    value="80" />
             </div>
             <div class="modal-action">
                 <button class="btn btn-primary" onclick="App.doEnqueue()">入队</button>
@@ -269,4 +373,5 @@
 
     <script src="app.js"></script>
 </body>
+
 </html>

@@ -1,8 +1,24 @@
 /* Dashboard 自定义样式 */
 
 /* 消息流时间戳 */
-.msg-time { color: oklch(var(--s)); font-size: 0.7rem; min-width: 5rem; }
-.msg-user { color: oklch(var(--p)); font-weight: 600; min-width: 8rem; }
+.msg-time {
+    color: oklch(var(--s));
+    font-size: 0.7rem;
+    min-width: 5rem;
+    background: color-mix(in srgb, oklch(var(--s)) 10%, transparent);
+    padding: 0.1rem 0.3rem;
+    border-radius: 0.2rem;
+    flex-shrink: 0;
+}
+.msg-user {
+    color: oklch(var(--p));
+    font-weight: 600;
+    min-width: 8rem;
+    background: color-mix(in srgb, oklch(var(--p)) 10%, transparent);
+    padding: 0.1rem 0.3rem;
+    border-radius: 0.2rem;
+    flex-shrink: 0;
+}
 .msg-text { word-break: break-word; }
 
 /* 消息项 */
@@ -12,9 +28,10 @@
     padding: 0.25rem 0.5rem;
     border-radius: 0.25rem;
     transition: background 0.15s;
+    align-items: baseline;
 }
 .msg-item:hover { background: oklch(var(--b2)); }
-.msg-item.is-agent { background: oklch(var(--p) / 0.08); }
+.msg-item.is-agent { background: color-mix(in srgb, oklch(var(--p)) 8%, transparent); }
 .msg-item.is-mention { border-left: 2px solid oklch(var(--wa)); }
 
 /* 话题卡片 */
@@ -29,17 +46,104 @@
 .topic-card:hover { background: oklch(var(--b3)); }
 .topic-card.state-active { border-color: oklch(var(--su)); }
 .topic-card.state-stale { border-color: oklch(var(--wa)); }
-.topic-card.state-archived { border-color: oklch(var(--bc) / 0.3); }
+.topic-card.state-archived { border-color: color-mix(in srgb, oklch(var(--bc)) 30%, transparent); }
 
 /* 队列行 */
 .queue-row td { vertical-align: middle; }
 .queue-row.is-blocked { opacity: 0.5; }
 
-/* CodeAct session message */
-.codeact-msg { border-radius: 0.5rem; padding: 0.5rem; margin-bottom: 0.5rem; }
-.codeact-msg.role-system { background: oklch(var(--in) / 0.1); border-left: 3px solid oklch(var(--in)); }
-.codeact-msg.role-user { background: oklch(var(--su) / 0.1); border-left: 3px solid oklch(var(--su)); }
-.codeact-msg.role-assistant { background: oklch(var(--p) / 0.1); border-left: 3px solid oklch(var(--p)); }
+/* CodeAct session message — clear role separation */
+.codeact-msg {
+    border-radius: 0.5rem;
+    padding: 0.75rem 1rem;
+    margin-bottom: 0.75rem;
+    overflow-x: hidden;
+    overflow-wrap: break-word;
+    word-break: break-word;
+}
+.codeact-msg .role-label {
+    display: inline-block;
+    font-size: 0.7rem;
+    font-weight: 700;
+    padding: 0.15rem 0.6rem;
+    border-radius: 0.25rem;
+    margin-bottom: 0.4rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
+/* system = 浅蓝 */
+.codeact-msg.role-system {
+    background: #1e3a5f;
+    border-left: 4px solid #4a9eff;
+}
+[data-theme="light"] .codeact-msg.role-system {
+    background: #dbeafe;
+    border-left: 4px solid #3b82f6;
+}
+.codeact-msg.role-system .role-label {
+    background: #2563eb;
+    color: #dbeafe;
+}
+/* user = 浅黄/浅绿 */
+.codeact-msg.role-user {
+    background: #3b3a1a;
+    border-left: 4px solid #eab308;
+}
+[data-theme="light"] .codeact-msg.role-user {
+    background: #fef9c3;
+    border-left: 4px solid #ca8a04;
+}
+.codeact-msg.role-user .role-label {
+    background: #ca8a04;
+    color: #fef9c3;
+}
+/* assistant = 浅红/浅粉 */
+.codeact-msg.role-assistant {
+    background: #4a1a2e;
+    border-left: 4px solid #f472b6;
+}
+[data-theme="light"] .codeact-msg.role-assistant {
+    background: #fce7f3;
+    border-left: 4px solid #db2777;
+}
+.codeact-msg.role-assistant .role-label {
+    background: #db2777;
+    color: #fce7f3;
+}
+
+/* Code blocks inside CodeAct messages */
+.codeact-msg pre.code-block {
+    background: oklch(var(--b3));
+    border: 1px solid color-mix(in srgb, oklch(var(--bc)) 15%, transparent);
+    border-radius: 0.375rem;
+    padding: 0.75rem;
+    margin: 0.5rem 0;
+    overflow-x: auto;
+    overflow-wrap: normal;
+    word-break: normal;
+    font-size: 0.75rem;
+    line-height: 1.4;
+}
+.codeact-msg pre.code-block code {
+    background: transparent;
+    padding: 0;
+}
+
+/* Message group tag in "全部" view */
+.msg-group-tag {
+    font-size: 0.65rem;
+    padding: 0.1rem 0.4rem;
+    border-radius: 0.2rem;
+    background: color-mix(in srgb, oklch(var(--a)) 15%, transparent);
+    color: oklch(var(--a));
+    white-space: nowrap;
+    width: 6rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex-shrink: 0;
+    text-align: center;
+    display: inline-block;
+}
 
 /* Chat list item */
 .chat-item {
@@ -53,7 +157,7 @@
     align-items: center;
 }
 .chat-item:hover { background: oklch(var(--b2)); }
-.chat-item.active { background: oklch(var(--p) / 0.15); color: oklch(var(--p)); }
+.chat-item.active { background: color-mix(in srgb, oklch(var(--p)) 15%, transparent); color: oklch(var(--p)); }
 
 /* Priority badge colors */
 .priority-high { color: oklch(var(--er)); font-weight: 700; }
@@ -63,14 +167,14 @@
 /* Scrollbar */
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: oklch(var(--bc) / 0.2); border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: oklch(var(--bc) / 0.4); }
+::-webkit-scrollbar-thumb { background: color-mix(in srgb, oklch(var(--bc)) 20%, transparent); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: color-mix(in srgb, oklch(var(--bc)) 40%, transparent); }
 
 /* Stickiness badges */
 .stickiness-CORE { color: oklch(var(--er)); }
 .stickiness-FAMILIAR { color: oklch(var(--wa)); }
 .stickiness-ACQUAINTANCE { color: oklch(var(--su)); }
-.stickiness-STRANGER { color: oklch(var(--bc) / 0.6); }
+.stickiness-STRANGER { color: color-mix(in srgb, oklch(var(--bc)) 60%, transparent); }
 
 /* Decision list item */
 .decision-item {
@@ -78,3 +182,42 @@
     border-radius: 0.25rem;
 }
 .decision-item:nth-child(odd) { background: oklch(var(--b2)); }
+
+/* JSON display with highlight.js */
+.json-display {
+    font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, monospace;
+    tab-size: 2;
+}
+.json-display code.hljs {
+    background: transparent;
+    padding: 0;
+}
+
+/* Clickable inline elements: link style */
+.clickable-link {
+    color: oklch(var(--p));
+    cursor: pointer;
+    text-decoration: underline;
+    text-decoration-color: color-mix(in srgb, oklch(var(--p)) 40%, transparent);
+    text-underline-offset: 2px;
+    transition: text-decoration-color 0.15s, color 0.15s;
+}
+.clickable-link:hover {
+    text-decoration-color: oklch(var(--p));
+}
+
+/* Clickable table cell IDs */
+.clickable-id {
+    color: oklch(var(--p));
+    cursor: pointer;
+    text-decoration: underline;
+    text-decoration-style: dotted;
+    text-underline-offset: 2px;
+    transition: color 0.15s;
+}
+.clickable-id:hover {
+    text-decoration-style: solid;
+}
+
+/* Dequeued row style */
+.dequeued-row td { opacity: 0.7; }

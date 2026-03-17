@@ -87,8 +87,10 @@ export class EventBridge {
         const groups: Record<string, unknown>[] = [];
         for (const sub of subagentManager.getAllSubagents()) {
             const fp = sub.fastPathHandler as any;
+            const gm = this.deps.memory.getGroupModel(sub.chatId);
             groups.push({
                 chatId: sub.chatId,
+                chatTitle: gm?.chatTitle || "",
                 engagement: sub.observer.getEngagementScore(),
                 bufferSize: sub.observer.getBufferSize(),
                 topicCount: sub.topicRegistry.getAll().length,
@@ -108,7 +110,7 @@ export class EventBridge {
 
         return {
             groups,
-            queue: q3.getAll(),
+            queue: { active: q3.getAll(), dequeued: q3.getDequeueHistory() },
             pendingCallbacks: q5.peek(),
             globalState: globalState.getState(),
             sandboxPool: sandboxPool.getStats(),

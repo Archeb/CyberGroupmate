@@ -35,9 +35,17 @@ export interface AttentionQueueConfig {
  *
  * 内部使用 Map<chatId, entry> 存储，dequeue 时按优先级排序。
  */
+export interface DequeueRecord {
+    entry: AttentionQueueEntry;
+    dequeuedAt: number;
+}
+
 export class DynamicAttentionQueue {
     private entries = new Map<string, AttentionQueueEntry>();
     private config: AttentionQueueConfig;
+    /** 已出队历史（环形缓冲） */
+    private dequeueHistory: DequeueRecord[] = [];
+    private maxDequeueHistory = 50;
 
     constructor(config?: Partial<AttentionQueueConfig>) {
         this.config = {
@@ -146,8 +154,20 @@ export class DynamicAttentionQueue {
 
         const top = sorted[0];
         this.entries.delete(top.chatId);
+        // 记入出队历史
+        this.dequeueHistory.push({ entry: { ...top }, dequeuedAt: Date.now() });
+        if (this.dequeueHistory.length > this.maxDequeueHistory) {
+            this.dequeueHistory.shift();
+        }
         log.debug("dequeue", { chatId: top.chatId, priority: top.priority });
         return top;
+    }
+
+    /**
+     * 获取出队历史记录
+     */
+    getDequeueHistory(): DequeueRecord[] {
+        return [...this.dequeueHistory];
     }
 
     /**

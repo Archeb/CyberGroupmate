@@ -50,10 +50,50 @@ export function createApiRouter(deps: DashboardDeps, bridge: EventBridge): Route
 
     // ─── Topics ───
     router.get("/topics/:chatId", (req, res) => {
-        const sub = deps.subagentManager.get(req.params.chatId);
-        if (!sub) { res.json([]); return; }
-        const topics = sub.topicRegistry.getByChat(req.params.chatId);
-        res.json(topics.map(serializeTopic));
+        const chatId = req.params.chatId;
+        const sub = deps.subagentManager.get(chatId);
+
+        // 1) Pipeline in-memory topics
+        const pipelineTopics = sub ? sub.topicRegistry.getByChat(chatId) : [];
+        const pipelineIds = new Set(pipelineTopics.map((t: any) => t.id));
+
+        // 2) Historical topics from SQLite (last 7 days)
+        const since = new Date(Date.now() - 7 * 24 * 3600 * 1000).toISOString();
+        let historyTopics: any[] = [];
+        try { historyTopics = deps.memory.getTopicsSince(chatId, since); } catch {}
+
+        // Merge: pipeline topics first, then history topics not already in pipeline
+        const result: Record<string, unknown>[] = pipelineTopics.map((t: any) => {
+            // Find matching history record for extra fields
+            const hist = historyTopics.find((h: any) => h.pipelineTopicId === t.id);
+            return {
+                ...serializeTopic(t),
+                source: "pipeline",
+                wasEngaged: hist?.wasEngaged ?? false,
+                interventionCount: hist?.interventionCount ?? 0,
+            };
+        });
+
+        for (const h of historyTopics) {
+            if (h.pipelineTopicId && pipelineIds.has(h.pipelineTopicId)) continue;
+            result.push({
+                id: h.id,
+                label: h.label,
+                summary: h.summary,
+                state: h.endedAt ? "ARCHIVED" : "ACTIVE",
+                keywords: h.keywords ?? [],
+                participantIds: h.participants ?? [],
+                messageIds: h.messageRange?.messageIds ?? [],
+                sentiment: h.sentiment,
+                startedAt: h.startedAt,
+                endedAt: h.endedAt,
+                source: "history",
+                wasEngaged: h.wasEngaged ?? false,
+                interventionCount: h.interventionCount ?? 0,
+            });
+        }
+
+        res.json(result);
     });
 
     router.get("/topics", (_req, res) => {
@@ -66,9 +106,77 @@ export function createApiRouter(deps: DashboardDeps, bridge: EventBridge): Route
         res.json(all);
     });
 
+    // ─── Single Topic Detail (with related messages) ───
+    router.get("/topic/:topicId", async (req, res) => {
+        try {
+            const topicId = req.params.topicId;
+            const db = (deps.memory as any).db;
+            if (!db) { res.status(500).json({ error: "db not available" }); return; }
+
+            // Query topic by id or pipeline_topic_id
+            const topicRow = db.prepare(
+                "SELECT * FROM topics WHERE id = ? OR pipeline_topic_id = ?"
+            ).get(topicId, topicId) as Record<string, unknown> | undefined;
+
+            if (!topicRow) {
+                res.status(404).json({ error: "topic not found" });
+                return;
+            }
+
+            // Parse message_ids
+            let messageIds: string[] = [];
+            try {
+                messageIds = JSON.parse(String(topicRow.message_ids || "[]"));
+            } catch {}
+
+            // Fetch related messages
+            let messages: Record<string, unknown>[] = [];
+            if (messageIds.length > 0) {
+                const placeholders = messageIds.map(() => "?").join(", ");
+                const chatId = topicRow.chat_id as string;
+                messages = db.prepare(`
+                    SELECT message_id, user_id, display_name, text, timestamp
+                    FROM message_log
+                    WHERE chat_id = ? AND message_id IN (${placeholders})
+                    ORDER BY timestamp ASC
+                `).all(chatId, ...messageIds) as Record<string, unknown>[];
+            }
+
+            // Parse other JSON fields safely
+            const parseJSON = (v: unknown) => { try { return JSON.parse(String(v || "[]")); } catch { return []; } };
+
+            res.json({
+                topicId: topicRow.id,
+                pipelineTopicId: topicRow.pipeline_topic_id,
+                label: topicRow.label,
+                summary: topicRow.summary,
+                chatId: topicRow.chat_id,
+                state: topicRow.ended_at ? "ARCHIVED" : "ACTIVE",
+                sentiment: topicRow.sentiment,
+                keywords: parseJSON(topicRow.keywords),
+                participants: parseJSON(topicRow.participants),
+                keyPoints: parseJSON(topicRow.key_points),
+                wasEngaged: !!(topicRow.was_engaged as number),
+                interventionCount: topicRow.intervention_count ?? 0,
+                startedAt: topicRow.started_at,
+                endedAt: topicRow.ended_at,
+                messageCount: messageIds.length,
+                messages: messages.map(m => ({
+                    messageId: m.message_id,
+                    userId: m.user_id,
+                    displayName: m.display_name,
+                    text: m.text,
+                    timestamp: m.timestamp,
+                })),
+            });
+        } catch (err) {
+            res.status(500).json({ error: String(err) });
+        }
+    });
+
     // ─── Attention Queue (Q3) ───
     router.get("/queue", (_req, res) => {
-        res.json(deps.q3.getAll());
+        res.json({ active: deps.q3.getAll(), dequeued: deps.q3.getDequeueHistory() });
     });
 
     router.post("/queue/enqueue", (req, res) => {
@@ -129,6 +237,23 @@ export function createApiRouter(deps: DashboardDeps, bridge: EventBridge): Route
         const model = deps.memory.getGroupModel(chatId);
         const profiles = deps.memory.getProfilesForChat(chatId);
         res.json({ model, profiles });
+    });
+
+    // ─── Memory: Recall (keyword/semantic search) ───
+    router.post("/memory/recall", async (req, res) => {
+        try {
+            const { query, chatId, daysBack, categories, maxResults } = req.body;
+            if (!query) { res.status(400).json({ error: "query required" }); return; }
+            const result = await deps.memory.recall(String(query), {
+                chatId: chatId ? String(chatId) : undefined,
+                daysBack: daysBack ? Number(daysBack) : undefined,
+                categories: Array.isArray(categories) ? categories : undefined,
+                maxResults: maxResults ? Math.min(Number(maxResults), 50) : 20,
+            });
+            res.json(result);
+        } catch (err) {
+            res.status(500).json({ error: String(err) });
+        }
     });
 
     // ─── CodeAct ───
