@@ -31,7 +31,7 @@ export interface SentMessageRecord {
 }
 
 /**
- * SentMessageCollector — 在 session 执行期间收集已发送消息
+ * SentMessageCollector — 在 session 执行期间收集已发送消息和重复消息拦截警告
  *
  * 用法：调用方在 runCodeActSession 前创建，注册 sandbox notify
  * 监听器，每轮代码执行后调用 drainTurn() 取得本轮新发消息。
@@ -41,9 +41,28 @@ export class SentMessageCollector {
     /** 整个 session 的累计记录 */
     readonly allSent: SentMessageRecord[] = [];
 
+    /** 本轮被拦截的重复消息警告 */
+    private duplicateWarningBuffer: string[] = [];
+    /** 整个 session 累计的重复拦截次数 */
+    duplicateBlockedCount = 0;
+
     /** 由 sandbox notify 事件回调调用 */
     collect(event: Record<string, unknown>): void {
-        if (String(event.type ?? "") !== "system.agent_message_sent") return;
+        const type = String(event.type ?? "");
+
+        // 处理重复消息拦截事件
+        if (type === "system.duplicate_message_blocked") {
+            this.duplicateBlockedCount++;
+            const chatId = String(event.chatId ?? "");
+            const text = String(event.text ?? "");
+            const preview = text.length > 80 ? text.slice(0, 80) + "..." : text;
+            this.duplicateWarningBuffer.push(
+                `- chat=${chatId}: "${preview}" 已在本次 session 中发送过，重复发送已被拦截`
+            );
+            return;
+        }
+
+        if (type !== "system.agent_message_sent") return;
         const record: SentMessageRecord = {
             chatId: String(event.chatId ?? ""),
             text: String(event.text ?? ""),
@@ -60,15 +79,31 @@ export class SentMessageCollector {
         return drained;
     }
 
-    /** 格式化为 observation 文本 */
-    static formatAsObservation(records: SentMessageRecord[]): string {
-        if (records.length === 0) return "";
-        const lines = records.map(r =>
-            `- 发送到 chat=${r.chatId}: "${r.text.length > 100 ? r.text.slice(0, 100) + '...' : r.text}"`
-        );
-        return `[📤 已发送消息确认]\n${lines.join("\n")}`;
+    /** 取出本轮重复拦截警告并清空 buffer */
+    drainDuplicateWarnings(): string[] {
+        const drained = this.duplicateWarningBuffer.splice(0);
+        return drained;
+    }
+
+    /** 格式化为 observation 文本（含已发消息确认 + 重复拦截警告） */
+    static formatAsObservation(records: SentMessageRecord[], duplicateWarnings?: string[]): string {
+        const parts: string[] = [];
+
+        if (records.length > 0) {
+            const lines = records.map(r =>
+                `- 发送到 chat=${r.chatId}: "${r.text.length > 100 ? r.text.slice(0, 100) + '...' : r.text}"`
+            );
+            parts.push(`[📤 已发送消息确认]\n${lines.join("\n")}`);
+        }
+
+        if (duplicateWarnings && duplicateWarnings.length > 0) {
+            parts.push(`[⚠ 运行时警告: 重复消息已拦截]\n${duplicateWarnings.join("\n")}\n请勿重复发送相同内容的消息。`);
+        }
+
+        return parts.join("\n\n");
     }
 }
+
 
 // ─── 常量 ───
 
@@ -324,10 +359,11 @@ export async function runCodeActSession(
         // ─── 组装 observation ───
         let observation = outputParts.join("\n\n");
 
-        // Fix 1: 追加本轮已发送消息确认到 observation
+        // Fix 1: 追加本轮已发送消息确认 + 重复拦截警告到 observation
         if (sentMessageCollector) {
             const turnSent = sentMessageCollector.drainTurn();
-            const sentConfirmation = SentMessageCollector.formatAsObservation(turnSent);
+            const turnDupWarnings = sentMessageCollector.drainDuplicateWarnings();
+            const sentConfirmation = SentMessageCollector.formatAsObservation(turnSent, turnDupWarnings);
             if (sentConfirmation) {
                 observation = observation ? `${observation}\n\n${sentConfirmation}` : sentConfirmation;
             }

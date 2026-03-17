@@ -12,7 +12,7 @@ export interface CapabilityRegistryEnv {
 
 interface CapabilityRegistration {
     key: string;
-    install: (env: CapabilityRegistryEnv) => unknown;
+    install: (env: CapabilityRegistryEnv, sentHistory?: Map<string, Set<string>>) => unknown;
 }
 
 function hydrateTelegramMessage(message: unknown): unknown {
@@ -41,10 +41,41 @@ function formatTelegramAck(prefix: string, payload: unknown): string {
     return parts.join(" ");
 }
 
-function createTelegramClientProxy(env: CapabilityRegistryEnv) {
+function createTelegramClientProxy(env: CapabilityRegistryEnv, sentHistory: Map<string, Set<string>>) {
+    /**
+     * 检查消息是否是重复发送。
+     * 如果是新消息则记录并返回 false；如果已发送过则返回 true。
+     */
+    function isDuplicate(chatId: string, text: string): boolean {
+        const key = String(chatId);
+        const existing = sentHistory.get(key);
+        if (existing && existing.has(text)) {
+            return true;
+        }
+        if (!existing) {
+            sentHistory.set(key, new Set([text]));
+        } else {
+            existing.add(text);
+        }
+        return false;
+    }
+
     return {
         getMe: async () => env.callHost("telegram.getMe", []),
         sendText: async (chatId: number | string, text: string, opts?: { replyTo?: number }) => {
+            // ── 重复消息拦截 ──
+            if (isDuplicate(String(chatId), text)) {
+                const warning = `[⚠ 运行时警告: 重复消息已拦截] 目标 chat=${String(chatId)} 的消息 "${text.length > 80 ? text.slice(0, 80) + '...' : text}" 与本次 session 中已发送的消息内容完全一致，已自动拦截，不会重复发送。`;
+                env.emitOutput(warning);
+                env.notifyHost({
+                    type: "system.duplicate_message_blocked",
+                    scene: "telegram",
+                    chatId: String(chatId),
+                    text,
+                    timestamp: new Date().toISOString(),
+                });
+                return null;
+            }
             const sent = hydrateTelegramMessage(await env.callHost("telegram.sendText", [chatId, text, opts]));
             env.emitOutput(formatTelegramAck("[Telegram] sendText ok", sent));
             // 发射 agent_message_sent 通知，供 SentMessageCollector 捕获
@@ -60,6 +91,20 @@ function createTelegramClientProxy(env: CapabilityRegistryEnv) {
             return sent;
         },
         sendMedia: async (chatId: number | string, media: unknown, opts?: { replyTo?: number; caption?: string }) => {
+            // ── 重复消息拦截（基于 caption）──
+            const mediaText = opts?.caption ?? "[media]";
+            if (isDuplicate(String(chatId), mediaText)) {
+                const warning = `[⚠ 运行时警告: 重复消息已拦截] 目标 chat=${String(chatId)} 的媒体消息 "${mediaText.length > 80 ? mediaText.slice(0, 80) + '...' : mediaText}" 与本次 session 中已发送的消息内容完全一致，已自动拦截，不会重复发送。`;
+                env.emitOutput(warning);
+                env.notifyHost({
+                    type: "system.duplicate_message_blocked",
+                    scene: "telegram",
+                    chatId: String(chatId),
+                    text: mediaText,
+                    timestamp: new Date().toISOString(),
+                });
+                return null;
+            }
             const sent = hydrateTelegramMessage(await env.callHost("telegram.sendMedia", [chatId, media, opts]));
             env.emitOutput(formatTelegramAck("[Telegram] sendMedia ok", sent));
             // 发射 agent_message_sent 通知
@@ -146,8 +191,8 @@ const REGISTRY: CapabilityRegistration[] = [
     },
     {
         key: "skills",
-        install: (env) => {
-            const tg = createTelegramClientProxy(env);
+        install: (env, sentHistory) => {
+            const tg = createTelegramClientProxy(env, sentHistory ?? new Map());
             return {
                 memory: {
                     recallAndSummarize: async (query: string, options?: Record<string, unknown>) =>
@@ -161,7 +206,7 @@ const REGISTRY: CapabilityRegistration[] = [
                         text: string,
                         opts?: { replyTo?: number }
                     ) => {
-                        // tg.sendText 内部已经发射 system.agent_message_sent 通知
+                        // tg.sendText 内部已经发射 system.agent_message_sent 通知 + 去重检查
                         const sent = await tg.sendText(chatId, text, opts);
                         return sent;
                     },
@@ -189,12 +234,20 @@ const REGISTRY: CapabilityRegistration[] = [
 export function installCapabilityRegistry(env: CapabilityRegistryEnv): Record<string, unknown> {
     const installed: Record<string, unknown> = {};
 
+    // 创建 session 级别的发送历史，用于去重检测
+    const sentHistory = new Map<string, Set<string>>();
+
     if (!env.ctx.tg) {
-        env.ctx.tg = createTelegramClientProxy(env);
+        env.ctx.tg = createTelegramClientProxy(env, sentHistory);
     }
 
     for (const entry of REGISTRY) {
-        installed[entry.key] = entry.install(env);
+        if (entry.key === "skills") {
+            // skills 需要共享同一个 sentHistory
+            installed[entry.key] = entry.install(env, sentHistory);
+        } else {
+            installed[entry.key] = entry.install(env);
+        }
     }
 
     return installed;
