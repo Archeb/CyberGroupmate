@@ -206,10 +206,10 @@ embedding:
 
 # ─── Dashboard 监控仪表盘 ───
 # 实时可视化系统状态、消息流、队列、决策等
-# dashboard:
-#   # 是否启用（默认 true）
-#   enabled: true
-#   # HTTP 端口（默认 6767）
-#   port: 6767
-#   # 认证 Token（访问时需携带 ?token=xxx）
-#   token: "your-secret-token"
+dashboard:
+  # 是否启用（默认 true）
+  enabled: true
+  # HTTP 端口（默认 6767）
+  port: 6767
+  # 认证 Token（访问时需携带 ?token=xxx）
+  token: "your-secret-token"
