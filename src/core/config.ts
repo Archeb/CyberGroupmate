@@ -174,6 +174,16 @@ export interface SubagentExternalConfig {
     };
 }
 
+/** Dashboard 外部配置 */
+export interface DashboardExternalConfig {
+    /** 是否启用。默认 true */
+    enabled?: boolean;
+    /** HTTP 端口。默认 6767 */
+    port?: number;
+    /** 认证 Token */
+    token?: string;
+}
+
 export interface AppConfig {
     llmProfiles: Record<string, LLMConfig>;
     modelTiers: ModelTiersConfig;
@@ -184,6 +194,7 @@ export interface AppConfig {
     contextBudget?: ContextBudgetConfig;
     embedding: EmbeddingConfig;
     subagent?: SubagentExternalConfig;
+    dashboard?: DashboardExternalConfig;
 }
 
 // ─── 默认值 ───
@@ -326,6 +337,7 @@ export function loadConfig(configPath?: string, forceReload?: boolean): AppConfi
         contextBudget: parsedContextBudget,
         embedding: parseEmbeddingConfig(fileConfig),
         subagent: parseSubagentConfig(fileConfig),
+        dashboard: parseDashboardConfig(fileConfig),
     };
 
     _cached = config;
@@ -387,6 +399,19 @@ function parseEmbeddingConfig(fileConfig: Record<string, unknown>): EmbeddingCon
 
     return result;
 }
+
+// ─── Dashboard 配置解析 ───
+
+function parseDashboardConfig(fileConfig: Record<string, unknown>): DashboardExternalConfig | undefined {
+    const raw = fileConfig.dashboard as Record<string, unknown> | undefined;
+    if (!raw || typeof raw !== "object") return undefined;
+    return {
+        enabled: raw.enabled != null ? Boolean(raw.enabled) : undefined,
+        port: raw.port != null ? num(raw.port, 6767) : undefined,
+        token: str(raw.token),
+    };
+}
+
 // ─── Subagent 配置解析 ───
 
 function parseSubagentConfig(fileConfig: Record<string, unknown>): SubagentExternalConfig | undefined {

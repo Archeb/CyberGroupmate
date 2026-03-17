@@ -153,6 +153,20 @@ export class FeedbackLoop {
         this.onFollowUpDetected?.(chatId, text);
     }
 
+    /**
+     * 获取当前活跃的追问检测窗口（Dashboard 用）
+     */
+    getActiveWindows(): Array<{ chatId: string; sentAtMs: number; agentMsgId?: string; remainingMs: number }> {
+        const now = Date.now();
+        const result: Array<{ chatId: string; sentAtMs: number; agentMsgId?: string; remainingMs: number }> = [];
+        for (const [chatId, w] of this.followUpWindows) {
+            const elapsed = now - w.sentAtMs;
+            const remaining = Math.max(0, this.followUpWindowMs - elapsed);
+            result.push({ chatId, sentAtMs: w.sentAtMs, agentMsgId: w.agentMsgId, remainingMs: remaining });
+        }
+        return result;
+    }
+
     dispose(): void {
         for (const timer of this.timers.values()) {
             clearTimeout(timer);

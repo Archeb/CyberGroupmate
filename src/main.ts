@@ -498,6 +498,20 @@ async function main(): Promise<void> {
 
     log.info("MainAgentLoop 配置完成");
 
+    // ─── Dashboard 监控仪表盘 ───
+    const dashboardEnabled = appConfig.dashboard?.enabled !== false;
+    if (dashboardEnabled) {
+        const { DashboardServer } = await import("./dashboard/dashboard-server.js");
+        const dashboardToken = appConfig.dashboard?.token ?? "cybergroupmate";
+        const dashboardPort = appConfig.dashboard?.port ?? 6767;
+        const dashboard = new DashboardServer(
+            { nc, subagentManager, q3, q5, mainLoop, globalState, sandboxPool, memory, feedbackLoop },
+            { port: dashboardPort, token: dashboardToken, enabled: true },
+        );
+        await dashboard.start();
+        log.info("Dashboard 已启动", { port: dashboardPort, url: `http://localhost:${dashboardPort}?token=${dashboardToken}` });
+    }
+
     // NOTE: Sandbox 事件处理和 host call handler 已通过 SandboxPool.onAcquire 回调注册
     // sandbox 实例在 CodeActExecutor.executeWithSandbox() 中按需创建，不再全局启动
     log.info("SandboxPool 已配置", {

@@ -175,14 +175,16 @@ export class SandboxPool {
     /**
      * 获取池状态
      */
-    getStats(): { total: number; inUse: number; idle: number } {
+    getStats(): { total: number; inUse: number; idle: number; instances: Array<{ chatId: string; inUse: boolean; lastUsedAt: number }> } {
         let inUse = 0;
         let idle = 0;
+        const instances: Array<{ chatId: string; inUse: boolean; lastUsedAt: number }> = [];
         for (const entry of this.pool.values()) {
             if (entry.inUse) inUse++;
             else idle++;
+            instances.push({ chatId: entry.chatId, inUse: entry.inUse, lastUsedAt: entry.lastUsedAt });
         }
-        return { total: this.pool.size, inUse, idle };
+        return { total: this.pool.size, inUse, idle, instances };
     }
 
     /**

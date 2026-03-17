@@ -15,15 +15,19 @@
   "dependencies": {
     "@mtcute/node": "latest",
     "better-sqlite3": "^11.0.0",
+    "express": "^5.2.1",
     "js-tiktoken": "^1.0.21",
     "sqlite-vec": "^0.1.7-alpha.2",
     "stream-json": "^1.9.1",
     "ulid": "^2.3.0",
+    "ws": "^8.19.0",
     "yaml": "^2.8.2"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.0.0",
+    "@types/express": "^5.0.6",
     "@types/node": "^22.0.0",
+    "@types/ws": "^8.18.1",
     "tsx": "^4.0.0",
     "typescript": "^5.9.3"
   }
