@@ -152,6 +152,18 @@ function createTelegramClientProxy(env: CapabilityRegistryEnv, sentHistory: Map<
             await env.callHost("telegram.sendTyping", [chatId]);
             env.emitOutput(`[Telegram] sendTyping ok chat=${String(chatId)}`);
         },
+        joinChat: async (chatId: number | string) => {
+            await env.callHost("telegram.joinChat", [chatId]);
+            env.emitOutput(`[Telegram] joinChat ok chat=${String(chatId)}`);
+        },
+        leaveChat: async (chatId: number | string) => {
+            await env.callHost("telegram.leaveChat", [chatId]);
+            env.emitOutput(`[Telegram] leaveChat ok chat=${String(chatId)}`);
+        },
+        getDialogs: async (opts?: { limit?: number }) => {
+            const dialogs = await env.callHost("telegram.getDialogs", [opts]);
+            return Array.isArray(dialogs) ? dialogs : [];
+        },
     };
 }
 

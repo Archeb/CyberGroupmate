@@ -39,6 +39,8 @@ interface TelegramClientLike {
     iterDialogs?(params?: unknown): AsyncIterable<unknown>;
     readHistory?(chatId: unknown): Promise<void>;
     sendTyping?(chatId: unknown): Promise<void>;
+    joinChat?(chatId: unknown): Promise<unknown>;
+    leaveChat?(chatId: unknown): Promise<unknown>;
 }
 
 type TelegramClientFactory = (config: TelegramConfig) => Promise<TelegramClientLike>;
@@ -284,6 +286,28 @@ export class TelegramAdapter implements PlatformAdapter {
             case "telegram.sendTyping": {
                 const peer = await this.ensurePeerCached(args[0]);
                 await this.client.sendTyping(peer);
+                return null;
+            }
+            case "telegram.joinChat": {
+                const peer = await this.ensurePeerCached(args[0]);
+                if (typeof this.client.joinChannel === "function") {
+                    await this.client.joinChannel(peer);
+                } else if (typeof this.client.joinChat === "function") {
+                    await this.client.joinChat(peer);
+                } else {
+                    throw new Error("joinChat is not supported by the current Telegram client");
+                }
+                return null;
+            }
+            case "telegram.leaveChat": {
+                const peer = await this.ensurePeerCached(args[0]);
+                if (typeof this.client.leaveChannel === "function") {
+                    await this.client.leaveChannel(peer);
+                } else if (typeof this.client.leaveChat === "function") {
+                    await this.client.leaveChat(peer);
+                } else {
+                    throw new Error("leaveChat is not supported by the current Telegram client");
+                }
                 return null;
             }
             default:

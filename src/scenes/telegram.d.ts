@@ -66,6 +66,8 @@ interface TelegramClient {
     getMe(): Promise<User>;
     getChat(chatId: number | string): Promise<Chat>;
     getUser(userId: number | string): Promise<User>;
+    /** 获取最近的对话列表（包含 peer、最后一条消息、未读数） */
+    getDialogs(opts?: { limit?: number }): Promise<Dialog[]>;
     // [USERBOT_ONLY_BEGIN]
     getChatMembers(chatId: number | string, opts?: { limit?: number }): Promise<Peer[]>;
     getHistory(chatId: number | string, opts?: { limit?: number }): Promise<Message[]>;
@@ -73,6 +75,12 @@ interface TelegramClient {
     // ─── 迭代器 (for await) ───
     iterHistory(chatId: number | string, opts?: { limit?: number }): AsyncIterable<Message>;
     iterDialogs(opts?: { limit?: number }): AsyncIterable<Dialog>;
+
+    // ─── 群组管理 ───
+    /** 加入一个群聊或频道 */
+    joinChat(chatId: number | string): Promise<void>;
+    /** 退出一个群聊或频道 */
+    leaveChat(chatId: number | string): Promise<void>;
 
     // ─── 状态操作 ───
     readHistory(chatId: number | string): Promise<void>;
