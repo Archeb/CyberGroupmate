@@ -2,6 +2,10 @@ services:
   cybergroupmate:
     build: .
     container_name: cybergroupmate
+    environment:
+      - LOG_LEVEL=info
+    ports:
+      - "6767:6767"
     volumes:
       - ./config.yaml:/app/config.yaml:ro
       - cybergroupmate-data:/app/workspace
