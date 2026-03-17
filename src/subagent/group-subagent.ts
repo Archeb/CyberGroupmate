@@ -92,8 +92,8 @@ export class GroupSubagent extends EventEmitter {
     /** 自上次 attend 以来，是否有话题通过 triage（ENGAGE），用于 Phase 2 守卫 */
     hasTriageEngaged: boolean = false;
 
-    /** 已分派回复任务的 topicId 集合（防重复分派） */
-    private dispatchedTopicIds = new Set<string>();
+    /** 已分派回复任务的 topicId 集合（防重复分派），值为分派时间戳 */
+    private dispatchedTopicIds = new Map<string, number>();
 
     /** Agent 最后一次回复时间戳（毫秒），用于 triage 防重复 */
     lastAgentReplyAt: number = 0;
@@ -273,7 +273,27 @@ export class GroupSubagent extends EventEmitter {
         if (this.recordingPipeline) {
             this.recordingPipeline.lastAgentReplyAt = ts;
         }
+        // 同步到 CodeActExecutor 以便持久化到 session JSON
+        if (this.codeActExecutor && typeof (this.codeActExecutor as any).lastAgentReplyAt !== "undefined") {
+            (this.codeActExecutor as any).lastAgentReplyAt = ts;
+        }
         log.debug("updateLastAgentReplyAt", { chatId: this.chatId, ts });
+    }
+
+    /**
+     * 从 CodeActExecutor 恢复 lastAgentReplyAt（进程重启后调用）
+     */
+    restoreLastAgentReplyAt(): void {
+        if (this.codeActExecutor && typeof (this.codeActExecutor as any).lastAgentReplyAt === "number") {
+            const restored = (this.codeActExecutor as any).lastAgentReplyAt as number;
+            if (restored > 0) {
+                this.lastAgentReplyAt = restored;
+                if (this.recordingPipeline) {
+                    this.recordingPipeline.lastAgentReplyAt = restored;
+                }
+                log.info("restoreLastAgentReplyAt: 已恢复", { chatId: this.chatId, ts: restored, age: `${Math.round((Date.now() - restored) / 60000)}分钟前` });
+            }
+        }
     }
 
     /**
@@ -303,7 +323,7 @@ export class GroupSubagent extends EventEmitter {
      * 标记话题已分派回复任务（dispatch-handler 调用）
      */
     markTopicDispatched(topicId: string): void {
-        this.dispatchedTopicIds.add(topicId);
+        this.dispatchedTopicIds.set(topicId, Date.now());
         log.info("markTopicDispatched", { chatId: this.chatId, topicId, total: this.dispatchedTopicIds.size });
     }
 
@@ -318,18 +338,25 @@ export class GroupSubagent extends EventEmitter {
      * 获取所有已分派话题 ID
      */
     getDispatchedTopicIds(): ReadonlySet<string> {
-        return this.dispatchedTopicIds;
+        return new Set(this.dispatchedTopicIds.keys());
     }
 
     /**
      * 清理已归档/过期的 dispatched 记录（attend 后调用）
      */
     private pruneDispatchedTopics(): void {
-        for (const id of this.dispatchedTopicIds) {
+        const TTL = 30 * 60 * 1000; // 30 分钟过期
+        const now = Date.now();
+        for (const [id, dispatchedAt] of this.dispatchedTopicIds) {
             const topic = this.topicRegistry.get(id);
-            if (!topic || topic.state === "ARCHIVED" || topic.state === "STALE") {
+            // 仅清理：(1) registry 中已归档/过期的，或 (2) 超过 TTL 的未知 ID
+            // 不清理 registry 中不存在的（可能是 LLM 生成的非 registry 格式 ID）
+            if (topic && (topic.state === "ARCHIVED" || topic.state === "STALE")) {
                 this.dispatchedTopicIds.delete(id);
-                log.debug("pruneDispatchedTopics: 清理", { chatId: this.chatId, topicId: id, state: topic?.state ?? "NOT_FOUND" });
+                log.debug("pruneDispatchedTopics: 清理(已归档)", { chatId: this.chatId, topicId: id, state: topic.state });
+            } else if (now - dispatchedAt > TTL) {
+                this.dispatchedTopicIds.delete(id);
+                log.debug("pruneDispatchedTopics: 清理(TTL过期)", { chatId: this.chatId, topicId: id, ageMs: now - dispatchedAt });
             }
         }
     }

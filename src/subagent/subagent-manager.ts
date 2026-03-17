@@ -143,6 +143,7 @@ export class SubagentManager {
 
                         if (loaded) {
                             subagent.codeActExecutor = executor;
+                            subagent.restoreLastAgentReplyAt();
                             restored.push(chatId);
                             log.info("restoreAll: 恢复 session", {
                                 chatId,

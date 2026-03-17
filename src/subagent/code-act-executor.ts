@@ -82,11 +82,6 @@ function stripVerboseSections(content: string): string {
         /## 相关人物背景\n[\s\S]*?(?=\n## |$)/,
         "## 相关人物背景\n[见当前任务]"
     );
-    // 剥离已发送消息确认段落
-    result = result.replace(
-        /\[📤 已发送消息确认\]\n[\s\S]*?(?=\n\[|$)/g,
-        "[📤 已发送消息 - 请看消息原文]"
-    );
     return result;
 }
 export interface CodeActExecutorConfig {
@@ -142,6 +137,9 @@ export class CodeActExecutor {
 
     /** 上次 compact 时间 */
     lastCompactedAt: string | null = null;
+
+    /** Agent 最后回复时间戳（由 GroupSubagent 同步写入，持久化到 session JSON） */
+    lastAgentReplyAt: number = 0;
 
     /** 执行计数 */
     private executionCount = 0;
@@ -599,6 +597,7 @@ export class CodeActExecutor {
                 executionRecords: this.executionRecords,
                 executionCount: this.executionCount,
                 lastCompactedAt: this.lastCompactedAt,
+                lastAgentReplyAt: this.lastAgentReplyAt,
                 savedAt: new Date().toISOString(),
             };
 
@@ -648,6 +647,7 @@ export class CodeActExecutor {
             this.executionRecords = Array.isArray(state.executionRecords) ? state.executionRecords : [];
             this.executionCount = typeof state.executionCount === "number" ? state.executionCount : 0;
             this.lastCompactedAt = state.lastCompactedAt ?? null;
+            this.lastAgentReplyAt = typeof state.lastAgentReplyAt === "number" ? state.lastAgentReplyAt : 0;
 
             log.info("loadSession: 已恢复", {
                 chatId: this.chatId,
