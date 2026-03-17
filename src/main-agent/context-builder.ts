@@ -53,8 +53,8 @@ export interface ContextBuildInput {
  *
  * 按深度裁剪信息量：
  * - L0: topicDigests + engagementScore
- * - L1: + groupModel + lastCallbacks
- * - L2: + messages
+ * - L1: + groupModel + lastCallbacks + recentMessages(少量)
+ * - L2: + messages(完整)
  * - L3: + deepSummary
  */
 export function buildGroupContext(input: ContextBuildInput): GroupContextPackage {
@@ -76,7 +76,7 @@ export function buildGroupContext(input: ContextBuildInput): GroupContextPackage
         pkg.activePersons = input.activePersons;
     }
 
-    if (input.depth >= 2) {
+    if (input.depth >= 1) {
         pkg.messages = input.messages;
     }
 

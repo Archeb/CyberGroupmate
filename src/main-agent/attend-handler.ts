@@ -67,6 +67,16 @@ export function createAttendHandler(
             depth = 2 as import("./cosine-decay.js").ContextDepth;
         }
 
+        // L1: 少量最近消息（3-5条）提供基本上下文感知
+        // L2+: 完整消息列表（20条）提供详细上下文
+        const messageLimit = depth >= 2 ? 20 : depth >= 1 ? 5 : 0;
+        const recentMessages = messageLimit > 0
+            ? memory.getRecentMessages(entry.chatId, messageLimit).map(m => ({
+                ...m,
+                replyToMessageId: m.replyToMessageId ?? null,
+            }))
+            : undefined;
+
         const contextPkg = buildGroupContext({
             chatId: entry.chatId,
             depth,
@@ -75,6 +85,7 @@ export function createAttendHandler(
             engagementScore: entry.priority,
             groupModel,
             lastCallbacks: subagent.lastCallbacks,
+            messages: recentMessages,
             chatTitle: groupModel?.chatTitle,
             stickiness: subagent.stickiness,
             fastPathEnabled: !!(subagent.fastPathHandler as any)?.isAuthorized?.(),
