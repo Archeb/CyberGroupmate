@@ -397,7 +397,6 @@ export class CodeActExecutor {
                 this.llmConfig!,
                 this.sessionsDir,
                 this.config.maxExecutionTimeMs,
-                true, // disableNcInterrupt: Subagent 架构下不需要 NC 中断检查
                 sentCollector, // Fix 1: 传入 collector
             );
         } finally {

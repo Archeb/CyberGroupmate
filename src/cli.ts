@@ -5,7 +5,6 @@
  * 提供子命令用于手动测试各组件：
  *   npx tsx src/cli.ts sandbox    — 交互式 sandbox REPL
  *   npx tsx src/cli.ts notify     — 手动推送一条通知
- *   npx tsx src/cli.ts drain      — 查看当前通知队列
  *   npx tsx src/cli.ts memory     — 交互式 memory 查询
  *   npx tsx src/cli.ts config     — 检查配置加载结果
  *   npx tsx src/cli.ts status     — 查看 agent 状态
@@ -156,56 +155,29 @@ async function executeAndPrint(sandbox: Sandbox, code: string): Promise<void> {
  * notify — 手动推送一条通知
  *
  * 用法：
- *   notify [type] [text]        — 普通通知
- *   notify --urgent [type] [text] — 加急通知（立即触发 drain）
+ *   notify [type] [text]
  */
 async function cmdNotify(args: string[]): Promise<void> {
     const eventsPath = join(DATA_DIR, "events.jsonl");
     const nc = new NotificationCenter(eventsPath, false);
 
-    // 解析 --urgent 标志
-    const urgent = args.includes("--urgent") || args.includes("-u");
-    const filteredArgs = args.filter((a) => a !== "--urgent" && a !== "-u");
-
-    const type = filteredArgs[0] ?? "test.manual";
-    const text = filteredArgs.slice(1).join(" ") || "手动测试通知";
+    const type = args[0] ?? "test.manual";
+    const text = args.slice(1).join(" ") || "手动测试通知";
 
     const event = nc.push({
         type,
         text,
         source: "cli",
-        _urgent: urgent || undefined,
     });
 
     log.info("事件已推送", {
         id: event._id,
         type: event.type,
-        urgent: urgent ? "✓" : undefined,
         pendingCount: nc.pendingCount,
     });
     nc.dispose();
 }
 
-/**
- * drain — 查看当前通知队列
- */
-async function cmdDrain(): Promise<void> {
-    const eventsPath = join(DATA_DIR, "events.jsonl");
-    const nc = new NotificationCenter(eventsPath, false);
-
-    log.info("当前队列", { pending: nc.pendingCount });
-
-    const events = await nc.drain(0, 100);
-    if (events.length === 0) {
-        log.info("队列为空");
-        return;
-    }
-
-    for (const event of events) {
-        console.log(JSON.stringify(event, null, 2));
-    }
-    log.info(`共 ${events.length} 条事件`);
-}
 
 /**
  * memory — 交互式 Memory 查询
@@ -467,7 +439,6 @@ const HELP = `
 命令:
   sandbox                交互式 Sandbox REPL
   notify [type] [text]   推送一条通知到队列
-  drain                  查看并清空通知队列
   memory <subcmd>        记忆系统查询（recall/browse/reflect/status）
   config                 检查配置加载结果
   status                 查看 agent 运行状态和统计
@@ -486,9 +457,6 @@ async function main(): Promise<void> {
             break;
         case "notify":
             await cmdNotify(args);
-            break;
-        case "drain":
-            await cmdDrain();
             break;
         case "memory":
         case "mem":

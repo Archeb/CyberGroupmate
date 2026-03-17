@@ -75,18 +75,12 @@ persona:
 
 # ─── 通知唤醒设置 ───
 notification:
-  # 触发紧急响应的词汇匹配列表
-  urgent_words:
-    - "@赛博群友"
-    - "？"
-    - "?"
-    - "呢"
-    - "吗"
-  # 触发 Q3 即时入队（Main Agent 介入）的关键字（如 agent 名字）
-  # 与 urgent_words 不同：urgent_words 影响 NC 消息聚合时机，mention_keywords 决定是否拉起 Main Agent
-  # 默认为 [persona.name]
+  # 触发 Q3 即时入队（Main Agent 介入）+ Observer 提权的关键字
+  # 当消息文本包含这些关键字时，会立即触发 Main Agent 处理
+  # 无默认值，必须显式配置
   mention_keywords:
     - "赛博群友"
+    - "@赛博群友"
 
 # ─── Telegram 设置 ───
 telegram:

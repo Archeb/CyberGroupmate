@@ -224,7 +224,7 @@ async function main(): Promise<void> {
             engagementWindowMs: 5 * 60 * 1000,
             alertEngagementThreshold: appConfig.subagent?.alertEngagementThreshold ?? 60,
             fastPathEngagementThreshold: appConfig.subagent?.fastPath?.engagementThreshold ?? 70,
-            mentionKeywords: appConfig.notification?.urgentWords ?? ["?", "？", "呢", "吗"],
+            mentionKeywords: appConfig.notification?.mentionKeywords ?? [],
         },
         recordingDeps: {
             llmConfig: cheapConfig,

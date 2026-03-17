@@ -10,7 +10,7 @@
  */
 
 import { Sandbox, ExecutionResult } from "./sandbox.js";
-import { NotificationCenter } from "../event/notification-center.js";
+import type { NotificationCenter } from "../event/notification-center.js";
 import { callLLM, ChatMessage, LLMResponse } from "../core/llm.js";
 import type { LLMConfig } from "../core/config.js";
 import { appendFileSync, mkdirSync, existsSync } from "node:fs";
@@ -178,14 +178,6 @@ export function parseResponse(response: string): {
     return { thinking, codeBlocks };
 }
 
-export function shouldInterruptForEvent(event: Record<string, unknown>): boolean {
-    const type = String(event.type ?? "");
-    if (type === "system.reply_task") return true;
-    if (type === "nc.message") return true;
-    if (type === "telegram.message") return true;
-    return !!event._urgent;
-}
-
 // ─── Session Runner ───
 
 /**
@@ -223,8 +215,6 @@ export async function runCodeActSession(
     sessionsDir: string = "workspace/sessions",
     /** 每段代码的执行超时（毫秒），默认 30s */
     executeTimeout: number = 30000,
-    /** 禁用 NC drain 中断检查（Subagent 架构时使用，避免与 Observer 冲突） */
-    disableNcInterrupt: boolean = false,
     /** 已发消息收集器，用于将 notify 事件中确认的消息反馈到 observation */
     sentMessageCollector?: SentMessageCollector,
 ): Promise<SessionResult> {
@@ -374,41 +364,7 @@ export async function runCodeActSession(
             messages.push({ role: "user", content: observation });
         }
 
-        if (!disableNcInterrupt && nc.pendingCount > 0) {
-            const newEvents = await nc.drain(0, 5);
-            if (newEvents.length > 0) {
-                const shouldInterrupt = newEvents.some(event =>
-                    shouldInterruptForEvent(event as Record<string, unknown>)
-                );
 
-                if (shouldInterrupt) {
-                    for (let i = newEvents.length - 1; i >= 0; i--) {
-                        nc.push(newEvents[i]);
-                    }
-                    messages.push({
-                        role: "user",
-                        content: `[系统] 发现新的外部消息或回复任务，当前 session 已中断并把控制权交还主循环。`,
-                    });
-                    return {
-                        sessionId,
-                        turns,
-                        messages,
-                        endReason: "interrupted",
-                    };
-                }
-
-                const eventSummary = newEvents
-                    .map((e) => {
-                        const preview = JSON.stringify(e).slice(0, 300);
-                        return `- ${e.type}: ${preview}`;
-                    })
-                    .join("\n");
-                messages.push({
-                    role: "user",
-                    content: `[📬 新通知到达 (${newEvents.length} 条)]\n${eventSummary}`,
-                });
-            }
-        }
     }
 
     // 达到最大轮次
