@@ -58,6 +58,8 @@ export interface PersonaConfig {
 
 export interface NotificationConfig {
     urgentWords: string[];
+    /** 触发 Q3 即时入队的关键词（agent 名字等），区别于 NC batching 用的 urgentWords */
+    mentionKeywords: string[];
 }
 
 export interface TelegramConfig {
@@ -303,6 +305,9 @@ export function loadConfig(configPath?: string, forceReload?: boolean): AppConfi
             urgentWords: Array.isArray(fileNotification.urgent_words)
                 ? (fileNotification.urgent_words as string[])
                 : ["?", "？", "呢", "吗"],
+            mentionKeywords: Array.isArray(fileNotification.mention_keywords)
+                ? (fileNotification.mention_keywords as string[])
+                : [str(filePersona.name) ?? "赛博群友"],
         },
         reflection: {
             temperature: fileReflection.temperature != null ? num(fileReflection.temperature, 0.3) : undefined,

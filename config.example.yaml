@@ -82,6 +82,11 @@ notification:
     - "?"
     - "呢"
     - "吗"
+  # 触发 Q3 即时入队（Main Agent 介入）的关键字（如 agent 名字）
+  # 与 urgent_words 不同：urgent_words 影响 NC 消息聚合时机，mention_keywords 决定是否拉起 Main Agent
+  # 默认为 [persona.name]
+  mention_keywords:
+    - "赛博群友"
 
 # ─── Telegram 设置 ───
 telegram:

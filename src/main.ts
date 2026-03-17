@@ -261,7 +261,7 @@ async function main(): Promise<void> {
     );
 
     // ─── NC.onPush: 消息实时处理管线 ───
-    const personaName = appConfig.persona?.name ?? "";
+    const mentionKeywords = (appConfig.notification?.mentionKeywords ?? []).map(k => k.toLowerCase()).filter(k => k.length > 0);
 
     // Hook 2: 消息分发到 per-group GroupSubagent (Observer + RecordingPipeline) → 更新 Q3
     nc.onPush(event => {
@@ -310,10 +310,9 @@ async function main(): Promise<void> {
         const isDM = !!event.isDirectMessage;
         const isMention = !!event.mentionsAgent;
         const alert = sub.observer.checkAlert();
-        // 文本提及检测：检查消息内容是否包含 agent 的名字
-        // 注意：不使用完整的 urgentWords 列表（含 ?/呢/吗 等常见词会导致误触发）
+        // 文本提及检测：检查消息内容是否包含配置的 mention_keywords（agent 名字等）
         const messageText = String(event.text ?? event.message ?? "").toLowerCase();
-        const hasNameMention = personaName.length > 0 && messageText.includes(personaName.toLowerCase());
+        const hasNameMention = mentionKeywords.length > 0 && mentionKeywords.some(kw => messageText.includes(kw));
 
         if (alert || isDM || isMention || hasNameMention) {
             q3.enqueueOrUpdate(sub.buildQueueEntry());
