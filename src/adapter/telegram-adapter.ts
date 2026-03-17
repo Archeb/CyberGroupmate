@@ -462,10 +462,7 @@ export class TelegramAdapter implements PlatformAdapter {
         const senderId = plain.sender?.id ?? "0";
         const numericChatId = Number(plain.chat.id);
         const isDirectMessage = plain.chat.type === "private" || (!Number.isNaN(numericChatId) && numericChatId > 0);
-        const mentionsAgent = Boolean(
-            plain.isMention ||
-            (this.selfUser && plain.replyToMessage && plain.sender?.id !== this.selfUser.id),
-        );
+        const mentionsAgent = Boolean(plain.isMention);
 
         return {
             chatId: plain.chat.id,
