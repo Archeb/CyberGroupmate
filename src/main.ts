@@ -254,10 +254,21 @@ async function main(): Promise<void> {
     });
 
     // FeedbackLoop 创建（需要在 subagentManager 之后，以支持 per-group registryLookup）
+    // architecture_v2.md §3 Q3 路径 (5): 追问检测 → Q3 入队
     const feedbackLoop = new FeedbackLoop(
         memory,
         nc,
         (chatId: string) => subagentManager.get(chatId)?.topicRegistry ?? null,
+        3 * 60 * 1000,  // evaluationDelayMs
+        (chatId: string, triggerText: string) => {
+            const sub = subagentManager.get(chatId);
+            if (!sub) return;
+            // 重置 lastAgentReplyAt 使 triage 允许介入（绕过防重复守卫）
+            sub.updateLastAgentReplyAt(0);
+            q3.enqueueOrUpdate(sub.buildQueueEntry());
+            q3.boost(chatId, 15);
+            log.info("追问检测 → Q3 入队", { chatId, triggerText: triggerText.slice(0, 50) });
+        },
     );
 
     // ─── NC.onPush: 消息实时处理管线 ───
@@ -352,6 +363,18 @@ async function main(): Promise<void> {
                 replyToMessageId: sentEvent.replyToMessageId ? String(sentEvent.replyToMessageId) : undefined,
             } satisfies AgentMessageSentEvent);
         }
+    });
+
+    // Hook 4: 追问实时检测 (architecture_v2.md §3 Q3 路径 5)
+    // 在 FeedbackLoop 的追问窗口内检测同群用户消息并触发 Q3 入队
+    nc.onPush(event => {
+        const chatId = String(event.chatId ?? "");
+        if (!chatId) return;
+        const eventType = String(event.type ?? "");
+        if (eventType !== "nc.message" && eventType !== "telegram.message") return;
+        const userId = String(event.userId ?? event.user_id ?? event.senderId ?? "");
+        const text = String(event.text ?? event.message ?? "");
+        feedbackLoop.checkFollowUp(chatId, userId, text);
     });
 
     // Per-group TopicRegistry 定时清理（遍历所有 subagent 的 topicRegistry）

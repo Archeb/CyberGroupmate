@@ -155,17 +155,18 @@ graph TD
     MQ5 -->|Phase1: 重整全局状态/解阻| MA
 
     NC -.->|FeedbackLoop 追踪| FL[FeedbackLoop: 反馈评估]:::subfill
+    FL -.->|"追问检测 (followUp window)"| MQ3
 ```
 
 ### 关键队列与组件梳理
 *   **Q1 (NotificationCenter, NC)**: 事件总线。接纳一切输入并通过 `onPush` Hook 同步分发到 `MessageLogWriter`（实时落盘）、`GroupSubagent.onMessage()`（Observer + RecordingPipeline）、`FeedbackLoop`（反馈追踪）。NC 同时支持 JSONL 文件持久化和跨进程事件注入（CLI 可追加 JSONL，NC 通过 `fs.watch` 检测并读入）。
 *   **Q2 (Observer 内部 Buffer)**: Observer 的消息缓冲区。所有消息进入后参与 Engagement 计算，attend 后自动清空（`clearBuffer()`）。
-*   **Q3 (DynamicAttentionQueue)**: 主 Agent 专属注意力队列。入队来源有四条路径：(1) DM 私聊或 @mention 消息到达时即时入队（必须回应的直接交互）；(2) Observer 检测到高 engagement 告警时即时入队（紧急路径）；(3) RecordingPipeline flush 后 triage 通过触发 `triage-engage` 事件入队（正常路径——triage 是 Q3 的核心看门人）；(4) DEFER 决策半优先级重新入队。**不对普通群消息无条件入队**，确保 Main Agent 的决策基于 triage 的结构化分析而非原始消息。支持时间衰减、block/unblock（CodeAct 执行中阻塞该群）、priority boost（告警/Followup 提权）。
+*   **Q3 (DynamicAttentionQueue)**: 主 Agent 专属注意力队列。入队来源有五条路径：(1) DM 私聊或 @mention 消息到达时即时入队（必须回应的直接交互）；(2) Observer 检测到高 engagement 告警时即时入队（紧急路径）；(3) RecordingPipeline flush 后 triage 通过触发 `triage-engage` 事件入队（正常路径——triage 是 Q3 的核心看门人）；(4) DEFER 决策半优先级重新入队；(5) FeedbackLoop 追问检测——Agent 发言后开启短窗口（默认 90 秒），窗口内同群用户消息触发即时入队并重置 `lastAgentReplyAt` 使 triage 不跳过。**不对普通群消息无条件入队**，确保 Main Agent 的决策基于 triage 的结构化分析而非原始消息。支持时间衰减、block/unblock（CodeAct 执行中阻塞该群）、priority boost（告警/Followup 提权）。
 *   **Q4 (CodeActExecutor 内部 Task Queue)**: 每个群组的 CodeActExecutor 内部的串行任务队列。主 Agent 分派 `CODEACT_REPLY` 后 enqueue，按序执行。
 *   **Q5 (CallbackQueue)**: Subagent 向主 Agent 呈报完成结果的回执箱。CodeActExecutor 和 FastPathHandler 完成后将 `SubagentCallback` push 到此，由主 Agent Phase 1 drain。
 *   **SandboxPool**: 全局 Sandbox 实例池，管理最大并发数和空闲超时回收。CodeActExecutor 执行时 acquire，完成后 release。每个 Sandbox 实例上注册了 Host Call 路由（Telegram API、Memory API、TaskList 等）。
 *   **GlobalState**: 全局状态持久化（JSON 文件），记录最近决策日志、任务列表、pendingFollowups 等。主 Agent 系统 Prompt 中注入全局状态，确保跨 tick 状态一致感。
-*   **FeedbackLoop**: 追踪 Agent 已发消息的后续群聊反响，用于评估 Agent 发言的效果。
+*   **FeedbackLoop**: 追踪 Agent 已发消息的后续群聊反响，用于评估 Agent 发言的效果。同时承担**追问检测**职责：Agent 发言后开启一个可配置的追问窗口（默认 90 秒），在窗口期内收到同群用户消息时判定为追问，立即将该群以 boost 优先级入队 Q3，并重置 `lastAgentReplyAt` 为 0 以绕过 RecordingPipeline 的 triage 防重复守卫。追问窗口到期后自动清理，每个 chatId 同时只维护一个窗口（新 Agent 消息会刷新窗口）。
 
 ---
 

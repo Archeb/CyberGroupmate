@@ -1,8 +1,13 @@
 /**
- * feedback-loop.ts — 发言后反馈评估
+ * feedback-loop.ts — 发言后反馈评估 + 追问检测
  *
  * 记录 agent 发言，并在一段时间后观察群内是否出现后续互动，
  * 将结果回写到 memory，并生成系统通知。
+ *
+ * 追问检测 (architecture_v2.md §3 Q3 路径 5)：
+ * Agent 发言后开启一个短窗口（默认 90 秒），在窗口期内收到同群
+ * 用户消息时立即触发 onFollowUpDetected 回调，将该群入队 Q3。
+ * 每个 chatId 同时只维护一个窗口，新 Agent 消息会刷新窗口。
  */
 
 import { createLogger } from "../core/logger.js";
@@ -30,20 +35,34 @@ interface PendingFeedback {
     sentAtMs: number;
 }
 
+/** 追问窗口状态 */
+interface FollowUpWindow {
+    sentAtMs: number;
+    agentMsgId?: string;
+    timer: ReturnType<typeof setTimeout>;
+}
+
 export class FeedbackLoop {
     private timers = new Map<string, ReturnType<typeof setTimeout>>();
+
+    /** 追问检测窗口（key = chatId） */
+    private followUpWindows = new Map<string, FollowUpWindow>();
 
     /**
      * @param memory - 记忆存储
      * @param nc - 通知中心
      * @param registryLookup - 按 chatId 查找 per-group TopicRegistry
      * @param evaluationDelayMs - 评估延迟
+     * @param onFollowUpDetected - 追问检测回调：chatId + 触发消息文本
+     * @param followUpWindowMs - 追问窗口时长（默认 90 秒）
      */
     constructor(
         private memory: MemoryStoreV2,
         private nc: NotificationCenter,
         private registryLookup: (chatId: string) => TopicRegistry | null,
         private evaluationDelayMs: number = 3 * 60 * 1000,
+        private onFollowUpDetected?: (chatId: string, triggerMessageText: string) => void,
+        private followUpWindowMs: number = 90_000,
     ) {}
 
     recordAgentMessage(event: AgentMessageSentEvent): void {
@@ -79,6 +98,59 @@ export class FeedbackLoop {
         }, this.evaluationDelayMs);
 
         this.timers.set(key, timer);
+
+        // ── 追问窗口管理 ──
+        // 每次 agent 发言都刷新该 chatId 的追问窗口
+        if (this.onFollowUpDetected) {
+            const existingWindow = this.followUpWindows.get(event.chatId);
+            if (existingWindow) {
+                clearTimeout(existingWindow.timer);
+            }
+
+            const windowTimer = setTimeout(() => {
+                this.followUpWindows.delete(event.chatId);
+            }, this.followUpWindowMs);
+
+            this.followUpWindows.set(event.chatId, {
+                sentAtMs,
+                agentMsgId: event.messageId,
+                timer: windowTimer,
+            });
+
+            log.debug("追问窗口已开启", {
+                chatId: event.chatId,
+                windowMs: this.followUpWindowMs,
+                agentMsgId: event.messageId,
+            });
+        }
+    }
+
+    /**
+     * 检查追问 — 由 NC onPush Hook 在每条群消息到达时调用
+     *
+     * 如果该 chatId 处于追问窗口内且发言者不是 agent，
+     * 触发 onFollowUpDetected 回调并关闭窗口（单次触发）。
+     */
+    checkFollowUp(chatId: string, userId: string, text: string): void {
+        const window = this.followUpWindows.get(chatId);
+        if (!window) return;
+
+        // 排除 agent 自身的消息（可能是多条连续发送）
+        if (userId === "agent" || userId === "self" || userId === "") return;
+
+        // 检测到追问：关闭窗口，触发回调
+        clearTimeout(window.timer);
+        this.followUpWindows.delete(chatId);
+
+        log.info("追问检测触发", {
+            chatId,
+            userId,
+            textPreview: text.slice(0, 50),
+            windowAge: Date.now() - window.sentAtMs,
+            agentMsgId: window.agentMsgId,
+        });
+
+        this.onFollowUpDetected?.(chatId, text);
     }
 
     dispose(): void {
@@ -86,6 +158,12 @@ export class FeedbackLoop {
             clearTimeout(timer);
         }
         this.timers.clear();
+
+        // 清理追问窗口
+        for (const w of this.followUpWindows.values()) {
+            clearTimeout(w.timer);
+        }
+        this.followUpWindows.clear();
     }
 
     private async evaluate(pending: PendingFeedback): Promise<void> {
