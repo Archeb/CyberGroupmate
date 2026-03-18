@@ -25,7 +25,7 @@ import type { LLMConfig, VisionConfig } from "../core/config.js";
 import { enrichMessages } from "../core/message-enricher.js";
 import type { ChatMessage } from "../core/llm.js";
 import { createLogger } from "../core/logger.js";
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { shouldCompact, compact as contextManagerCompact } from "../memory-v2/context-manager.js";
@@ -46,22 +46,14 @@ function loadApiTypeDefs(): string {
         const thisFile = fileURLToPath(import.meta.url);
         const modulesDir = join(dirname(thisFile), "..", "sandbox", "modules");
 
-        const files = [
-            join(modulesDir, "telegram.d.ts"),
-            join(modulesDir, "memory.d.ts"),
-            join(modulesDir, "runtime.d.ts"),
-            join(modulesDir, "actions.d.ts"),
-            join(modulesDir, "skills.d.ts"),
-            join(modulesDir, "scene.d.ts"),
-            join(modulesDir, "ctx.d.ts"),
-            join(modulesDir, "docs.d.ts"),
-        ];
+        // 自动发现所有 .d.ts 文件，新增模块只需放一个 .d.ts 即可
+        const dtsFiles = readdirSync(modulesDir)
+            .filter(f => f.endsWith(".d.ts"))
+            .sort();
 
         const parts: string[] = [];
-        for (const f of files) {
-            if (existsSync(f)) {
-                parts.push(`// --- ${f.split("/").pop()} ---\n${readFileSync(f, "utf-8")}`);
-            }
+        for (const f of dtsFiles) {
+            parts.push(`// --- ${f} ---\n${readFileSync(join(modulesDir, f), "utf-8")}`);
         }
         _apiTypeDefsCache = parts.join("\n\n");
     } catch {
