@@ -23,6 +23,7 @@ import { CodeActExecutor } from "../subagent/code-act-executor.js";
 import { FastPathHandler } from "../subagent/fast-path-handler.js";
 import { buildGroupContext } from "./context-builder.js";
 import { createLogger } from "../core/logger.js";
+import { formatTsForDisplay } from "../core/timezone.js";
 
 const log = createLogger("dispatch-handler");
 
@@ -80,7 +81,7 @@ export function createDispatchHandler(
                     id: String(m.messageId ?? m.id ?? m.message_id ?? ""),
                     sender: String(m.displayName ?? m.display_name ?? m.sender ?? m.user_id ?? "?"),
                     text: String(m.text ?? ""),
-                    timestamp: String(m.timestamp ?? ""),
+                    timestamp: formatTsForDisplay(m.timestamp),
                     replyTo: m.replyToMessageId
                         ? (dispatchMsgIdToName.get(m.replyToMessageId) ?? `msg#${m.replyToMessageId}`)
                         : undefined,

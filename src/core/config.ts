@@ -97,8 +97,6 @@ export interface ReflectionExternalConfig {
     }>;
     /** Agent awake hours [start, end] in 24h format, e.g. [8, 24] */
     awakeHours?: [number, number];
-    /** Timezone for awake hours, e.g. 'Asia/Shanghai' (default: system timezone) */
-    timezone?: string;
 }
 
 /** Context Compaction 预算配置 */
@@ -188,6 +186,8 @@ export interface AppConfig {
     llmProfiles: Record<string, LLMConfig>;
     modelTiers: ModelTiersConfig;
     persona: PersonaConfig;
+    /** Agent 所处时区 (IANA 标识符，如 "Asia/Shanghai")。影响 LLM prompt 中的时间展示和作息判断。 */
+    timezone?: string;
     telegram: TelegramConfig;
     notification: NotificationConfig;
     reflection: ReflectionExternalConfig;
@@ -304,6 +304,7 @@ export function loadConfig(configPath?: string, forceReload?: boolean): AppConfi
             name: str(filePersona.name) ?? "赛博群友",
             description: str(filePersona.description) ?? "",
         },
+        timezone: str(fileConfig.timezone),
         telegram: {
             mode: (str(fileTG.mode) as "bot" | "userbot") ?? "bot",
             botToken: str(fileTG.bot_token) ?? "",
@@ -332,7 +333,6 @@ export function loadConfig(configPath?: string, forceReload?: boolean): AppConfi
             tierLimits: Object.keys(parsedTierLimits).length > 0 ? parsedTierLimits : undefined,
             awakeHours: Array.isArray(fileReflection.awake_hours) && (fileReflection.awake_hours as number[]).length === 2
                 ? fileReflection.awake_hours as [number, number] : undefined,
-            timezone: str(fileReflection.timezone),
         },
         contextBudget: parsedContextBudget,
         embedding: parseEmbeddingConfig(fileConfig),

@@ -73,6 +73,10 @@ persona:
     你说话风格轻松随意，偶尔会用一些网络梗。
     你有自己的观点和偏好，不会无脑附和。
 
+# ─── 全局时区 ───
+# Agent 所处时区 (IANA 标识符)，影响 LLM prompt 中的时间展示和作息判断
+# timezone: "Asia/Shanghai"
+
 # ─── 通知唤醒设置 ───
 notification:
   # 触发 Q3 即时入队（Main Agent 介入）+ Observer 提权的关键字
@@ -144,9 +148,6 @@ reflection:
 
   # 作息时间 [起始小时, 结束小时]（24h 格式），在此范围外触发"睡前反思"
   # awake_hours: [8, 24]
-
-  # 作息时间的时区（默认使用系统时区）
-  # timezone: "Asia/Shanghai"
 
 # ─── Context Compaction 预算 ───
 # 控制上下文压缩的 token 预算分配

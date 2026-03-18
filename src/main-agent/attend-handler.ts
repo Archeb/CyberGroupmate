@@ -22,6 +22,7 @@ import { estimateReplyMode, buildReplyDecisions, buildObserveDecision } from "./
 import { renderPrompt, buildAttentionVariables } from "./prompt-renderer.js";
 import { callLLM } from "../core/llm.js";
 import { createLogger } from "../core/logger.js";
+import { formatTsForDisplay } from "../core/timezone.js";
 
 const log = createLogger("attend-handler");
 
@@ -132,7 +133,7 @@ export function createAttendHandler(
                             const replyTag = m.replyToMessageId
                                 ? ` (↩ reply to ${msgIdToName.get(m.replyToMessageId) ?? `msg#${m.replyToMessageId}`})`
                                 : "";
-                            return `[${m.timestamp ?? ""}] ${sender}${replyTag}: ${m.text ?? ""}`;
+                            return `[${formatTsForDisplay(m.timestamp) ?? ""}] ${sender}${replyTag}: ${m.text ?? ""}`;
                         }
                     ).join("\n");
                 }
@@ -141,7 +142,7 @@ export function createAttendHandler(
             // 构建 FastPath 历史
             const fpHandler = subagent.fastPathHandler as FastPathHandler | null;
             const fpHistory = fpHandler?.getSentMessages()
-                .map(m => `- [${m.timestamp}] ${m.text}`)
+                .map(m => `- [${formatTsForDisplay(m.timestamp)}] ${m.text}`)
                 .join("\n") ?? "";
 
             // 计算时间差

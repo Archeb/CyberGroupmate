@@ -27,6 +27,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { createLogger } from "./core/logger.js";
+import { setGlobalTimezone, getGlobalTimezone } from "./core/timezone.js";
 import { TelegramAdapter } from "./adapter/telegram-adapter.js";
 
 import { SubagentManager } from "./subagent/subagent-manager.js";
@@ -104,6 +105,9 @@ async function main(): Promise<void> {
     const cheapConfig = resolveTierProfile("cheap", appConfig);
     const midConfig = resolveTierProfile("mid", appConfig);
     const sotaConfig = resolveTierProfile("sota", appConfig);
+
+    // ─── 全局时区初始化 ───
+    setGlobalTimezone(appConfig.timezone);
 
     log.info("LLM Profiles 加载完成", {
         profiles: Object.keys(appConfig.llmProfiles).join(", "),
@@ -403,7 +407,6 @@ async function main(): Promise<void> {
     const silenceThreshold = reflectionCfg.silenceThreshold ?? 7200;
     const maxInterval = reflectionCfg.maxInterval ?? 86400;
     const awakeHours = reflectionCfg.awakeHours;
-    const agentTimezone = reflectionCfg.timezone;
     const checkInterval = (reflectionCfg.checkInterval ?? 300) * 1000;
     const lastActivityPerChat = new Map<string, number>();
     const lastReflectedAtMap = new Map<string, number>();
@@ -413,9 +416,10 @@ async function main(): Promise<void> {
         if (!awakeHours) return false;
         const [start, end] = awakeHours;
         let currentHour: number;
-        if (agentTimezone) {
+        const tz = getGlobalTimezone();
+        if (tz) {
             try {
-                const formatter = new Intl.DateTimeFormat("en-US", { hour: "numeric", hour12: false, timeZone: agentTimezone });
+                const formatter = new Intl.DateTimeFormat("en-US", { hour: "numeric", hour12: false, timeZone: tz });
                 currentHour = parseInt(formatter.format(new Date()), 10);
             } catch {
                 currentHour = new Date().getHours();

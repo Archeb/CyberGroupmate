@@ -578,14 +578,13 @@ interface MergedMemory {
 **Agent 作息时间配置**（`config.yaml`）：
 
 ```yaml
-agent:
-  schedule:
-    awake_hours: [8, 24]       # 活跃时段：08:00-24:00
-    timezone: "Asia/Shanghai"
-    
-  reflection:
+# Agent 所处时区 (IANA 标识符)
+timezone: "Asia/Shanghai"
+
+reflection:
     silence_threshold: 7200    # 冷场阈值（秒），默认 2 小时
     max_interval: 86400        # 最长不反思间隔（秒），默认 24 小时
+    awake_hours: [8, 24]       # 活跃时段：08:00-24:00
 ```
 
 Agent 通过 `runtime.cron` 自己设定定时任务，同时保留主动调用 skill 的能力。

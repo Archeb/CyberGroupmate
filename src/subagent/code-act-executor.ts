@@ -28,6 +28,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { shouldCompact, compact as contextManagerCompact } from "../memory-v2/context-manager.js";
+import { formatTsForDisplay } from "../core/timezone.js";
 
 const log = createLogger("code-act-executor");
 
@@ -325,7 +326,7 @@ export class CodeActExecutor {
         const targetMessages = (ctx.recentMessages ?? []).map(
             (m) => {
                 const replyTag = m.replyTo ? ` (↩ reply to ${m.replyTo})` : "";
-                return `[${m.timestamp ?? ""}] [msgId:${m.id ?? "?"}] ${m.sender ?? "?"}${replyTag}: ${m.text ?? ""}`;
+                return `[${formatTsForDisplay(m.timestamp) ?? ""}] [msgId:${m.id ?? "?"}] ${m.sender ?? "?"}${replyTag}: ${m.text ?? ""}`;
             }
         ).join("\n") || "(无目标消息原文)";
 
@@ -578,7 +579,7 @@ export class CodeActExecutor {
         if (this.pendingMessages.length === 0) return null;
         const drained = this.pendingMessages.splice(0);
         const lines = drained.map(m =>
-            `[${m.timestamp}] ${m.sender}: ${m.text}`
+            `[${formatTsForDisplay(m.timestamp)}] ${m.sender}: ${m.text}`
         ).join("\n");
         log.info("drainPendingMessages", {
             chatId: this.chatId,
