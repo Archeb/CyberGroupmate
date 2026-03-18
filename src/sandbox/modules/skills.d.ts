@@ -7,11 +7,4 @@ declare const skills: {
         recallAndSummarize(query: string, options?: Record<string, unknown>): Promise<unknown>;
         browseForAnswer(request: Record<string, unknown>): Promise<unknown>;
     };
-    social: {
-        replyInTelegram(
-            chatId: number | string,
-            text: string,
-            opts?: { replyTo?: number }
-        ): Promise<unknown>;
-    };
 };

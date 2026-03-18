@@ -17,17 +17,6 @@ export function installSkills(env: CapabilityRegistryEnv, sentHistory: Map<strin
                 env.callHost("memory.recall", [query, options]),
             browseForAnswer: async (request: Record<string, unknown>) =>
                 env.callHost("memory.browseHistory", [request]),
-        },
-        social: {
-            replyInTelegram: async (
-                chatId: number | string,
-                text: string,
-                opts?: { replyTo?: number }
-            ) => {
-                // tg.sendText 内部已经发射 system.agent_message_sent 通知 + 去重检查
-                const sent = await tg.sendText(chatId, text, opts);
-                return sent;
-            },
-        },
+        }
     };
 }
