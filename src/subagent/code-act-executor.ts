@@ -22,7 +22,7 @@ import { NotificationCenter } from "../event/notification-center.js";
 import { runCodeActSession, SentMessageCollector, type SessionResult, type SentMessageRecord } from "../sandbox/session-runner.js";
 import { renderPrompt } from "../main-agent/prompt-renderer.js";
 import type { LLMConfig, VisionConfig } from "../core/config.js";
-import { processMediaBatch, type MediaAttachment } from "../core/vision-processor.js";
+import { enrichMessages } from "../core/message-enricher.js";
 import type { ChatMessage } from "../core/llm.js";
 import { createLogger } from "../core/logger.js";
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
@@ -331,82 +331,21 @@ export class CodeActExecutor {
         const toneGuidance = ctx.toneGuidance ?? "";
         const contentDirection = ctx.contentDirection ?? task.decisions.map(d => d.contentDirection ?? "").filter(Boolean).join("; ");
 
-        // 2. Vision 处理：从 mediaInfo 解析 fileId，按需下载和识图
+        // 2. 消息富化：媒体处理 + 格式化（委托 message-enricher）
         const recentMessages = ctx.recentMessages ?? [];
-        const mediaAttachments: MediaAttachment[] = [];
-        for (let i = 0; i < recentMessages.length; i++) {
-            const m = recentMessages[i];
-            if (m.mediaInfo) {
-                try {
-                    const info = JSON.parse(m.mediaInfo);
-                    if (info.fileId && info.type) {
-                        mediaAttachments.push({
-                            type: info.type,
-                            fileId: info.fileId,
-                            uniqueFileId: info.uniqueFileId ?? info.fileId,
-                            emoji: info.emoji,
-                            mimeType: info.mimeType,
-                            width: info.width,
-                            height: info.height,
-                            fileSize: info.fileSize,
-                            messageIndex: i,
-                        });
-                    }
-                } catch { /* mediaInfo JSON 解析失败，跳过 */ }
-            }
-        }
-
-        if (mediaAttachments.length > 0) {
-            log.info("Vision 处理开始", { chatId: this.chatId, taskId: task.taskId, mediaCount: mediaAttachments.length });
-            try {
-                const processed = await processMediaBatch(
-                    mediaAttachments,
-                    this.visionConfig,
-                    this.llmConfig!,
-                    undefined, // visionTierConfig — 可后续扩展
-                    this.downloadFn,
-                    this.memory ?? undefined, // sticker cache
-                );
-                // 将处理结果写回 recentMessages
-                for (const pm of processed) {
-                    if (pm.index >= 0 && pm.index < recentMessages.length) {
-                        const rm = recentMessages[pm.index] as any;
-                        if (!rm.processedMedia) rm.processedMedia = [];
-                        rm.processedMedia.push(pm);
-                    }
-                }
-                log.info("Vision 处理完成", { chatId: this.chatId, taskId: task.taskId, processed: processed.length });
-            } catch (err) {
-                log.warn("Vision 处理失败，继续使用占位符", { chatId: this.chatId, taskId: task.taskId, error: String(err) });
-            }
-        }
-
-        // 3. 格式化目标消息（含 reply-to 关系 + 媒体描述）
-        const imageParts: Array<{ url: string }> = [];
-        const targetMessages = recentMessages.map(
-            (m) => {
-                const replyTag = m.replyTo ? ` (↩ reply to ${m.replyTo})` : "";
-                let textPart = m.text ?? "";
-
-                // 注入媒体描述（路径 B/C）
-                if (m.processedMedia && m.processedMedia.length > 0) {
-                    for (const pm of m.processedMedia) {
-                        if (pm.description) {
-                            textPart = textPart + ` ${pm.description}`;
-                        }
-                        if (pm.base64Data && pm.mimeType) {
-                            // 路径 A: 收集 base64 图片，稍后注入 LLM messages
-                            imageParts.push({
-                                url: `data:${pm.mimeType};base64,${pm.base64Data}`,
-                            });
-                            textPart = textPart.replace("[📷 图片]", `[📷 图片${imageParts.length}]`);
-                        }
-                    }
-                }
-
-                return `[${formatTsForDisplay(m.timestamp) ?? ""}] [msgId:${m.id ?? "?"}] ${m.sender ?? "?"}${replyTag}: ${textPart}`;
-            }
-        ).join("\n") || "(无目标消息原文)";
+        const { formattedText: targetMessages, imageParts } = await enrichMessages(
+            recentMessages.map(m => ({
+                ...m,
+                chatId: this.chatId,
+            })),
+            {
+                visionConfig: this.visionConfig,
+                llmConfig: this.llmConfig!,
+                downloadFn: this.downloadFn,
+                stickerCache: this.memory ?? undefined,
+                chatId: this.chatId,
+            },
+        );
 
         // 3. 格式化决策
         const formattedDecisions = task.decisions.map(d =>

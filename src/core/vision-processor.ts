@@ -30,6 +30,10 @@ export interface MediaAttachment {
     fileSize?: number;
     /** 对应消息在上下文中的序号 */
     messageIndex: number;
+    /** 所属群组 ID（用于 file reference refetch） */
+    chatId?: string;
+    /** 原始消息 ID（用于 file reference refetch） */
+    messageId?: string;
 }
 
 /** 处理后的媒体结果 */
@@ -50,7 +54,7 @@ export interface StickerCache {
 }
 
 /** 下载函数类型 */
-export type DownloadFn = (fileId: string) => Promise<Buffer>;
+export type DownloadFn = (fileId: string, chatId?: string, messageId?: string) => Promise<Buffer>;
 
 // ─── 默认配置 ───
 
@@ -117,7 +121,7 @@ export async function processMediaBatch(
         if (isPathA && inlineCount < maxImages && downloadFn) {
             // 路径 A: 内联 base64
             try {
-                const buffer = await downloadFn(photo.fileId);
+                const buffer = await downloadFn(photo.fileId, photo.chatId, photo.messageId);
                 const mime = photo.mimeType ?? "image/jpeg";
                 results.push({
                     index: photo.messageIndex,
@@ -135,7 +139,7 @@ export async function processMediaBatch(
             // 路径 A 溢出 或 路径 B: 调用 vision LLM 描述
             const visionConfig = isPathA ? llmConfig : visionLlmConfig!;
             try {
-                const buffer = await downloadFn(photo.fileId);
+                const buffer = await downloadFn(photo.fileId, photo.chatId, photo.messageId);
                 const mime = photo.mimeType ?? "image/jpeg";
                 const desc = await describeImage(buffer, mime, visionConfig);
                 results.push({
@@ -198,7 +202,7 @@ async function processSingleSticker(
 
     // vision_each 或 vision_cache miss: 下载+识别
     try {
-        const buffer = await downloadFn(sticker.fileId);
+        const buffer = await downloadFn(sticker.fileId, sticker.chatId, sticker.messageId);
         const mime = sticker.mimeType ?? "image/webp";
         const result = await describeSticker(buffer, mime, visionLlmConfig, sticker.emoji);
 

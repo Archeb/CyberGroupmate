@@ -58,8 +58,8 @@ export function createDispatchHandler(
     const { memory, globalState, subagentManager, sandboxPool, nc, q3, q5, llmConfig, cheapConfig, persona, sessionsDir, appConfig, telegramAdapter: tgAdapter } = deps;
     const visionConfig = appConfig.vision;
     // 构建下载函数（传给 Executor 用于懒加载 Vision 处理）
-    const downloadFn = tgAdapter ? async (fileId: string): Promise<Buffer> => {
-        const result = await tgAdapter.handleCall("telegram.downloadMedia", [fileId]) as { buffer: string; size: number };
+    const downloadFn = tgAdapter ? async (fileId: string, chatId?: string, messageId?: string): Promise<Buffer> => {
+        const result = await tgAdapter.handleCall("telegram.downloadMedia", [fileId, chatId, messageId]) as { buffer: string; size: number };
         return Buffer.from(result.buffer, "base64");
     } : undefined;
 

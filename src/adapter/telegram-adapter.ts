@@ -42,6 +42,7 @@ interface TelegramClientLike {
     joinChat?(chatId: unknown): Promise<unknown>;
     leaveChat?(chatId: unknown): Promise<unknown>;
     downloadAsBuffer?(location: unknown): Promise<Uint8Array>;
+    getMessages?(chatId: unknown, messageIds: number[]): Promise<unknown[]>;
 }
 
 type TelegramClientFactory = (config: TelegramConfig) => Promise<TelegramClientLike>;
@@ -328,12 +329,59 @@ export class TelegramAdapter implements PlatformAdapter {
                 return null;
             }
             case "telegram.downloadMedia": {
-                // args[0] = fileId string (mtcute file ID)
+                // args[0] = fileId string, args[1] = chatId (optional), args[2] = messageId (optional)
                 const fileIdOrMedia = args[0];
                 if (!fileIdOrMedia) throw new Error("downloadMedia: fileId is required");
-                const uint8 = await this.client.downloadAsBuffer(fileIdOrMedia);
-                const buffer = Buffer.from(uint8);
-                return { buffer: buffer.toString("base64"), size: buffer.length };
+
+                try {
+                    const uint8 = await this.client.downloadAsBuffer(fileIdOrMedia);
+                    const buffer = Buffer.from(uint8);
+                    return { buffer: buffer.toString("base64"), size: buffer.length };
+                } catch (err) {
+                    const errMsg = err instanceof Error ? err.message : String(err);
+                    const isFileRefError = /file.?ref/i.test(errMsg) || /FILE_REFERENCE/i.test(errMsg);
+
+                    if (!isFileRefError) throw err;
+
+                    // File reference 过期 → 尝试 refetch 消息获取新的 fileId
+                    const chatId = args[1];
+                    const messageId = args[2];
+                    if (!chatId || !messageId) {
+                        log.warn("downloadMedia: file reference 过期但缺少 chatId/messageId，无法 refetch", { fileId: String(fileIdOrMedia) });
+                        throw err;
+                    }
+
+                    log.info("downloadMedia: file reference 过期，尝试 refetch", {
+                        chatId: String(chatId),
+                        messageId: String(messageId),
+                    });
+
+                    try {
+                        const peer = await this.ensurePeerCached(chatId);
+                        const msgIdNum = Number(messageId);
+                        if (!Number.isFinite(msgIdNum)) throw new Error("messageId 不是有效数字");
+
+                        const messages = await this.client.getMessages(peer, [msgIdNum]);
+                        const msg = messages?.[0];
+                        if (!msg) throw new Error("refetch 返回空消息");
+
+                        // 从刷新后的消息中提取新的 fileId
+                        const freshFileId = this.extractFileIdFromMessage(msg);
+                        if (!freshFileId) throw new Error("refetch 消息中未找到 fileId");
+
+                        log.info("downloadMedia: refetch 成功，重试下载", { freshFileId: freshFileId.slice(0, 30) + "..." });
+                        const uint8 = await this.client.downloadAsBuffer(freshFileId);
+                        const buffer = Buffer.from(uint8);
+                        return { buffer: buffer.toString("base64"), size: buffer.length };
+                    } catch (refetchErr) {
+                        log.warn("downloadMedia: refetch 重试也失败", {
+                            chatId: String(chatId),
+                            messageId: String(messageId),
+                            error: String(refetchErr),
+                        });
+                        throw err; // 抛出原始错误
+                    }
+                }
             }
             default:
                 throw new Error(`Unsupported TelegramAdapter call: ${method}`);
@@ -648,6 +696,17 @@ export class TelegramAdapter implements PlatformAdapter {
             return `${value.firstName}${last}`;
         }
         if (typeof value?.username === "string" && value.username.length > 0) return value.username;
+        return undefined;
+    }
+
+    /**
+     * 从 mtcute 消息对象中提取 media.fileId
+     * 用于 file reference refetch 后获取新的 fileId
+     */
+    private extractFileIdFromMessage(msg: any): string | undefined {
+        const media = msg?.media;
+        if (!media) return undefined;
+        if (typeof media.fileId === "string") return media.fileId;
         return undefined;
     }
 }
