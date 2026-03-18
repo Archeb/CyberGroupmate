@@ -18,6 +18,10 @@ function qs(val: unknown): string {
     return String(val ?? "");
 }
 
+function fromJSONSafe(val: string | null | undefined): unknown[] {
+    try { return JSON.parse(String(val || "[]")); } catch { return []; }
+}
+
 function serializeTopic(topic: any): Record<string, unknown> | null {
     if (!topic) return null;
     return {
@@ -49,34 +53,145 @@ export function createApiRouter(deps: DashboardDeps, bridge: EventBridge): Route
     });
 
     // ─── Topics ───
+    router.get("/topics/:chatId/search", (req, res) => {
+        try {
+            const chatId = req.params.chatId;
+            const query = qs(req.query.q).trim();
+            if (!query) { res.json({ topics: [] }); return; }
+
+            const db = (deps.memory as any).db;
+            if (!db) { res.status(500).json({ error: "db not available" }); return; }
+
+            const results: Record<string, unknown>[] = [];
+            const seenIds = new Set<string>();
+
+            // 1) Pipeline in-memory topics (JS filter)
+            const sub = deps.subagentManager.get(chatId);
+            if (sub) {
+                const pipelineTopics = sub.topicRegistry.getByChat(chatId) as any[];
+                const lowerQ = query.toLowerCase();
+                for (const t of pipelineTopics) {
+                    const match = (t.label || "").toLowerCase().includes(lowerQ)
+                        || (t.summary || "").toLowerCase().includes(lowerQ)
+                        || (t.keywords || []).some((k: string) => k.toLowerCase().includes(lowerQ));
+                    if (match) {
+                        seenIds.add(t.id);
+                        results.push({ ...serializeTopic(t), source: "pipeline" });
+                    }
+                }
+            }
+
+            // 2) FTS5 search
+            try {
+                const ftsRows = db.prepare(`
+                    SELECT t.* FROM topics t
+                    INNER JOIN topics_fts fts ON t.rowid = fts.rowid
+                    WHERE topics_fts MATCH ? AND t.chat_id = ?
+                    ORDER BY t.started_at DESC LIMIT 20
+                `).all(query, chatId) as Record<string, unknown>[];
+                for (const row of ftsRows) {
+                    const id = row.id as string;
+                    if (seenIds.has(id) || seenIds.has(row.pipeline_topic_id as string)) continue;
+                    seenIds.add(id);
+                    results.push({
+                        id, label: row.label, summary: row.summary,
+                        state: row.ended_at ? "ARCHIVED" : "ACTIVE",
+                        keywords: fromJSONSafe(row.keywords as string),
+                        participantIds: fromJSONSafe(row.participants as string),
+                        messageIds: fromJSONSafe(row.message_ids as string),
+                        sentiment: row.sentiment, startedAt: row.started_at, endedAt: row.ended_at,
+                        source: "history",
+                        wasEngaged: !!(row.was_engaged as number),
+                        interventionCount: row.intervention_count ?? 0,
+                    });
+                }
+            } catch { /* FTS5 not available, fall through */ }
+
+            // 3) LIKE fallback (if FTS5 yielded nothing)
+            if (results.length === 0) {
+                try {
+                    const likePattern = `%${query}%`;
+                    const likeRows = db.prepare(`
+                        SELECT * FROM topics
+                        WHERE chat_id = ? AND (label LIKE ? OR summary LIKE ? OR keywords LIKE ?)
+                        ORDER BY started_at DESC LIMIT 20
+                    `).all(chatId, likePattern, likePattern, likePattern) as Record<string, unknown>[];
+                    for (const row of likeRows) {
+                        const id = row.id as string;
+                        if (seenIds.has(id)) continue;
+                        seenIds.add(id);
+                        results.push({
+                            id, label: row.label, summary: row.summary,
+                            state: row.ended_at ? "ARCHIVED" : "ACTIVE",
+                            keywords: fromJSONSafe(row.keywords as string),
+                            participantIds: fromJSONSafe(row.participants as string),
+                            messageIds: fromJSONSafe(row.message_ids as string),
+                            sentiment: row.sentiment, startedAt: row.started_at, endedAt: row.ended_at,
+                            source: "history",
+                            wasEngaged: !!(row.was_engaged as number),
+                            interventionCount: row.intervention_count ?? 0,
+                        });
+                    }
+                } catch { /* LIKE fallback */ }
+            }
+
+            res.json({ topics: results });
+        } catch (err) {
+            res.status(500).json({ error: String(err) });
+        }
+    });
+
     router.get("/topics/:chatId", (req, res) => {
         const chatId = req.params.chatId;
+        const limit = Math.min(parseInt(qs(req.query.limit)) || 10, 100);
+        const offset = Math.max(parseInt(qs(req.query.offset)) || 0, 0);
         const sub = deps.subagentManager.get(chatId);
 
         // 1) Pipeline in-memory topics
         const pipelineTopics = sub ? sub.topicRegistry.getByChat(chatId) : [];
         const pipelineIds = new Set(pipelineTopics.map((t: any) => t.id));
 
-        // 2) Historical topics from SQLite (last 7 days)
-        const since = new Date(Date.now() - 7 * 24 * 3600 * 1000).toISOString();
+        // 2) Historical topics from SQLite (all time, no 7-day limit)
+        const db = (deps.memory as any).db;
         let historyTopics: any[] = [];
-        try { historyTopics = deps.memory.getTopicsSince(chatId, since); } catch {}
+        if (db) {
+            try {
+                const rows = db.prepare(
+                    "SELECT * FROM topics WHERE chat_id = ? ORDER BY started_at DESC"
+                ).all(chatId) as Record<string, unknown>[];
+                historyTopics = rows.map((row: Record<string, unknown>) => ({
+                    id: row.id, pipelineTopicId: row.pipeline_topic_id,
+                    label: row.label, summary: row.summary,
+                    state: row.ended_at ? "ARCHIVED" : "ACTIVE",
+                    keywords: fromJSONSafe(row.keywords as string),
+                    participants: fromJSONSafe(row.participants as string),
+                    messageRange: { messageIds: fromJSONSafe(row.message_ids as string) },
+                    sentiment: row.sentiment, startedAt: row.started_at, endedAt: row.ended_at,
+                    wasEngaged: !!(row.was_engaged as number),
+                    interventionCount: row.intervention_count ?? 0,
+                }));
+            } catch {}
+        } else {
+            // Fallback to getTopicsSince if db not directly accessible
+            const since = new Date(Date.now() - 365 * 24 * 3600 * 1000).toISOString();
+            try { historyTopics = deps.memory.getTopicsSince(chatId, since); } catch {}
+        }
 
         // Merge: pipeline topics first, then history topics not already in pipeline
-        const result: Record<string, unknown>[] = pipelineTopics.map((t: any) => {
-            // Find matching history record for extra fields
+        const allTopics: Record<string, unknown>[] = pipelineTopics.map((t: any) => {
             const hist = historyTopics.find((h: any) => h.pipelineTopicId === t.id);
             return {
                 ...serializeTopic(t),
                 source: "pipeline",
                 wasEngaged: hist?.wasEngaged ?? false,
                 interventionCount: hist?.interventionCount ?? 0,
+                startedAt: t.startedAt ?? t.createdAt,
             };
         });
 
         for (const h of historyTopics) {
             if (h.pipelineTopicId && pipelineIds.has(h.pipelineTopicId)) continue;
-            result.push({
+            allTopics.push({
                 id: h.id,
                 label: h.label,
                 summary: h.summary,
@@ -93,7 +208,21 @@ export function createApiRouter(deps: DashboardDeps, bridge: EventBridge): Route
             });
         }
 
-        res.json(result);
+        // Sort by startedAt descending (most recent first)
+        allTopics.sort((a, b) => {
+            const ta = (a.startedAt as string) || "";
+            const tb = (b.startedAt as string) || "";
+            return tb.localeCompare(ta);
+        });
+
+        const total = allTopics.length;
+        const paginated = allTopics.slice(offset, offset + limit);
+
+        res.json({
+            topics: paginated,
+            total,
+            hasMore: offset + limit < total,
+        });
     });
 
     router.get("/topics", (_req, res) => {

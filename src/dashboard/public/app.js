@@ -194,10 +194,12 @@ const App = (() => {
 
     // ─── Topics ───
     const expandedTopicGroups = new Set(); // track which groups are expanded
-    let topicCache = {}; // chatId -> topics[]
+    let topicCache = {}; // chatId -> { topics[], hasMore, offset }
+    let topicSearchMode = false; // whether search results are displayed
 
     async function renderTopics() {
         const container = document.getElementById("topics-container");
+        if (topicSearchMode) return; // Don't overwrite search results
         if (!state.groups.length) { container.innerHTML = '<div class="text-sm opacity-60">暂无数据</div>'; return; }
 
         // Preserve current expand state from DOM
@@ -212,15 +214,17 @@ const App = (() => {
         container.innerHTML = state.groups.map(g => {
             const isExpanded = expandedTopicGroups.has(g.chatId);
             const label = getGroupLabel(g.chatId);
+            const cached = topicCache[g.chatId];
+            const totalBadge = cached ? `${cached.topics.length}${cached.hasMore ? '+' : ''} / ${cached.total || '?'}` : `${g.topicCount}`;
             return `<div class="collapse collapse-arrow bg-base-200 topic-group-collapse">
                 <input type="checkbox" data-chat-id="${g.chatId}" ${isExpanded ? 'checked' : ''} onchange="App.toggleTopicGroup('${g.chatId}', this.checked)" />
                 <div class="collapse-title text-sm font-medium flex justify-between items-center">
                     <span>${escapeHtml(label)}</span>
-                    <span class="badge badge-sm">${g.topicCount} 话题</span>
+                    <span class="badge badge-sm">${totalBadge} 话题</span>
                 </div>
                 <div class="collapse-content">
                     <div id="topics-${CSS.escape(g.chatId)}" class="space-y-1">
-                        ${topicCache[g.chatId] ? renderTopicCards(topicCache[g.chatId], g.chatId) : '<div class="text-xs opacity-60">加载中...</div>'}
+                        ${cached ? renderTopicCards(cached.topics, g.chatId, cached.hasMore) : '<div class="text-xs opacity-60">加载中...</div>'}
                     </div>
                 </div>
             </div>`;
@@ -243,15 +247,16 @@ const App = (() => {
         }
     }
 
-    function renderTopicCards(topics, chatId) {
+    function renderTopicCards(topics, chatId, hasMore) {
         if (!topics.length) return '<div class="text-sm opacity-60">无话题</div>';
-        return topics.map(t => {
+        let html = topics.map(t => {
             const stateClass = `state-${(t.state || "").toLowerCase()}`;
             const participants = (t.participantIds || []).map(p =>
                 `<span class="clickable-link" onclick="App.quickQueryUser('${p}','${chatId}')">${escapeHtml(p)}</span>`
             ).join(", ");
             const engaged = t.wasEngaged ? `<span class="badge badge-xs badge-success">已回应 ×${t.interventionCount || 1}</span>` : '';
             const sourceBadge = t.source === "history" ? '<span class="badge badge-xs badge-ghost">历史</span>' : '';
+            const timeStr = t.startedAt ? new Date(t.startedAt).toLocaleString() : '';
             return `<div class="topic-card ${stateClass} cursor-pointer" onclick="App.viewTopicDetail('${t.id}')">
                 <div class="flex justify-between items-center">
                     <span class="font-semibold text-sm">${escapeHtml(t.label || t.id)}</span>
@@ -259,18 +264,98 @@ const App = (() => {
                 </div>
                 <div class="text-xs opacity-70 mt-1">${escapeHtml(t.summary || "")}</div>
                 <div class="text-xs mt-1">
+                    <span class="opacity-50">${timeStr}</span> |
                     参与者: ${participants || "无"} | 消息数: ${(t.messageIds || []).length} |
                     关键词: ${(t.keywords || []).map(k => escapeHtml(k)).join(", ")}
                 </div>
             </div>`;
         }).join("");
+        if (hasMore) {
+            html += `<div class="text-center mt-2">
+                <button class="btn btn-xs btn-outline" onclick="App.loadMoreTopics('${chatId}')">加载更多...</button>
+            </div>`;
+        }
+        return html;
     }
 
     async function loadTopics(chatId) {
-        const topics = await api(`/topics/${chatId}`);
-        topicCache[chatId] = topics;
+        const data = await api(`/topics/${chatId}?limit=10&offset=0`);
+        const topics = data.topics || data; // backward compat
+        topicCache[chatId] = {
+            topics: Array.isArray(topics) ? topics : [],
+            hasMore: data.hasMore ?? false,
+            total: data.total ?? 0,
+            offset: Array.isArray(topics) ? topics.length : 0,
+        };
         const el = document.getElementById(`topics-${CSS.escape(chatId)}`);
-        if (el) el.innerHTML = renderTopicCards(topics, chatId);
+        if (el) el.innerHTML = renderTopicCards(topicCache[chatId].topics, chatId, topicCache[chatId].hasMore);
+    }
+
+    async function loadMoreTopics(chatId) {
+        const cached = topicCache[chatId];
+        if (!cached || !cached.hasMore) return;
+        const data = await api(`/topics/${chatId}?limit=10&offset=${cached.offset}`);
+        const newTopics = data.topics || [];
+        cached.topics.push(...newTopics);
+        cached.hasMore = data.hasMore ?? false;
+        cached.total = data.total ?? cached.total;
+        cached.offset += newTopics.length;
+        const el = document.getElementById(`topics-${CSS.escape(chatId)}`);
+        if (el) el.innerHTML = renderTopicCards(cached.topics, chatId, cached.hasMore);
+    }
+
+    async function searchTopics() {
+        const query = document.getElementById("topic-search-input").value.trim();
+        if (!query) return;
+        topicSearchMode = true;
+        document.getElementById("topic-search-clear").style.display = "";
+        const container = document.getElementById("topics-container");
+        container.innerHTML = '<div class="text-sm opacity-60">搜索中...</div>';
+
+        // Search across all groups
+        let allResults = [];
+        for (const g of state.groups) {
+            try {
+                const data = await api(`/topics/${g.chatId}/search?q=${encodeURIComponent(query)}`);
+                const topics = data.topics || [];
+                for (const t of topics) {
+                    allResults.push({ ...t, chatId: g.chatId, chatLabel: getGroupLabel(g.chatId) });
+                }
+            } catch { }
+        }
+
+        if (!allResults.length) {
+            container.innerHTML = '<div class="text-sm opacity-60">未找到匹配的话题</div>';
+            return;
+        }
+
+        // Render flat search results grouped by chat
+        const byChatId = {};
+        for (const t of allResults) {
+            if (!byChatId[t.chatId]) byChatId[t.chatId] = [];
+            byChatId[t.chatId].push(t);
+        }
+
+        container.innerHTML = Object.entries(byChatId).map(([chatId, topics]) => {
+            const label = topics[0].chatLabel || shortId(chatId);
+            return `<div class="collapse collapse-arrow collapse-open bg-base-200">
+                <input type="checkbox" checked />
+                <div class="collapse-title text-sm font-medium">
+                    <span>${escapeHtml(label)}</span>
+                    <span class="badge badge-sm ml-2">${topics.length} 匹配</span>
+                </div>
+                <div class="collapse-content">
+                    <div class="space-y-1">${renderTopicCards(topics, chatId, false)}</div>
+                </div>
+            </div>`;
+        }).join("");
+    }
+
+    function clearTopicSearch() {
+        topicSearchMode = false;
+        document.getElementById("topic-search-input").value = "";
+        document.getElementById("topic-search-clear").style.display = "none";
+        renderTopics();
     }
 
     // ─── Queue ───
@@ -1057,7 +1142,8 @@ const App = (() => {
 
     // Public API (for onclick handlers)
     return {
-        selectChat, loadTopics, toggleTopicGroup, boostQueue, removeFromQueue, showEnqueueModal, doEnqueue,
+        selectChat, loadTopics, loadMoreTopics, toggleTopicGroup, searchTopics, clearTopicSearch,
+        boostQueue, removeFromQueue, showEnqueueModal, doEnqueue,
         selectCodeActChat, cancelCodeAct, queryUser, queryGroup, quickQueryUser, quickQueryGroup, recallMemory,
         viewTopicDetail, loadStickers, deleteSticker, editSticker, saveSticker, clearLLMLogs, toggleLLMLogDetail, toggleMsgExpand, toggleRespExpand,
     };

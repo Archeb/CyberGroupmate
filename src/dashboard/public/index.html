@@ -184,7 +184,16 @@
         <div id="panel-topics" class="tab-panel hidden">
             <div class="card bg-base-100">
                 <div class="card-body p-4">
-                    <h3 class="card-title text-sm mb-2">话题注册表 (TopicRegistry)</h3>
+                    <div class="flex justify-between items-center mb-2">
+                        <h3 class="card-title text-sm">话题注册表 (TopicRegistry)</h3>
+                        <div class="flex gap-2 items-center">
+                            <input id="topic-search-input" type="text" placeholder="搜索关键词..."
+                                class="input input-sm input-bordered w-48"
+                                onkeydown="if(event.key==='Enter')App.searchTopics()" />
+                            <button class="btn btn-xs btn-primary" onclick="App.searchTopics()">搜索</button>
+                            <button class="btn btn-xs btn-ghost" onclick="App.clearTopicSearch()" id="topic-search-clear" style="display:none">清除</button>
+                        </div>
+                    </div>
                     <div id="topics-container" class="space-y-2"></div>
                 </div>
             </div>
