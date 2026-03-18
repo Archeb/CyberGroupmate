@@ -16,7 +16,8 @@
  * 参考设计：subagent.md §12, subtask.md S5.5
  */
 
-import type { GroupContextPackage, TopicDigest, SubagentCallback } from "../subagent/types.js";
+import type { GroupContextPackage, TopicDigest, SubagentCallback, FastPathConfig } from "../subagent/types.js";
+import type { GlobalState } from "./global-state.js";
 import type { GroupModel } from "../memory-v2/types.js";
 import { createLogger } from "../core/logger.js";
 import { readFileSync, existsSync } from "node:fs";
@@ -24,6 +25,14 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const log = createLogger("prompt-renderer");
+
+/**
+ * 根据 isDirectMessage 推断聊天类型（平台无关）
+ */
+export function deriveChatType(isDirectMessage?: boolean): string {
+    if (isDirectMessage === true) return "私聊";
+    return "群聊";
+}
 
 // ─── 模板文件映射 ───
 
@@ -35,6 +44,7 @@ const PROMPT_FILE_MAP: Record<string, string> = {
     EXECUTION_TASK: "subagent-execution-task.md",
     FAST_PATH: "subagent-fast-path.md",
     CALLBACK: "subagent-callback.md",
+    MAIN_SYSTEM: "subagent-main-system.md",
 };
 
 export type PromptType = keyof typeof PROMPT_FILE_MAP;
@@ -165,6 +175,7 @@ export function buildAttentionVariables(
 
     return {
         chatId: pkg.chatId,
+        chatType: deriveChatType(pkg.isDirectMessage),
         depth: pkg.depth,
         snapshotTimestamp: pkg.snapshotTimestamp,
         engagementScore: pkg.engagementScore,
@@ -217,6 +228,90 @@ export function buildAttentionVariables(
     };
 }
 
+/**
+ * 从 GlobalState + persona 构建 MAIN_SYSTEM prompt 的变量
+ */
+export function buildMainSystemVariables(
+    persona: { name: string; description: string },
+    globalState: GlobalState,
+    decisionPrompt: string,
+): Record<string, unknown> {
+    const recentDecisions = globalState.getRecentDecisions().slice(-5)
+        .map(d => `- [${d.chatId}] ${d.decision}`).join("\n") || "（无）";
+    const activeTasks = globalState.getTaskList()
+        .filter(t => t.status !== "DONE" && t.status !== "CANCELLED")
+        .map(t => `- [${t.priority}][${t.status}] ${t.description}${t.chatId ? ` (群:${t.chatId})` : ""}`)
+        .join("\n") || "（无待办任务）";
+
+    return {
+        personaName: persona.name,
+        personaDescription: persona.description,
+        attentionSummary: globalState.getAttentionSummary() || "（无）",
+        recentDecisions,
+        activeTasks,
+        decisionPrompt,
+    };
+}
+
+/**
+ * 从 SubagentCallback 构建 CALLBACK prompt 的变量
+ */
+export function buildCallbackVariables(
+    cb: SubagentCallback,
+    chatTitle?: string,
+    isDirectMessage?: boolean,
+): Record<string, unknown> {
+    const isCompleted = cb.status === "COMPLETED";
+    const sentMessages = cb.sentMessages?.length
+        ? cb.sentMessages.map(m => {
+            const text = m.text.length > 80 ? m.text.slice(0, 80) + "..." : m.text;
+            return `- "${text}"`;
+        }).join("\n")
+        : "（无）";
+
+    return {
+        chatId: cb.chatId,
+        chatType: deriveChatType(isDirectMessage),
+        chatTitle: chatTitle || cb.chatId,
+        taskId: cb.taskId,
+        executionType: cb.executionType,
+        status: cb.status,
+        durationMs: cb.durationMs,
+        isCompleted,
+        sentMessages,
+        summary: cb.summary,
+        hasError: !!cb.error,
+        error: cb.error ?? "",
+    };
+}
+
+/**
+ * 从 FastPath 上下文构建 FAST_PATH prompt 的变量
+ */
+export function buildFastPathVariables(
+    persona: { name: string; description: string },
+    chatId: string,
+    chatTitle: string,
+    auth: FastPathConfig,
+    event: { userId: string; text: string },
+    repliesSent: number,
+    isDirectMessage?: boolean,
+): Record<string, unknown> {
+    return {
+        personaName: persona.name,
+        personaDescription: persona.description,
+        chatTitle,
+        chatType: deriveChatType(isDirectMessage),
+        preauthorizedActions: auth.preauthorizedActions.map(a => `- ${a}`).join("\n"),
+        blockedActions: auth.blockedActions.map(a => `- ❌ ${a}`).join("\n"),
+        maxReplyLength: auth.maxReplyLength ?? 150,
+        tonePreset: auth.tonePreset,
+        repliesSent,
+        maxReplies: auth.maxRepliesBeforeReauth,
+        senderName: event.userId,
+        messageText: event.text,
+    };
+}
 
 /**
  * 格式化 TopicDigest 列表为可读字符串

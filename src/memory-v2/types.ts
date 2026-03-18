@@ -171,6 +171,8 @@ export interface GroupModel {
     chatId: string;
     /** 群组标题 */
     chatTitle: string;
+    /** 是否为私聊（由 adapter 层提供） */
+    isDirectMessage?: boolean;
     /** 群组描述/定位 */
     description: string;
     /** 主要语言 */

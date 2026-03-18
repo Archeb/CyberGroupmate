@@ -1,5 +1,5 @@
 ═══ 回复任务 {{taskId}} ═══
-聊天对象: {{chatTitle}} ({{chatId}})
+聊天对象: {{chatTitle}} ({{chatId}}) [{{chatType}}]
 回复模式: {{replyMode}}
 
 ## 话题摘要

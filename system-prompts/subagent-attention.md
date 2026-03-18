@@ -1,4 +1,4 @@
-═══ 注意力切换: {{chatTitle}} ({{chatId}}) ═══
+═══ 注意力切换: {{chatTitle}} ({{chatId}}) [{{chatType}}] ═══
 快照时间: {{snapshotTimestamp}}
 上次关注: {{lastAttendedAt}} ({{timeSinceLastAttend}} 前)
 上下文深度: L{{depth}}

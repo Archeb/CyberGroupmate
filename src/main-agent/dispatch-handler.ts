@@ -124,6 +124,7 @@ export function createDispatchHandler(
                     groupModel,
                     lastCallbacks: subagent.lastCallbacks,
                     chatTitle: groupModel?.chatTitle,
+                    isDirectMessage: groupModel?.isDirectMessage,
                     stickiness: subagent.stickiness,
                 });
 
@@ -202,7 +203,8 @@ export function createDispatchHandler(
                 if (!fp) {
                     fp = new FastPathHandler(result.chatId);
                     fp.setCallbackHandler((cb: SubagentCallback) => q5.enqueue(cb));
-                    fp.setLLMConfig(cheapConfig, persona);
+                    const fpGroupModel = memory.getGroupModel(result.chatId);
+                    fp.setLLMConfig(cheapConfig, persona, fpGroupModel?.chatTitle ?? result.chatId);
                     subagent.fastPathHandler = fp;
                 }
                 fp.authorize(result.fastPathAuth);

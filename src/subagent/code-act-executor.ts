@@ -20,7 +20,7 @@ import type { MemoryStoreV2 } from "../memory-v2/index.js";
 import { SandboxPool } from "../sandbox/sandbox-pool.js";
 import { NotificationCenter } from "../event/notification-center.js";
 import { runCodeActSession, SentMessageCollector, type SessionResult, type SentMessageRecord } from "../sandbox/session-runner.js";
-import { renderPrompt } from "../main-agent/prompt-renderer.js";
+import { renderPrompt, deriveChatType } from "../main-agent/prompt-renderer.js";
 import type { LLMConfig, VisionConfig } from "../core/config.js";
 import { enrichMessages } from "../core/message-enricher.js";
 import type { ChatMessage } from "../core/llm.js";
@@ -329,7 +329,7 @@ export class CodeActExecutor {
         // 2. 消息富化：媒体处理 + 格式化（委托 message-enricher）
         const recentMessages = ctx.recentMessages ?? [];
         const { formattedText: targetMessages, imageParts } = await enrichMessages(
-            recentMessages.map(m => ({
+            [...recentMessages].reverse().map(m => ({
                 ...m,
                 chatId: this.chatId,
             })),
@@ -358,6 +358,7 @@ export class CodeActExecutor {
         // 5. 渲染任务 prompt (每次任务不同)
         const taskVars = {
             chatId: this.chatId,
+            chatType: deriveChatType(ctx.isDirectMessage),
             chatTitle: ctx.chatTitle ?? ctx.groupModel?.chatTitle ?? this.chatId,
             taskId: task.taskId,
             replyMode: task.replyMode,
