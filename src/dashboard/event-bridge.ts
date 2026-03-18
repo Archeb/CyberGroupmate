@@ -8,6 +8,7 @@
 import type { WebSocket } from "ws";
 import type { DashboardDeps, WsEvent } from "./types.js";
 import { createLogger } from "../core/logger.js";
+import { llmEvents, type LLMCallEvent, type LLMResponseEvent } from "../core/llm.js";
 
 const log = createLogger("dashboard-bridge");
 
@@ -21,6 +22,7 @@ export class EventBridge {
     constructor(deps: DashboardDeps) {
         this.deps = deps;
         this.hookNC();
+        this.hookLLMEvents();
     }
 
     addClient(ws: WebSocket): void {
@@ -62,6 +64,25 @@ export class EventBridge {
                     isDirectMessage: !!event.isDirectMessage,
                     mentionsAgent: !!event.mentionsAgent,
                 },
+            });
+        });
+    }
+
+    /** 订阅 LLM 事件并广播到 WebSocket */
+    private hookLLMEvents(): void {
+        llmEvents.on("llm:call", (data: LLMCallEvent) => {
+            this.broadcast({
+                type: "llm:call",
+                timestamp: data.timestamp,
+                data,
+            });
+        });
+
+        llmEvents.on("llm:response", (data: LLMResponseEvent) => {
+            this.broadcast({
+                type: "llm:response",
+                timestamp: data.timestamp,
+                data,
             });
         });
     }

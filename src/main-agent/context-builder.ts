@@ -38,6 +38,8 @@ export interface ContextBuildInput {
     deepSummary?: string;
     /** 群组标题 */
     chatTitle?: string;
+    /** 是否为私聊 */
+    isDirectMessage?: boolean;
     /** 群组亲密度 */
     stickiness?: GroupStickiness;
     /** FastPath 是否启用 */
@@ -70,6 +72,7 @@ export function buildGroupContext(input: ContextBuildInput): GroupContextPackage
         pkg.groupModel = input.groupModel ?? undefined;
         pkg.lastCallbacks = input.lastCallbacks;
         pkg.chatTitle = input.chatTitle;
+        pkg.isDirectMessage = input.isDirectMessage;
         pkg.stickiness = input.stickiness;
         pkg.fastPathEnabled = input.fastPathEnabled;
         pkg.pendingCodeActTasks = input.pendingCodeActTasks;

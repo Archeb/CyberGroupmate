@@ -24,6 +24,7 @@ import { FastPathHandler } from "../subagent/fast-path-handler.js";
 import { buildGroupContext } from "./context-builder.js";
 import { createLogger } from "../core/logger.js";
 import { formatTsForDisplay } from "../core/timezone.js";
+import type { AppConfig } from "../core/config.js";
 
 const log = createLogger("dispatch-handler");
 
@@ -40,6 +41,10 @@ export interface DispatchHandlerDeps {
     cheapConfig: LLMConfig;
     persona: { name: string; description: string };
     sessionsDir: string;
+    /** 完整 AppConfig（用于解析 vision 等配置） */
+    appConfig: AppConfig;
+    /** Telegram Adapter 引用（用于下载媒体，传给 Executor） */
+    telegramAdapter?: { handleCall(method: string, args: unknown[]): Promise<unknown> };
 }
 
 /**
@@ -50,7 +55,13 @@ export interface DispatchHandlerDeps {
 export function createDispatchHandler(
     deps: DispatchHandlerDeps,
 ): (result: AttendResult) => Promise<void> {
-    const { memory, globalState, subagentManager, sandboxPool, nc, q3, q5, llmConfig, cheapConfig, persona, sessionsDir } = deps;
+    const { memory, globalState, subagentManager, sandboxPool, nc, q3, q5, llmConfig, cheapConfig, persona, sessionsDir, appConfig, telegramAdapter: tgAdapter } = deps;
+    const visionConfig = appConfig.vision;
+    // 构建下载函数（传给 Executor 用于懒加载 Vision 处理）
+    const downloadFn = tgAdapter ? async (fileId: string, chatId?: string, messageId?: string, uniqueFileId?: string): Promise<Buffer> => {
+        const result = await tgAdapter.handleCall("telegram.downloadMedia", [fileId, chatId, messageId, uniqueFileId]) as { buffer: string; size: number };
+        return Buffer.from(result.buffer, "base64");
+    } : undefined;
 
     return async (result: AttendResult): Promise<void> => {
         const subagent = subagentManager.get(result.chatId);
@@ -85,7 +96,12 @@ export function createDispatchHandler(
                     replyTo: m.replyToMessageId
                         ? (dispatchMsgIdToName.get(m.replyToMessageId) ?? `msg#${m.replyToMessageId}`)
                         : undefined,
+                    mediaType: m.mediaType ?? undefined,
+                    mediaInfo: m.mediaInfo ?? undefined,
                 }));
+
+                // Vision 处理已移至 CodeActExecutor.executeWithSandbox()，
+                // 利用 mediaInfo 中的 fileId 在执行时按需下载和识图
 
                 // 获取人物信息
                 let personContext = "";
@@ -108,6 +124,7 @@ export function createDispatchHandler(
                     groupModel,
                     lastCallbacks: subagent.lastCallbacks,
                     chatTitle: groupModel?.chatTitle,
+                    isDirectMessage: groupModel?.isDirectMessage,
                     stickiness: subagent.stickiness,
                 });
 
@@ -156,8 +173,8 @@ export function createDispatchHandler(
                         q3.unblock(cb.chatId);
                         globalState.recordDecision(cb.chatId, `CALLBACK: ${cb.executionType} ${cb.status} (${cb.summary})`);
                     });
-                    // Fix 9: 注入 Sandbox + NC + LLM 依赖 + Memory（层 1 消息刷新）
-                    executor.setDependencies(sandboxPool, nc, llmConfig, sessionsDir, persona, memory);
+                    // Fix 9: 注入 Sandbox + NC + LLM 依赖 + Memory + Vision
+                    executor.setDependencies(sandboxPool, nc, llmConfig, sessionsDir, persona, memory, visionConfig, downloadFn);
                 }
 
                 executor.enqueue(task);
@@ -186,7 +203,8 @@ export function createDispatchHandler(
                 if (!fp) {
                     fp = new FastPathHandler(result.chatId);
                     fp.setCallbackHandler((cb: SubagentCallback) => q5.enqueue(cb));
-                    fp.setLLMConfig(cheapConfig, persona);
+                    const fpGroupModel = memory.getGroupModel(result.chatId);
+                    fp.setLLMConfig(cheapConfig, persona, fpGroupModel?.chatTitle ?? result.chatId);
                     subagent.fastPathHandler = fp;
                 }
                 fp.authorize(result.fastPathAuth);

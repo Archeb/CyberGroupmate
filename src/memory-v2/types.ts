@@ -7,7 +7,7 @@
  * 在整体架构中的位置：
  * - 被 MemoryStoreV2 实现类使用
  * - 被 compaction.ts、main.ts、cli.ts 等消费者导入
- * - 场景类型定义 scenes/memory.d.ts 的实际对应类型
+ * - sandbox/modules/memory.d.ts 的实际对应类型
  */
 
 import type { LLMConfig, ReflectionExternalConfig } from "../core/config.js";
@@ -171,6 +171,8 @@ export interface GroupModel {
     chatId: string;
     /** 群组标题 */
     chatTitle: string;
+    /** 是否为私聊（由 adapter 层提供） */
+    isDirectMessage?: boolean;
     /** 群组描述/定位 */
     description: string;
     /** 主要语言 */
@@ -342,6 +344,10 @@ export interface MessageLogEntry {
     replyToMessageId?: string;
     /** 消息时间 (ISO 8601) */
     timestamp: string;
+    /** 媒体类型: "photo" | "sticker" | "video" | "document" | "animation" | "other" */
+    mediaType?: string;
+    /** 媒体元数据 JSON（含 fileId, uniqueFileId, emoji 等） */
+    mediaInfo?: string;
 }
 
 export interface RecentMessageEntry {
@@ -352,6 +358,10 @@ export interface RecentMessageEntry {
     text: string;
     replyToMessageId?: string;
     timestamp: string;
+    /** 媒体类型 */
+    mediaType?: string;
+    /** 媒体元数据 JSON */
+    mediaInfo?: string;
 }
 
 // ─── MemoryStoreV2 接口 ───

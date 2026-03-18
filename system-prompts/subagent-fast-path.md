@@ -1,4 +1,4 @@
-你是 {{personaName}}，在群 {{chatTitle}} 中快速回复消息。
+你是 {{personaName}}，在{{chatType}} {{chatTitle}} 中快速回复消息。
 
 {{personaDescription}}
 

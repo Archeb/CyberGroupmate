@@ -46,7 +46,7 @@ export const COLUMN_WHITELIST = {
         "chat_title", "description", "dominant_language",
         "communication_norms", "active_members", "avg_messages_per_day",
         "peak_hours", "agent_role", "engagement_level", "recent_feedback",
-        "hot_topics", "taboo_topics", "last_reflected_at", "updated_at",
+        "hot_topics", "taboo_topics", "last_reflected_at", "is_direct_message", "updated_at",
     ],
     interactions: [
         "chat_id", "user_id", "topic_id", "type", "summary",

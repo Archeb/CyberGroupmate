@@ -11,8 +11,44 @@ import type { NotificationCenter } from "../event/notification-center.js";
 import type { TelegramConfig } from "../core/config.js";
 import type { PlatformAdapter } from "./platform-adapter.js";
 import { createLogger } from "../core/logger.js";
+import * as fs from "node:fs";
+import * as path from "node:path";
 
 const log = createLogger("telegram-adapter");
+
+// ─── 媒体文件缓存 ───
+
+const DEFAULT_MEDIA_CACHE_DIR = "workspace/media-cache";
+
+class MediaFileCache {
+    private readonly dir: string;
+
+    constructor(cacheDir: string = DEFAULT_MEDIA_CACHE_DIR) {
+        this.dir = cacheDir;
+        try {
+            fs.mkdirSync(this.dir, { recursive: true });
+        } catch { /* ignore */ }
+    }
+
+    get(uniqueFileId: string): Buffer | null {
+        try {
+            const filePath = path.join(this.dir, uniqueFileId);
+            if (fs.existsSync(filePath)) {
+                return fs.readFileSync(filePath);
+            }
+        } catch { /* miss */ }
+        return null;
+    }
+
+    set(uniqueFileId: string, buffer: Buffer): void {
+        try {
+            const filePath = path.join(this.dir, uniqueFileId);
+            fs.writeFileSync(filePath, buffer);
+        } catch (err) {
+            log.warn("MediaFileCache: 写入缓存失败", { uniqueFileId, error: String(err) });
+        }
+    }
+}
 
 interface PromptHandler {
     (prompt: string): Promise<string>;
@@ -41,6 +77,8 @@ interface TelegramClientLike {
     sendTyping?(chatId: unknown): Promise<void>;
     joinChat?(chatId: unknown): Promise<unknown>;
     leaveChat?(chatId: unknown): Promise<unknown>;
+    downloadAsBuffer?(location: unknown): Promise<Uint8Array>;
+    getMessages?(chatId: unknown, messageIds: number[]): Promise<unknown[]>;
 }
 
 type TelegramClientFactory = (config: TelegramConfig) => Promise<TelegramClientLike>;
@@ -62,6 +100,18 @@ interface PlainChat {
     type: "private" | "group" | "supergroup" | "channel";
 }
 
+/** 结构化媒体元数据（从 mtcute msg.media 提取） */
+export interface MediaInfo {
+    type: "photo" | "sticker" | "video" | "document" | "animation" | "other";
+    fileId?: string;
+    uniqueFileId?: string;
+    emoji?: string;
+    mimeType?: string;
+    width?: number;
+    height?: number;
+    fileSize?: number;
+}
+
 interface PlainMessage {
     id: string;
     text: string;
@@ -71,6 +121,7 @@ interface PlainMessage {
     isMention: boolean;
     replyToMessage?: { id: string } | null;
     media?: unknown;
+    mediaInfo?: MediaInfo;
 }
 
 interface PlainDialog {
@@ -85,6 +136,7 @@ export class TelegramAdapter implements PlatformAdapter {
     private client: any | null = null;
     private selfUser: PlainUser | null = null;
     private messageHandler: ((msg: any) => Promise<void>) | null = null;
+    private mediaCache = new MediaFileCache();
 
     constructor(
         private config: TelegramConfig,
@@ -127,6 +179,7 @@ export class TelegramAdapter implements PlatformAdapter {
                 isDirectMessage: normalized.isDirectMessage,
                 mentionsAgent: normalized.mentionsAgent,
                 textPreview: normalized.text.slice(0, 80),
+                mediaType: normalized.mediaInfo?.type,
             });
 
             this.nc.push({
@@ -152,6 +205,7 @@ export class TelegramAdapter implements PlatformAdapter {
                 chatType: normalized.chatType,
                 isDirectMessage: normalized.isDirectMessage,
                 mentionsAgent: normalized.mentionsAgent,
+                mediaInfo: normalized.mediaInfo,
                 payload: {
                     scene: "telegram",
                     chatId: normalized.chatId,
@@ -165,6 +219,7 @@ export class TelegramAdapter implements PlatformAdapter {
                     chatType: normalized.chatType,
                     isDirectMessage: normalized.isDirectMessage,
                     mentionsAgent: normalized.mentionsAgent,
+                    mediaInfo: normalized.mediaInfo,
                     source: {
                         scene: "telegram",
                         platform: "telegram",
@@ -309,6 +364,73 @@ export class TelegramAdapter implements PlatformAdapter {
                     throw new Error("leaveChat is not supported by the current Telegram client");
                 }
                 return null;
+            }
+            case "telegram.downloadMedia": {
+                // args[0] = fileId, args[1] = chatId, args[2] = messageId, args[3] = uniqueFileId
+                const fileIdOrMedia = args[0];
+                if (!fileIdOrMedia) throw new Error("downloadMedia: fileId is required");
+                const uniqueFileId = typeof args[3] === "string" ? args[3] : undefined;
+
+                // ── 缓存命中 → 直接返回 ──
+                if (uniqueFileId) {
+                    const cached = this.mediaCache.get(uniqueFileId);
+                    if (cached) {
+                        log.debug("downloadMedia: 缓存命中", { uniqueFileId });
+                        return { buffer: cached.toString("base64"), size: cached.length };
+                    }
+                }
+
+                try {
+                    const uint8 = await this.client.downloadAsBuffer(fileIdOrMedia);
+                    const buffer = Buffer.from(uint8);
+                    if (uniqueFileId) this.mediaCache.set(uniqueFileId, buffer);
+                    return { buffer: buffer.toString("base64"), size: buffer.length };
+                } catch (err) {
+                    const errMsg = err instanceof Error ? err.message : String(err);
+                    const isFileRefError = /file.?ref/i.test(errMsg) || /FILE_REFERENCE/i.test(errMsg);
+
+                    if (!isFileRefError) throw err;
+
+                    // File reference 过期 → 尝试 refetch 消息获取新的 fileId
+                    const chatId = args[1];
+                    const messageId = args[2];
+                    if (!chatId || !messageId) {
+                        log.warn("downloadMedia: file reference 过期但缺少 chatId/messageId，无法 refetch", { fileId: String(fileIdOrMedia) });
+                        throw err;
+                    }
+
+                    log.info("downloadMedia: file reference 过期，尝试 refetch", {
+                        chatId: String(chatId),
+                        messageId: String(messageId),
+                    });
+
+                    try {
+                        const peer = await this.ensurePeerCached(chatId);
+                        const msgIdNum = Number(messageId);
+                        if (!Number.isFinite(msgIdNum)) throw new Error("messageId 不是有效数字");
+
+                        const messages = await this.client.getMessages(peer, [msgIdNum]);
+                        const msg = messages?.[0];
+                        if (!msg) throw new Error("refetch 返回空消息");
+
+                        // 从刷新后的消息中提取新的 fileId
+                        const freshFileId = this.extractFileIdFromMessage(msg);
+                        if (!freshFileId) throw new Error("refetch 消息中未找到 fileId");
+
+                        log.info("downloadMedia: refetch 成功，重试下载", { freshFileId: freshFileId.slice(0, 30) + "..." });
+                        const uint8 = await this.client.downloadAsBuffer(freshFileId);
+                        const buffer = Buffer.from(uint8);
+                        if (uniqueFileId) this.mediaCache.set(uniqueFileId, buffer);
+                        return { buffer: buffer.toString("base64"), size: buffer.length };
+                    } catch (refetchErr) {
+                        log.warn("downloadMedia: refetch 重试也失败", {
+                            chatId: String(chatId),
+                            messageId: String(messageId),
+                            error: String(refetchErr),
+                        });
+                        throw err; // 抛出原始错误
+                    }
+                }
             }
             default:
                 throw new Error(`Unsupported TelegramAdapter call: ${method}`);
@@ -455,6 +577,7 @@ export class TelegramAdapter implements PlatformAdapter {
         chatType?: string;
         isDirectMessage?: boolean;
         mentionsAgent?: boolean;
+        mediaInfo?: MediaInfo;
     } | null {
         const plain = this.normalizeMessage(msg);
         if (!plain.chat?.id) return null;
@@ -464,11 +587,39 @@ export class TelegramAdapter implements PlatformAdapter {
         const isDirectMessage = plain.chat.type === "private" || (!Number.isNaN(numericChatId) && numericChatId > 0);
         const mentionsAgent = Boolean(plain.isMention);
 
+        // ── 媒体元数据提取 ──
+        const mediaInfo = plain.mediaInfo;
+
+        // 对纯 media 消息生成占位文本，确保 text 非空
+        let text = plain.text ?? "";
+        if (!text && mediaInfo) {
+            switch (mediaInfo.type) {
+                case "photo":
+                    text = "[📷 图片]";
+                    break;
+                case "sticker":
+                    text = mediaInfo.emoji ? `[🎭 贴纸: ${mediaInfo.emoji}]` : "[🎭 贴纸]";
+                    break;
+                case "video":
+                    text = "[🎬 视频]";
+                    break;
+                case "animation":
+                    text = "[🎞 GIF]";
+                    break;
+                case "document":
+                    text = "[📎 文件]";
+                    break;
+                default:
+                    text = "[📎 媒体]";
+                    break;
+            }
+        }
+
         return {
             chatId: plain.chat.id,
             userId: senderId,
             displayName: plain.sender?.displayName ?? plain.sender?.firstName ?? "Unknown",
-            text: plain.text ?? "",
+            text,
             timestamp: plain.date,
             messageId: plain.id,
             replyToMessageId: plain.replyToMessage?.id ?? undefined,
@@ -476,6 +627,7 @@ export class TelegramAdapter implements PlatformAdapter {
             chatType: plain.chat.type,
             isDirectMessage,
             mentionsAgent,
+            mediaInfo,
         };
     }
 
@@ -497,6 +649,42 @@ export class TelegramAdapter implements PlatformAdapter {
             isMention: Boolean(message?.isMention),
             replyToMessage: message?.replyToMessage ? { id: String(message.replyToMessage.id ?? "") } : undefined,
             media: message?.media,
+            mediaInfo: this.extractMediaInfo(message?.media),
+        };
+    }
+
+    /**
+     * 从 mtcute msg.media 对象提取结构化媒体元数据。
+     * mtcute media 对象有 .type 字段: "photo", "sticker", "video", "document", "animation" 等。
+     */
+    private extractMediaInfo(media: any): MediaInfo | undefined {
+        if (!media) return undefined;
+
+        const rawType = String(media.type ?? "");
+        let type: MediaInfo["type"];
+        switch (rawType) {
+            case "photo": type = "photo"; break;
+            case "sticker": type = "sticker"; break;
+            case "video": type = "video"; break;
+            case "document": type = "document"; break;
+            case "animation": type = "animation"; break;
+            default:
+                // 未知类型但有 media 对象 → 标记为 other
+                if (!rawType) return undefined;
+                type = "other";
+                break;
+        }
+
+        return {
+            type,
+            fileId: typeof media.fileId === "string" ? media.fileId : undefined,
+            uniqueFileId: typeof media.uniqueFileId === "string" ? media.uniqueFileId : undefined,
+            emoji: typeof media.emoji === "string" ? media.emoji : undefined,
+            mimeType: typeof media.mimeType === "string" ? media.mimeType : undefined,
+            width: typeof media.width === "number" ? media.width : undefined,
+            height: typeof media.height === "number" ? media.height : undefined,
+            fileSize: typeof media.fileSize === "number" ? media.fileSize
+                : typeof media.size === "number" ? media.size : undefined,
         };
     }
 
@@ -557,6 +745,17 @@ export class TelegramAdapter implements PlatformAdapter {
             return `${value.firstName}${last}`;
         }
         if (typeof value?.username === "string" && value.username.length > 0) return value.username;
+        return undefined;
+    }
+
+    /**
+     * 从 mtcute 消息对象中提取 media.fileId
+     * 用于 file reference refetch 后获取新的 fileId
+     */
+    private extractFileIdFromMessage(msg: any): string | undefined {
+        const media = msg?.media;
+        if (!media) return undefined;
+        if (typeof media.fileId === "string") return media.fileId;
         return undefined;
     }
 }

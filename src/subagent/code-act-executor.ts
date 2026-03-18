@@ -20,11 +20,12 @@ import type { MemoryStoreV2 } from "../memory-v2/index.js";
 import { SandboxPool } from "../sandbox/sandbox-pool.js";
 import { NotificationCenter } from "../event/notification-center.js";
 import { runCodeActSession, SentMessageCollector, type SessionResult, type SentMessageRecord } from "../sandbox/session-runner.js";
-import { renderPrompt } from "../main-agent/prompt-renderer.js";
-import type { LLMConfig } from "../core/config.js";
+import { renderPrompt, deriveChatType } from "../main-agent/prompt-renderer.js";
+import type { LLMConfig, VisionConfig } from "../core/config.js";
+import { enrichMessages } from "../core/message-enricher.js";
 import type { ChatMessage } from "../core/llm.js";
 import { createLogger } from "../core/logger.js";
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { shouldCompact, compact as contextManagerCompact } from "../memory-v2/context-manager.js";
@@ -43,21 +44,16 @@ function loadApiTypeDefs(): string {
 
     try {
         const thisFile = fileURLToPath(import.meta.url);
-        const scenesDir = join(dirname(thisFile), "..", "scenes");
+        const modulesDir = join(dirname(thisFile), "..", "sandbox", "modules");
 
-        const files = [
-            join(scenesDir, "telegram.d.ts"),
-            join(scenesDir, "memory.d.ts"),
-            join(scenesDir, "shared", "runtime.d.ts"),
-            join(scenesDir, "shared", "actions.d.ts"),
-            join(scenesDir, "shared", "skills.d.ts"),
-        ];
+        // 自动发现所有 .d.ts 文件，新增模块只需放一个 .d.ts 即可
+        const dtsFiles = readdirSync(modulesDir)
+            .filter(f => f.endsWith(".d.ts"))
+            .sort();
 
         const parts: string[] = [];
-        for (const f of files) {
-            if (existsSync(f)) {
-                parts.push(`// --- ${f.split("/").pop()} ---\n${readFileSync(f, "utf-8")}`);
-            }
+        for (const f of dtsFiles) {
+            parts.push(`// --- ${f} ---\n${readFileSync(join(modulesDir, f), "utf-8")}`);
         }
         _apiTypeDefsCache = parts.join("\n\n");
     } catch {
@@ -150,7 +146,7 @@ export class CodeActExecutor {
     private callbackHandler: ((cb: SubagentCallback) => void) | null = null;
 
     /** 层 2: 消息前送缓冲区 — NC hook 在 session 执行期间推入新消息 */
-    private pendingMessages: Array<{ id: string; sender: string; text: string; timestamp: string }> = [];
+    private pendingMessages: Array<{ id: string; sender: string; text: string; timestamp: string; mediaType?: string; mediaInfo?: string }> = [];
 
     /** Memory 引用（层 1 用于刷新目标消息） */
     private memory: MemoryStoreV2 | null = null;
@@ -185,6 +181,10 @@ export class CodeActExecutor {
     private sessionFilePath: string | null = null;
     private personaName: string = "赛博群友";
     private personaDescription: string = "";
+    /** Vision 配置 */
+    private visionConfig: VisionConfig | undefined;
+    /** 媒体下载函数（委托给 adapter） */
+    private downloadFn: ((fileId: string) => Promise<Buffer>) | undefined;
 
     setDependencies(
         sandboxPool: SandboxPool,
@@ -193,6 +193,8 @@ export class CodeActExecutor {
         sessionsDir?: string,
         persona?: { name: string; description: string },
         memory?: MemoryStoreV2,
+        visionConfig?: VisionConfig,
+        downloadFn?: (fileId: string) => Promise<Buffer>,
     ): void {
         this.sandboxPool = sandboxPool;
         this.nc = nc;
@@ -203,7 +205,9 @@ export class CodeActExecutor {
             this.personaDescription = persona.description;
         }
         if (memory) this.memory = memory;
-        log.info("setDependencies", { chatId: this.chatId, hasSandboxPool: true });
+        this.visionConfig = visionConfig;
+        this.downloadFn = downloadFn;
+        log.info("setDependencies", { chatId: this.chatId, hasSandboxPool: true, hasVision: !!visionConfig, hasDownload: !!downloadFn });
     }
 
     /**
@@ -322,13 +326,21 @@ export class CodeActExecutor {
         const toneGuidance = ctx.toneGuidance ?? "";
         const contentDirection = ctx.contentDirection ?? task.decisions.map(d => d.contentDirection ?? "").filter(Boolean).join("; ");
 
-        // 2. 格式化目标消息（含 reply-to 关系）
-        const targetMessages = (ctx.recentMessages ?? []).map(
-            (m) => {
-                const replyTag = m.replyTo ? ` (↩ reply to ${m.replyTo})` : "";
-                return `[${formatTsForDisplay(m.timestamp) ?? ""}] [msgId:${m.id ?? "?"}] ${m.sender ?? "?"}${replyTag}: ${m.text ?? ""}`;
-            }
-        ).join("\n") || "(无目标消息原文)";
+        // 2. 消息富化：媒体处理 + 格式化（委托 message-enricher）
+        const recentMessages = ctx.recentMessages ?? [];
+        const { formattedText: targetMessages, imageParts } = await enrichMessages(
+            [...recentMessages].reverse().map(m => ({
+                ...m,
+                chatId: this.chatId,
+            })),
+            {
+                visionConfig: this.visionConfig,
+                llmConfig: this.llmConfig!,
+                downloadFn: this.downloadFn,
+                stickerCache: this.memory ?? undefined,
+                chatId: this.chatId,
+            },
+        );
 
         // 3. 格式化决策
         const formattedDecisions = task.decisions.map(d =>
@@ -346,6 +358,7 @@ export class CodeActExecutor {
         // 5. 渲染任务 prompt (每次任务不同)
         const taskVars = {
             chatId: this.chatId,
+            chatType: deriveChatType(ctx.isDirectMessage),
             chatTitle: ctx.chatTitle ?? ctx.groupModel?.chatTitle ?? this.chatId,
             taskId: task.taskId,
             replyMode: task.replyMode,
@@ -375,8 +388,12 @@ export class CodeActExecutor {
             }
         }
 
-        // 当前任务 prompt 放在最后
-        messages.push({ role: "user", content: taskPrompt });
+        // 当前任务 prompt 放在最后（路径 A 时附加图片）
+        messages.push({
+            role: "user",
+            content: taskPrompt,
+            ...(imageParts.length > 0 ? { imageParts } : {}),
+        });
 
         // ═══ Fix 1: 注册 SentMessageCollector ═══
         // 清空 pending buffer（层 1 已经刷新了 recentMessages，此处 drain 掉残留）
@@ -559,13 +576,14 @@ export class CodeActExecutor {
      * 层 2: 推入一条新消息到 pending buffer
      * 由 NC hook 在 session 执行期间调用
      */
-    pushPendingMessage(msg: { id: string; sender: string; text: string; timestamp: string }): void {
+    pushPendingMessage(msg: { id: string; sender: string; text: string; timestamp: string; mediaType?: string; mediaInfo?: string }): void {
         this.pendingMessages.push(msg);
         log.debug("pushPendingMessage", {
             chatId: this.chatId,
             msgId: msg.id,
             sender: msg.sender,
             textPreview: msg.text.length > 50 ? msg.text.slice(0, 50) + "..." : msg.text,
+            hasMedia: !!msg.mediaInfo,
             bufferSize: this.pendingMessages.length,
         });
     }

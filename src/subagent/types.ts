@@ -198,6 +198,8 @@ export interface FastPathConfig {
     maxRepliesBeforeReauth: number;
     /** 过期时间 (ISO 8601) */
     expiresAt: string;
+    /** 最大回复长度（字符数），默认 150 */
+    maxReplyLength?: number;
     /** 授权时间 */
     authorizedAt: string;
 }
@@ -257,6 +259,8 @@ export interface GroupContextPackage {
     // ─── subagent.md §4.1 补齐字段 ───
     /** 群组标题/名称 */
     chatTitle?: string;
+    /** 是否为私聊（由 adapter 层提供，平台无关） */
+    isDirectMessage?: boolean;
     /** 群组亲密度配置 */
     stickiness?: GroupStickiness;
     /** FastPath 是否已启用 */
@@ -269,8 +273,23 @@ export interface GroupContextPackage {
     // ─── Dispatch handler 注入的执行上下文（CodeActExecutor prompt 使用） ───
     /** 话题摘要文本 */
     topicSummary?: string;
-    /** 格式化的最近消息（含 reply-to 关系） */
-    recentMessages?: Array<{ id: string; sender: string; text: string; timestamp: string; replyTo?: string }>;
+    /** 格式化的最近消息（含 reply-to 关系 + 媒体信息） */
+    recentMessages?: Array<{
+        id: string;
+        sender: string;
+        text: string;
+        timestamp: string;
+        replyTo?: string;
+        mediaType?: string;
+        mediaInfo?: string;
+        /** Vision 处理后的媒体结果 */
+        processedMedia?: Array<{
+            index: number;
+            base64Data?: string;
+            mimeType?: string;
+            description?: string;
+        }>;
+    }>;
     /** 人物背景 JSON */
     personContext?: string;
     /** 语气指导 */

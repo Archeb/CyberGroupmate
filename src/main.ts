@@ -302,9 +302,30 @@ async function main(): Promise<void> {
                 text: String(event.text ?? event.message ?? ""),
                 replyToMessageId: event.replyToMessageId ? String(event.replyToMessageId) : undefined,
                 timestamp: new Date().toISOString(),
+                mediaType: (event as any).mediaInfo?.type ?? undefined,
+                mediaInfo: (event as any).mediaInfo ? JSON.stringify((event as any).mediaInfo) : undefined,
             }]);
         } catch (err) {
             log.warn("即时消息落盘失败", { chatId, error: String(err) });
+        }
+
+        // ─── chatTitle 持久化：确保 group_models 表有群名/私聊对象名 ───
+        // 群聊: event.chatTitle 来自 chat.title
+        // 私聊: chatTitle 为对方 displayName（normalizeChat fallback），也可以用 event.displayName
+        const isDMChat = !!event.isDirectMessage;
+        const incomingTitle = isDMChat
+            ? String(event.displayName ?? event.chatTitle ?? "")
+            : String(event.chatTitle ?? "");
+        if (incomingTitle) {
+            try {
+                const existing = memory.getGroupModel(chatId);
+                if (!existing || existing.chatTitle !== incomingTitle) {
+                    memory.upsertGroupModel(chatId, { chatTitle: incomingTitle, isDirectMessage: isDMChat });
+                    log.debug("chatTitle 已更新", { chatId, chatTitle: incomingTitle, isDM: isDMChat });
+                }
+            } catch (err) {
+                log.warn("chatTitle 持久化失败", { chatId, error: String(err) });
+            }
         }
 
         const sub = subagentManager.getOrCreate(chatId);
@@ -346,6 +367,8 @@ async function main(): Promise<void> {
                 sender: String(event.displayName ?? event.senderName ?? event.userName ?? "?"),
                 text: String(event.text ?? event.message ?? ""),
                 timestamp: String(event.timestamp ?? new Date().toISOString()),
+                mediaType: (event as any).mediaInfo?.type ?? undefined,
+                mediaInfo: (event as any).mediaInfo ? JSON.stringify((event as any).mediaInfo) : undefined,
             });
         }
 
@@ -509,6 +532,8 @@ async function main(): Promise<void> {
         cheapConfig,
         persona: appConfig.persona,
         sessionsDir: SESSIONS_DIR,
+        appConfig,
+        telegramAdapter,
     }));
 
     log.info("MainAgentLoop 配置完成");

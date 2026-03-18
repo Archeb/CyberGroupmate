@@ -312,6 +312,7 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
                 hot_topics TEXT DEFAULT '[]',
                 taboo_topics TEXT DEFAULT '[]',
                 last_reflected_at TEXT,
+                is_direct_message INTEGER DEFAULT 0,
                 updated_at TEXT NOT NULL
             );
 
@@ -380,6 +381,26 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
         } catch {
             // FTS5 表已存在时忽略
         }
+
+        // ── 媒体相关表 ──
+
+        // message_log 新增 media 列（兼容旧数据库）
+        try { this.db.exec(`ALTER TABLE message_log ADD COLUMN media_type TEXT`); } catch { /* 列已存在 */ }
+        try { this.db.exec(`ALTER TABLE message_log ADD COLUMN media_info TEXT`); } catch { /* 列已存在 */ }
+
+        // Sticker 描述缓存表
+        this.db.exec(`
+            CREATE TABLE IF NOT EXISTS sticker_descriptions (
+                unique_file_id TEXT PRIMARY KEY,
+                description TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+        `);
+        // 新增 emoji 列（兼容旧数据库）
+        try { this.db.exec(`ALTER TABLE sticker_descriptions ADD COLUMN emoji TEXT`); } catch { /* 列已存在 */ }
+
+        // group_models 新增 is_direct_message 列（兼容旧数据库）
+        try { this.db.exec(`ALTER TABLE group_models ADD COLUMN is_direct_message INTEGER DEFAULT 0`); } catch { /* 列已存在 */ }
     }
 
     // ─── 写入方法 ───
@@ -633,8 +654,8 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
 
         const insert = this.db.prepare(`
             INSERT OR IGNORE INTO message_log
-                (message_id, chat_id, user_id, display_name, text, reply_to_message_id, timestamp)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+                (message_id, chat_id, user_id, display_name, text, reply_to_message_id, timestamp, media_type, media_info)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         `);
 
         const batch = this.db.transaction((msgs: MessageLogEntry[]) => {
@@ -642,6 +663,7 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
                 insert.run(
                     m.messageId, m.chatId, m.userId, m.displayName,
                     m.text, m.replyToMessageId ?? null, m.timestamp,
+                    m.mediaType ?? null, m.mediaInfo ?? null,
                 );
             }
         });
@@ -843,6 +865,7 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
             if (data.hotTopics !== undefined) builder.set("hot_topics", toJSON(data.hotTopics));
             if (data.tabooTopics !== undefined) builder.set("taboo_topics", toJSON(data.tabooTopics));
             if (data.lastReflectedAt !== undefined) builder.set("last_reflected_at", data.lastReflectedAt);
+            if (data.isDirectMessage !== undefined) builder.set("is_direct_message", data.isDirectMessage ? 1 : 0);
             builder.set("updated_at", ts);
             builder.where("chat_id", chatId);
 
@@ -855,8 +878,8 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
                     chat_id, chat_title, description, dominant_language, communication_norms,
                     active_members, avg_messages_per_day, peak_hours, agent_role,
                     engagement_level, recent_feedback, hot_topics, taboo_topics,
-                    last_reflected_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    last_reflected_at, is_direct_message, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `).run(
                 chatId,
                 data.chatTitle ?? "",
@@ -872,6 +895,7 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
                 toJSON(data.hotTopics),
                 toJSON(data.tabooTopics),
                 data.lastReflectedAt ?? null,
+                data.isDirectMessage ? 1 : 0,
                 ts,
             );
             log.debug("upsertGroupModel: INSERT", { chatId, title: data.chatTitle ?? "" });
@@ -888,6 +912,7 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
         return {
             chatId: row.chat_id as string,
             chatTitle: row.chat_title as string,
+            isDirectMessage: !!(row.is_direct_message as number),
             description: row.description as string,
             dominantLanguage: row.dominant_language as string,
             communicationNorms: fromJSON(row.communication_norms as string, []),
@@ -1352,7 +1377,7 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
             { role: "user", content: `查询：${query}\n\n相关记忆：\n${topicSummaries}\n${factSummaries}` },
         ];
 
-        const response = await callLLM(messages, this.cheapLlmConfig);
+        const response = await callLLM(messages, this.cheapLlmConfig, { caller: "memory" });
         return response.content.trim();
     }
 
@@ -1519,7 +1544,7 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
             { role: "user", content: intent },
         ];
 
-        const response = await callLLM(messages, this.cheapLlmConfig);
+        const response = await callLLM(messages, this.cheapLlmConfig, { caller: "memory" });
         try {
             const parsed = JSON.parse(response.content.replace(/```json?\s*/g, "").replace(/```/g, "").trim());
             return {
@@ -1555,7 +1580,7 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
             { role: "user", content: `问题：${intent}\n\n对话记录：\n${contextParts.join("\n\n---\n\n")}` },
         ];
 
-        const response = await callLLM(messages, this.cheapLlmConfig);
+        const response = await callLLM(messages, this.cheapLlmConfig, { caller: "memory" });
         return response.content.trim();
     }
 
@@ -1614,7 +1639,7 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
 
     getRecentMessages(chatId: string, limit: number = 5): RecentMessageEntry[] {
         const rows = this.db.prepare(
-            `SELECT message_id, chat_id, user_id, display_name, text, reply_to_message_id, timestamp
+            `SELECT message_id, chat_id, user_id, display_name, text, reply_to_message_id, timestamp, media_type, media_info
              FROM message_log
              WHERE chat_id = ?
              ORDER BY timestamp DESC
@@ -1629,7 +1654,55 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
             text: (row.text as string) ?? "",
             replyToMessageId: (row.reply_to_message_id as string) ?? undefined,
             timestamp: row.timestamp as string,
+            mediaType: (row.media_type as string) ?? undefined,
+            mediaInfo: (row.media_info as string) ?? undefined,
         }));
+    }
+
+    // ── Sticker 描述缓存 ──
+
+    getStickerDescription(uniqueFileId: string): { description: string; emoji?: string } | null {
+        const row = this.db.prepare(
+            "SELECT description, emoji FROM sticker_descriptions WHERE unique_file_id = ?"
+        ).get(uniqueFileId) as { description: string; emoji?: string } | undefined;
+        if (!row) return null;
+        return { description: row.description, emoji: row.emoji ?? undefined };
+    }
+
+    setStickerDescription(uniqueFileId: string, description: string, emoji?: string): void {
+        const ts = now();
+        this.db.prepare(`
+            INSERT OR REPLACE INTO sticker_descriptions (unique_file_id, description, emoji, created_at)
+            VALUES (?, ?, ?, ?)
+        `).run(uniqueFileId, description, emoji ?? null, ts);
+        log.debug("setStickerDescription", { uniqueFileId, emoji, descPreview: description.slice(0, 50) });
+    }
+
+    getAllStickerDescriptions(): Array<{ uniqueFileId: string; description: string; emoji?: string; createdAt: string }> {
+        const rows = this.db.prepare(
+            "SELECT unique_file_id, description, emoji, created_at FROM sticker_descriptions ORDER BY created_at DESC"
+        ).all() as Array<{ unique_file_id: string; description: string; emoji?: string; created_at: string }>;
+        return rows.map(r => ({
+            uniqueFileId: r.unique_file_id,
+            description: r.description,
+            emoji: r.emoji ?? undefined,
+            createdAt: r.created_at,
+        }));
+    }
+
+    deleteStickerDescription(uniqueFileId: string): boolean {
+        const result = this.db.prepare(
+            "DELETE FROM sticker_descriptions WHERE unique_file_id = ?"
+        ).run(uniqueFileId);
+        return result.changes > 0;
+    }
+
+    updateStickerDescription(uniqueFileId: string, description: string, emoji?: string): boolean {
+        const ts = now();
+        const result = this.db.prepare(
+            "UPDATE sticker_descriptions SET description = ?, emoji = ?, created_at = ? WHERE unique_file_id = ?"
+        ).run(description, emoji ?? null, ts, uniqueFileId);
+        return result.changes > 0;
     }
 
     // ─── Reflection (M2.4: 调用 reflection.ts) ───

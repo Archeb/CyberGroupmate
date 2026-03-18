@@ -12,17 +12,95 @@ export { type LLMConfig } from "./config.js";
 
 import type { LLMConfig } from "./config.js";
 import { createLogger } from "./logger.js";
+import { EventEmitter } from "node:events";
 
 const log = createLogger("llm");
 
+// ─── LLM 事件总线（供 Dashboard 订阅） ───
+
+export const llmEvents = new EventEmitter();
+llmEvents.setMaxListeners(20);
+
+/** LLM 调用事件数据 */
+export interface LLMCallEvent {
+    /** 唯一调用 ID */
+    callId: string;
+    /** 调用方模块标识 */
+    caller: string;
+    /** 模型名 */
+    model: string;
+    /** 温度 */
+    temperature: number;
+    /** 最大 token 数 */
+    maxTokens: number;
+    /** provider */
+    provider: string;
+    /** 消息摘要：每条消息的 role + content 前 200 字 + imageParts 信息 */
+    messageSummaries: Array<{
+        role: string;
+        contentPreview: string;
+        imageCount: number;
+        /** 图片 URL 列表（base64 只保留前缀，URL 保留完整） */
+        imageUrls?: string[];
+    }>;
+    /** 调用开始时间 */
+    timestamp: string;
+}
+
+/** LLM 响应事件数据 */
+export interface LLMResponseEvent {
+    /** 对应的调用 ID */
+    callId: string;
+    /** 调用方模块标识 */
+    caller: string;
+    /** 响应内容前 500 字 */
+    contentPreview: string;
+    /** 完整内容长度 */
+    contentLength: number;
+    /** token 用量 */
+    usage?: LLMResponse["usage"];
+    /** 耗时 ms */
+    durationMs: number;
+    /** 是否出错 */
+    error?: string;
+    /** 时间戳 */
+    timestamp: string;
+}
+
+let _callIdCounter = 0;
+function nextCallId(): string {
+    return `llm_${Date.now()}_${++_callIdCounter}`;
+}
+
+function summarizeMessages(messages: ChatMessage[]): LLMCallEvent["messageSummaries"] {
+    return messages.map(m => {
+        const imageUrls = (m.imageParts ?? []).map(img => img.url);
+        return {
+            role: m.role,
+            contentPreview: m.content,
+            imageCount: m.imageParts?.length ?? 0,
+            imageUrls: imageUrls.length > 0 ? imageUrls : undefined,
+        };
+    });
+}
+
 // ─── 类型定义 ───
+
+/** 多模态图片附件 */
+export interface ImagePart {
+    /** data:image/jpeg;base64,... 或 URL */
+    url: string;
+    detail?: "auto" | "low" | "high";
+}
 
 /** OpenAI 格式消息 */
 export interface ChatMessage {
     role: "system" | "user" | "assistant";
     content: string;
-    /** 可选作用域：用于在多场景设计下过滤消息. 例如 "global", "scene:telegram", "scene:home" */
+    /** 可选作用域：用于在多场景设计下过滤消息 */
     scope?: string;
+    /** 多模态图片附件（仅 role=user 生效） */
+    imageParts?: ImagePart[];
 }
 
 /** LLM 调用选项（可覆盖默认配置） */
@@ -35,6 +113,8 @@ export interface LLMCallOptions {
     model?: string;
     /** Gemini thinking level: "none" | "low" | "medium" | "high" */
     thinkingLevel?: string;
+    /** 调用方模块标识（用于 Dashboard 日志显示） */
+    caller?: string;
 }
 
 /** LLM 调用结果 */
@@ -84,14 +164,49 @@ export async function callLLM(
     const temperature = options?.temperature ?? config.temperature;
     const maxTokens = options?.maxTokens ?? config.maxTokens;
     const thinkingLevel = options?.thinkingLevel ?? config.thinkingLevel;
+    const caller = options?.caller ?? "unknown";
+
+    // ── 发射 llm:call 事件 ──
+    const callId = nextCallId();
+    const startTime = Date.now();
+    if (llmEvents.listenerCount("llm:call") > 0) {
+        const callEvent: LLMCallEvent = {
+            callId,
+            caller,
+            model,
+            temperature,
+            maxTokens,
+            provider: config.provider ?? "openai",
+            messageSummaries: summarizeMessages(messages),
+            timestamp: new Date().toISOString(),
+        };
+        llmEvents.emit("llm:call", callEvent);
+    }
 
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
         try {
+            let result: LLMResponse;
             if (config.provider === "anthropic") {
-                return await callAnthropic(messages, config, model, temperature, maxTokens);
+                result = await callAnthropic(messages, config, model, temperature, maxTokens);
             } else {
-                return await callOpenAI(messages, config, model, temperature, maxTokens, thinkingLevel);
+                result = await callOpenAI(messages, config, model, temperature, maxTokens, thinkingLevel);
             }
+
+            // ── 发射 llm:response 事件 ──
+            if (llmEvents.listenerCount("llm:response") > 0) {
+                const responseEvent: LLMResponseEvent = {
+                    callId,
+                    caller,
+                    contentPreview: result.content,
+                    contentLength: result.content.length,
+                    usage: result.usage,
+                    durationMs: Date.now() - startTime,
+                    timestamp: new Date().toISOString(),
+                };
+                llmEvents.emit("llm:response", responseEvent);
+            }
+
+            return result;
         } catch (err: unknown) {
             const isRateLimit =
                 err instanceof Error &&
@@ -109,6 +224,20 @@ export async function callLLM(
                 const delay = RETRY_DELAYS[attempt] ?? 4000;
                 await new Promise((r) => setTimeout(r, delay));
                 continue;
+            }
+
+            // ── 发射错误事件 ──
+            if (llmEvents.listenerCount("llm:response") > 0) {
+                const responseEvent: LLMResponseEvent = {
+                    callId,
+                    caller,
+                    contentPreview: "",
+                    contentLength: 0,
+                    durationMs: Date.now() - startTime,
+                    error: err instanceof Error ? err.message : String(err),
+                    timestamp: new Date().toISOString(),
+                };
+                llmEvents.emit("llm:response", responseEvent);
             }
 
             throw err;
@@ -143,12 +272,30 @@ async function callOpenAI(
         headers,
         body: JSON.stringify({
             model,
-            messages: messages.map(m => ({ role: m.role, content: m.content })),
+            messages: messages.map(m => {
+                // 有 imageParts 时组装为多模态 content parts
+                if (m.imageParts && m.imageParts.length > 0 && m.role === "user") {
+                    const parts: Array<Record<string, unknown>> = [
+                        { type: "text", text: m.content },
+                    ];
+                    for (const img of m.imageParts) {
+                        parts.push({
+                            type: "image_url",
+                            image_url: {
+                                url: img.url,
+                                ...(img.detail ? { detail: img.detail } : {}),
+                            },
+                        });
+                    }
+                    return { role: m.role, content: parts };
+                }
+                return { role: m.role, content: m.content };
+            }),
             temperature,
             max_tokens: maxTokens,
             // Gemini thinking 参数（OpenAI 兼容格式：reasoning_effort）
             ...(thinkingLevel && thinkingLevel !== "none" ? {
-                reasoning_effort: thinkingLevel,  // "low" | "medium" | "high"
+                reasoning_effort: thinkingLevel,
             } : {}),
         }),
     });
@@ -204,10 +351,39 @@ async function callAnthropic(
 
     const body: Record<string, unknown> = {
         model,
-        messages: nonSystemMsgs.map((m) => ({
-            role: m.role,
-            content: m.content,
-        })),
+        messages: nonSystemMsgs.map((m) => {
+            // 有 imageParts 时组装为 Anthropic 多模态格式
+            if (m.imageParts && m.imageParts.length > 0 && m.role === "user") {
+                const parts: Array<Record<string, unknown>> = [
+                    { type: "text", text: m.content },
+                ];
+                for (const img of m.imageParts) {
+                    // Anthropic 需要 base64 source 格式
+                    const dataMatch = img.url.match(/^data:([^;]+);base64,(.+)$/);
+                    if (dataMatch) {
+                        parts.push({
+                            type: "image",
+                            source: {
+                                type: "base64",
+                                media_type: dataMatch[1],
+                                data: dataMatch[2],
+                            },
+                        });
+                    } else {
+                        // URL 格式（Anthropic 也支持）
+                        parts.push({
+                            type: "image",
+                            source: {
+                                type: "url",
+                                url: img.url,
+                            },
+                        });
+                    }
+                }
+                return { role: m.role, content: parts };
+            }
+            return { role: m.role, content: m.content };
+        }),
         temperature,
         max_tokens: maxTokens,
     };

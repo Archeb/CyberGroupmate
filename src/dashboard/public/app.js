@@ -23,6 +23,11 @@ const App = (() => {
     let refreshTimer = null;
     let activeTab = "messages";
 
+    // LLM Log state
+    let llmLogs = []; // { callId, caller, model, temperature, maxTokens, provider, messageSummaries, timestamp, response?, expanded? }
+    const MAX_LLM_LOGS = 200;
+    let llmStats = { total: 0, success: 0, error: 0, totalTokens: 0 };
+
     // ─── API Helpers ───
     async function api(path, opts = {}) {
         const sep = path.includes("?") ? "&" : "?";
@@ -50,7 +55,7 @@ const App = (() => {
     function renderJsonHighlighted(el, data) {
         const json = typeof data === "string" ? data : JSON.stringify(data, null, 2);
         el.innerHTML = `<code class="language-json hljs">${json}</code>`;
-        try { hljs.highlightElement(el.querySelector("code")); } catch {}
+        try { hljs.highlightElement(el.querySelector("code")); } catch { }
         scrollToBottom(el);
     }
 
@@ -71,7 +76,7 @@ const App = (() => {
             try {
                 const event = JSON.parse(ev.data);
                 handleEvent(event);
-            } catch {}
+            } catch { }
         };
     }
 
@@ -96,6 +101,12 @@ const App = (() => {
                     state.queue = event.data;
                 }
                 renderQueue();
+                break;
+            case "llm:call":
+                handleLLMCall(event.data);
+                break;
+            case "llm:response":
+                handleLLMResponse(event.data);
                 break;
         }
     }
@@ -176,17 +187,19 @@ const App = (() => {
                         if (messages.length > MAX_MESSAGES) messages.splice(0, messages.length - MAX_MESSAGES);
                     }
                 }
-            } catch {}
+            } catch { }
         }
         renderMessageStream();
     }
 
     // ─── Topics ───
     const expandedTopicGroups = new Set(); // track which groups are expanded
-    let topicCache = {}; // chatId -> topics[]
+    let topicCache = {}; // chatId -> { topics[], hasMore, offset }
+    let topicSearchMode = false; // whether search results are displayed
 
     async function renderTopics() {
         const container = document.getElementById("topics-container");
+        if (topicSearchMode) return; // Don't overwrite search results
         if (!state.groups.length) { container.innerHTML = '<div class="text-sm opacity-60">暂无数据</div>'; return; }
 
         // Preserve current expand state from DOM
@@ -201,15 +214,17 @@ const App = (() => {
         container.innerHTML = state.groups.map(g => {
             const isExpanded = expandedTopicGroups.has(g.chatId);
             const label = getGroupLabel(g.chatId);
+            const cached = topicCache[g.chatId];
+            const totalBadge = cached ? `${cached.topics.length}${cached.hasMore ? '+' : ''} / ${cached.total || '?'}` : `${g.topicCount}`;
             return `<div class="collapse collapse-arrow bg-base-200 topic-group-collapse">
                 <input type="checkbox" data-chat-id="${g.chatId}" ${isExpanded ? 'checked' : ''} onchange="App.toggleTopicGroup('${g.chatId}', this.checked)" />
                 <div class="collapse-title text-sm font-medium flex justify-between items-center">
                     <span>${escapeHtml(label)}</span>
-                    <span class="badge badge-sm">${g.topicCount} 话题</span>
+                    <span class="badge badge-sm">${totalBadge} 话题</span>
                 </div>
                 <div class="collapse-content">
                     <div id="topics-${CSS.escape(g.chatId)}" class="space-y-1">
-                        ${topicCache[g.chatId] ? renderTopicCards(topicCache[g.chatId], g.chatId) : '<div class="text-xs opacity-60">加载中...</div>'}
+                        ${cached ? renderTopicCards(cached.topics, g.chatId, cached.hasMore) : '<div class="text-xs opacity-60">加载中...</div>'}
                     </div>
                 </div>
             </div>`;
@@ -232,15 +247,16 @@ const App = (() => {
         }
     }
 
-    function renderTopicCards(topics, chatId) {
+    function renderTopicCards(topics, chatId, hasMore) {
         if (!topics.length) return '<div class="text-sm opacity-60">无话题</div>';
-        return topics.map(t => {
-            const stateClass = `state-${(t.state||"").toLowerCase()}`;
+        let html = topics.map(t => {
+            const stateClass = `state-${(t.state || "").toLowerCase()}`;
             const participants = (t.participantIds || []).map(p =>
                 `<span class="clickable-link" onclick="App.quickQueryUser('${p}','${chatId}')">${escapeHtml(p)}</span>`
             ).join(", ");
             const engaged = t.wasEngaged ? `<span class="badge badge-xs badge-success">已回应 ×${t.interventionCount || 1}</span>` : '';
             const sourceBadge = t.source === "history" ? '<span class="badge badge-xs badge-ghost">历史</span>' : '';
+            const timeStr = t.startedAt ? new Date(t.startedAt).toLocaleString() : '';
             return `<div class="topic-card ${stateClass} cursor-pointer" onclick="App.viewTopicDetail('${t.id}')">
                 <div class="flex justify-between items-center">
                     <span class="font-semibold text-sm">${escapeHtml(t.label || t.id)}</span>
@@ -248,18 +264,98 @@ const App = (() => {
                 </div>
                 <div class="text-xs opacity-70 mt-1">${escapeHtml(t.summary || "")}</div>
                 <div class="text-xs mt-1">
-                    参与者: ${participants || "无"} | 消息数: ${(t.messageIds||[]).length} |
-                    关键词: ${(t.keywords||[]).map(k => escapeHtml(k)).join(", ")}
+                    <span class="opacity-50">${timeStr}</span> |
+                    参与者: ${participants || "无"} | 消息数: ${(t.messageIds || []).length} |
+                    关键词: ${(t.keywords || []).map(k => escapeHtml(k)).join(", ")}
+                </div>
+            </div>`;
+        }).join("");
+        if (hasMore) {
+            html += `<div class="text-center mt-2">
+                <button class="btn btn-xs btn-outline" onclick="App.loadMoreTopics('${chatId}')">加载更多...</button>
+            </div>`;
+        }
+        return html;
+    }
+
+    async function loadTopics(chatId) {
+        const data = await api(`/topics/${chatId}?limit=10&offset=0`);
+        const topics = data.topics || data; // backward compat
+        topicCache[chatId] = {
+            topics: Array.isArray(topics) ? topics : [],
+            hasMore: data.hasMore ?? false,
+            total: data.total ?? 0,
+            offset: Array.isArray(topics) ? topics.length : 0,
+        };
+        const el = document.getElementById(`topics-${CSS.escape(chatId)}`);
+        if (el) el.innerHTML = renderTopicCards(topicCache[chatId].topics, chatId, topicCache[chatId].hasMore);
+    }
+
+    async function loadMoreTopics(chatId) {
+        const cached = topicCache[chatId];
+        if (!cached || !cached.hasMore) return;
+        const data = await api(`/topics/${chatId}?limit=10&offset=${cached.offset}`);
+        const newTopics = data.topics || [];
+        cached.topics.push(...newTopics);
+        cached.hasMore = data.hasMore ?? false;
+        cached.total = data.total ?? cached.total;
+        cached.offset += newTopics.length;
+        const el = document.getElementById(`topics-${CSS.escape(chatId)}`);
+        if (el) el.innerHTML = renderTopicCards(cached.topics, chatId, cached.hasMore);
+    }
+
+    async function searchTopics() {
+        const query = document.getElementById("topic-search-input").value.trim();
+        if (!query) return;
+        topicSearchMode = true;
+        document.getElementById("topic-search-clear").style.display = "";
+        const container = document.getElementById("topics-container");
+        container.innerHTML = '<div class="text-sm opacity-60">搜索中...</div>';
+
+        // Search across all groups
+        let allResults = [];
+        for (const g of state.groups) {
+            try {
+                const data = await api(`/topics/${g.chatId}/search?q=${encodeURIComponent(query)}`);
+                const topics = data.topics || [];
+                for (const t of topics) {
+                    allResults.push({ ...t, chatId: g.chatId, chatLabel: getGroupLabel(g.chatId) });
+                }
+            } catch { }
+        }
+
+        if (!allResults.length) {
+            container.innerHTML = '<div class="text-sm opacity-60">未找到匹配的话题</div>';
+            return;
+        }
+
+        // Render flat search results grouped by chat
+        const byChatId = {};
+        for (const t of allResults) {
+            if (!byChatId[t.chatId]) byChatId[t.chatId] = [];
+            byChatId[t.chatId].push(t);
+        }
+
+        container.innerHTML = Object.entries(byChatId).map(([chatId, topics]) => {
+            const label = topics[0].chatLabel || shortId(chatId);
+            return `<div class="collapse collapse-arrow collapse-open bg-base-200">
+                <input type="checkbox" checked />
+                <div class="collapse-title text-sm font-medium">
+                    <span>${escapeHtml(label)}</span>
+                    <span class="badge badge-sm ml-2">${topics.length} 匹配</span>
+                </div>
+                <div class="collapse-content">
+                    <div class="space-y-1">${renderTopicCards(topics, chatId, false)}</div>
                 </div>
             </div>`;
         }).join("");
     }
 
-    async function loadTopics(chatId) {
-        const topics = await api(`/topics/${chatId}`);
-        topicCache[chatId] = topics;
-        const el = document.getElementById(`topics-${CSS.escape(chatId)}`);
-        if (el) el.innerHTML = renderTopicCards(topics, chatId);
+    function clearTopicSearch() {
+        topicSearchMode = false;
+        document.getElementById("topic-search-input").value = "";
+        document.getElementById("topic-search-clear").style.display = "none";
+        renderTopics();
     }
 
     // ─── Queue ───
@@ -282,7 +378,7 @@ const App = (() => {
                     <td><span class="badge badge-xs">${e.source}</span></td>
                     <td class="stickiness-${e.stickinessLevel}">${e.stickinessLevel}</td>
                     <td>${e.newMessageCount}</td>
-                    <td>${(e.topicDigests||[]).length}</td>
+                    <td>${(e.topicDigests || []).length}</td>
                     <td>${e.blocked ? '<span class="badge badge-xs badge-error">阻塞</span>' : '<span class="badge badge-xs badge-success">活跃</span>'}</td>
                     <td>
                         <div class="flex gap-1">
@@ -499,7 +595,7 @@ const App = (() => {
                 html += result.topics.map(t => `<div class="topic-card mb-1 cursor-pointer" onclick="App.viewTopicDetail('${t.id}')">
                     <div class="font-semibold text-xs">${escapeHtml(t.label)}</div>
                     <div class="text-xs opacity-70">${escapeHtml(t.summary || '')}</div>
-                    <div class="text-xs">${(t.keywords||[]).map(k => '<span class="badge badge-xs">' + escapeHtml(k) + '</span>').join(' ')}</div>
+                    <div class="text-xs">${(t.keywords || []).map(k => '<span class="badge badge-xs">' + escapeHtml(k) + '</span>').join(' ')}</div>
                 </div>`).join('');
             }
             if (result.facts?.length) {
@@ -514,7 +610,7 @@ const App = (() => {
                 html += `<h4 class="text-sm font-bold mt-2 mb-1">👤 关联人物 (${result.persons.length})</h4>`;
                 html += result.persons.map(p => `<div class="text-xs p-1 bg-base-200 rounded">
                     <span class="clickable-link" onclick="App.quickQueryUser('${p.userId}','${p.chatId}')">${escapeHtml(p.userId)}</span>
-                    T${p.dunbarTier} | ${escapeHtml((p.traits||[]).join(', '))}
+                    T${p.dunbarTier} | ${escapeHtml((p.traits || []).join(', '))}
                 </div>`).join('');
             }
             if (!html) html = '<div class="text-xs opacity-60">未找到匹配结果</div>';
@@ -606,7 +702,7 @@ const App = (() => {
                     <div class="stat-value text-sm">${pool.total} / ${pool.inUse} / ${pool.idle}</div>
                 </div>
             </div>
-            ${(pool.instances||[]).length ? '<div class="mt-2 space-y-1">' + (pool.instances||[]).map(i => `
+            ${(pool.instances || []).length ? '<div class="mt-2 space-y-1">' + (pool.instances || []).map(i => `
                 <div class="flex justify-between text-xs px-2 py-1 bg-base-200 rounded">
                     <span class="font-mono">${shortId(i.chatId)}</span>
                     <span class="badge badge-xs ${i.inUse ? 'badge-error' : 'badge-success'}">${i.inUse ? '使用中' : '空闲'}</span>
@@ -663,6 +759,64 @@ const App = (() => {
         }).join("");
     }
 
+    // ─── Sticker Management ───
+    let stickerCache = [];
+
+    async function loadStickers() {
+        stickerCache = await api("/stickers");
+        document.getElementById("sticker-count").textContent = stickerCache.length;
+        const tbody = document.getElementById("stickers-tbody");
+        if (!stickerCache.length) {
+            tbody.innerHTML = '<tr><td colspan="5" class="text-center opacity-60">暂无贴纸缓存</td></tr>';
+            return;
+        }
+        tbody.innerHTML = stickerCache.map(s => {
+            const time = s.createdAt ? new Date(s.createdAt).toLocaleString() : "";
+            const emojiDisplay = s.emoji || "-";
+            return `<tr>
+                <td class="text-xl">${emojiDisplay}</td>
+                <td class="max-w-xs truncate" title="${escapeHtml(s.description)}">${escapeHtml(s.description)}</td>
+                <td class="font-mono text-xs max-w-32 truncate" title="${escapeHtml(s.uniqueFileId)}">${escapeHtml(s.uniqueFileId.slice(-16))}</td>
+                <td class="text-xs opacity-60">${time}</td>
+                <td>
+                    <div class="flex gap-1">
+                        <button class="btn btn-xs btn-ghost" onclick="App.editSticker('${escapeHtml(s.uniqueFileId)}')">✏️</button>
+                        <button class="btn btn-xs btn-ghost text-error" onclick="App.deleteSticker('${escapeHtml(s.uniqueFileId)}')">🗑</button>
+                    </div>
+                </td>
+            </tr>`;
+        }).join("");
+    }
+
+    async function deleteSticker(uniqueFileId) {
+        if (!confirm(`确认删除贴纸 ${uniqueFileId.slice(-16)} 的缓存？`)) return;
+        await api(`/stickers/${encodeURIComponent(uniqueFileId)}`, { method: "DELETE" });
+        await loadStickers();
+    }
+
+    function editSticker(uniqueFileId) {
+        const s = stickerCache.find(s => s.uniqueFileId === uniqueFileId);
+        if (!s) return;
+        document.getElementById("sticker-edit-id").textContent = uniqueFileId;
+        document.getElementById("sticker-edit-emoji").value = s.emoji || "";
+        document.getElementById("sticker-edit-desc").value = s.description || "";
+        document.getElementById("sticker-edit-modal").showModal();
+    }
+
+    async function saveSticker() {
+        const uniqueFileId = document.getElementById("sticker-edit-id").textContent;
+        const emoji = document.getElementById("sticker-edit-emoji").value.trim() || undefined;
+        const description = document.getElementById("sticker-edit-desc").value.trim();
+        if (!description) { alert("描述不能为空"); return; }
+        await api(`/stickers/${encodeURIComponent(uniqueFileId)}`, {
+            method: "PUT",
+            body: { description, emoji },
+        });
+        document.getElementById("sticker-edit-modal").close();
+        await loadStickers();
+    }
+
+
     // ─── Tab Management ───
     function switchTab(tab) {
         activeTab = tab;
@@ -683,7 +837,9 @@ const App = (() => {
             if (selectedCodeActChatId) selectCodeActChat(selectedCodeActChatId);
         }
         if (activeTab === "system") renderSystem();
+        if (activeTab === "stickers") loadStickers();
         if (activeTab === "queue") renderQueue();
+        if (activeTab === "llm-log") renderLLMLog();
     }
 
     // ─── Render All ───
@@ -714,7 +870,7 @@ const App = (() => {
                 }
                 renderAll();
                 refreshActiveTab();
-            } catch {}
+            } catch { }
         }, REFRESH_INTERVAL);
     }
 
@@ -748,10 +904,247 @@ const App = (() => {
 
     document.addEventListener("DOMContentLoaded", init);
 
+    // ─── LLM Log ───
+
+    const CALLER_COLORS = {
+        "attend-handler": "badge-primary",
+        "fast-path": "badge-warning",
+        "session-runner": "badge-accent",
+        "context-manager": "badge-info",
+        "reflection": "badge-secondary",
+        "memory": "badge-success",
+        "vision": "badge-error",
+        "recording-pipeline": "badge-ghost",
+    };
+
+    let selectedLLMCallId = null;
+
+    function updateLLMStats() {
+        const t = document.getElementById("llm-stat-total");
+        const s = document.getElementById("llm-stat-success");
+        const e = document.getElementById("llm-stat-error");
+        const k = document.getElementById("llm-stat-tokens");
+        if (t) t.textContent = llmStats.total;
+        if (s) s.textContent = llmStats.success;
+        if (e) e.textContent = llmStats.error;
+        if (k) k.textContent = llmStats.totalTokens.toLocaleString();
+    }
+
+    function handleLLMCall(data) {
+        llmStats.total++;
+        const entry = { ...data, response: null };
+        llmLogs.unshift(entry);
+        if (llmLogs.length > MAX_LLM_LOGS) llmLogs.pop();
+
+        updateLLMStats();
+
+        // Incremental DOM: prepend a new row
+        const listEl = document.getElementById("llm-log-list");
+        if (!listEl) return;
+
+        // Clear placeholder if present
+        if (llmLogs.length === 1) listEl.innerHTML = "";
+
+        const row = document.createElement("div");
+        row.className = "llm-log-row";
+        row.setAttribute("data-call-id", data.callId);
+        row.onclick = () => selectLLMLog(data.callId);
+
+        const time = new Date(data.timestamp).toLocaleTimeString();
+        const callerBadge = CALLER_COLORS[data.caller] || "badge-ghost";
+        const msgCount = data.messageSummaries?.length ?? 0;
+        const hasImages = data.messageSummaries?.some(m => m.imageCount > 0);
+
+        row.innerHTML = `
+            <span class="llm-row-status" data-status="pending">⠇</span>
+            <span class="llm-row-time">${time}</span>
+            <span class="badge badge-xs ${callerBadge}">${escapeHtml(data.caller)}</span>
+            <span class="llm-row-model">${escapeHtml(data.model)}</span>
+            <span class="llm-row-meta">✉${msgCount}${hasImages ? ' 🖼' : ''}</span>
+            <span class="llm-row-duration" data-field="duration">...</span>
+        `;
+        listEl.prepend(row);
+    }
+
+    function handleLLMResponse(data) {
+        const entry = llmLogs.find(e => e.callId === data.callId);
+        if (entry) entry.response = data;
+
+        if (data.error) {
+            llmStats.error++;
+        } else {
+            llmStats.success++;
+        }
+        if (data.usage?.totalTokens) {
+            llmStats.totalTokens += data.usage.totalTokens;
+        }
+        updateLLMStats();
+
+        // In-place update: find the row and patch status + duration
+        const row = document.querySelector(`.llm-log-row[data-call-id="${data.callId}"]`);
+        if (row) {
+            const statusEl = row.querySelector("[data-status]");
+            if (statusEl) {
+                statusEl.setAttribute("data-status", data.error ? "error" : "ok");
+                statusEl.textContent = data.error ? "✗" : "✓";
+            }
+            const durEl = row.querySelector("[data-field='duration']");
+            if (durEl) {
+                const tokStr = data.usage?.totalTokens ? ` (${data.usage.totalTokens}tok)` : "";
+                durEl.textContent = `${data.durationMs}ms${tokStr}`;
+            }
+            if (data.error) row.classList.add("llm-log-error");
+        }
+
+        // If this is the selected entry, re-render detail
+        if (selectedLLMCallId === data.callId) {
+            renderLLMDetail(data.callId);
+        }
+    }
+
+    function selectLLMLog(callId) {
+        selectedLLMCallId = callId;
+        // Update active row styling
+        document.querySelectorAll(".llm-log-row").forEach(r => r.classList.remove("llm-log-active"));
+        const row = document.querySelector(`.llm-log-row[data-call-id="${callId}"]`);
+        if (row) row.classList.add("llm-log-active");
+        renderLLMDetail(callId);
+    }
+
+    function renderLLMDetail(callId) {
+        const detailEl = document.getElementById("llm-log-detail");
+        if (!detailEl) return;
+
+        const entry = llmLogs.find(e => e.callId === callId);
+        if (!entry) {
+            detailEl.innerHTML = '<div class="text-sm opacity-40 p-4">条目未找到</div>';
+            return;
+        }
+
+        const r = entry.response;
+        let html = '';
+
+        // Header
+        const callerBadge = CALLER_COLORS[entry.caller] || "badge-ghost";
+        html += `<div class="llm-detail-header">
+            <span class="badge badge-sm ${callerBadge}">${escapeHtml(entry.caller)}</span>
+            <span class="opacity-70">${escapeHtml(entry.model)}</span>
+            <span class="opacity-40">T=${entry.temperature} max=${entry.maxTokens}</span>
+            ${r ? `<span class="opacity-60">${r.durationMs}ms</span>` : '<span class="text-warning">进行中...</span>'}
+            ${r?.usage ? `<span class="opacity-40">prompt:${r.usage.promptTokens ?? '?'} / completion:${r.usage.completionTokens ?? '?'} / total:${r.usage.totalTokens ?? '?'}</span>` : ''}
+        </div>`;
+
+        // Messages
+        html += '<div class="llm-detail-section"><div class="llm-detail-section-title">Messages (' + (entry.messageSummaries?.length ?? 0) + ')</div>';
+        (entry.messageSummaries || []).forEach((m, mi) => {
+            const roleClass = m.role === 'system' ? 'llm-role-system' : m.role === 'assistant' ? 'llm-role-assistant' : 'llm-role-user';
+            const content = m.contentPreview || '';
+            const truncLen = 200;
+            const needsTrunc = content.length > truncLen;
+            const msgId = `llm-msg-${callId}-${mi}`;
+            html += `<div class="llm-detail-msg">
+                <div class="llm-detail-msg-role ${roleClass}">${m.role}</div>
+                <div class="llm-detail-msg-content" id="${msgId}">${escapeHtml(needsTrunc ? content.slice(0, truncLen) + '...' : content)}</div>`;
+            if (needsTrunc) {
+                html += `<span class="llm-msg-toggle" id="${msgId}-toggle" onclick="App.toggleMsgExpand('${callId}',${mi})">展开</span>`;
+            }
+            if (m.imageCount > 0) {
+                html += '<div class="llm-detail-msg-images">';
+                for (const url of (m.imageUrls || [])) {
+                    const isData = url.startsWith('data:');
+                    const label = isData ? url.split(';')[0].replace('data:', '') : 'URL';
+                    html += `<span class="llm-img-hover-wrap">
+                        <span class="badge badge-sm badge-outline">🖼️ ${escapeHtml(label)}</span>
+                        <img class="llm-img-preview" src="${isData ? url : escapeHtml(url)}" alt="preview" loading="lazy" />
+                    </span> `;
+                }
+                html += '</div>';
+            }
+            html += '</div>';
+        });
+        html += '</div>';
+
+        // Response
+        if (r) {
+            html += '<div class="llm-detail-section"><div class="llm-detail-section-title">Response (' + (r.contentLength ?? 0) + ' chars)</div>';
+            if (r.error) {
+                html += `<div class="llm-detail-error">${escapeHtml(r.error)}</div>`;
+            } else {
+                const respContent = r.contentPreview || '(empty)';
+                const respTruncLen = 500;
+                const respNeedsTrunc = respContent.length > respTruncLen;
+                const respId = `llm-resp-${callId}`;
+                html += `<div class="llm-detail-response-body" id="${respId}">${escapeHtml(respNeedsTrunc ? respContent.slice(0, respTruncLen) + '...' : respContent)}</div>`;
+                if (respNeedsTrunc) {
+                    html += `<span class="llm-msg-toggle" id="${respId}-toggle" onclick="App.toggleRespExpand('${callId}')">展开</span>`;
+                }
+            }
+            html += '</div>';
+        }
+
+        detailEl.innerHTML = html;
+        detailEl.scrollTop = detailEl.scrollHeight;
+    }
+
+    function renderLLMLog() {
+        // Called on tab switch — just update stats, list is already populated incrementally
+        updateLLMStats();
+    }
+
+    function toggleLLMLogDetail(idx) {
+        // unused now, kept for compat
+    }
+
+    function toggleMsgExpand(callId, msgIndex) {
+        const entry = llmLogs.find(e => e.callId === callId);
+        if (!entry || !entry.messageSummaries?.[msgIndex]) return;
+        const content = entry.messageSummaries[msgIndex].contentPreview || '';
+        const truncLen = 200;
+        const msgEl = document.getElementById(`llm-msg-${callId}-${msgIndex}`);
+        const togEl = document.getElementById(`llm-msg-${callId}-${msgIndex}-toggle`);
+        if (!msgEl || !togEl) return;
+        if (togEl.textContent === '展开') {
+            msgEl.textContent = content;
+            togEl.textContent = '收起';
+        } else {
+            msgEl.textContent = content.slice(0, truncLen) + '...';
+            togEl.textContent = '展开';
+        }
+    }
+
+    function toggleRespExpand(callId) {
+        const entry = llmLogs.find(e => e.callId === callId);
+        if (!entry?.response) return;
+        const content = entry.response.contentPreview || '';
+        const truncLen = 500;
+        const el = document.getElementById(`llm-resp-${callId}`);
+        const tog = document.getElementById(`llm-resp-${callId}-toggle`);
+        if (!el || !tog) return;
+        if (tog.textContent === '展开') {
+            el.textContent = content;
+            tog.textContent = '收起';
+        } else {
+            el.textContent = content.slice(0, truncLen) + '...';
+            tog.textContent = '展开';
+        }
+    }
+
+    function clearLLMLogs() {
+        llmLogs = [];
+        llmStats = { total: 0, success: 0, error: 0, totalTokens: 0 };
+        selectedLLMCallId = null;
+        updateLLMStats();
+        const listEl = document.getElementById("llm-log-list");
+        if (listEl) listEl.innerHTML = '<div class="text-sm opacity-40 p-4">等待 LLM 调用...</div>';
+        const detailEl = document.getElementById("llm-log-detail");
+        if (detailEl) detailEl.innerHTML = '<div class="text-sm opacity-40 p-4">← 点击左侧条目查看详情</div>';
+    }
+
     // Public API (for onclick handlers)
     return {
-        selectChat, loadTopics, toggleTopicGroup, boostQueue, removeFromQueue, showEnqueueModal, doEnqueue,
+        selectChat, loadTopics, loadMoreTopics, toggleTopicGroup, searchTopics, clearTopicSearch,
+        boostQueue, removeFromQueue, showEnqueueModal, doEnqueue,
         selectCodeActChat, cancelCodeAct, queryUser, queryGroup, quickQueryUser, quickQueryGroup, recallMemory,
-        viewTopicDetail,
+        viewTopicDetail, loadStickers, deleteSticker, editSticker, saveSticker, clearLLMLogs, toggleLLMLogDetail, toggleMsgExpand, toggleRespExpand,
     };
 })();

@@ -106,6 +106,16 @@
                     </svg></span>
                 CodeAct
             </a>
+            <a role="tab" class="tab" data-tab="llm-log">
+                <span class="tab-icon"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"
+                        viewBox="0 0 32 32" fill="currentColor">
+                        <path d="M16 7a3 3 0 1 0 3 3 3 3 0 0 0-3-3zm0 4a1 1 0 1 1 1-1 1 1 0 0 1-1 1z" />
+                        <path
+                            d="M23 3H9a2 2 0 0 0-2 2v22a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2zm0 24H9V5h14z" />
+                        <path d="M20 19H12v2h8zm0 4H12v2h8z" />
+                    </svg></span>
+                LLM 日志
+            </a>
             <a role="tab" class="tab" data-tab="memory">
                 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"
                     xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 576 512">
@@ -114,6 +124,14 @@
                         fill="currentColor"></path>
                 </svg>
                 记忆查询
+            </a>
+            <a role="tab" class="tab" data-tab="stickers">
+                <span class="tab-icon"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"
+                        viewBox="0 0 32 32" fill="currentColor">
+                        <path
+                            d="M16 2A14 14 0 0 0 2 16a14.16 14.16 0 0 0 13.86 14H16a14 14 0 0 0 0-28zm0 26a12 12 0 0 1-5.28-1.22A14 14 0 0 0 16 16.58a14 14 0 0 0 5.28 10.2A11.93 11.93 0 0 1 16 28zM10 12a2 2 0 1 1 2 2 2 2 0 0 1-2-2zm8 0a2 2 0 1 1 2 2 2 2 0 0 1-2-2z" />
+                    </svg></span>
+                贴纸管理
             </a>
             <a role="tab" class="tab" data-tab="system">
                 <span class="tab-icon"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"
@@ -166,7 +184,16 @@
         <div id="panel-topics" class="tab-panel hidden">
             <div class="card bg-base-100">
                 <div class="card-body p-4">
-                    <h3 class="card-title text-sm mb-2">话题注册表 (TopicRegistry)</h3>
+                    <div class="flex justify-between items-center mb-2">
+                        <h3 class="card-title text-sm">话题注册表 (TopicRegistry)</h3>
+                        <div class="flex gap-2 items-center">
+                            <input id="topic-search-input" type="text" placeholder="搜索关键词..."
+                                class="input input-sm input-bordered w-48"
+                                onkeydown="if(event.key==='Enter')App.searchTopics()" />
+                            <button class="btn btn-xs btn-primary" onclick="App.searchTopics()">搜索</button>
+                            <button class="btn btn-xs btn-ghost" onclick="App.clearTopicSearch()" id="topic-search-clear" style="display:none">清除</button>
+                        </div>
+                    </div>
                     <div id="topics-container" class="space-y-2"></div>
                 </div>
             </div>
@@ -282,6 +309,30 @@
                 </div>
             </div>
         </div>
+        <!-- LLM Log -->
+        <div id="panel-llm-log" class="tab-panel hidden">
+            <div class="llm-log-layout">
+                <!-- Left: log list -->
+                <div class="llm-log-left">
+                    <div class="llm-log-toolbar">
+                        <span class="text-xs opacity-60">调用 <b id="llm-stat-total">0</b></span>
+                        <span class="text-xs text-success">✓ <b id="llm-stat-success">0</b></span>
+                        <span class="text-xs text-error">✗ <b id="llm-stat-error">0</b></span>
+                        <span class="text-xs opacity-60">Tok <b id="llm-stat-tokens">0</b></span>
+                        <button class="btn btn-xs btn-ghost" onclick="App.clearLLMLogs()">清空</button>
+                    </div>
+                    <div id="llm-log-list" class="llm-log-list">
+                        <div class="text-sm opacity-40 p-4">等待 LLM 调用...</div>
+                    </div>
+                </div>
+                <!-- Right: detail -->
+                <div class="llm-log-right">
+                    <div id="llm-log-detail" class="llm-log-detail-pane">
+                        <div class="text-sm opacity-40 p-4">← 点击左侧条目查看详情</div>
+                    </div>
+                </div>
+            </div>
+        </div>
 
         <!-- Memory -->
         <div id="panel-memory" class="tab-panel hidden">
@@ -353,6 +404,51 @@
                 </div>
             </div>
         </div>
+
+        <!-- Stickers -->
+        <div id="panel-stickers" class="tab-panel hidden">
+            <div class="card bg-base-100">
+                <div class="card-body p-4">
+                    <div class="flex justify-between items-center mb-3">
+                        <h3 class="card-title text-sm">🎭 贴纸描述缓存</h3>
+                        <div class="flex gap-2 items-center">
+                            <span id="sticker-count" class="badge badge-sm badge-ghost">0</span>
+                            <button class="btn btn-xs btn-primary" onclick="App.loadStickers()">刷新</button>
+                        </div>
+                    </div>
+                    <div class="overflow-x-auto">
+                        <table class="table table-xs">
+                            <thead>
+                                <tr>
+                                    <th>Emoji</th>
+                                    <th>描述</th>
+                                    <th>UniqueFileId</th>
+                                    <th>创建时间</th>
+                                    <th>操作</th>
+                                </tr>
+                            </thead>
+                            <tbody id="stickers-tbody"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Sticker Edit Modal -->
+        <dialog id="sticker-edit-modal" class="modal">
+            <div class="modal-box">
+                <h3 class="text-lg font-bold">编辑贴纸描述</h3>
+                <div class="py-4 space-y-3">
+                    <div class="text-xs opacity-60">UniqueFileId: <span id="sticker-edit-id" class="font-mono"></span></div>
+                    <input id="sticker-edit-emoji" type="text" placeholder="Emoji" class="input input-bordered w-full" maxlength="8" />
+                    <textarea id="sticker-edit-desc" placeholder="描述" class="textarea textarea-bordered w-full" rows="3"></textarea>
+                </div>
+                <div class="modal-action">
+                    <button class="btn btn-primary" onclick="App.saveSticker()">保存</button>
+                    <form method="dialog"><button class="btn">取消</button></form>
+                </div>
+            </div>
+        </dialog>
 
         <!-- System -->
         <div id="panel-system" class="tab-panel hidden">

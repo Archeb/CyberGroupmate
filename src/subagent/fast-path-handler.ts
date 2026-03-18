@@ -17,7 +17,7 @@ import type {
 } from "./types.js";
 import { DEFAULT_SUBAGENT_CONFIG } from "./types.js";
 import { callLLM, type ChatMessage } from "../core/llm.js";
-import { renderPrompt } from "../main-agent/prompt-renderer.js";
+import { renderPrompt, buildFastPathVariables } from "../main-agent/prompt-renderer.js";
 import type { LLMConfig } from "../core/config.js";
 import { createLogger } from "../core/logger.js";
 
@@ -53,6 +53,7 @@ export class FastPathHandler {
     private llmConfig: LLMConfig | null = null;
     private personaName: string = "赛博群友";
     private personaDescription: string = "";
+    private chatTitle: string = "";
 
     /** 发送回调（由外部注入，实际发送消息到 Telegram） */
     private sendFn: ((chatId: string, text: string) => Promise<string | undefined>) | null = null;
@@ -81,10 +82,18 @@ export class FastPathHandler {
     /**
      * 注入 LLM 配置和 persona
      */
-    setLLMConfig(llmConfig: LLMConfig, persona: { name: string; description: string }): void {
+    setLLMConfig(llmConfig: LLMConfig, persona: { name: string; description: string }, chatTitle?: string): void {
         this.llmConfig = llmConfig;
         this.personaName = persona.name;
         this.personaDescription = persona.description;
+        if (chatTitle) this.chatTitle = chatTitle;
+    }
+
+    /**
+     * 更新群组标题
+     */
+    setChatTitle(title: string): void {
+        this.chatTitle = title;
     }
 
     /**
@@ -236,23 +245,19 @@ export class FastPathHandler {
         // 尝试使用 LLM 生成回复 (subagent.md §12.2 ➆)
         if (this.llmConfig) {
             try {
-                const prompt = renderPrompt("FAST_PATH", {
-                    personaName: this.personaName,
-                    personaDescription: this.personaDescription,
-                    chatTitle: this.chatId,
-                    preauthorizedActions: auth.preauthorizedActions.map(a => `- ${a}`).join("\n"),
-                    blockedActions: auth.blockedActions.map(a => `- ❌ ${a}`).join("\n"),
-                    maxReplyLength: 150,
-                    tonePreset: auth.tonePreset,
-                    repliesSent: this.repliesSent,
-                    maxReplies: auth.maxRepliesBeforeReauth,
-                    senderName: event.userId,
-                    messageText: event.text,
-                });
+                const prompt = renderPrompt("FAST_PATH", buildFastPathVariables(
+                    { name: this.personaName, description: this.personaDescription },
+                    this.chatId,
+                    this.chatTitle || this.chatId,
+                    auth,
+                    event,
+                    this.repliesSent,
+                ));
 
                 const response = await callLLM(
                     [{ role: "user", content: prompt }],
                     this.llmConfig,
+                    { caller: "fast-path" },
                 );
 
                 return response.content.trim();

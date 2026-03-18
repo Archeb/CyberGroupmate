@@ -25,6 +25,7 @@ import type {
 import { DEFAULT_SUBAGENT_CONFIG } from "../subagent/types.js";
 import type { ChatMessage } from "../core/llm.js";
 import type { LLMConfig } from "../core/config.js";
+import { renderPrompt, buildCallbackVariables } from "./prompt-renderer.js";
 import { shouldCompact, compact as contextManagerCompact } from "../memory-v2/context-manager.js";
 import { createLogger } from "../core/logger.js";
 
@@ -417,19 +418,6 @@ export class MainAgentLoop {
  * 将 SubagentCallback 格式化为对话历史中的 user 消息。
  * 主 Agent LLM 在后续轮次可以看到这些消息，了解上一轮 subagent 做了什么。
  */
-export function formatCallbackMessage(cb: SubagentCallback): string {
-    let msg = `[Callback ${cb.chatId}] ${cb.executionType} ${cb.status}`;
-    msg += ` | ${cb.summary}`;
-    if (cb.sentMessages?.length) {
-        msg += `\n已发消息:`;
-        for (const m of cb.sentMessages) {
-            const text = m.text.length > 80 ? m.text.slice(0, 80) + "..." : m.text;
-            msg += `\n- "${text}"`;
-        }
-    }
-    if (cb.error) {
-        msg += `\n错误: ${cb.error}`;
-    }
-    msg += `\n耗时: ${cb.durationMs}ms`;
-    return msg;
+export function formatCallbackMessage(cb: SubagentCallback, chatTitle?: string): string {
+    return renderPrompt("CALLBACK", buildCallbackVariables(cb, chatTitle));
 }
