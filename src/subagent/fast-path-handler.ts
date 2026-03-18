@@ -253,6 +253,7 @@ export class FastPathHandler {
                 const response = await callLLM(
                     [{ role: "user", content: prompt }],
                     this.llmConfig,
+                    { caller: "fast-path" },
                 );
 
                 return response.content.trim();

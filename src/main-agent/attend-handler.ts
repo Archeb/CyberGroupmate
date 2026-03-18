@@ -215,7 +215,8 @@ ${decisionPrompt}`;
 
             const llmResponse = await callLLM(
                 messages,
-                sotaConfig
+                sotaConfig,
+                { caller: "attend-handler" },
             );
 
             // 解析 LLM 返回的 JSON

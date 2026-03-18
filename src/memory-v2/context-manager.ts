@@ -477,7 +477,7 @@ async function generateBriefing(
     ];
 
     try {
-        const response = await callLLM(briefingMessages, llmConfig);
+        const response = await callLLM(briefingMessages, llmConfig, { caller: "context-manager" });
         const briefing = response.content.trim();
 
         // 检查 briefing 是否超过预算

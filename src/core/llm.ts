@@ -12,8 +12,77 @@ export { type LLMConfig } from "./config.js";
 
 import type { LLMConfig } from "./config.js";
 import { createLogger } from "./logger.js";
+import { EventEmitter } from "node:events";
 
 const log = createLogger("llm");
+
+// ─── LLM 事件总线（供 Dashboard 订阅） ───
+
+export const llmEvents = new EventEmitter();
+llmEvents.setMaxListeners(20);
+
+/** LLM 调用事件数据 */
+export interface LLMCallEvent {
+    /** 唯一调用 ID */
+    callId: string;
+    /** 调用方模块标识 */
+    caller: string;
+    /** 模型名 */
+    model: string;
+    /** 温度 */
+    temperature: number;
+    /** 最大 token 数 */
+    maxTokens: number;
+    /** provider */
+    provider: string;
+    /** 消息摘要：每条消息的 role + content 前 200 字 + imageParts 信息 */
+    messageSummaries: Array<{
+        role: string;
+        contentPreview: string;
+        imageCount: number;
+        /** 图片 URL 列表（base64 只保留前缀，URL 保留完整） */
+        imageUrls?: string[];
+    }>;
+    /** 调用开始时间 */
+    timestamp: string;
+}
+
+/** LLM 响应事件数据 */
+export interface LLMResponseEvent {
+    /** 对应的调用 ID */
+    callId: string;
+    /** 调用方模块标识 */
+    caller: string;
+    /** 响应内容前 500 字 */
+    contentPreview: string;
+    /** 完整内容长度 */
+    contentLength: number;
+    /** token 用量 */
+    usage?: LLMResponse["usage"];
+    /** 耗时 ms */
+    durationMs: number;
+    /** 是否出错 */
+    error?: string;
+    /** 时间戳 */
+    timestamp: string;
+}
+
+let _callIdCounter = 0;
+function nextCallId(): string {
+    return `llm_${Date.now()}_${++_callIdCounter}`;
+}
+
+function summarizeMessages(messages: ChatMessage[]): LLMCallEvent["messageSummaries"] {
+    return messages.map(m => {
+        const imageUrls = (m.imageParts ?? []).map(img => img.url);
+        return {
+            role: m.role,
+            contentPreview: m.content,
+            imageCount: m.imageParts?.length ?? 0,
+            imageUrls: imageUrls.length > 0 ? imageUrls : undefined,
+        };
+    });
+}
 
 // ─── 类型定义 ───
 
@@ -44,6 +113,8 @@ export interface LLMCallOptions {
     model?: string;
     /** Gemini thinking level: "none" | "low" | "medium" | "high" */
     thinkingLevel?: string;
+    /** 调用方模块标识（用于 Dashboard 日志显示） */
+    caller?: string;
 }
 
 /** LLM 调用结果 */
@@ -93,14 +164,49 @@ export async function callLLM(
     const temperature = options?.temperature ?? config.temperature;
     const maxTokens = options?.maxTokens ?? config.maxTokens;
     const thinkingLevel = options?.thinkingLevel ?? config.thinkingLevel;
+    const caller = options?.caller ?? "unknown";
+
+    // ── 发射 llm:call 事件 ──
+    const callId = nextCallId();
+    const startTime = Date.now();
+    if (llmEvents.listenerCount("llm:call") > 0) {
+        const callEvent: LLMCallEvent = {
+            callId,
+            caller,
+            model,
+            temperature,
+            maxTokens,
+            provider: config.provider ?? "openai",
+            messageSummaries: summarizeMessages(messages),
+            timestamp: new Date().toISOString(),
+        };
+        llmEvents.emit("llm:call", callEvent);
+    }
 
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
         try {
+            let result: LLMResponse;
             if (config.provider === "anthropic") {
-                return await callAnthropic(messages, config, model, temperature, maxTokens);
+                result = await callAnthropic(messages, config, model, temperature, maxTokens);
             } else {
-                return await callOpenAI(messages, config, model, temperature, maxTokens, thinkingLevel);
+                result = await callOpenAI(messages, config, model, temperature, maxTokens, thinkingLevel);
             }
+
+            // ── 发射 llm:response 事件 ──
+            if (llmEvents.listenerCount("llm:response") > 0) {
+                const responseEvent: LLMResponseEvent = {
+                    callId,
+                    caller,
+                    contentPreview: result.content,
+                    contentLength: result.content.length,
+                    usage: result.usage,
+                    durationMs: Date.now() - startTime,
+                    timestamp: new Date().toISOString(),
+                };
+                llmEvents.emit("llm:response", responseEvent);
+            }
+
+            return result;
         } catch (err: unknown) {
             const isRateLimit =
                 err instanceof Error &&
@@ -118,6 +224,20 @@ export async function callLLM(
                 const delay = RETRY_DELAYS[attempt] ?? 4000;
                 await new Promise((r) => setTimeout(r, delay));
                 continue;
+            }
+
+            // ── 发射错误事件 ──
+            if (llmEvents.listenerCount("llm:response") > 0) {
+                const responseEvent: LLMResponseEvent = {
+                    callId,
+                    caller,
+                    contentPreview: "",
+                    contentLength: 0,
+                    durationMs: Date.now() - startTime,
+                    error: err instanceof Error ? err.message : String(err),
+                    timestamp: new Date().toISOString(),
+                };
+                llmEvents.emit("llm:response", responseEvent);
             }
 
             throw err;

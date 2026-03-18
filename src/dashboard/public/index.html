@@ -106,6 +106,16 @@
                     </svg></span>
                 CodeAct
             </a>
+            <a role="tab" class="tab" data-tab="llm-log">
+                <span class="tab-icon"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"
+                        viewBox="0 0 32 32" fill="currentColor">
+                        <path d="M16 7a3 3 0 1 0 3 3 3 3 0 0 0-3-3zm0 4a1 1 0 1 1 1-1 1 1 0 0 1-1 1z" />
+                        <path
+                            d="M23 3H9a2 2 0 0 0-2 2v22a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2zm0 24H9V5h14z" />
+                        <path d="M20 19H12v2h8zm0 4H12v2h8z" />
+                    </svg></span>
+                LLM 日志
+            </a>
             <a role="tab" class="tab" data-tab="memory">
                 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"
                     xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 576 512">
@@ -286,6 +296,30 @@
                         </div>
                         <div id="codeact-session" class="space-y-2 overflow-y-auto overflow-x-hidden max-h-[50vh]">
                         </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <!-- LLM Log -->
+        <div id="panel-llm-log" class="tab-panel hidden">
+            <div class="llm-log-layout">
+                <!-- Left: log list -->
+                <div class="llm-log-left">
+                    <div class="llm-log-toolbar">
+                        <span class="text-xs opacity-60">调用 <b id="llm-stat-total">0</b></span>
+                        <span class="text-xs text-success">✓ <b id="llm-stat-success">0</b></span>
+                        <span class="text-xs text-error">✗ <b id="llm-stat-error">0</b></span>
+                        <span class="text-xs opacity-60">Tok <b id="llm-stat-tokens">0</b></span>
+                        <button class="btn btn-xs btn-ghost" onclick="App.clearLLMLogs()">清空</button>
+                    </div>
+                    <div id="llm-log-list" class="llm-log-list">
+                        <div class="text-sm opacity-40 p-4">等待 LLM 调用...</div>
+                    </div>
+                </div>
+                <!-- Right: detail -->
+                <div class="llm-log-right">
+                    <div id="llm-log-detail" class="llm-log-detail-pane">
+                        <div class="text-sm opacity-40 p-4">← 点击左侧条目查看详情</div>
                     </div>
                 </div>
             </div>

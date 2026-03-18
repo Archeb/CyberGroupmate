@@ -242,7 +242,7 @@ export async function runCodeActSession(
         // ─── 调用 LLM ───
         let llmResponse: LLMResponse;
         try {
-            llmResponse = await callLLM(messages, llmConfig);
+            llmResponse = await callLLM(messages, llmConfig, { caller: "session-runner" });
         } catch (err: unknown) {
             const errorMsg =
                 err instanceof Error ? err.message : String(err);
