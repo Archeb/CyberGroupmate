@@ -312,6 +312,7 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
                 hot_topics TEXT DEFAULT '[]',
                 taboo_topics TEXT DEFAULT '[]',
                 last_reflected_at TEXT,
+                is_direct_message INTEGER DEFAULT 0,
                 updated_at TEXT NOT NULL
             );
 
@@ -397,6 +398,9 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
         `);
         // 新增 emoji 列（兼容旧数据库）
         try { this.db.exec(`ALTER TABLE sticker_descriptions ADD COLUMN emoji TEXT`); } catch { /* 列已存在 */ }
+
+        // group_models 新增 is_direct_message 列（兼容旧数据库）
+        try { this.db.exec(`ALTER TABLE group_models ADD COLUMN is_direct_message INTEGER DEFAULT 0`); } catch { /* 列已存在 */ }
     }
 
     // ─── 写入方法 ───
@@ -861,6 +865,7 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
             if (data.hotTopics !== undefined) builder.set("hot_topics", toJSON(data.hotTopics));
             if (data.tabooTopics !== undefined) builder.set("taboo_topics", toJSON(data.tabooTopics));
             if (data.lastReflectedAt !== undefined) builder.set("last_reflected_at", data.lastReflectedAt);
+            if (data.isDirectMessage !== undefined) builder.set("is_direct_message", data.isDirectMessage ? 1 : 0);
             builder.set("updated_at", ts);
             builder.where("chat_id", chatId);
 
@@ -873,8 +878,8 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
                     chat_id, chat_title, description, dominant_language, communication_norms,
                     active_members, avg_messages_per_day, peak_hours, agent_role,
                     engagement_level, recent_feedback, hot_topics, taboo_topics,
-                    last_reflected_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    last_reflected_at, is_direct_message, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `).run(
                 chatId,
                 data.chatTitle ?? "",
@@ -890,6 +895,7 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
                 toJSON(data.hotTopics),
                 toJSON(data.tabooTopics),
                 data.lastReflectedAt ?? null,
+                data.isDirectMessage ? 1 : 0,
                 ts,
             );
             log.debug("upsertGroupModel: INSERT", { chatId, title: data.chatTitle ?? "" });
@@ -906,6 +912,7 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
         return {
             chatId: row.chat_id as string,
             chatTitle: row.chat_title as string,
+            isDirectMessage: !!(row.is_direct_message as number),
             description: row.description as string,
             dominantLanguage: row.dominant_language as string,
             communicationNorms: fromJSON(row.communication_norms as string, []),

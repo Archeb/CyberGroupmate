@@ -88,6 +88,7 @@ export function createAttendHandler(
             lastCallbacks: subagent.lastCallbacks,
             messages: recentMessages,
             chatTitle: groupModel?.chatTitle,
+            isDirectMessage: groupModel?.isDirectMessage,
             stickiness: subagent.stickiness,
             fastPathEnabled: !!(subagent.fastPathHandler as any)?.isAuthorized?.(),
             pendingCodeActTasks: (subagent.codeActExecutor as any)?.getQueueSize?.() ?? 0,
