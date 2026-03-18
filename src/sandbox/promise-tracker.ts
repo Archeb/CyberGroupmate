@@ -49,24 +49,16 @@ export function createPromiseTracker(): PromiseTracker {
     }
 
     async function flush(): Promise<{ count: number; warning: string | null }> {
-        let pendingCount = 0;
-        const PENDING = Symbol("pending");
-
+        let total = 0;
         // 循环：Promise resolve 后可能又产生新的未 await 的调用
         while (pending.length > 0) {
             const batch = pending.splice(0);
-            // 逐个检查是否仍处于 pending 状态（即未被 await）
-            for (const p of batch) {
-                const status = await Promise.race([p, Promise.resolve(PENDING)]);
-                if (status === PENDING) pendingCount++;
-            }
-            // 确保所有 Promise 都完成
+            total += batch.length;
             await Promise.allSettled(batch);
         }
-
         return {
-            count: pendingCount,
-            warning: pendingCount > 0
+            count: total,
+            warning: total > 0
                 ? "[System] 检测到未 await 的异步 API 调用，系统已自动等待执行完毕。下次请对所有异步操作使用 await。"
                 : null,
         };

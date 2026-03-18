@@ -13,7 +13,7 @@ llm_profiles:
     model: gemini-3-flash-preview
     temperature: 0.7
     max_tokens: 8192
-    # vision: true  # 启用后此 profile 支持多模态图片输入
+    vision: true  # 启用后此 profile 支持多模态图片输入
 
   gemini-pro:
     provider: openai
@@ -61,7 +61,7 @@ model_tiers:
   # sota — 复杂场景：直接 @ 复杂问题、冲突调解
   sota: gemini-pro
   # vision — 图片理解 (看图/贴纸识别)
-  # vision: gemini-flash
+  vision: gemini-flash
 
 # ─── Vision 看图设置 ───
 # 控制图片和贴纸的处理行为。需要配合 model_tiers.vision 或 llm_profiles 中设置 vision: true 使用。
