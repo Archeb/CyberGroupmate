@@ -72,12 +72,8 @@ export interface TelegramConfig {
 }
 
 export interface ReflectionExternalConfig {
-    /** LLM temperature for reflection calls (default: 0.3) */
-    temperature?: number;
-    /** Max output tokens for reflection LLM call (default: 16384) */
-    maxTokens?: number;
-    /** Override model for reflection (default: uses cheap tier model) */
-    model?: string;
+    /** LLM profile name (references llm_profiles). When set, uses that profile's full config. Falls back to caller-provided llmConfig if unset. */
+    profile?: string;
     /** Silence threshold in seconds before triggering reflection (default: 7200 = 2h) */
     silenceThreshold?: number;
     /** Max interval in seconds between reflections, even if group is active (default: 86400 = 24h) */
@@ -331,9 +327,7 @@ export function loadConfig(configPath?: string, forceReload?: boolean): AppConfi
                 : [],
         },
         reflection: {
-            temperature: fileReflection.temperature != null ? num(fileReflection.temperature, 0.3) : undefined,
-            maxTokens: fileReflection.max_tokens != null ? num(fileReflection.max_tokens, 16384) : undefined,
-            model: str(fileReflection.model),
+            profile: str(fileReflection.profile),
             silenceThreshold: fileReflection.silence_threshold != null ? num(fileReflection.silence_threshold, 7200) : undefined,
             maxInterval: fileReflection.max_interval != null ? num(fileReflection.max_interval, 86400) : undefined,
             checkInterval: fileReflection.check_interval != null ? num(fileReflection.check_interval, 300) : undefined,

@@ -15,6 +15,7 @@
 
 import { createLogger } from "../core/logger.js";
 import { callLLM, type LLMConfig, type ChatMessage } from "../core/llm.js";
+import { resolveLLMProfile } from "../core/config.js";
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import type {
@@ -140,7 +141,12 @@ export async function runReflection(
     reflectionConfig?: ReflectionExternalConfig,
 ): Promise<ReflectionResult> {
     const startTime = new Date().toISOString();
-    log.info("Reflection 开始", { chatId });
+
+    // ── Profile 解析：若配置了 profile 则使用该 profile 的完整 LLMConfig ──
+    const effectiveLlmConfig = reflectionConfig?.profile
+        ? resolveLLMProfile(reflectionConfig.profile)
+        : llmConfig;
+    log.info("Reflection 开始", { chatId, profile: reflectionConfig?.profile ?? "(fallback)" });
 
     // ── Step 1: 数据收集 ──
     const groupModel = memory.getGroupModel(chatId);
@@ -181,10 +187,7 @@ export async function runReflection(
         insights: "",
     };
     try {
-        const response = await callLLM(messages, llmConfig, {
-            temperature: reflectionConfig?.temperature ?? 0.3,
-            ...(reflectionConfig?.maxTokens ? { maxTokens: reflectionConfig.maxTokens } : {}),
-            ...(reflectionConfig?.model ? { model: reflectionConfig.model } : {}),
+        const response = await callLLM(messages, effectiveLlmConfig, {
             caller: "reflection",
         });
         const parsed = parseReflectionJSON(response.content);
@@ -322,7 +325,7 @@ export async function runReflection(
     // 4d. 情感记忆合并（LLM 辅助分析）
     let totalMerged = 0;
     for (const profile of profiles) {
-        const merged = await mergeEpisodes(profile.userId, chatId, memory, llmConfig, reflectionConfig);
+        const merged = await mergeEpisodes(profile.userId, chatId, memory, effectiveLlmConfig, reflectionConfig);
         if (merged > 0) {
             log.debug("Reflection 4d: 情感合并", { userId: profile.userId, merged });
         }
@@ -940,9 +943,6 @@ async function analyzeMergeWithLLM(
             { role: "user", content: userPrompt },
         ];
         const response = await callLLM(messages, llmConfig, {
-            temperature: reflectionConfig?.temperature ?? 0.3,
-            ...(reflectionConfig?.maxTokens ? { maxTokens: reflectionConfig.maxTokens } : {}),
-            ...(reflectionConfig?.model ? { model: reflectionConfig.model } : {}),
             caller: "reflection",
         });
 
@@ -990,9 +990,6 @@ async function analyzeCascadeMergeWithLLM(
             { role: "user", content: userPrompt },
         ];
         const response = await callLLM(messages, llmConfig, {
-            temperature: reflectionConfig?.temperature ?? 0.3,
-            ...(reflectionConfig?.maxTokens ? { maxTokens: reflectionConfig.maxTokens } : {}),
-            ...(reflectionConfig?.model ? { model: reflectionConfig.model } : {}),
             caller: "reflection",
         });
 
