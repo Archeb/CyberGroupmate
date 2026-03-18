@@ -117,14 +117,10 @@ telegram:
 # ─── Reflection 设置 ───
 # 控制反思引擎的行为参数
 reflection:
-  # LLM 生成温度（较低保证稳定性）
-  temperature: 0.3
-
-  # 最大输出 token 数（活跃群可能需要更大）
-  max_tokens: 16384
-
-  # 覆盖模型名称（默认使用 cheap tier 模型）
-  # model: gemini-3-flash-preview
+  # 使用的 LLM profile（引用 llm_profiles 中的名称）
+  # 未设置则使用调用者传入的默认模型（通常为 mid tier）
+  # 如需自定义 temperature/max_tokens，请在 llm_profiles 中新建专用 profile
+  profile: gemini-flash
 
   # 冷场触发阈值（秒），群沉默多久后自动触发反思
   silence_threshold: 7200    # 2h
