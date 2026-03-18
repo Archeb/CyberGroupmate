@@ -246,7 +246,7 @@ async function describeImage(
         },
     ];
 
-    const response = await callLLM(messages, visionConfig, { maxTokens: 200, caller: "vision" });
+    const response = await callLLM(messages, visionConfig, { caller: "vision" });
     return response.content.trim();
 }
 
