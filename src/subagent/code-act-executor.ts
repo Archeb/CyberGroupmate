@@ -44,14 +44,17 @@ function loadApiTypeDefs(): string {
 
     try {
         const thisFile = fileURLToPath(import.meta.url);
-        const scenesDir = join(dirname(thisFile), "..", "scenes");
+        const modulesDir = join(dirname(thisFile), "..", "sandbox", "modules");
 
         const files = [
-            join(scenesDir, "telegram.d.ts"),
-            join(scenesDir, "memory.d.ts"),
-            join(scenesDir, "shared", "runtime.d.ts"),
-            join(scenesDir, "shared", "actions.d.ts"),
-            join(scenesDir, "shared", "skills.d.ts"),
+            join(modulesDir, "telegram.d.ts"),
+            join(modulesDir, "memory.d.ts"),
+            join(modulesDir, "runtime.d.ts"),
+            join(modulesDir, "actions.d.ts"),
+            join(modulesDir, "skills.d.ts"),
+            join(modulesDir, "scene.d.ts"),
+            join(modulesDir, "ctx.d.ts"),
+            join(modulesDir, "docs.d.ts"),
         ];
 
         const parts: string[] = [];

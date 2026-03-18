@@ -7,7 +7,7 @@
  * 在整体架构中的位置：
  * - 被 MemoryStoreV2 实现类使用
  * - 被 compaction.ts、main.ts、cli.ts 等消费者导入
- * - 场景类型定义 scenes/memory.d.ts 的实际对应类型
+ * - sandbox/modules/memory.d.ts 的实际对应类型
  */
 
 import type { LLMConfig, ReflectionExternalConfig } from "../core/config.js";
