@@ -11,8 +11,44 @@ import type { NotificationCenter } from "../event/notification-center.js";
 import type { TelegramConfig } from "../core/config.js";
 import type { PlatformAdapter } from "./platform-adapter.js";
 import { createLogger } from "../core/logger.js";
+import * as fs from "node:fs";
+import * as path from "node:path";
 
 const log = createLogger("telegram-adapter");
+
+// ─── 媒体文件缓存 ───
+
+const DEFAULT_MEDIA_CACHE_DIR = "workspace/media-cache";
+
+class MediaFileCache {
+    private readonly dir: string;
+
+    constructor(cacheDir: string = DEFAULT_MEDIA_CACHE_DIR) {
+        this.dir = cacheDir;
+        try {
+            fs.mkdirSync(this.dir, { recursive: true });
+        } catch { /* ignore */ }
+    }
+
+    get(uniqueFileId: string): Buffer | null {
+        try {
+            const filePath = path.join(this.dir, uniqueFileId);
+            if (fs.existsSync(filePath)) {
+                return fs.readFileSync(filePath);
+            }
+        } catch { /* miss */ }
+        return null;
+    }
+
+    set(uniqueFileId: string, buffer: Buffer): void {
+        try {
+            const filePath = path.join(this.dir, uniqueFileId);
+            fs.writeFileSync(filePath, buffer);
+        } catch (err) {
+            log.warn("MediaFileCache: 写入缓存失败", { uniqueFileId, error: String(err) });
+        }
+    }
+}
 
 interface PromptHandler {
     (prompt: string): Promise<string>;
@@ -100,6 +136,7 @@ export class TelegramAdapter implements PlatformAdapter {
     private client: any | null = null;
     private selfUser: PlainUser | null = null;
     private messageHandler: ((msg: any) => Promise<void>) | null = null;
+    private mediaCache = new MediaFileCache();
 
     constructor(
         private config: TelegramConfig,
@@ -329,13 +366,24 @@ export class TelegramAdapter implements PlatformAdapter {
                 return null;
             }
             case "telegram.downloadMedia": {
-                // args[0] = fileId string, args[1] = chatId (optional), args[2] = messageId (optional)
+                // args[0] = fileId, args[1] = chatId, args[2] = messageId, args[3] = uniqueFileId
                 const fileIdOrMedia = args[0];
                 if (!fileIdOrMedia) throw new Error("downloadMedia: fileId is required");
+                const uniqueFileId = typeof args[3] === "string" ? args[3] : undefined;
+
+                // ── 缓存命中 → 直接返回 ──
+                if (uniqueFileId) {
+                    const cached = this.mediaCache.get(uniqueFileId);
+                    if (cached) {
+                        log.debug("downloadMedia: 缓存命中", { uniqueFileId });
+                        return { buffer: cached.toString("base64"), size: cached.length };
+                    }
+                }
 
                 try {
                     const uint8 = await this.client.downloadAsBuffer(fileIdOrMedia);
                     const buffer = Buffer.from(uint8);
+                    if (uniqueFileId) this.mediaCache.set(uniqueFileId, buffer);
                     return { buffer: buffer.toString("base64"), size: buffer.length };
                 } catch (err) {
                     const errMsg = err instanceof Error ? err.message : String(err);
@@ -372,6 +420,7 @@ export class TelegramAdapter implements PlatformAdapter {
                         log.info("downloadMedia: refetch 成功，重试下载", { freshFileId: freshFileId.slice(0, 30) + "..." });
                         const uint8 = await this.client.downloadAsBuffer(freshFileId);
                         const buffer = Buffer.from(uint8);
+                        if (uniqueFileId) this.mediaCache.set(uniqueFileId, buffer);
                         return { buffer: buffer.toString("base64"), size: buffer.length };
                     } catch (refetchErr) {
                         log.warn("downloadMedia: refetch 重试也失败", {
