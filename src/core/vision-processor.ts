@@ -45,8 +45,8 @@ export interface ProcessedMedia {
 
 /** Sticker 描述缓存接口 */
 export interface StickerCache {
-    getStickerDescription(uniqueFileId: string): string | null;
-    setStickerDescription(uniqueFileId: string, description: string): void;
+    getStickerDescription(uniqueFileId: string): { description: string; emoji?: string } | null;
+    setStickerDescription(uniqueFileId: string, description: string, emoji?: string): void;
 }
 
 /** 下载函数类型 */
@@ -188,9 +188,10 @@ async function processSingleSticker(
         const cached = stickerCache.getStickerDescription(sticker.uniqueFileId);
         if (cached) {
             log.debug("Sticker 缓存命中", { uniqueFileId: sticker.uniqueFileId });
+            const emojiTag = cached.emoji ?? sticker.emoji ?? "";
             return {
                 index: sticker.messageIndex,
-                description: `[🎭 贴纸: ${cached}]`,
+                description: `[🎭 贴纸${emojiTag ? " " + emojiTag : ""}: ${cached.description}]`,
             };
         }
     }
@@ -199,16 +200,17 @@ async function processSingleSticker(
     try {
         const buffer = await downloadFn(sticker.fileId);
         const mime = sticker.mimeType ?? "image/webp";
-        const desc = await describeSticker(buffer, mime, visionLlmConfig, sticker.emoji);
+        const result = await describeSticker(buffer, mime, visionLlmConfig, sticker.emoji);
 
         // 写入缓存 (vision_cache mode)
         if (mode === "vision_cache" && stickerCache) {
-            stickerCache.setStickerDescription(sticker.uniqueFileId, desc);
+            stickerCache.setStickerDescription(sticker.uniqueFileId, result.description, result.emoji);
         }
 
+        const emojiTag = result.emoji ?? sticker.emoji ?? "";
         return {
             index: sticker.messageIndex,
-            description: `[🎭 贴纸: ${desc}]`,
+            description: `[🎭 贴纸${emojiTag ? " " + emojiTag : ""}: ${result.description}]`,
         };
     } catch (err) {
         log.warn("Sticker 识别失败，降级为 emoji", { uniqueFileId: sticker.uniqueFileId, error: String(err) });
@@ -245,26 +247,46 @@ async function describeImage(
 }
 
 /**
- * 调用 Vision LLM 描述 Sticker
+ * 调用 Vision LLM 描述 Sticker，返回描述 + emoji
  */
 async function describeSticker(
     stickerBuffer: Buffer,
     mimeType: string,
     visionConfig: LLMConfig,
     emoji?: string,
-): Promise<string> {
+): Promise<{ description: string; emoji?: string }> {
     const b64 = stickerBuffer.toString("base64");
     const dataUri = `data:${mimeType};base64,${b64}`;
 
-    const emojiHint = emoji ? `（这个贴纸的 emoji 是 ${emoji}）` : "";
+    const emojiHint = emoji ? `（这个贴纸的原始 emoji 是 ${emoji}）` : "";
     const messages: ChatMessage[] = [
         {
             role: "user",
-            content: `这是一个 Telegram 贴纸图片${emojiHint}。请用几个词简短描述贴纸表情/动作/含义。`,
+            content: `这是一个 Telegram 贴纸图片${emojiHint}。
+
+请你：
+1. 用几个词简短描述贴纸表情/动作/含义。如果贴纸中有文字，结合图片内容理解并描述文字的完整内容。
+2. 选择一个最能代表这个贴纸含义的 emoji。
+
+请用以下 JSON 格式回复（仅返回 JSON，不要包含其他内容）：
+{"description": "描述内容", "emoji": "单个emoji"}`,
             imageParts: [{ url: dataUri }],
         },
     ];
 
-    const response = await callLLM(messages, visionConfig, { maxTokens: 100 });
-    return response.content.trim();
+    const response = await callLLM(messages, visionConfig);
+    const raw = response.content.trim();
+
+    // 尝试解析 JSON
+    try {
+        const jsonStr = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
+        const parsed = JSON.parse(jsonStr);
+        return {
+            description: String(parsed.description ?? raw),
+            emoji: typeof parsed.emoji === "string" ? parsed.emoji : undefined,
+        };
+    } catch {
+        log.debug("describeSticker: JSON 解析失败，使用原始文本", { raw: raw.slice(0, 100) });
+        return { description: raw };
+    }
 }

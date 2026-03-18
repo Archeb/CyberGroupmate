@@ -663,6 +663,64 @@ const App = (() => {
         }).join("");
     }
 
+    // ─── Sticker Management ───
+    let stickerCache = [];
+
+    async function loadStickers() {
+        stickerCache = await api("/stickers");
+        document.getElementById("sticker-count").textContent = stickerCache.length;
+        const tbody = document.getElementById("stickers-tbody");
+        if (!stickerCache.length) {
+            tbody.innerHTML = '<tr><td colspan="5" class="text-center opacity-60">暂无贴纸缓存</td></tr>';
+            return;
+        }
+        tbody.innerHTML = stickerCache.map(s => {
+            const time = s.createdAt ? new Date(s.createdAt).toLocaleString() : "";
+            const emojiDisplay = s.emoji || "-";
+            return `<tr>
+                <td class="text-xl">${emojiDisplay}</td>
+                <td class="max-w-xs truncate" title="${escapeHtml(s.description)}">${escapeHtml(s.description)}</td>
+                <td class="font-mono text-xs max-w-32 truncate" title="${escapeHtml(s.uniqueFileId)}">${escapeHtml(s.uniqueFileId.slice(-16))}</td>
+                <td class="text-xs opacity-60">${time}</td>
+                <td>
+                    <div class="flex gap-1">
+                        <button class="btn btn-xs btn-ghost" onclick="App.editSticker('${escapeHtml(s.uniqueFileId)}')">✏️</button>
+                        <button class="btn btn-xs btn-ghost text-error" onclick="App.deleteSticker('${escapeHtml(s.uniqueFileId)}')">🗑</button>
+                    </div>
+                </td>
+            </tr>`;
+        }).join("");
+    }
+
+    async function deleteSticker(uniqueFileId) {
+        if (!confirm(`确认删除贴纸 ${uniqueFileId.slice(-16)} 的缓存？`)) return;
+        await api(`/stickers/${encodeURIComponent(uniqueFileId)}`, { method: "DELETE" });
+        await loadStickers();
+    }
+
+    function editSticker(uniqueFileId) {
+        const s = stickerCache.find(s => s.uniqueFileId === uniqueFileId);
+        if (!s) return;
+        document.getElementById("sticker-edit-id").textContent = uniqueFileId;
+        document.getElementById("sticker-edit-emoji").value = s.emoji || "";
+        document.getElementById("sticker-edit-desc").value = s.description || "";
+        document.getElementById("sticker-edit-modal").showModal();
+    }
+
+    async function saveSticker() {
+        const uniqueFileId = document.getElementById("sticker-edit-id").textContent;
+        const emoji = document.getElementById("sticker-edit-emoji").value.trim() || undefined;
+        const description = document.getElementById("sticker-edit-desc").value.trim();
+        if (!description) { alert("描述不能为空"); return; }
+        await api(`/stickers/${encodeURIComponent(uniqueFileId)}`, {
+            method: "PUT",
+            body: { description, emoji },
+        });
+        document.getElementById("sticker-edit-modal").close();
+        await loadStickers();
+    }
+
+
     // ─── Tab Management ───
     function switchTab(tab) {
         activeTab = tab;
@@ -683,6 +741,7 @@ const App = (() => {
             if (selectedCodeActChatId) selectCodeActChat(selectedCodeActChatId);
         }
         if (activeTab === "system") renderSystem();
+        if (activeTab === "stickers") loadStickers();
         if (activeTab === "queue") renderQueue();
     }
 
@@ -752,6 +811,6 @@ const App = (() => {
     return {
         selectChat, loadTopics, toggleTopicGroup, boostQueue, removeFromQueue, showEnqueueModal, doEnqueue,
         selectCodeActChat, cancelCodeAct, queryUser, queryGroup, quickQueryUser, quickQueryGroup, recallMemory,
-        viewTopicDetail,
+        viewTopicDetail, loadStickers, deleteSticker, editSticker, saveSticker,
     };
 })();

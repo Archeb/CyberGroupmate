@@ -395,6 +395,8 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
                 created_at TEXT NOT NULL
             );
         `);
+        // 新增 emoji 列（兼容旧数据库）
+        try { this.db.exec(`ALTER TABLE sticker_descriptions ADD COLUMN emoji TEXT`); } catch { /* 列已存在 */ }
     }
 
     // ─── 写入方法 ───
@@ -1652,20 +1654,48 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
 
     // ── Sticker 描述缓存 ──
 
-    getStickerDescription(uniqueFileId: string): string | null {
+    getStickerDescription(uniqueFileId: string): { description: string; emoji?: string } | null {
         const row = this.db.prepare(
-            "SELECT description FROM sticker_descriptions WHERE unique_file_id = ?"
-        ).get(uniqueFileId) as { description: string } | undefined;
-        return row?.description ?? null;
+            "SELECT description, emoji FROM sticker_descriptions WHERE unique_file_id = ?"
+        ).get(uniqueFileId) as { description: string; emoji?: string } | undefined;
+        if (!row) return null;
+        return { description: row.description, emoji: row.emoji ?? undefined };
     }
 
-    setStickerDescription(uniqueFileId: string, description: string): void {
+    setStickerDescription(uniqueFileId: string, description: string, emoji?: string): void {
         const ts = now();
         this.db.prepare(`
-            INSERT OR REPLACE INTO sticker_descriptions (unique_file_id, description, created_at)
-            VALUES (?, ?, ?)
-        `).run(uniqueFileId, description, ts);
-        log.debug("setStickerDescription", { uniqueFileId, descPreview: description.slice(0, 50) });
+            INSERT OR REPLACE INTO sticker_descriptions (unique_file_id, description, emoji, created_at)
+            VALUES (?, ?, ?, ?)
+        `).run(uniqueFileId, description, emoji ?? null, ts);
+        log.debug("setStickerDescription", { uniqueFileId, emoji, descPreview: description.slice(0, 50) });
+    }
+
+    getAllStickerDescriptions(): Array<{ uniqueFileId: string; description: string; emoji?: string; createdAt: string }> {
+        const rows = this.db.prepare(
+            "SELECT unique_file_id, description, emoji, created_at FROM sticker_descriptions ORDER BY created_at DESC"
+        ).all() as Array<{ unique_file_id: string; description: string; emoji?: string; created_at: string }>;
+        return rows.map(r => ({
+            uniqueFileId: r.unique_file_id,
+            description: r.description,
+            emoji: r.emoji ?? undefined,
+            createdAt: r.created_at,
+        }));
+    }
+
+    deleteStickerDescription(uniqueFileId: string): boolean {
+        const result = this.db.prepare(
+            "DELETE FROM sticker_descriptions WHERE unique_file_id = ?"
+        ).run(uniqueFileId);
+        return result.changes > 0;
+    }
+
+    updateStickerDescription(uniqueFileId: string, description: string, emoji?: string): boolean {
+        const ts = now();
+        const result = this.db.prepare(
+            "UPDATE sticker_descriptions SET description = ?, emoji = ?, created_at = ? WHERE unique_file_id = ?"
+        ).run(description, emoji ?? null, ts, uniqueFileId);
+        return result.changes > 0;
     }
 
     // ─── Reflection (M2.4: 调用 reflection.ts) ───

@@ -316,5 +316,22 @@ export function createApiRouter(deps: DashboardDeps, bridge: EventBridge): Route
         res.json(deps.q5.peek());
     });
 
+    // ─── Sticker Management ───
+    router.get("/stickers", (_req, res) => {
+        res.json(deps.memory.getAllStickerDescriptions());
+    });
+
+    router.delete("/stickers/:uniqueFileId", (req, res) => {
+        const ok = deps.memory.deleteStickerDescription(req.params.uniqueFileId);
+        res.json({ ok });
+    });
+
+    router.put("/stickers/:uniqueFileId", (req, res) => {
+        const { description, emoji } = req.body;
+        if (!description) { res.status(400).json({ error: "description required" }); return; }
+        const ok = deps.memory.updateStickerDescription(req.params.uniqueFileId, description, emoji);
+        res.json({ ok });
+    });
+
     return router;
 }

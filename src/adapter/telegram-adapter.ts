@@ -41,7 +41,7 @@ interface TelegramClientLike {
     sendTyping?(chatId: unknown): Promise<void>;
     joinChat?(chatId: unknown): Promise<unknown>;
     leaveChat?(chatId: unknown): Promise<unknown>;
-    downloadBuffer?(media: unknown): Promise<Buffer>;
+    downloadAsBuffer?(location: unknown): Promise<Uint8Array>;
 }
 
 type TelegramClientFactory = (config: TelegramConfig) => Promise<TelegramClientLike>;
@@ -167,6 +167,7 @@ export class TelegramAdapter implements PlatformAdapter {
                 chatType: normalized.chatType,
                 isDirectMessage: normalized.isDirectMessage,
                 mentionsAgent: normalized.mentionsAgent,
+                mediaInfo: normalized.mediaInfo,
                 payload: {
                     scene: "telegram",
                     chatId: normalized.chatId,
@@ -330,10 +331,8 @@ export class TelegramAdapter implements PlatformAdapter {
                 // args[0] = fileId string (mtcute file ID)
                 const fileIdOrMedia = args[0];
                 if (!fileIdOrMedia) throw new Error("downloadMedia: fileId is required");
-                if (typeof this.client.downloadBuffer !== "function") {
-                    throw new Error("downloadMedia: client.downloadBuffer not available");
-                }
-                const buffer = await this.client.downloadBuffer(fileIdOrMedia);
+                const uint8 = await this.client.downloadAsBuffer(fileIdOrMedia);
+                const buffer = Buffer.from(uint8);
                 return { buffer: buffer.toString("base64"), size: buffer.length };
             }
             default:

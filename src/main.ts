@@ -348,6 +348,8 @@ async function main(): Promise<void> {
                 sender: String(event.displayName ?? event.senderName ?? event.userName ?? "?"),
                 text: String(event.text ?? event.message ?? ""),
                 timestamp: String(event.timestamp ?? new Date().toISOString()),
+                mediaType: (event as any).mediaInfo?.type ?? undefined,
+                mediaInfo: (event as any).mediaInfo ? JSON.stringify((event as any).mediaInfo) : undefined,
             });
         }
 

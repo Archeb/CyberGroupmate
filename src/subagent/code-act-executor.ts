@@ -21,7 +21,8 @@ import { SandboxPool } from "../sandbox/sandbox-pool.js";
 import { NotificationCenter } from "../event/notification-center.js";
 import { runCodeActSession, SentMessageCollector, type SessionResult, type SentMessageRecord } from "../sandbox/session-runner.js";
 import { renderPrompt } from "../main-agent/prompt-renderer.js";
-import type { LLMConfig } from "../core/config.js";
+import type { LLMConfig, VisionConfig } from "../core/config.js";
+import { processMediaBatch, type MediaAttachment } from "../core/vision-processor.js";
 import type { ChatMessage } from "../core/llm.js";
 import { createLogger } from "../core/logger.js";
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
@@ -150,7 +151,7 @@ export class CodeActExecutor {
     private callbackHandler: ((cb: SubagentCallback) => void) | null = null;
 
     /** 层 2: 消息前送缓冲区 — NC hook 在 session 执行期间推入新消息 */
-    private pendingMessages: Array<{ id: string; sender: string; text: string; timestamp: string }> = [];
+    private pendingMessages: Array<{ id: string; sender: string; text: string; timestamp: string; mediaType?: string; mediaInfo?: string }> = [];
 
     /** Memory 引用（层 1 用于刷新目标消息） */
     private memory: MemoryStoreV2 | null = null;
@@ -185,6 +186,10 @@ export class CodeActExecutor {
     private sessionFilePath: string | null = null;
     private personaName: string = "赛博群友";
     private personaDescription: string = "";
+    /** Vision 配置 */
+    private visionConfig: VisionConfig | undefined;
+    /** 媒体下载函数（委托给 adapter） */
+    private downloadFn: ((fileId: string) => Promise<Buffer>) | undefined;
 
     setDependencies(
         sandboxPool: SandboxPool,
@@ -193,6 +198,8 @@ export class CodeActExecutor {
         sessionsDir?: string,
         persona?: { name: string; description: string },
         memory?: MemoryStoreV2,
+        visionConfig?: VisionConfig,
+        downloadFn?: (fileId: string) => Promise<Buffer>,
     ): void {
         this.sandboxPool = sandboxPool;
         this.nc = nc;
@@ -203,7 +210,9 @@ export class CodeActExecutor {
             this.personaDescription = persona.description;
         }
         if (memory) this.memory = memory;
-        log.info("setDependencies", { chatId: this.chatId, hasSandboxPool: true });
+        this.visionConfig = visionConfig;
+        this.downloadFn = downloadFn;
+        log.info("setDependencies", { chatId: this.chatId, hasSandboxPool: true, hasVision: !!visionConfig, hasDownload: !!downloadFn });
     }
 
     /**
@@ -322,9 +331,59 @@ export class CodeActExecutor {
         const toneGuidance = ctx.toneGuidance ?? "";
         const contentDirection = ctx.contentDirection ?? task.decisions.map(d => d.contentDirection ?? "").filter(Boolean).join("; ");
 
-        // 2. 格式化目标消息（含 reply-to 关系 + 媒体描述）
+        // 2. Vision 处理：从 mediaInfo 解析 fileId，按需下载和识图
+        const recentMessages = ctx.recentMessages ?? [];
+        const mediaAttachments: MediaAttachment[] = [];
+        for (let i = 0; i < recentMessages.length; i++) {
+            const m = recentMessages[i];
+            if (m.mediaInfo) {
+                try {
+                    const info = JSON.parse(m.mediaInfo);
+                    if (info.fileId && info.type) {
+                        mediaAttachments.push({
+                            type: info.type,
+                            fileId: info.fileId,
+                            uniqueFileId: info.uniqueFileId ?? info.fileId,
+                            emoji: info.emoji,
+                            mimeType: info.mimeType,
+                            width: info.width,
+                            height: info.height,
+                            fileSize: info.fileSize,
+                            messageIndex: i,
+                        });
+                    }
+                } catch { /* mediaInfo JSON 解析失败，跳过 */ }
+            }
+        }
+
+        if (mediaAttachments.length > 0) {
+            log.info("Vision 处理开始", { chatId: this.chatId, taskId: task.taskId, mediaCount: mediaAttachments.length });
+            try {
+                const processed = await processMediaBatch(
+                    mediaAttachments,
+                    this.visionConfig,
+                    this.llmConfig!,
+                    undefined, // visionTierConfig — 可后续扩展
+                    this.downloadFn,
+                    this.memory ?? undefined, // sticker cache
+                );
+                // 将处理结果写回 recentMessages
+                for (const pm of processed) {
+                    if (pm.index >= 0 && pm.index < recentMessages.length) {
+                        const rm = recentMessages[pm.index] as any;
+                        if (!rm.processedMedia) rm.processedMedia = [];
+                        rm.processedMedia.push(pm);
+                    }
+                }
+                log.info("Vision 处理完成", { chatId: this.chatId, taskId: task.taskId, processed: processed.length });
+            } catch (err) {
+                log.warn("Vision 处理失败，继续使用占位符", { chatId: this.chatId, taskId: task.taskId, error: String(err) });
+            }
+        }
+
+        // 3. 格式化目标消息（含 reply-to 关系 + 媒体描述）
         const imageParts: Array<{ url: string }> = [];
-        const targetMessages = (ctx.recentMessages ?? []).map(
+        const targetMessages = recentMessages.map(
             (m) => {
                 const replyTag = m.replyTo ? ` (↩ reply to ${m.replyTo})` : "";
                 let textPart = m.text ?? "";
@@ -333,7 +392,6 @@ export class CodeActExecutor {
                 if (m.processedMedia && m.processedMedia.length > 0) {
                     for (const pm of m.processedMedia) {
                         if (pm.description) {
-                            // 如果文本中有占位符则替换，否则追加
                             textPart = textPart + ` ${pm.description}`;
                         }
                         if (pm.base64Data && pm.mimeType) {
@@ -583,13 +641,14 @@ export class CodeActExecutor {
      * 层 2: 推入一条新消息到 pending buffer
      * 由 NC hook 在 session 执行期间调用
      */
-    pushPendingMessage(msg: { id: string; sender: string; text: string; timestamp: string }): void {
+    pushPendingMessage(msg: { id: string; sender: string; text: string; timestamp: string; mediaType?: string; mediaInfo?: string }): void {
         this.pendingMessages.push(msg);
         log.debug("pushPendingMessage", {
             chatId: this.chatId,
             msgId: msg.id,
             sender: msg.sender,
             textPreview: msg.text.length > 50 ? msg.text.slice(0, 50) + "..." : msg.text,
+            hasMedia: !!msg.mediaInfo,
             bufferSize: this.pendingMessages.length,
         });
     }
