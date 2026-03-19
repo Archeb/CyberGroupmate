@@ -20,6 +20,7 @@ import { DEFAULT_SUBAGENT_CONFIG } from "./types.js";
 import { createLogger } from "../core/logger.js";
 import { existsSync, readdirSync, mkdirSync } from "node:fs";
 import { join, basename } from "node:path";
+import type { MemoryStoreV2 } from "../memory-v2/index.js";
 
 const log = createLogger("subagent-manager");
 
@@ -31,6 +32,8 @@ export interface SubagentManagerConfig {
     stickinessProvider?: (chatId: string) => GroupStickiness | undefined;
     /** RecordingPipeline 依赖（注入每个 GroupSubagent） */
     recordingDeps?: RecordingPipelineDeps;
+    /** MemoryV2 实例（用于启动恢复话题） */
+    memory?: MemoryStoreV2;
     /** Session 持久化根目录（默认 workspace/sessions） */
     sessionsDir?: string;
     /** 平台名称（用于持久化路径，如 "telegram"） */
@@ -144,11 +147,19 @@ export class SubagentManager {
                         if (loaded) {
                             subagent.codeActExecutor = executor;
                             subagent.restoreLastAgentReplyAt();
+
+                            // 从 MemoryV2 恢复最近话题到 TopicRegistry
+                            if (this.config.memory) {
+                                const topicCount = subagent.loadRecentTopics(this.config.memory);
+                                log.info("restoreAll: 恢复话题", { chatId, topicCount });
+                            }
+
                             restored.push(chatId);
                             log.info("restoreAll: 恢复 session", {
                                 chatId,
                                 sessionSize: executor.getSessionSize(),
                                 executionCount: executor.getExecutionCount(),
+                                registrySize: subagent.topicRegistry.size,
                             });
                         }
                     }

@@ -364,6 +364,51 @@ export class GroupSubagent extends EventEmitter {
     }
 
     /**
+     * 从 MemoryV2 恢复最近话题到 TopicRegistry（启动时调用）
+     *
+     * 查询最近 2 小时的话题，重建 registry 状态。
+     * 已回复的话题（wasEngaged）进入 COOLDOWN，避免重复回复。
+     *
+     * @param memory MemoryV2 实例
+     * @returns 恢复的话题数量
+     */
+    loadRecentTopics(memory: MemoryStoreV2): number {
+        const since = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+        const topicNodes = memory.getTopicsSince(this.chatId, since);
+
+        if (topicNodes.length === 0) {
+            log.debug("loadRecentTopics: 无最近话题", { chatId: this.chatId });
+            return 0;
+        }
+
+        // 将 TopicNode 转为 RestorableTopic
+        const restorableTopics: import("../pipeline/topic-registry.js").RestorableTopic[] = topicNodes.map(tn => ({
+            id: tn.pipelineTopicId ?? tn.id,  // 优先使用 pipeline ID（registry 用 pipeline ID 作 key）
+            chatId: tn.chatId,
+            label: tn.label,
+            summary: tn.summary,
+            keyPoints: tn.keyPoints,
+            keywords: tn.keywords,
+            participants: tn.participants,
+            messageIds: tn.messageRange?.messageIds,
+            startedAt: tn.startedAt,
+            wasEngaged: tn.wasEngaged,
+            interventionCount: tn.interventionCount,
+            messageCount: tn.messageRange?.count ?? 0,
+        }));
+
+        const restored = this.topicRegistry.restoreFromMemory(restorableTopics);
+        log.info("loadRecentTopics", {
+            chatId: this.chatId,
+            queried: topicNodes.length,
+            restored,
+            registrySize: this.topicRegistry.size,
+        });
+
+        return restored;
+    }
+
+    /**
      * 释放资源
      */
     dispose(): void {

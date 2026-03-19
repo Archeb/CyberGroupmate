@@ -73,12 +73,17 @@ export function createDispatchHandler(
             if (decision.action === "REPLY") {
                 // Fix 3: 构建符合 subagent.md §13.2 B1 规格的 contextSnapshot
                 // 获取话题摘要
-                const activeTopics = subagent?.topicRegistry.getActive(result.chatId) ?? [];
+                // Fix: getActive() 只返回 ACTIVE 状态话题，但 triage 通过后话题进入 ENGAGED 状态。
+                // 使用 getByChat() 获取所有非归档话题，确保 ENGAGED/TRIAGING 话题也可见。
+                const allTopics = subagent?.topicRegistry.getByChat(result.chatId) ?? [];
                 const topicForDecision = decision.topicId
-                    ? activeTopics.find((t: any) => String(t.id) === decision.topicId)
-                    : activeTopics[0];
-                const topicSummary = topicForDecision
-                    ? `${topicForDecision.label ?? ""}: ${topicForDecision.recentContext ?? ""}`
+                    ? allTopics.find((t: any) => String(t.id) === decision.topicId)
+                    : allTopics[0];
+                // 构建完整的话题摘要：包含所有非归档话题的状态和上下文
+                const topicSummary = allTopics.length > 0
+                    ? allTopics.map((t: any) =>
+                        `[${t.state}] ${t.label ?? ""}${t.lastSummary ? ` — ${t.lastSummary}` : (t.recentContext ? `: ${t.recentContext.split("\n").slice(-2).join("; ")}` : "")}`
+                    ).join("\n")
                     : "";
 
                 // 获取最近消息

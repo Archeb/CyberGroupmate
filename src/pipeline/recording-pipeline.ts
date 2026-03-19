@@ -74,7 +74,7 @@ const TOPIC_CLUSTERING_PROMPT = `你是一个群聊消息话题分析器。
 - topicLabel 应为 3-5 个词，概括话题主旨
 - 只输出 JSON，不要其他内容`;
 
-const TOPIC_TRIAGE_PROMPT = `你是一个群聊 AI 智能体的决策顾问。
+const TOPIC_TRIAGE_PROMPT = `你是一个AI 智能体的决策顾问。
 请分析每个话题，判断 AI 智能体是否应该介入。
 
 AI 智能体人设：{PERSONA}

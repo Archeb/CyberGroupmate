@@ -370,8 +370,87 @@ export class TopicRegistry extends EventEmitter {
         );
     }
 
+    /**
+     * 从 MemoryV2 恢复最近话题到 registry（启动时调用）
+     *
+     * 从 MemoryV2 topics 表恢复最近的话题，重建内存状态。
+     * 已回复过的话题（wasEngaged）设为 COOLDOWN，未回复的设为 ACTIVE。
+     *
+     * @param topics 从 MemoryV2 getTopicsSince() 获取的话题列表
+     * @returns 恢复的话题数量
+     */
+    restoreFromMemory(topics: RestorableTopic[]): number {
+        let restored = 0;
+
+        for (const t of topics) {
+            // 跳过已存在的话题（避免重复）
+            if (this.topics.has(t.id)) continue;
+
+            // 计算话题是否过期（2小时不活跃 → 不恢复）
+            const startedMs = new Date(t.startedAt).getTime();
+            const age = Date.now() - startedMs;
+            if (age > 2 * 60 * 60 * 1000) continue; // 超过 2 小时的不恢复
+
+            // 决定恢复后的状态
+            const state: TopicState = (t.wasEngaged || t.interventionCount > 0)
+                ? "COOLDOWN"     // 已回复 → 进入 COOLDOWN 避免重复
+                : "ACTIVE";      // 未回复 → ACTIVE 允许重新 triage
+
+            const topic: Topic = {
+                id: t.id,
+                chatId: t.chatId,
+                label: t.label,
+                keywords: t.keywords ?? [],
+                participantIds: new Set(t.participants ?? []),
+                messageIds: t.messageIds ?? [],
+                state,
+                createdAt: startedMs,
+                lastActivityAt: startedMs,
+                turnCount: 0,
+                maxTurns: 5,
+                pendingMessages: [],
+                exitSignals: [],
+                irrelevantStreak: 0,
+                messageCount: t.messageCount ?? 0,
+                interventionCount: t.interventionCount ?? 0,
+                recentContext: "",
+                lastSummary: t.summary ?? undefined,
+                lastKeyPoints: t.keyPoints ?? undefined,
+            };
+
+            this.topics.set(topic.id, topic);
+            restored++;
+
+            log.info("话题恢复", {
+                id: topic.id,
+                label: topic.label,
+                state: topic.state,
+                chatId: topic.chatId,
+                wasEngaged: t.wasEngaged,
+            });
+        }
+
+        return restored;
+    }
+
     /** 当前话题总数（调试用） */
     get size(): number {
         return this.topics.size;
     }
+}
+
+/** 可恢复话题的最小数据（来自 MemoryV2 TopicNode） */
+export interface RestorableTopic {
+    id: string;
+    chatId: string;
+    label: string;
+    summary?: string;
+    keyPoints?: string[];
+    keywords?: string[];
+    participants?: string[];
+    messageIds?: string[];
+    startedAt: string;
+    wasEngaged: boolean;
+    interventionCount: number;
+    messageCount?: number;
 }

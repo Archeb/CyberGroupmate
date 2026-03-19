@@ -235,6 +235,7 @@ async function main(): Promise<void> {
             personaDescription: appConfig.persona?.description ?? "赛博群友",
             memory,
         },
+        memory,  // 用于启动时恢复 TopicRegistry
         sessionsDir: SESSIONS_DIR,
         platformName: "telegram",
     });
@@ -282,8 +283,29 @@ async function main(): Promise<void> {
     nc.onPush(event => {
         const chatId = String(event.chatId ?? "");
         if (!chatId) return;
-        // 接收所有消息类型事件（TelegramAdapter 使用 "nc.message"）
+
+        // ─── Agent 发出消息的即时落盘（Fix: 修复 agent 消息不可见导致重复回复） ───
+        // system.agent_message_sent 事件之前只被 FeedbackLoop 消费，
+        // 不写入 message_log，导致 getRecentMessages() 缺少 agent 消息。
         const eventType = String(event.type ?? "");
+        if (eventType === "system.agent_message_sent") {
+            try {
+                memory.storeMessageBatch([{
+                    messageId: String(event.messageId ?? `agent-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`),
+                    chatId,
+                    userId: appConfig.persona?.name ?? "agent",
+                    displayName: appConfig.persona?.name ?? "赛博群友",
+                    text: String(event.text ?? ""),
+                    replyToMessageId: event.replyToMessageId ? String(event.replyToMessageId) : undefined,
+                    timestamp: String(event.timestamp ?? new Date().toISOString()),
+                }]);
+            } catch (err) {
+                log.warn("Agent 消息落盘失败", { chatId, error: String(err) });
+            }
+            return; // agent 消息不走后续 Observer/Q3 逻辑
+        }
+
+        // 接收所有消息类型事件（TelegramAdapter 使用 "nc.message"）
         if (eventType !== "nc.message" && eventType !== "telegram.message") return;
 
         // ─── 即时落盘：确保 message_log 实时可查 ───
