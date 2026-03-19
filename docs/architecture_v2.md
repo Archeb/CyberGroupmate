@@ -115,6 +115,60 @@ stateDiagram-v2
 5. **Reflection 反思引擎**：在冷场达标（沉默超阈值）、最大间隔到期、或处于非清醒时段时定时触发。Reflection 5 步流程：(a) 收集上次反思后的话题与交互数据 → (b) 量化统计每位参与者 → (c) LLM 生成结构化 JSON → (d) 写入画像增量/核心事实/群组模型更新/情感记忆合并/邓巴裁剪 → (e) 返回结果。合并机制支持渐进级联：>7天→周、>30天→月、>90天→季、>365天→年，只保留高显著性事件。
 6. **上下文预算管理 (ContextManager)**：为 CodeActExecutor 和主 Agent 提供对话历史的智能压缩。核心能力包括：token 预算估算、消息分类（protected/compactable/disposable）、话题保护与 reply chain 保护（确保当前活跃话题上下文不被截断），以及 LLM 生成的 Context Briefing。
 
+### 2.4 视觉处理管线 (Vision Pipeline)
+**核心概念**：让 Agent "看得见图"。系统根据模型能力和配置自动选择三条处理路径，在 CodeActExecutor 执行期间按需处理消息中的图片和贴纸。主 Agent 决策阶段不做视觉处理（只看文本标签），视觉能力仅在执行层启用。
+
+**架构分层**：
+1. **消息富化器 (`message-enricher.ts`)**：管线入口。从 `RawMessage.mediaInfo` JSON 中解析出 `MediaAttachment[]`（含 fileId、uniqueFileId、type、emoji 等），调用 Vision 处理器批量处理后，将结果写回消息的 `processedMedia` 字段，最终输出格式化文本 + base64 图片列表。
+2. **视觉处理器 (`vision-processor.ts`)**：核心调度。接收 `MediaAttachment[]`，将其分类为 photos 和 stickers 两类，分别按路径处理。
+3. **下载函数 (`downloadFn`)**：由 `dispatch-handler.ts` 从 Telegram Adapter 构建（`telegram.downloadMedia` Host Call），经 `CodeActExecutor.setDependencies()` 注入到执行器，支持 file reference refetch（需要 chatId + messageId）和文件系统缓存（uniqueFileId 去重）。
+
+**三条图片处理路径**：
+| 路径 | 条件 | 行为 | 缓存策略 |
+| :--- | :--- | :--- | :--- |
+| **A: 原生多模态** | 主模型 `llmConfig.vision=true` | 前 `maxImagesPerContext` 张图下载后 base64 内联注入 LLM（`imageParts`），溢出部分降级为 B | 不缓存（每次需完整数据） |
+| **B: Vision 辅助** | A 路溢出，或主模型不支持 vision 但配置了 `vision` tier LLM | 下载图片后调用 vision tier LLM 生成文本描述，以 `[📷 图片描述: ...]` 注入消息 | 内存缓存（`uniqueFileId → description`） |
+| **C: 无 Vision** | 既无原生 vision 也无 vision tier LLM | 占位文本 `[📷 图片]` | 无 |
+
+路径 A 下载失败时自动降级为 B（再失败降级为 C）。
+
+**三种贴纸处理模式** (`VisionConfig.stickerMode`):
+| 模式 | 行为 |
+| :--- | :--- |
+| `emoji_only` (默认) | 仅展示贴纸对应的 emoji 标签 `[🎭 贴纸: 😂]` |
+| `vision_cache` | 首次下载+Vision LLM 识别（描述+emoji），结果写入 `StickerCache` 持久化，后续命中缓存 |
+| `vision_each` | 每次都下载+Vision LLM 识别，不缓存 |
+
+贴纸 Vision LLM 返回结构化 JSON `{"description": "...", "emoji": "🤣"}`，解析失败时 fallback 为原始文本。
+
+**配置** (`config.yaml → vision`)：
+- `maxImagesPerContext`: 单轮上下文最多内联图数（默认 3）
+- `maxImageSize`: 大图压缩阈值长边像素（默认 1024）
+- `stickerMode`: 贴纸处理模式
+- LLM Profile 层面：`vision: true` 标记该 profile 支持多模态；`model_tiers.vision` 指定专用 vision tier
+
+**调用时机**：
+- **主 Agent 决策阶段**（`attend-handler`）：不做 Vision 处理，使用 `formatMessageLine(includeMediaTags: true)` 生成纯文本媒体标签（如 `[📷 图片]`、`[🎭 贴纸: 😂]`），让主脑知道消息附带了媒体类型即可。
+- **CodeAct 执行阶段**（`code-act-executor.ts → executeWithSandbox()`）：使用完整的 `enrichMessages()` 管线，按需下载图片、调用 Vision LLM、生成描述或内联 base64，让执行层 LLM 能真正 "看到" 图片内容。
+
+```mermaid
+graph LR
+    classDef vfill fill:#9b59b6,stroke:#333,stroke-width:2px,color:#fff;
+    classDef afill fill:#e67e22,stroke:#333,stroke-width:2px,color:#fff;
+
+    RM["RawMessage\n(含 mediaInfo JSON)"] -->|解析| ME["message-enricher\nparseMediaAttachments()"]:::afill
+    ME -->|MediaAttachment 列表| VP["vision-processor\nprocessMediaBatch()"]:::vfill
+    VP -->|photo 分类| PA{"主模型\nvision=true?"}
+    PA -->|是 ≤maxImages| PathA["路径A: 下载→base64内联"]:::vfill
+    PA -->|是 >maxImages| PathB["路径B: 下载→Vision LLM描述"]:::vfill
+    PA -->|否 有vision tier| PathB
+    PA -->|否 无vision| PathC["路径C: 占位文本"]:::afill
+    VP -->|sticker 分类| SM{stickerMode}
+    SM -->|emoji_only| SE["emoji 标签"]:::afill
+    SM -->|vision_cache| SVC["缓存查/Vision LLM→缓存写"]:::vfill
+    SM -->|vision_each| SVE["每次 Vision LLM"]:::vfill
+```
+
 ---
 
 ## 3. 组件间关系与数据流动
@@ -178,7 +232,7 @@ graph TD
 | :--- | :--- | :--- |
 | **主 Agent 系统指令** | 全局静态配置库 (`persona`)、全局状态 (`GlobalState`) | `{persona}` (底层人格设定), `{recentDecisions}` (最近决策记录), `{activeTasks}` (当前任务列表), `{attentionSummary}` (全局状态摘要) |
 | **主 Agent 决策输入** (Attend Context) | 群消息的数据库快照 + Observer 产出的话题注册表 + 群组画像 + 历史 Callback + 已分派话题集 | `{topicDigests}`, `{messages}` (L2+深度消息原文), `{engagementScore}`, `{lastCallbacks}`, `{fastPathHistory}`, `{suggestedReplyMode}` (算法预估), `{alertReason}`, `{groupModel}`, `{stickinessLevel}`, `{timeSinceLastAttend}`, `{dispatchedTopicIds}` (已分派回复任务的话题ID，防重复) |
-| **CodeActExecutor 任务指派** | Main Agent 派发到 Q4 的含明确方向的回复任务 + Memory 查询 | `{targetMessages}` (含 reply-to 关系的消息原文), `{topicSummary}`, `{personContext}` (人物背景), `{contentDirection}` (主脑指示的方向), `{toneGuidance}` (语气指导), `{apiTypeDefs}` (沙盒 API 类型定义) |
+| **CodeActExecutor 任务指派** | Main Agent 派发到 Q4 的含明确方向的回复任务 + Memory 查询 + **Vision 管线**（`enrichMessages` 按需下载图片/贴纸并生成描述或 base64 内联） | `{targetMessages}` (含 reply-to 关系的消息原文 + 媒体描述/内联图), `{imageParts}` (路径 A 的 base64 图片数据), `{topicSummary}`, `{personContext}` (人物背景), `{contentDirection}` (主脑指示的方向), `{toneGuidance}` (语气指导), `{apiTypeDefs}` (沙盒 API 类型定义) |
 | **FastPath 快速指令** | Main Agent 授权时圈定的配置选项 | `{preauthorizedActions}` (允许的行动), `{blockedActions}` (绝对不可涉及的话题), `{tonePreset}` (语气预设), `{maxReplyLength}`, `{repliesSent}` / `{maxReplies}` (已用/总额度) |
 | **Reflection 定期反思输入** | MemoryV2 查出的上次反思后的话题与交互数据 + 已有画像 + 群组画像 | `{topics}` (带摘要/情感/AI介入状态), `{interactions}`, `{participantStats}` (量化统计), `{existingProfiles}`, `{groupModel}` |
 
@@ -189,8 +243,9 @@ graph TD
 **背景设定**：一个被 Agent 的 Stickiness 设置为 "FAMILIAR" 级别 (priorityMultiplier=1.2, depthCyclePeriod=15, fastPathEligible=true) 的游戏讨论群。
 
 1. **[感知流入]** 群友 A 连续发了 3 张新游戏截图，群友 B 紧跟着发了一句 "**@CyberGroupmate 这画质可以啊，你觉得呢？你的配置跑得起来不？**"
+   - 每条图片消息在入 `message_log` 时，其 `mediaInfo` 字段记录了 `{type:"photo", fileId, uniqueFileId, mimeType, width, height}` 元数据。
 2. **[底层总线]** 消息毫秒级从 Telegram 适配器进入 **NotificationCenter**，通过 `onPush` Hook 同步路由到 `MessageLogWriter` 实时落盘至 SQLite `message_log`，以及对应群组的 `GroupSubagent.onMessage()`。
-3. **[静默观察]** 消息同时被分发给 **Observer**（计算 Engagement：高频消息 + 多发言者 + @提及 → 飙升）和 **RecordingPipeline**（话题聚类 + LLM Triage）。Observer Engagement 超过告警阈值，通过 `buildQueueEntry()` 生成高级告警条目入队 **Q3**。
+3. **[静默观察]** 消息同时被分发给 **Observer**（计算 Engagement：高频消息 + 多发言者 + @提及 → 飙升）和 **RecordingPipeline**（话题聚类 + LLM Triage）。Observer Engagement 超过告警阈值，通过 `buildQueueEntry()` 生成高级告警条目入队 **Q3**。此时图片只以 `[📷 图片]` 标签参与主脑决策（不做实际视觉处理）。
 4. **[主脑调度]** **MainAgentLoop** 正处于串行 tick 循环中。Phase 2 遍历所有 Subagent 更新 Q3，检测到该群告警并 boost 优先级 +20。Phase 3 dequeue 发现该群优先级最高。
 5. **[深思熟虑]** Phase 4 调用 `calculateDepth()` 根据 attendCount 和 depthCyclePeriod 计算 Cosine Decay 深度，因存在 alert 强制最低 L2。`buildGroupContext()` 组装含消息原文、群画像、历史 Callback 的上下文包。Phase 5 将系统 Prompt（含全局状态、最近决策、活跃任务）+ attend 上下文 + 对话历史拼装后交给 SOTA 模型做最终裁判。
 6. **[战略分发]** Phase 6 根据 LLM 返回的 JSON 决策分派：
@@ -198,5 +253,5 @@ graph TD
    - **决策 2 (防冷场)**: FAST_PATH_AUTH 动作，下发快速通道授权（`maxReplies=3, expiresAt=5分钟后, tonePreset=轻松`），允许 FastPath 随便找个硬件梗预热。
 7. **[执行双响炮]** 本群的 Subagent 在各自的轨道上并行启动：
    - **FastPathHandler** 拿到授权，下一条消息到达时通过 `cheapConfig` LLM 生成一句快回并发送。产出成功 Callback 放入 Q5。
-   - 同一时刻，**CodeActExecutor** 从 `SandboxPool` acquire 一个沙盒实例，将历史 Session + 本次任务 Prompt 注入，执行 `runCodeActSession()` 多轮 CodeAct 交互（调用 `memory.recall` 查 "上次给这哥们推的是 4070"、调用 Web 搜索获取最新数据），最终通过 Telegram Host Call 在群内发出详尽整活回复。完成后释放沙盒、持久化 Session、产出 Callback 送入 Q5。
+   - 同一时刻，**CodeActExecutor** 从 `SandboxPool` acquire 一个沙盒实例。执行前，`enrichMessages()` 管线启动 **Vision 处理**：3 张截图的 `mediaInfo` 被解析为 `MediaAttachment[]`，因主模型 `vision=true`，前 3 张图走 **路径 A**——通过 `downloadFn` 从 Telegram 下载图片并 base64 内联注入 LLM 的 `imageParts`，让模型直接 "看到" 游戏截图内容。若图片超过 `maxImagesPerContext` 限制，溢出部分自动降级为 **路径 B** 调用 vision tier LLM 生成文本描述（结果按 `uniqueFileId` 缓存，避免重复下载和识别）。随后将历史 Session + 本次任务 Prompt（含图片）注入，执行 `runCodeActSession()` 多轮 CodeAct 交互（调用 `memory.recall` 查 "上次给这哥们推的是 4070"、调用 Web 搜索获取最新数据），最终通过 Telegram Host Call 在群内发出详尽整活回复。完成后释放沙盒、持久化 Session、产出 Callback 送入 Q5。
 8. **[收拢善后]** Callback 被主脑在下一 tick 的 Phase 1 drain：记录到 GlobalState、追加到 LLM 对话历史、标记任务完成、Q3 unblock 该群。直到深夜处于非清醒时段，**Reflection 引擎** 被定时器触发。它将白天这段看图聊硬件的对话收集为话题，量化统计参与者，调用 LLM 生成结构化反思 JSON，更新群友画像特征、存储核心事实、级联合并老旧情感记忆，并对邓巴层级超限的用户做精度裁剪和降级处理。
