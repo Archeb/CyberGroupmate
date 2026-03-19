@@ -462,5 +462,97 @@ export function createApiRouter(deps: DashboardDeps, bridge: EventBridge): Route
         res.json({ ok });
     });
 
+
+    // ─── Memory: List / Edit / Delete ───
+
+    // Person Identities
+    router.get("/memory/persons", (req, res) => {
+        const limit = Math.min(parseInt(qs(req.query.limit)) || 50, 200);
+        const offset = Math.max(parseInt(qs(req.query.offset)) || 0, 0);
+        res.json(deps.memory.listPersonIdentities(limit, offset));
+    });
+
+    router.put("/memory/person/:userId", (req, res) => {
+        const userId = req.params.userId;
+        try {
+            deps.memory.upsertPersonIdentity(userId, req.body);
+            res.json({ ok: true });
+        } catch (err) {
+            res.status(500).json({ error: String(err) });
+        }
+    });
+
+    router.delete("/memory/person/:userId", (req, res) => {
+        const ok = deps.memory.deletePersonIdentity(req.params.userId);
+        res.json({ ok });
+    });
+
+    // Person Group Profiles
+    router.get("/memory/profiles/:chatId", (req, res) => {
+        const profiles = deps.memory.getProfilesForChat(req.params.chatId);
+        res.json(profiles);
+    });
+
+    router.put("/memory/profile/:userId/:chatId", (req, res) => {
+        try {
+            deps.memory.upsertPersonGroupProfile(req.params.userId, req.params.chatId, req.body);
+            res.json({ ok: true });
+        } catch (err) {
+            res.status(500).json({ error: String(err) });
+        }
+    });
+
+    router.delete("/memory/profile/:userId/:chatId", (req, res) => {
+        const ok = deps.memory.deletePersonGroupProfile(req.params.userId, req.params.chatId);
+        res.json({ ok });
+    });
+
+    // Group Models
+    router.get("/memory/groups", (_req, res) => {
+        res.json(deps.memory.listGroupModels());
+    });
+
+    router.put("/memory/group/:chatId", (req, res) => {
+        try {
+            deps.memory.upsertGroupModel(req.params.chatId, req.body);
+            res.json({ ok: true });
+        } catch (err) {
+            res.status(500).json({ error: String(err) });
+        }
+    });
+
+    // Core Facts
+    router.get("/memory/facts", (req, res) => {
+        const limit = Math.min(parseInt(qs(req.query.limit)) || 50, 200);
+        const offset = Math.max(parseInt(qs(req.query.offset)) || 0, 0);
+        const subject = qs(req.query.subject) || undefined;
+        const category = qs(req.query.category) || undefined;
+        res.json(deps.memory.listCoreFacts({ subject, category, limit, offset }));
+    });
+
+    router.put("/memory/fact/:id", (req, res) => {
+        const ok = deps.memory.updateFact(req.params.id, req.body);
+        res.json({ ok });
+    });
+
+    router.delete("/memory/fact/:id", (req, res) => {
+        const ok = deps.memory.deleteFact(req.params.id);
+        res.json({ ok });
+    });
+
+    // Interactions
+    router.get("/memory/interactions", (req, res) => {
+        const limit = Math.min(parseInt(qs(req.query.limit)) || 50, 200);
+        const offset = Math.max(parseInt(qs(req.query.offset)) || 0, 0);
+        const chatId = qs(req.query.chatId) || undefined;
+        const userId = qs(req.query.userId) || undefined;
+        res.json(deps.memory.listInteractions({ chatId, userId, limit, offset }));
+    });
+
+    router.delete("/memory/interaction/:id", (req, res) => {
+        const ok = deps.memory.deleteInteraction(req.params.id);
+        res.json({ ok });
+    });
+
     return router;
 }

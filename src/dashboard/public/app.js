@@ -840,6 +840,7 @@ const App = (() => {
         if (activeTab === "stickers") loadStickers();
         if (activeTab === "queue") renderQueue();
         if (activeTab === "llm-log") renderLLMLog();
+        if (activeTab === "memory") refreshMemorySubTab();
     }
 
     // ─── Render All ───
@@ -895,7 +896,7 @@ const App = (() => {
     // ─── Init ───
     function init() {
         // Tab click handlers
-        document.querySelectorAll('[role="tab"]').forEach(tab => {
+        document.querySelectorAll('[role="tab"][data-tab]').forEach(tab => {
             tab.addEventListener("click", () => switchTab(tab.dataset.tab));
         });
         connectWS();
@@ -1140,11 +1141,365 @@ const App = (() => {
         if (detailEl) detailEl.innerHTML = '<div class="text-sm opacity-40 p-4">← 点击左侧条目查看详情</div>';
     }
 
+    // ─── Memory Sub-tabs ───
+    let activeMemoryTab = 'm-persons';
+    let memoryEditContext = null; // { type, key, data }
+
+    function switchMemoryTab(tab) {
+        activeMemoryTab = tab;
+        document.querySelectorAll('.memory-subpanel').forEach(p => p.classList.add('hidden'));
+        const panel = document.getElementById(`mpanel-${tab}`);
+        if (panel) panel.classList.remove('hidden');
+        document.querySelectorAll('[data-mtab]').forEach(t => {
+            t.classList.toggle('tab-active', t.dataset.mtab === tab);
+        });
+        refreshMemorySubTab();
+    }
+
+    function refreshMemorySubTab() {
+        if (activeMemoryTab === 'm-persons') loadPersons();
+        if (activeMemoryTab === 'm-groups') loadGroups();
+        if (activeMemoryTab === 'm-facts') loadFacts();
+        if (activeMemoryTab === 'm-interactions') loadInteractions();
+    }
+
+    // ─── Person Identities ───
+    let personsPage = 0;
+    async function loadPersons(page) {
+        if (page !== undefined) personsPage = page;
+        const offset = personsPage * 50;
+        const data = await api(`/memory/persons?limit=50&offset=${offset}`);
+        document.getElementById('persons-count').textContent = data.total;
+        const tbody = document.getElementById('persons-tbody');
+        if (!data.items.length) { tbody.innerHTML = '<tr><td colspan="6" class="text-center opacity-60">暂无数据</td></tr>'; return; }
+        tbody.innerHTML = data.items.map(p => {
+            const aliases = (p.aliases || []).join(', ');
+            const lastSeen = p.lastSeenAt ? new Date(p.lastSeenAt).toLocaleString() : '-';
+            return `<tr>
+                <td class="font-mono text-xs">${escapeHtml(p.userId)}</td>
+                <td>${escapeHtml(p.displayName)}</td>
+                <td class="max-w-32 truncate" title="${escapeHtml(aliases)}">${escapeHtml(aliases) || '-'}</td>
+                <td>${p.totalMessageCount}</td>
+                <td class="text-xs opacity-60">${lastSeen}</td>
+                <td>
+                    <div class="flex gap-1">
+                        <button class="btn btn-xs btn-ghost" onclick="App.editPerson('${escapeHtml(p.userId)}')">✏️</button>
+                        <button class="btn btn-xs btn-ghost text-error" onclick="App.deletePerson('${escapeHtml(p.userId)}')">🗑</button>
+                    </div>
+                </td>
+            </tr>`;
+        }).join('');
+        // Pagination
+        const totalPages = Math.ceil(data.total / 50);
+        const pagEl = document.getElementById('persons-pagination');
+        if (totalPages > 1) {
+            pagEl.innerHTML = Array.from({ length: Math.min(totalPages, 10) }, (_, i) =>
+                `<button class="btn btn-xs ${i === personsPage ? 'btn-primary' : 'btn-ghost'}" onclick="App.loadPersons(${i})">${i + 1}</button>`
+            ).join('');
+        } else pagEl.innerHTML = '';
+    }
+
+    async function editPerson(userId) {
+        const data = await api(`/memory/user/${userId}`);
+        const identity = data.identity || {};
+        memoryEditContext = { type: 'person', key: { userId }, data: identity };
+        document.getElementById('memory-edit-title').textContent = `编辑用户: ${userId}`;
+        document.getElementById('memory-edit-fields').innerHTML = [
+            fieldInput('displayName', '显示名', identity.displayName || ''),
+            fieldInput('aliases', '别名 (逗号分隔)', (identity.aliases || []).join(', ')),
+        ].join('');
+        document.getElementById('memory-edit-modal').showModal();
+    }
+
+    async function deletePerson(userId) {
+        if (!confirm(`确认删除用户画像 ${userId}？`)) return;
+        await api(`/memory/person/${userId}`, { method: 'DELETE' });
+        loadPersons();
+    }
+
+    // ─── Person Group Profiles ───
+    async function loadProfiles() {
+        const chatId = document.getElementById('profiles-chatid-input').value.trim();
+        if (!chatId) { alert('请输入 chatId'); return; }
+        const data = await api(`/memory/profiles/${chatId}`);
+        const tbody = document.getElementById('profiles-tbody');
+        if (!data.length) { tbody.innerHTML = '<tr><td colspan="7" class="text-center opacity-60">暂无数据</td></tr>'; return; }
+        tbody.innerHTML = data.map(p => {
+            const traits = (p.traits || []).join(', ');
+            const interests = (p.interests || []).join(', ');
+            return `<tr>
+                <td class="font-mono text-xs">${escapeHtml(p.userId)}</td>
+                <td class="font-mono text-xs">${shortId(p.chatId)}</td>
+                <td><span class="badge badge-xs">T${p.dunbarTier}</span></td>
+                <td class="max-w-32 truncate" title="${escapeHtml(traits)}">${escapeHtml(traits) || '-'}</td>
+                <td class="max-w-32 truncate" title="${escapeHtml(interests)}">${escapeHtml(interests) || '-'}</td>
+                <td>${p.messageCount}</td>
+                <td>
+                    <div class="flex gap-1">
+                        <button class="btn btn-xs btn-ghost" onclick="App.editProfile('${escapeHtml(p.userId)}','${escapeHtml(p.chatId)}')">✏️</button>
+                        <button class="btn btn-xs btn-ghost text-error" onclick="App.deleteProfile('${escapeHtml(p.userId)}','${escapeHtml(p.chatId)}')">🗑</button>
+                    </div>
+                </td>
+            </tr>`;
+        }).join('');
+    }
+
+    async function editProfile(userId, chatId) {
+        const profiles = await api(`/memory/profiles/${chatId}`);
+        const p = profiles.find(x => x.userId === userId) || {};
+        memoryEditContext = { type: 'profile', key: { userId, chatId }, data: p };
+        document.getElementById('memory-edit-title').textContent = `编辑群内画像: ${userId} @ ${shortId(chatId)}`;
+        document.getElementById('memory-edit-fields').innerHTML = [
+            fieldSelect('dunbarTier', '邓巴层', p.dunbarTier || 4, [1,2,3,4]),
+            fieldInput('dunbarReason', '分层理由', p.dunbarReason || ''),
+            fieldInput('traits', 'Traits (逗号分隔)', (p.traits || []).join(', ')),
+            fieldInput('interests', 'Interests (逗号分隔)', (p.interests || []).join(', ')),
+            fieldInput('communicationStyle', '沟通风格', p.communicationStyle || ''),
+            fieldInput('relationToAgent', '与 Agent 关系', p.relationToAgent || ''),
+        ].join('');
+        document.getElementById('memory-edit-modal').showModal();
+    }
+
+    async function deleteProfile(userId, chatId) {
+        if (!confirm(`确认删除 ${userId} 在 ${shortId(chatId)} 的画像？`)) return;
+        await api(`/memory/profile/${userId}/${chatId}`, { method: 'DELETE' });
+        loadProfiles();
+    }
+
+    // ─── Group Models ───
+    async function loadGroups() {
+        const data = await api('/memory/groups');
+        const tbody = document.getElementById('groups-tbody');
+        if (!data.length) { tbody.innerHTML = '<tr><td colspan="8" class="text-center opacity-60">暂无数据</td></tr>'; return; }
+        tbody.innerHTML = data.map(g => {
+            const hot = (g.hotTopics || []).join(', ');
+            const taboo = (g.tabooTopics || []).join(', ');
+            return `<tr>
+                <td class="font-mono text-xs" title="${escapeHtml(g.chatId)}">${shortId(g.chatId)}</td>
+                <td>${escapeHtml(g.chatTitle || '-')}</td>
+                <td class="max-w-40 truncate" title="${escapeHtml(g.description || '')}">${escapeHtml(g.description || '-')}</td>
+                <td>${escapeHtml(g.dominantLanguage || '-')}</td>
+                <td class="max-w-32 truncate" title="${escapeHtml(g.agentRole || '')}">${escapeHtml(g.agentRole || '-')}</td>
+                <td class="max-w-32 truncate" title="${escapeHtml(hot)}">${escapeHtml(hot) || '-'}</td>
+                <td class="max-w-32 truncate" title="${escapeHtml(taboo)}">${escapeHtml(taboo) || '-'}</td>
+                <td>
+                    <button class="btn btn-xs btn-ghost" onclick="App.editGroupModel('${escapeHtml(g.chatId)}')">✏️</button>
+                </td>
+            </tr>`;
+        }).join('');
+    }
+
+    async function editGroupModel(chatId) {
+        const g = await api(`/memory/group/${chatId}`);
+        const model = g.model || g || {};
+        memoryEditContext = { type: 'group', key: { chatId }, data: model };
+        document.getElementById('memory-edit-title').textContent = `编辑群组画像: ${model.chatTitle || shortId(chatId)}`;
+        document.getElementById('memory-edit-fields').innerHTML = [
+            fieldInput('chatTitle', '群组标题', model.chatTitle || ''),
+            fieldTextarea('description', '群组描述', model.description || ''),
+            fieldInput('dominantLanguage', '主要语言', model.dominantLanguage || ''),
+            fieldInput('agentRole', 'Agent 角色', model.agentRole || ''),
+            fieldSelect('engagementLevel', '参与度', model.engagementLevel || 'medium', ['high','medium','low']),
+            fieldTextarea('recentFeedback', '近期反馈', model.recentFeedback || ''),
+            fieldInput('hotTopics', '热门话题 (逗号分隔)', (model.hotTopics || []).join(', ')),
+            fieldInput('tabooTopics', '禁忌话题 (逗号分隔)', (model.tabooTopics || []).join(', ')),
+            fieldInput('communicationNorms', '交流规范 (逗号分隔)', (model.communicationNorms || []).join(', ')),
+        ].join('');
+        document.getElementById('memory-edit-modal').showModal();
+    }
+
+    // ─── Core Facts ───
+    let factsPage = 0;
+    async function loadFacts(page) {
+        if (page !== undefined) factsPage = page;
+        const subject = document.getElementById('facts-subject-input').value.trim();
+        const category = document.getElementById('facts-category-select').value;
+        let url = `/memory/facts?limit=50&offset=${factsPage * 50}`;
+        if (subject) url += `&subject=${encodeURIComponent(subject)}`;
+        if (category) url += `&category=${encodeURIComponent(category)}`;
+        const data = await api(url);
+        document.getElementById('facts-count').textContent = data.total;
+        const tbody = document.getElementById('facts-tbody');
+        if (!data.items.length) { tbody.innerHTML = '<tr><td colspan="7" class="text-center opacity-60">暂无数据</td></tr>'; return; }
+        tbody.innerHTML = data.items.map(f => {
+            const updated = f.updatedAt ? new Date(f.updatedAt).toLocaleString() : '-';
+            const expires = f.expiresAt ? new Date(f.expiresAt).toLocaleString() : '-';
+            return `<tr>
+                <td class="font-mono text-xs max-w-24 truncate" title="${escapeHtml(f.subject)}">${escapeHtml(f.subject)}</td>
+                <td><span class="badge badge-xs">${escapeHtml(f.category)}</span></td>
+                <td class="max-w-64 truncate" title="${escapeHtml(f.content)}">${escapeHtml(f.content)}</td>
+                <td>${(f.confidence * 100).toFixed(0)}%</td>
+                <td class="text-xs opacity-60">${expires}</td>
+                <td class="text-xs opacity-60">${updated}</td>
+                <td>
+                    <div class="flex gap-1">
+                        <button class="btn btn-xs btn-ghost" onclick="App.editFact('${escapeHtml(f.id)}')">✏️</button>
+                        <button class="btn btn-xs btn-ghost text-error" onclick="App.deleteFact('${escapeHtml(f.id)}')">🗑</button>
+                    </div>
+                </td>
+            </tr>`;
+        }).join('');
+        const totalPages = Math.ceil(data.total / 50);
+        const pagEl = document.getElementById('facts-pagination');
+        if (totalPages > 1) {
+            pagEl.innerHTML = Array.from({ length: Math.min(totalPages, 10) }, (_, i) =>
+                `<button class="btn btn-xs ${i === factsPage ? 'btn-primary' : 'btn-ghost'}" onclick="App.loadFacts(${i})">${i + 1}</button>`
+            ).join('');
+        } else pagEl.innerHTML = '';
+    }
+
+    function editFact(factId) {
+        const row = document.querySelector(`#facts-tbody tr`);
+        // Re-fetch from current data
+        loadFactForEdit(factId);
+    }
+
+    async function loadFactForEdit(factId) {
+        const data = await api(`/memory/facts?limit=200`);
+        const f = (data.items || []).find(x => x.id === factId);
+        if (!f) { alert('未找到'); return; }
+        memoryEditContext = { type: 'fact', key: { id: factId }, data: f };
+        document.getElementById('memory-edit-title').textContent = `编辑事实: ${f.subject}`;
+        document.getElementById('memory-edit-fields').innerHTML = [
+            fieldTextarea('content', '内容', f.content || ''),
+            fieldSelect('category', '分类', f.category || 'general', ['biographical','preference','anecdote','opinion','plan','relationship','general']),
+            fieldInput('confidence', '置信度 (0-1)', String(f.confidence ?? 1)),
+            fieldInput('expiresAt', '过期时间 (ISO)', f.expiresAt || ''),
+        ].join('');
+        document.getElementById('memory-edit-modal').showModal();
+    }
+
+    async function deleteFact(id) {
+        if (!confirm('确认删除此事实？')) return;
+        await api(`/memory/fact/${id}`, { method: 'DELETE' });
+        loadFacts();
+    }
+
+    // ─── Interactions ───
+    let interactionsPage = 0;
+    async function loadInteractions(page) {
+        if (page !== undefined) interactionsPage = page;
+        const chatId = document.getElementById('interactions-chatid-input').value.trim();
+        const userId = document.getElementById('interactions-userid-input').value.trim();
+        let url = `/memory/interactions?limit=50&offset=${interactionsPage * 50}`;
+        if (chatId) url += `&chatId=${encodeURIComponent(chatId)}`;
+        if (userId) url += `&userId=${encodeURIComponent(userId)}`;
+        const data = await api(url);
+        document.getElementById('interactions-count').textContent = data.total;
+        const tbody = document.getElementById('interactions-tbody');
+        if (!data.items.length) { tbody.innerHTML = '<tr><td colspan="8" class="text-center opacity-60">暂无数据</td></tr>'; return; }
+        tbody.innerHTML = data.items.map(i => {
+            const time = i.date ? new Date(i.date).toLocaleString() : '-';
+            return `<tr>
+                <td class="text-xs opacity-60">${time}</td>
+                <td class="font-mono text-xs">${shortId(i.chatId)}</td>
+                <td class="font-mono text-xs">${escapeHtml(i.userId)}</td>
+                <td><span class="badge badge-xs">${escapeHtml(i.type)}</span></td>
+                <td class="max-w-64 truncate" title="${escapeHtml(i.summary)}">${escapeHtml(i.summary)}</td>
+                <td>${escapeHtml(i.sentiment)}</td>
+                <td>${(i.significance * 100).toFixed(0)}%</td>
+                <td>
+                    <button class="btn btn-xs btn-ghost text-error" onclick="App.deleteInteraction('${escapeHtml(i.id)}')">🗑</button>
+                </td>
+            </tr>`;
+        }).join('');
+        const totalPages = Math.ceil(data.total / 50);
+        const pagEl = document.getElementById('interactions-pagination');
+        if (totalPages > 1) {
+            pagEl.innerHTML = Array.from({ length: Math.min(totalPages, 10) }, (_, i) =>
+                `<button class="btn btn-xs ${i === interactionsPage ? 'btn-primary' : 'btn-ghost'}" onclick="App.loadInteractions(${i})">${i + 1}</button>`
+            ).join('');
+        } else pagEl.innerHTML = '';
+    }
+
+    async function deleteInteraction(id) {
+        if (!confirm('确认删除此交互记录？')) return;
+        await api(`/memory/interaction/${id}`, { method: 'DELETE' });
+        loadInteractions();
+    }
+
+    // ─── Memory Edit Modal Helpers ───
+    function fieldInput(name, label, value) {
+        return `<div><label class="label text-xs">${escapeHtml(label)}</label><input name="${name}" type="text" value="${escapeHtml(value)}" class="input input-bordered input-sm w-full" /></div>`;
+    }
+    function fieldTextarea(name, label, value) {
+        return `<div><label class="label text-xs">${escapeHtml(label)}</label><textarea name="${name}" class="textarea textarea-bordered textarea-sm w-full" rows="3">${escapeHtml(value)}</textarea></div>`;
+    }
+    function fieldSelect(name, label, value, options) {
+        return `<div><label class="label text-xs">${escapeHtml(label)}</label><select name="${name}" class="select select-bordered select-sm w-full">${options.map(o => `<option value="${o}" ${String(o) === String(value) ? 'selected' : ''}>${o}</option>`).join('')}</select></div>`;
+    }
+
+    async function saveMemoryEdit() {
+        if (!memoryEditContext) return;
+        const fields = document.getElementById('memory-edit-fields');
+        const formData = {};
+        fields.querySelectorAll('input, textarea, select').forEach(el => {
+            formData[el.name] = el.value;
+        });
+
+        const { type, key } = memoryEditContext;
+        try {
+            if (type === 'person') {
+                const body = {
+                    displayName: formData.displayName,
+                    aliases: formData.aliases ? formData.aliases.split(',').map(s => s.trim()).filter(Boolean) : [],
+                };
+                await api(`/memory/person/${key.userId}`, { method: 'PUT', body });
+                loadPersons();
+            } else if (type === 'profile') {
+                const body = {
+                    dunbarTier: parseInt(formData.dunbarTier) || 4,
+                    dunbarReason: formData.dunbarReason,
+                    traits: formData.traits ? formData.traits.split(',').map(s => s.trim()).filter(Boolean) : [],
+                    interests: formData.interests ? formData.interests.split(',').map(s => s.trim()).filter(Boolean) : [],
+                    communicationStyle: formData.communicationStyle,
+                    relationToAgent: formData.relationToAgent,
+                };
+                await api(`/memory/profile/${key.userId}/${key.chatId}`, { method: 'PUT', body });
+                loadProfiles();
+            } else if (type === 'group') {
+                const body = {
+                    chatTitle: formData.chatTitle,
+                    description: formData.description,
+                    dominantLanguage: formData.dominantLanguage,
+                    agentRole: formData.agentRole,
+                    engagementLevel: formData.engagementLevel,
+                    recentFeedback: formData.recentFeedback,
+                    hotTopics: formData.hotTopics ? formData.hotTopics.split(',').map(s => s.trim()).filter(Boolean) : [],
+                    tabooTopics: formData.tabooTopics ? formData.tabooTopics.split(',').map(s => s.trim()).filter(Boolean) : [],
+                    communicationNorms: formData.communicationNorms ? formData.communicationNorms.split(',').map(s => s.trim()).filter(Boolean) : [],
+                };
+                await api(`/memory/group/${key.chatId}`, { method: 'PUT', body });
+                loadGroups();
+            } else if (type === 'fact') {
+                const body = {
+                    content: formData.content,
+                    category: formData.category,
+                    confidence: parseFloat(formData.confidence) || 1.0,
+                    expiresAt: formData.expiresAt || null,
+                };
+                await api(`/memory/fact/${key.id}`, { method: 'PUT', body });
+                loadFacts();
+            }
+        } catch (err) {
+            alert('保存失败: ' + err);
+            return;
+        }
+        document.getElementById('memory-edit-modal').close();
+        memoryEditContext = null;
+    }
+
     // Public API (for onclick handlers)
     return {
         selectChat, loadTopics, loadMoreTopics, toggleTopicGroup, searchTopics, clearTopicSearch,
         boostQueue, removeFromQueue, showEnqueueModal, doEnqueue,
         selectCodeActChat, cancelCodeAct, queryUser, queryGroup, quickQueryUser, quickQueryGroup, recallMemory,
         viewTopicDetail, loadStickers, deleteSticker, editSticker, saveSticker, clearLLMLogs, toggleLLMLogDetail, toggleMsgExpand, toggleRespExpand,
+        switchMemoryTab, loadPersons, editPerson, deletePerson,
+        loadProfiles, editProfile, deleteProfile,
+        loadGroups, editGroupModel,
+        loadFacts, editFact, deleteFact,
+        loadInteractions, deleteInteraction,
+        saveMemoryEdit,
     };
 })();

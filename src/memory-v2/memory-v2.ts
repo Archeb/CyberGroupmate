@@ -1748,6 +1748,204 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
         return result.changes > 0;
     }
 
+    // ── Dashboard CRUD 方法 ──
+
+    /** 分页列出全部 person_identities */
+    listPersonIdentities(limit = 50, offset = 0): { items: PersonIdentity[]; total: number } {
+        const total = (this.db.prepare("SELECT COUNT(*) as cnt FROM person_identities").get() as { cnt: number }).cnt;
+        const rows = this.db.prepare(
+            "SELECT * FROM person_identities ORDER BY last_seen_at DESC LIMIT ? OFFSET ?"
+        ).all(limit, offset) as Record<string, unknown>[];
+        return {
+            total,
+            items: rows.map(row => ({
+                userId: row.user_id as string,
+                displayName: row.display_name as string,
+                aliases: fromJSON(row.aliases as string, []),
+                totalMessageCount: row.total_message_count as number,
+                lastSeenAt: row.last_seen_at as string,
+                firstSeenAt: row.first_seen_at as string,
+                updatedAt: row.updated_at as string,
+            })),
+        };
+    }
+
+    /** 删除某个 PersonIdentity */
+    deletePersonIdentity(userId: string): boolean {
+        const result = this.db.prepare("DELETE FROM person_identities WHERE user_id = ?").run(userId);
+        log.info("deletePersonIdentity", { userId, deleted: result.changes > 0 });
+        return result.changes > 0;
+    }
+
+    /** 删除某个群内画像 */
+    deletePersonGroupProfile(userId: string, chatId: string): boolean {
+        const result = this.db.prepare(
+            "DELETE FROM person_group_profiles WHERE user_id = ? AND chat_id = ?"
+        ).run(userId, chatId);
+        log.info("deletePersonGroupProfile", { userId, chatId, deleted: result.changes > 0 });
+        return result.changes > 0;
+    }
+
+    /** 列出全部群组画像 */
+    listGroupModels(): GroupModel[] {
+        const rows = this.db.prepare(
+            "SELECT * FROM group_models ORDER BY updated_at DESC"
+        ).all() as Record<string, unknown>[];
+        return rows.map(row => ({
+            chatId: row.chat_id as string,
+            chatTitle: row.chat_title as string,
+            isDirectMessage: !!(row.is_direct_message as number),
+            description: row.description as string,
+            dominantLanguage: row.dominant_language as string,
+            communicationNorms: fromJSON(row.communication_norms as string, []),
+            activeMembers: row.active_members as number,
+            avgMessagesPerDay: row.avg_messages_per_day as number,
+            peakHours: fromJSON(row.peak_hours as string, []),
+            agentRole: row.agent_role as string,
+            engagementLevel: (row.engagement_level as string) as GroupModel["engagementLevel"],
+            recentFeedback: row.recent_feedback as string,
+            hotTopics: fromJSON(row.hot_topics as string, []),
+            tabooTopics: fromJSON(row.taboo_topics as string, []),
+            lastReflectedAt: (row.last_reflected_at as string) ?? null,
+            updatedAt: row.updated_at as string,
+        }));
+    }
+
+    /** 分页列出/过滤 core_facts */
+    listCoreFacts(options?: { subject?: string; category?: string; limit?: number; offset?: number }): { items: CoreFact[]; total: number } {
+        const limit = options?.limit ?? 50;
+        const offset = options?.offset ?? 0;
+
+        let countSql = "SELECT COUNT(*) as cnt FROM core_facts WHERE 1=1";
+        let querySql = "SELECT * FROM core_facts WHERE 1=1";
+        const params: unknown[] = [];
+
+        if (options?.subject) {
+            countSql += " AND subject = ?";
+            querySql += " AND subject = ?";
+            params.push(options.subject);
+        }
+        if (options?.category) {
+            countSql += " AND category = ?";
+            querySql += " AND category = ?";
+            params.push(options.category);
+        }
+
+        const total = (this.db.prepare(countSql).get(...params) as { cnt: number }).cnt;
+        querySql += " ORDER BY updated_at DESC LIMIT ? OFFSET ?";
+        const rows = this.db.prepare(querySql).all(...params, limit, offset) as Record<string, unknown>[];
+
+        return {
+            total,
+            items: rows.map(row => ({
+                id: row.id as string,
+                subject: row.subject as string,
+                content: row.content as string,
+                category: row.category as FactCategory,
+                confidence: row.confidence as number,
+                source: (row.source as string) ?? null,
+                createdAt: row.created_at as string,
+                updatedAt: row.updated_at as string,
+                expiresAt: (row.expires_at as string) ?? null,
+            })),
+        };
+    }
+
+    /** 按 ID 更新 core_fact */
+    updateFact(id: string, data: { content?: string; category?: string; confidence?: number; expiresAt?: string | null }): boolean {
+        const ts = now();
+        const builder = new SafeUpdateBuilder("core_facts");
+        if (data.content !== undefined) builder.set("content", data.content);
+        if (data.category !== undefined) builder.set("category", data.category);
+        if (data.confidence !== undefined) builder.set("confidence", data.confidence);
+        if (data.expiresAt !== undefined) builder.set("expires_at", data.expiresAt);
+        builder.set("updated_at", ts);
+        builder.where("id", id);
+
+        if (!builder.hasSets) return false;
+        const { sql, params } = builder.build();
+        const result = this.db.prepare(sql).run(...params);
+
+        // 同步 FTS5
+        if (data.content !== undefined) {
+            try {
+                const row = this.db.prepare("SELECT rowid, subject FROM core_facts WHERE id = ?").get(id) as { rowid: number; subject: string } | undefined;
+                if (row) {
+                    this.db.prepare("DELETE FROM core_facts_fts WHERE rowid = ?").run(row.rowid);
+                    this.db.prepare("INSERT INTO core_facts_fts(rowid, content, subject) VALUES (?, ?, ?)").run(row.rowid, data.content, row.subject);
+                }
+            } catch { /* FTS sync */ }
+        }
+
+        log.info("updateFact", { id, changed: result.changes > 0 });
+        return result.changes > 0;
+    }
+
+    /** 按 ID 删除 core_fact（含 FTS5 + vec0 清理） */
+    deleteFact(id: string): boolean {
+        // FTS5 cleanup
+        try {
+            const row = this.db.prepare("SELECT rowid FROM core_facts WHERE id = ?").get(id) as { rowid: number } | undefined;
+            if (row) this.db.prepare("DELETE FROM core_facts_fts WHERE rowid = ?").run(row.rowid);
+        } catch { /* FTS */ }
+
+        // vec0 cleanup
+        if (this.sqliteVecAvailable) {
+            try { this.db.prepare("DELETE FROM facts_vec WHERE fact_id = ?").run(id); } catch { /* vec */ }
+        }
+
+        const result = this.db.prepare("DELETE FROM core_facts WHERE id = ?").run(id);
+        log.info("deleteFact", { id, deleted: result.changes > 0 });
+        return result.changes > 0;
+    }
+
+    /** 分页列出 interactions */
+    listInteractions(options?: { chatId?: string; userId?: string; limit?: number; offset?: number }): { items: InteractionEpisode[]; total: number } {
+        const limit = options?.limit ?? 50;
+        const offset = options?.offset ?? 0;
+
+        let countSql = "SELECT COUNT(*) as cnt FROM interactions WHERE 1=1";
+        let querySql = "SELECT * FROM interactions WHERE 1=1";
+        const params: unknown[] = [];
+
+        if (options?.chatId) {
+            countSql += " AND chat_id = ?";
+            querySql += " AND chat_id = ?";
+            params.push(options.chatId);
+        }
+        if (options?.userId) {
+            countSql += " AND user_id = ?";
+            querySql += " AND user_id = ?";
+            params.push(options.userId);
+        }
+
+        const total = (this.db.prepare(countSql).get(...params) as { cnt: number }).cnt;
+        querySql += " ORDER BY created_at DESC LIMIT ? OFFSET ?";
+        const rows = this.db.prepare(querySql).all(...params, limit, offset) as Record<string, unknown>[];
+
+        return {
+            total,
+            items: rows.map(row => ({
+                id: row.id as string,
+                date: row.created_at as string,
+                chatId: row.chat_id as string,
+                userId: row.user_id as string,
+                topicId: (row.topic_id as string) ?? null,
+                type: row.type as InteractionEpisode["type"],
+                summary: row.summary as string,
+                sentiment: (row.sentiment as InteractionEpisode["sentiment"]) ?? "neutral",
+                significance: (row.significance as number) ?? 0.5,
+            })),
+        };
+    }
+
+    /** 按 ID 删除 interaction */
+    deleteInteraction(id: string): boolean {
+        const result = this.db.prepare("DELETE FROM interactions WHERE id = ?").run(id);
+        log.info("deleteInteraction", { id, deleted: result.changes > 0 });
+        return result.changes > 0;
+    }
+
     // ─── Reflection (M2.4: 调用 reflection.ts) ───
 
     async reflect(

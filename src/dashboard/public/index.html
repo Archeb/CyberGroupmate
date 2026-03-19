@@ -336,54 +336,199 @@
 
         <!-- Memory -->
         <div id="panel-memory" class="tab-panel hidden">
-            <div class="flex gap-4">
-                <div class="w-80 shrink-0 space-y-4">
-                    <!-- User / Group query -->
-                    <div class="card bg-base-100">
-                        <div class="card-body p-4">
-                            <h3 class="card-title text-sm">用户查询</h3>
-                            <input id="memory-user-input" type="text" placeholder="输入 userId"
-                                class="input input-sm input-bordered w-full mb-2" />
-                            <input id="memory-user-chat" type="text" placeholder="chatId (可选)"
-                                class="input input-sm input-bordered w-full mb-2" />
-                            <button class="btn btn-sm btn-primary w-full" onclick="App.queryUser()">查询用户画像</button>
-                            <div class="divider text-xs">群组查询</div>
-                            <input id="memory-group-input" type="text" placeholder="输入 chatId"
-                                class="input input-sm input-bordered w-full mb-2" />
-                            <button class="btn btn-sm btn-secondary w-full" onclick="App.queryGroup()">查询群组画像</button>
+            <!-- Sub-tab nav -->
+            <div role="tablist" class="tabs tabs-box tabs-sm mb-3">
+                <a role="tab" class="tab tab-active" data-mtab="m-persons" onclick="App.switchMemoryTab('m-persons')">👤 用户画像</a>
+                <a role="tab" class="tab" data-mtab="m-profiles" onclick="App.switchMemoryTab('m-profiles')">🏷 群内画像</a>
+                <a role="tab" class="tab" data-mtab="m-groups" onclick="App.switchMemoryTab('m-groups')">🏠 群组画像</a>
+                <a role="tab" class="tab" data-mtab="m-facts" onclick="App.switchMemoryTab('m-facts')">💡 核心事实</a>
+                <a role="tab" class="tab" data-mtab="m-interactions" onclick="App.switchMemoryTab('m-interactions')">📝 交互日志</a>
+                <a role="tab" class="tab" data-mtab="m-recall" onclick="App.switchMemoryTab('m-recall')">🔍 记忆搜索</a>
+            </div>
+
+            <!-- Sub-panel: Person Identities -->
+            <div id="mpanel-m-persons" class="memory-subpanel">
+                <div class="card bg-base-100">
+                    <div class="card-body p-4">
+                        <div class="flex justify-between items-center mb-2">
+                            <h3 class="card-title text-sm">用户画像 (PersonIdentity)</h3>
+                            <div class="flex gap-2 items-center">
+                                <span id="persons-count" class="badge badge-sm badge-ghost">0</span>
+                                <button class="btn btn-xs btn-primary" onclick="App.loadPersons()">刷新</button>
+                            </div>
                         </div>
+                        <div class="overflow-x-auto">
+                            <table class="table table-xs">
+                                <thead><tr>
+                                    <th>UserId</th><th>显示名</th><th>别名</th><th>消息数</th><th>最后活跃</th><th>操作</th>
+                                </tr></thead>
+                                <tbody id="persons-tbody"></tbody>
+                            </table>
+                        </div>
+                        <div id="persons-pagination" class="flex justify-center mt-2 gap-2"></div>
                     </div>
-                    <!-- Recall / Search -->
-                    <div class="card bg-base-100">
-                        <div class="card-body p-4">
-                            <h3 class="card-title text-sm">🔍 记忆搜索 (Recall)</h3>
-                            <input id="recall-query-input" type="text" placeholder="关键词 / 语义检索"
-                                class="input input-sm input-bordered w-full mb-2" />
-                            <input id="recall-chatid-input" type="text" placeholder="chatId (可选，限定群组)"
-                                class="input input-sm input-bordered w-full mb-2" />
-                            <button class="btn btn-sm btn-accent w-full" onclick="App.recallMemory()">搜索记忆</button>
+                </div>
+            </div>
+
+            <!-- Sub-panel: Person Group Profiles -->
+            <div id="mpanel-m-profiles" class="memory-subpanel hidden">
+                <div class="card bg-base-100">
+                    <div class="card-body p-4">
+                        <div class="flex justify-between items-center mb-2">
+                            <h3 class="card-title text-sm">群内画像 (PersonGroupProfile)</h3>
+                            <div class="flex gap-2 items-center">
+                                <input id="profiles-chatid-input" type="text" placeholder="输入 chatId 查询" class="input input-sm input-bordered w-48" onkeydown="if(event.key==='Enter')App.loadProfiles()" />
+                                <button class="btn btn-xs btn-primary" onclick="App.loadProfiles()">查询</button>
+                            </div>
+                        </div>
+                        <div class="overflow-x-auto">
+                            <table class="table table-xs">
+                                <thead><tr>
+                                    <th>UserId</th><th>ChatId</th><th>邓巴层</th><th>Traits</th><th>Interests</th><th>消息数</th><th>操作</th>
+                                </tr></thead>
+                                <tbody id="profiles-tbody"></tbody>
+                            </table>
                         </div>
                     </div>
                 </div>
-                <div class="flex-1 min-w-0 space-y-4">
-                    <div class="card bg-base-100">
-                        <div class="card-body p-4 overflow-hidden">
-                            <h3 class="card-title text-sm mb-2">查询结果</h3>
-                            <pre id="memory-result"
-                                class="json-display bg-base-300 p-3 rounded-lg overflow-auto max-h-[40vh] text-xs whitespace-pre-wrap">点击左侧按钮查询</pre>
+            </div>
+
+            <!-- Sub-panel: Group Models -->
+            <div id="mpanel-m-groups" class="memory-subpanel hidden">
+                <div class="card bg-base-100">
+                    <div class="card-body p-4">
+                        <div class="flex justify-between items-center mb-2">
+                            <h3 class="card-title text-sm">群组画像 (GroupModel)</h3>
+                            <button class="btn btn-xs btn-primary" onclick="App.loadGroups()">刷新</button>
+                        </div>
+                        <div class="overflow-x-auto">
+                            <table class="table table-xs">
+                                <thead><tr>
+                                    <th>ChatId</th><th>标题</th><th>描述</th><th>语言</th><th>角色</th><th>热门话题</th><th>禁忌话题</th><th>操作</th>
+                                </tr></thead>
+                                <tbody id="groups-tbody"></tbody>
+                            </table>
                         </div>
                     </div>
-                    <div class="card bg-base-100">
-                        <div class="card-body p-4 overflow-hidden">
-                            <h3 class="card-title text-sm mb-2">🔍 搜索结果</h3>
-                            <div id="recall-result" class="overflow-auto max-h-[40vh] text-xs">
-                                <span class="opacity-60">输入关键词后点击搜索</span>
+                </div>
+            </div>
+
+            <!-- Sub-panel: Core Facts -->
+            <div id="mpanel-m-facts" class="memory-subpanel hidden">
+                <div class="card bg-base-100">
+                    <div class="card-body p-4">
+                        <div class="flex justify-between items-center mb-2">
+                            <h3 class="card-title text-sm">核心事实 (CoreFact)</h3>
+                            <div class="flex gap-2 items-center">
+                                <input id="facts-subject-input" type="text" placeholder="Subject 过滤" class="input input-sm input-bordered w-36" />
+                                <select id="facts-category-select" class="select select-sm select-bordered w-32">
+                                    <option value="">全部分类</option>
+                                    <option value="biographical">biographical</option>
+                                    <option value="preference">preference</option>
+                                    <option value="anecdote">anecdote</option>
+                                    <option value="opinion">opinion</option>
+                                    <option value="plan">plan</option>
+                                    <option value="relationship">relationship</option>
+                                    <option value="general">general</option>
+                                </select>
+                                <button class="btn btn-xs btn-primary" onclick="App.loadFacts()">查询</button>
+                                <span id="facts-count" class="badge badge-sm badge-ghost">0</span>
+                            </div>
+                        </div>
+                        <div class="overflow-x-auto">
+                            <table class="table table-xs">
+                                <thead><tr>
+                                    <th>Subject</th><th>Category</th><th>Content</th><th>Confidence</th><th>Expires</th><th>更新时间</th><th>操作</th>
+                                </tr></thead>
+                                <tbody id="facts-tbody"></tbody>
+                            </table>
+                        </div>
+                        <div id="facts-pagination" class="flex justify-center mt-2 gap-2"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Sub-panel: Interactions -->
+            <div id="mpanel-m-interactions" class="memory-subpanel hidden">
+                <div class="card bg-base-100">
+                    <div class="card-body p-4">
+                        <div class="flex justify-between items-center mb-2">
+                            <h3 class="card-title text-sm">交互日志 (Interaction)</h3>
+                            <div class="flex gap-2 items-center">
+                                <input id="interactions-chatid-input" type="text" placeholder="ChatId" class="input input-sm input-bordered w-36" />
+                                <input id="interactions-userid-input" type="text" placeholder="UserId" class="input input-sm input-bordered w-36" />
+                                <button class="btn btn-xs btn-primary" onclick="App.loadInteractions()">查询</button>
+                                <span id="interactions-count" class="badge badge-sm badge-ghost">0</span>
+                            </div>
+                        </div>
+                        <div class="overflow-x-auto">
+                            <table class="table table-xs">
+                                <thead><tr>
+                                    <th>时间</th><th>ChatId</th><th>UserId</th><th>类型</th><th>摘要</th><th>情感</th><th>重要性</th><th>操作</th>
+                                </tr></thead>
+                                <tbody id="interactions-tbody"></tbody>
+                            </table>
+                        </div>
+                        <div id="interactions-pagination" class="flex justify-center mt-2 gap-2"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Sub-panel: Recall (existing) -->
+            <div id="mpanel-m-recall" class="memory-subpanel hidden">
+                <div class="flex gap-4">
+                    <div class="w-80 shrink-0 space-y-4">
+                        <div class="card bg-base-100">
+                            <div class="card-body p-4">
+                                <h3 class="card-title text-sm">用户查询</h3>
+                                <input id="memory-user-input" type="text" placeholder="输入 userId" class="input input-sm input-bordered w-full mb-2" />
+                                <input id="memory-user-chat" type="text" placeholder="chatId (可选)" class="input input-sm input-bordered w-full mb-2" />
+                                <button class="btn btn-sm btn-primary w-full" onclick="App.queryUser()">查询用户画像</button>
+                                <div class="divider text-xs">群组查询</div>
+                                <input id="memory-group-input" type="text" placeholder="输入 chatId" class="input input-sm input-bordered w-full mb-2" />
+                                <button class="btn btn-sm btn-secondary w-full" onclick="App.queryGroup()">查询群组画像</button>
+                            </div>
+                        </div>
+                        <div class="card bg-base-100">
+                            <div class="card-body p-4">
+                                <h3 class="card-title text-sm">🔍 记忆搜索 (Recall)</h3>
+                                <input id="recall-query-input" type="text" placeholder="关键词 / 语义检索" class="input input-sm input-bordered w-full mb-2" />
+                                <input id="recall-chatid-input" type="text" placeholder="chatId (可选，限定群组)" class="input input-sm input-bordered w-full mb-2" />
+                                <button class="btn btn-sm btn-accent w-full" onclick="App.recallMemory()">搜索记忆</button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="flex-1 min-w-0 space-y-4">
+                        <div class="card bg-base-100">
+                            <div class="card-body p-4 overflow-hidden">
+                                <h3 class="card-title text-sm mb-2">查询结果</h3>
+                                <pre id="memory-result" class="json-display bg-base-300 p-3 rounded-lg overflow-auto max-h-[40vh] text-xs whitespace-pre-wrap">点击左侧按钮查询</pre>
+                            </div>
+                        </div>
+                        <div class="card bg-base-100">
+                            <div class="card-body p-4 overflow-hidden">
+                                <h3 class="card-title text-sm mb-2">🔍 搜索结果</h3>
+                                <div id="recall-result" class="overflow-auto max-h-[40vh] text-xs">
+                                    <span class="opacity-60">输入关键词后点击搜索</span>
+                                </div>
                             </div>
                         </div>
                     </div>
                 </div>
             </div>
         </div>
+
+        <!-- Memory Edit Modal -->
+        <dialog id="memory-edit-modal" class="modal">
+            <div class="modal-box max-w-2xl">
+                <h3 class="text-lg font-bold" id="memory-edit-title">编辑记忆</h3>
+                <div class="py-4 space-y-3" id="memory-edit-fields"></div>
+                <div class="modal-action">
+                    <button class="btn btn-primary" onclick="App.saveMemoryEdit()">保存</button>
+                    <form method="dialog"><button class="btn">取消</button></form>
+                </div>
+            </div>
+        </dialog>
 
         <!-- Topic Detail -->
         <div id="panel-topic-detail" class="tab-panel hidden">
