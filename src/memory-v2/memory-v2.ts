@@ -78,7 +78,7 @@ function getRecallDeepSummaryPrompt(): string {
                 join(PROMPTS_DIR, "recall-deep-summary.md"), "utf-8",
             ).trim();
         } catch {
-            _recallDeepSummaryPrompt = "你是一组群聊记忆系统中的深度总结助手。请根据以下记忆片段（话题摘要和事实），针对用户查询生成简洁的中文总结（2-3 句话）。只输出总结，不要其他内容。";
+            _recallDeepSummaryPrompt = "你是一组聊天记忆系统中的深度总结助手。请根据以下记忆片段（话题摘要和事实），针对用户查询生成简洁的中文总结（2-3 句话）。只输出总结，不要其他内容。";
             log.warn("recall-deep-summary.md 未找到，使用内联 fallback");
         }
     }

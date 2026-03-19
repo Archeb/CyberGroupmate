@@ -490,7 +490,7 @@ function getReflectionSystemPrompt(): string {
             log.debug("Reflection system prompt 已加载", { length: _reflectionSystemPrompt.length });
         } catch {
             log.warn("Reflection system prompt 文件未找到，使用内置默认值");
-            _reflectionSystemPrompt = "你是一个群聊观察员 AI。请根据话题和交互数据，输出一个严格的 JSON 对象。";
+            _reflectionSystemPrompt = "你是一个聊天观察员 AI。请根据话题和交互数据，输出一个严格的 JSON 对象。";
         }
     }
     return _reflectionSystemPrompt;

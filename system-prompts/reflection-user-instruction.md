@@ -1,6 +1,6 @@
 ## 任务
 
-请根据以上数据，对群聊进行反思总结，输出严格符合要求的 JSON 对象。
+请根据以上数据，对聊天进行反思总结，输出严格符合要求的 JSON 对象。
 
 ## 输入数据说明
 
@@ -60,7 +60,7 @@
     "tabooTopics": ["不宜讨论的敏感话题"],
     "description": "string (群组定位/简介)",
     "communicationNorms": ["交流规范/风格特征"],
-    "recentFeedback": "string (群成员对 agent 的反馈)"
+    "recentFeedback": "string (聊天成员对 agent 的反馈)"
   },
   "newFacts": [
     {

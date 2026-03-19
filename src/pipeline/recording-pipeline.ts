@@ -47,8 +47,8 @@ const EAGER_SILENCE = 30 * 1000;       // 30 sec
 
 // ─── Prompt 模板 ───
 
-const TOPIC_CLUSTERING_PROMPT = `你是一个群聊消息话题分析器。
-请分析以下群聊消息，将每条消息归属到一个话题中。
+const TOPIC_CLUSTERING_PROMPT = `你是一个消息话题分析器。
+请分析以下消息，将每条消息归属到一个话题中。
 
 已有话题列表（如果有的话）：
 {EXISTING_TOPICS}
@@ -417,7 +417,7 @@ export class RecordingPipeline extends EventEmitter {
                 assignments: messages.map(m => ({
                     messageId: m.id,
                     topicId: "NEW_1",
-                    topicLabel: "群聊讨论",
+                    topicLabel: "对话讨论",
                     keywords: [],
                 })),
                 evolutions: [],

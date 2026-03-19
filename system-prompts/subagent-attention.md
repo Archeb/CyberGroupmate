@@ -32,7 +32,7 @@
 {{/hasFastPathHistory}}
 
 {{#groupModel}}
-## 群组画像
+## 聊天画像
 - 标题: {{chatTitle}}
 - 描述: {{description}}
 - 日均消息: {{avgMessagesPerDay}}
