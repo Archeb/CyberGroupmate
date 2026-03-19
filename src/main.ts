@@ -329,6 +329,23 @@ async function main(): Promise<void> {
             } catch (err) {
                 log.warn("Agent 消息落盘失败", { chatId, error: String(err) });
             }
+
+            // 同步喂给 RecordingPipeline buffer，使 flush 时 LLM prompt 能看到 agent 消息
+            // （与普通消息双路写入一致：即时落盘 DB + 喂给 buffer）
+            const agentSub = subagentManager.get(chatId);
+            if (agentSub?.recordingPipeline) {
+                const agentMsg: import("./pipeline/types.js").Message = {
+                    id: String(event.messageId ?? `agent-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`),
+                    chatId,
+                    senderId: appConfig.persona?.name ?? "agent",
+                    senderName: appConfig.persona?.name ?? "赛博群友",
+                    text: String(event.text ?? ""),
+                    timestamp: Date.now(),
+                    replyToMessageId: event.replyToMessageId ? String(event.replyToMessageId) : undefined,
+                };
+                agentSub.recordingPipeline.onMessage(agentMsg);
+            }
+
             return; // agent 消息不走后续 Observer/Q3 逻辑
         }
 
