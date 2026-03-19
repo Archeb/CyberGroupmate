@@ -108,6 +108,11 @@ async function main(): Promise<void> {
     // ─── 全局时区初始化 ───
     setGlobalTimezone(appConfig.timezone);
 
+    // ─── Tavily API key → 环境变量（供 sandbox worker 继承） ───
+    if (appConfig.tavilyApiKey) {
+        process.env.TAVILY_API_KEY = appConfig.tavilyApiKey;
+    }
+
     log.info("LLM Profiles 加载完成", {
         profiles: Object.keys(appConfig.llmProfiles).join(", "),
         tiers: Object.entries(appConfig.modelTiers).map(([k, v]) => `${k}→${v}`).join(", "),
@@ -131,6 +136,17 @@ async function main(): Promise<void> {
             });
             sandbox.setHostCallHandler(async (method, args) => {
                 if (telegramAdapter.canHandle(method)) {
+                    // ── ChatId 发送限制：write 操作只允许绑定的 chatId ──
+                    const WRITE_METHODS = ["telegram.sendText", "telegram.sendMedia", "telegram.sendTyping", "telegram.joinChat", "telegram.leaveChat"];
+                    if (WRITE_METHODS.includes(method)) {
+                        const targetChatId = String(args[0] ?? "");
+                        if (targetChatId !== chatId) {
+                            throw new Error(
+                                `[Sandbox 安全限制] ${method} 被拦截：当前 sandbox 绑定 chat=${chatId}，` +
+                                `不允许向 chat=${targetChatId} 发送消息。`
+                            );
+                        }
+                    }
                     return telegramAdapter.handleCall(method, args);
                 }
                 switch (method) {
@@ -371,7 +387,11 @@ async function main(): Promise<void> {
         const messageText = String(event.text ?? event.message ?? "").toLowerCase();
         const hasNameMention = mentionKeywords.length > 0 && mentionKeywords.some(kw => messageText.includes(kw));
 
-        if (alert || isDM || isMention || hasNameMention) {
+        // attend 后冷却期内，Observer 告警不触发 Q3 入队，防止 LLM attend 期间
+        // 新消息持续重入队导致重复 attend（DM/@mention/文本提及不受冷却期限制）
+        const alertEffective = alert && !sub.isInAttendCooldown();
+
+        if (alertEffective || isDM || isMention || hasNameMention) {
             q3.enqueueOrUpdate(sub.buildQueueEntry());
             log.info("即时 → Q3 入队", {
                 chatId,

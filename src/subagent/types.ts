@@ -156,6 +156,10 @@ export interface SubagentCallback {
     taskId: string;
     /** 来源群组 */
     chatId: string;
+    /** 群组/私聊标题（用于 callback 渲染） */
+    chatTitle?: string;
+    /** 是否为私聊 */
+    isDirectMessage?: boolean;
     /** 执行类型 — spec 中为 source: 'CODE_ACT' | 'FAST_PATH' */
     executionType: "CODEACT" | "FAST_PATH";
     /** 执行状态 — spec 中为 type: 'COMPLETED' | 'FAILED' | 'TIMEOUT' */

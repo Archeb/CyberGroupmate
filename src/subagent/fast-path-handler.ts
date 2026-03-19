@@ -286,6 +286,7 @@ export class FastPathHandler {
         const callback: SubagentCallback = {
             taskId: `fp-${event.messageId}`,
             chatId: this.chatId,
+            chatTitle: this.chatTitle || undefined,
             executionType: "FAST_PATH",
             status,
             summary: `FastPath reply (${this.repliesSent}/${this.authorization?.maxRepliesBeforeReauth ?? 0})`,

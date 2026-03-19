@@ -204,6 +204,8 @@ export interface AppConfig {
     subagent?: SubagentExternalConfig;
     dashboard?: DashboardExternalConfig;
     vision?: VisionConfig;
+    /** Tavily Search API key */
+    tavilyApiKey?: string;
 }
 
 // ─── 默认值 ───
@@ -346,6 +348,7 @@ export function loadConfig(configPath?: string, forceReload?: boolean): AppConfi
         subagent: parseSubagentConfig(fileConfig),
         dashboard: parseDashboardConfig(fileConfig),
         vision: parseVisionConfig(fileConfig),
+        tavilyApiKey: str(fileConfig.tavily_api_key),
     };
 
     _cached = config;

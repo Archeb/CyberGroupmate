@@ -47,8 +47,11 @@ function loadApiTypeDefs(): string {
         const modulesDir = join(dirname(thisFile), "..", "sandbox", "modules");
 
         // 自动发现所有 .d.ts 文件，新增模块只需放一个 .d.ts 即可
+        // tavily.d.ts 仅在配置了 TAVILY_API_KEY 时包含
+        const hasTavily = !!process.env.TAVILY_API_KEY;
         const dtsFiles = readdirSync(modulesDir)
             .filter(f => f.endsWith(".d.ts"))
+            .filter(f => hasTavily || f !== "tavily.d.ts")
             .sort();
 
         const parts: string[] = [];
@@ -300,6 +303,8 @@ export class CodeActExecutor {
             const callback: SubagentCallback = {
                 taskId: task.taskId,
                 chatId: this.chatId,
+                chatTitle: task.contextSnapshot.chatTitle ?? task.contextSnapshot.groupModel?.chatTitle,
+                isDirectMessage: task.contextSnapshot.isDirectMessage,
                 executionType: "CODEACT",
                 status: "ERROR",
                 summary: `Execution failed: ${String(err)}`,
@@ -500,6 +505,8 @@ export class CodeActExecutor {
         const callback: SubagentCallback = {
             taskId: task.taskId,
             chatId: this.chatId,
+            chatTitle: ctx.chatTitle ?? ctx.groupModel?.chatTitle,
+            isDirectMessage: ctx.isDirectMessage,
             executionType: "CODEACT",
             status: isError ? "ERROR" : "COMPLETED",
             summary: `CodeAct session ${sessionResult.sessionId}: ${sessionResult.endReason}, ` +
@@ -552,6 +559,8 @@ export class CodeActExecutor {
         const callback: SubagentCallback = {
             taskId: task.taskId,
             chatId: this.chatId,
+            chatTitle: task.contextSnapshot.chatTitle ?? task.contextSnapshot.groupModel?.chatTitle,
+            isDirectMessage: task.contextSnapshot.isDirectMessage,
             executionType: "CODEACT",
             status: "COMPLETED",
             summary: `Executed ${task.replyMode} task with ${task.decisions.length} decisions (skeleton)`,

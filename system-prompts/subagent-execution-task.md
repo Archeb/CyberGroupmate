@@ -1,5 +1,5 @@
 ═══ {{taskId}} ═══
-聊天对象: {{chatTitle}} ({{chatId}}) [{{chatType}}]
+聊天对象: {{chatTitle}} (chatId: {{chatId}}) [{{chatType}}]
 
 
 ## 回复参考

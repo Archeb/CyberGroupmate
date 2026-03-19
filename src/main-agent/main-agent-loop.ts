@@ -191,10 +191,14 @@ export class MainAgentLoop {
             if (!entry.alert && !entry.hasFastPathRequest && !sa.hasTriageEngaged) {
                 continue;
             }
+            // attend 冷却期内，Observer 告警不入队（防止 attend 期间持续 re-enqueue）
+            if (entry.alert && !entry.hasFastPathRequest && !sa.hasTriageEngaged && sa.isInAttendCooldown()) {
+                continue;
+            }
             this.attentionQueue.enqueueOrUpdate(entry);
 
             const alert = sa.observer.checkAlert();
-            if (alert) {
+            if (alert && !sa.isInAttendCooldown()) {
                 this.attentionQueue.boost(sa.chatId, 20);
                 boostedAlerts++;
                 log.debug("Phase 2: alert boost", { chatId: sa.chatId, engagement: alert.engagementScore });
@@ -419,5 +423,5 @@ export class MainAgentLoop {
  * 主 Agent LLM 在后续轮次可以看到这些消息，了解上一轮 subagent 做了什么。
  */
 export function formatCallbackMessage(cb: SubagentCallback, chatTitle?: string): string {
-    return renderPrompt("CALLBACK", buildCallbackVariables(cb, chatTitle));
+    return renderPrompt("CALLBACK", buildCallbackVariables(cb, chatTitle ?? cb.chatTitle, cb.isDirectMessage));
 }

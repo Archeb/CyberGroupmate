@@ -13,6 +13,7 @@ import { createInterface } from "node:readline";
 import { installCapabilityRegistry } from "./capability-registry.js";
 import { createPromiseTracker } from "./promise-tracker.js";
 import { docs } from "./modules/docs.js";
+import { web } from "./modules/tavily.js";
 
 // ─── 顶层安全网：防止未捕获的异常导致 worker 进程崩溃 ───
 
@@ -242,7 +243,9 @@ async function executeCode(id: string, code: string): Promise<void> {
             })
             : ctx;
 
-        // 构造 async wrapper，注入 ctx, runtime, memory, scene, docs, actions, skills
+        // 构造 async wrapper，注入 ctx, runtime, memory, scene, docs, actions, skills, web
+        // web 模块仅在配置了 TAVILY_API_KEY 时注入，否则传 undefined
+        const hasWeb = !!process.env.TAVILY_API_KEY;
         const asyncFn = new Function(
             "ctx",
             "runtime",
@@ -251,10 +254,11 @@ async function executeCode(id: string, code: string): Promise<void> {
             "docs",
             "actions",
             "skills",
+            "web",
             `return (async () => { ${code} })()`
         );
 
-        await asyncFn(trackedCtx, rt, mem, scene, docs, act, sk);
+        await asyncFn(trackedCtx, rt, mem, scene, docs, act, sk, hasWeb ? web : undefined);
 
         // 兜底：等待所有未被 await 的 API 调用完成
         const { warning } = await tracker.flush();

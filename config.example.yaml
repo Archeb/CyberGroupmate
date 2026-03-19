@@ -225,3 +225,8 @@ dashboard:
   port: 6767
   # 认证 Token（访问时需携带 ?token=xxx）
   token: "your-secret-token"
+
+# ─── Tavily 网络搜索 ───
+# Tavily Search API key，用于 subagent 的联网搜索能力 (web.search / web.extract)
+# 在 https://app.tavily.com 注册获取。可选，未配置时 web 模块不可用。
+# tavily_api_key: "tvly-your-api-key"

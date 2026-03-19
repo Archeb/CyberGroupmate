@@ -262,7 +262,7 @@ async function describeImage(
     const messages: ChatMessage[] = [
         {
             role: "user",
-            content: "请简洁描述这张图片的内容。用一两句话概括主要内容。",
+            content: "请具体而详细地描述这张图片的内容。如图中有文字/代码，尽你所能给出完整内容。",
             imageParts: [{ url: dataUri }],
         },
     ];
