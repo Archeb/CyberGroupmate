@@ -61,6 +61,9 @@ export type DownloadFn = (fileId: string, chatId?: string, messageId?: string, u
 const DEFAULT_MAX_IMAGES = 3;
 const DEFAULT_MAX_IMAGE_SIZE = 1024;
 
+/** 图片描述内存缓存（Path B）: uniqueFileId → description */
+const photoDescriptionCache = new Map<string, string>();
+
 // ─── 核心处理函数 ───
 
 /**
@@ -115,49 +118,67 @@ export async function processMediaBatch(
         results.push(processed);
     }
 
-    // ─── 处理 Photo ───
-    let inlineCount = 0;
-    for (const photo of photos) {
-        if (isPathA && inlineCount < maxImages && downloadFn) {
-            // 路径 A: 内联 base64
-            try {
-                const buffer = await downloadFn(photo.fileId, photo.chatId, photo.messageId, photo.uniqueFileId);
-                const mime = photo.mimeType ?? "image/jpeg";
-                results.push({
+    // ─── 处理 Photo（并行） ───
+    // 先分类：前 maxImages 张走路径 A（内联），其余走路径 B（描述）或 C（占位）
+    // 描述结果按 uniqueFileId 缓存，避免重复 vision LLM 调用
+    const photoTasks: Array<Promise<ProcessedMedia>> = photos.map((photo, i) => {
+        const shouldInline = isPathA && i < maxImages && downloadFn;
+        const canDescribe = (isPathA || isPathB) && downloadFn;
+
+        /** 带缓存的图片描述：先查缓存，miss 时下载+LLM 描述并写入缓存 */
+        const describeWithCache = async (visionCfg: LLMConfig): Promise<ProcessedMedia> => {
+            // 缓存命中
+            const cached = photoDescriptionCache.get(photo.uniqueFileId);
+            if (cached) {
+                log.debug("图片描述缓存命中", { uniqueFileId: photo.uniqueFileId });
+                return { index: photo.messageIndex, description: cached };
+            }
+            // 缓存未命中：下载 + LLM 描述
+            const buffer = await downloadFn!(photo.fileId, photo.chatId, photo.messageId, photo.uniqueFileId);
+            const desc = await describeImage(buffer, photo.mimeType ?? "image/jpeg", visionCfg);
+            photoDescriptionCache.set(photo.uniqueFileId, desc);
+            return { index: photo.messageIndex, description: desc };
+        };
+
+        if (shouldInline) {
+            // 路径 A: 内联 base64（不缓存，每次需要完整数据）
+            return downloadFn!(photo.fileId, photo.chatId, photo.messageId, photo.uniqueFileId)
+                .then(buffer => ({
                     index: photo.messageIndex,
                     base64Data: buffer.toString("base64"),
-                    mimeType: mime,
+                    mimeType: photo.mimeType ?? "image/jpeg",
+                } as ProcessedMedia))
+                .catch(err => {
+                    log.warn("路径 A 下载失败，降级为描述", { fileId: photo.fileId, error: String(err) });
+                    if (canDescribe) {
+                        const visionCfg = isPathA ? llmConfig : visionLlmConfig!;
+                        return describeWithCache(visionCfg).catch(err2 => {
+                            log.warn("降级描述也失败", { fileId: photo.fileId, error: String(err2) });
+                            return { index: photo.messageIndex, description: "[📷 图片]" } as ProcessedMedia;
+                        });
+                    }
+                    return { index: photo.messageIndex, description: "[📷 图片]" } as ProcessedMedia;
                 });
-                inlineCount++;
-                continue;
-            } catch (err) {
-                log.warn("路径 A 下载失败，降级为描述", { fileId: photo.fileId, error: String(err) });
-            }
         }
 
-        if ((isPathA || isPathB) && downloadFn) {
-            // 路径 A 溢出 或 路径 B: 调用 vision LLM 描述
-            const visionConfig = isPathA ? llmConfig : visionLlmConfig!;
-            try {
-                const buffer = await downloadFn(photo.fileId, photo.chatId, photo.messageId, photo.uniqueFileId);
-                const mime = photo.mimeType ?? "image/jpeg";
-                const desc = await describeImage(buffer, mime, visionConfig);
-                results.push({
-                    index: photo.messageIndex,
-                    description: desc,
-                });
-                continue;
-            } catch (err) {
+        if (canDescribe) {
+            // 路径 A 溢出 或 路径 B: 调用 vision LLM 描述（带缓存）
+            const visionCfg = isPathA ? llmConfig : visionLlmConfig!;
+            return describeWithCache(visionCfg).catch(err => {
                 log.warn("Vision 描述失败，使用占位符", { fileId: photo.fileId, error: String(err) });
-            }
+                return { index: photo.messageIndex, description: "[📷 图片]" } as ProcessedMedia;
+            });
         }
 
-        // 路径 C 或降级兜底
-        results.push({
+        // 路径 C 或无下载能力
+        return Promise.resolve({
             index: photo.messageIndex,
             description: "[📷 图片]",
-        });
-    }
+        } as ProcessedMedia);
+    });
+
+    const photoResults = await Promise.all(photoTasks);
+    results.push(...photoResults);
 
     return results;
 }

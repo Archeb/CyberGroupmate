@@ -22,7 +22,7 @@ import { NotificationCenter } from "../event/notification-center.js";
 import { runCodeActSession, SentMessageCollector, type SessionResult, type SentMessageRecord } from "../sandbox/session-runner.js";
 import { renderPrompt, deriveChatType } from "../main-agent/prompt-renderer.js";
 import type { LLMConfig, VisionConfig } from "../core/config.js";
-import { enrichMessages } from "../core/message-enricher.js";
+import { enrichMessages, formatMessageLine } from "../core/message-enricher.js";
 import type { ChatMessage } from "../core/llm.js";
 import { createLogger } from "../core/logger.js";
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync } from "node:fs";
@@ -183,6 +183,8 @@ export class CodeActExecutor {
     private personaDescription: string = "";
     /** Vision 配置 */
     private visionConfig: VisionConfig | undefined;
+    /** Vision tier LLM 配置（独立 vision 模型，Path B 描述用） */
+    private visionLlmConfig: LLMConfig | undefined;
     /** 媒体下载函数（委托给 adapter） */
     private downloadFn: ((fileId: string) => Promise<Buffer>) | undefined;
     /** 平台无关的 typing 状态发送函数（由宿主注入，如 Telegram sendTyping） */
@@ -198,6 +200,7 @@ export class CodeActExecutor {
         visionConfig?: VisionConfig,
         downloadFn?: (fileId: string) => Promise<Buffer>,
         sendTyping?: (chatId: string) => Promise<void>,
+        visionLlmConfig?: LLMConfig,
     ): void {
         this.sandboxPool = sandboxPool;
         this.nc = nc;
@@ -209,9 +212,10 @@ export class CodeActExecutor {
         }
         if (memory) this.memory = memory;
         this.visionConfig = visionConfig;
+        this.visionLlmConfig = visionLlmConfig;
         this.downloadFn = downloadFn;
         this.sendTypingFn = sendTyping;
-        log.info("setDependencies", { chatId: this.chatId, hasSandboxPool: true, hasVision: !!visionConfig, hasDownload: !!downloadFn, hasTyping: !!sendTyping });
+        log.info("setDependencies", { chatId: this.chatId, hasSandboxPool: true, hasVision: !!visionConfig, hasVisionLlm: !!visionLlmConfig, hasDownload: !!downloadFn, hasTyping: !!sendTyping });
     }
 
     /**
@@ -340,6 +344,7 @@ export class CodeActExecutor {
             {
                 visionConfig: this.visionConfig,
                 llmConfig: this.llmConfig!,
+                visionLlmConfig: this.visionLlmConfig,
                 downloadFn: this.downloadFn,
                 stickerCache: this.memory ?? undefined,
                 chatId: this.chatId,
@@ -615,7 +620,14 @@ export class CodeActExecutor {
         if (this.pendingMessages.length === 0) return null;
         const drained = this.pendingMessages.splice(0);
         const lines = drained.map(m =>
-            `[${formatTsForDisplay(m.timestamp)}] ${m.sender}: ${m.text}`
+            formatMessageLine({
+                id: m.id,
+                sender: m.sender,
+                text: m.text,
+                timestamp: m.timestamp,
+                mediaType: m.mediaType,
+                mediaInfo: m.mediaInfo,
+            }, { includeMediaTags: true })
         ).join("\n");
         log.info("drainPendingMessages", {
             chatId: this.chatId,

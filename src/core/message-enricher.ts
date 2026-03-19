@@ -109,6 +109,57 @@ export async function enrichMessages(
     return { formattedText, imageParts };
 }
 
+// ─── 共享格式化函数 ───
+
+/**
+ * 根据 mediaType/mediaInfo 生成媒体类型标签（无 vision 处理，纯文本标记）
+ *
+ * 用于 attend-handler 等不做图片识别的场景，让 LLM 知道消息附带了什么类型的媒体。
+ */
+function mediaTagFromType(mediaType?: string, mediaInfo?: string): string {
+    if (!mediaType) return "";
+    let emoji = "";
+    try {
+        if (mediaInfo) {
+            const info = JSON.parse(mediaInfo);
+            emoji = info.emoji ?? "";
+        }
+    } catch { /* ignore */ }
+    switch (mediaType) {
+        case "photo": return "[📷 图片]";
+        case "sticker": return emoji ? `[🎭 贴纸: ${emoji}]` : "[🎭 贴纸]";
+        case "video": return "[📹 视频]";
+        case "animation": return "[🎬 GIF]";
+        case "document": return "[📎 文件]";
+        default: return `[📎 ${mediaType}]`;
+    }
+}
+
+/**
+ * 格式化单条消息为文本行
+ *
+ * 统一的消息格式化入口，供 attend-handler 和 enrichMessages 共用。
+ * - includeMediaTags: 当消息无 processedMedia 但有 mediaType 时，自动追加媒体标签
+ *   （attend-handler 设 true；enrichMessages 流程中已有 processedMedia 处理，也设 true 作兜底）
+ *
+ * 格式：[时间] [msgId:xxx] 发送者 (↩ reply to xxx): 消息文本 + 媒体标签
+ */
+export function formatMessageLine(
+    m: RawMessage,
+    options?: { includeMediaTags?: boolean },
+): string {
+    const replyTag = m.replyTo ? ` (↩ reply to ${m.replyTo})` : "";
+    let textPart = m.text ?? "";
+
+    // 如果没有 processedMedia（未经 vision 处理）但有 mediaType，追加媒体标签
+    if (options?.includeMediaTags && (!m.processedMedia || m.processedMedia.length === 0) && m.mediaType) {
+        const tag = mediaTagFromType(m.mediaType, m.mediaInfo);
+        if (tag) textPart = textPart ? `${textPart} ${tag}` : tag;
+    }
+
+    return `[${formatTsForDisplay(m.timestamp) ?? ""}] [msgId:${m.id ?? "?"}] ${m.sender ?? "?"}${replyTag}: ${textPart}`;
+}
+
 // ─── 内部函数 ───
 
 /**
@@ -157,25 +208,33 @@ function formatMessages(
     imageParts: Array<{ url: string }>,
 ): string {
     const lines = messages.map((m) => {
-        const replyTag = m.replyTo ? ` (↩ reply to ${m.replyTo})` : "";
         let textPart = m.text ?? "";
 
         // 注入媒体描述（从 processedMedia）
         if (m.processedMedia && m.processedMedia.length > 0) {
             for (const pm of m.processedMedia) {
-                if (pm.description) {
-                    textPart = textPart + ` ${pm.description}`;
-                }
                 if (pm.base64Data && pm.mimeType) {
-                    // 路径 A: 收集 base64 图片，稍后注入 LLM messages
+                    // 路径 A: 收集 base64 图片，追加带序号的标签
                     imageParts.push({
                         url: `data:${pm.mimeType};base64,${pm.base64Data}`,
                     });
-                    textPart = textPart.replace("[📷 图片]", `[📷 图片${imageParts.length}]`);
+                    textPart = textPart ? `${textPart} [📷 图片${imageParts.length}]` : `[📷 图片${imageParts.length}]`;
+                } else if (pm.description) {
+                    // 路径 B/C: 文本描述
+                    textPart = textPart ? `${textPart} [📷 图片描述: ${pm.description}]` : `[📷 图片描述: ${pm.description}]`;
                 }
             }
         }
 
+        // 使用共享的 formatMessageLine，但 textPart 已处理过，直接构建
+        // 如果有 processedMedia 就不再追加 mediaTag（已处理），否则追加 mediaTag 作兜底
+        const hasProcessedMedia = m.processedMedia && m.processedMedia.length > 0;
+        if (!hasProcessedMedia && m.mediaType) {
+            const tag = mediaTagFromType(m.mediaType, m.mediaInfo);
+            if (tag) textPart = textPart ? `${textPart} ${tag}` : tag;
+        }
+
+        const replyTag = m.replyTo ? ` (↩ reply to ${m.replyTo})` : "";
         return `[${formatTsForDisplay(m.timestamp) ?? ""}] [msgId:${m.id ?? "?"}] ${m.sender ?? "?"}${replyTag}: ${textPart}`;
     });
 

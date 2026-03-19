@@ -23,6 +23,7 @@ import { renderPrompt, buildAttentionVariables, buildMainSystemVariables } from 
 import { callLLM } from "../core/llm.js";
 import { createLogger } from "../core/logger.js";
 import { formatTsForDisplay } from "../core/timezone.js";
+import { formatMessageLine, type RawMessage } from "../core/message-enricher.js";
 
 const log = createLogger("attend-handler");
 
@@ -130,11 +131,19 @@ export function createAttendHandler(
                     }
                     messagesText = recentMsgs.map(
                         (m: any) => {
-                            const sender = m.displayName ?? `(uid:${m.userId})`;
-                            const replyTag = m.replyToMessageId
-                                ? ` (↩ reply to ${msgIdToName.get(m.replyToMessageId) ?? `msg#${m.replyToMessageId}`})`
-                                : "";
-                            return `[${formatTsForDisplay(m.timestamp) ?? ""}] ${sender}${replyTag}: ${m.text ?? ""}`;
+                            // 转换为 RawMessage 格式，复用 formatMessageLine
+                            const raw: RawMessage = {
+                                id: m.messageId,
+                                sender: m.displayName ?? `(uid:${m.userId})`,
+                                text: m.text ?? "",
+                                timestamp: m.timestamp,
+                                replyTo: m.replyToMessageId
+                                    ? (msgIdToName.get(m.replyToMessageId) ?? `msg#${m.replyToMessageId}`)
+                                    : undefined,
+                                mediaType: m.mediaType,
+                                mediaInfo: m.mediaInfo,
+                            };
+                            return formatMessageLine(raw, { includeMediaTags: true });
                         }
                     ).join("\n");
                 }

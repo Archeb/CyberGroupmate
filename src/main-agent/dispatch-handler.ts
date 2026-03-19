@@ -24,6 +24,7 @@ import { FastPathHandler } from "../subagent/fast-path-handler.js";
 import { buildGroupContext } from "./context-builder.js";
 import { createLogger } from "../core/logger.js";
 import { formatTsForDisplay } from "../core/timezone.js";
+import { resolveTierProfile } from "../core/config.js";
 import type { AppConfig } from "../core/config.js";
 
 const log = createLogger("dispatch-handler");
@@ -59,6 +60,10 @@ export function createDispatchHandler(
 ): (result: AttendResult) => Promise<void> {
     const { memory, globalState, subagentManager, sandboxPool, nc, q3, q5, llmConfig, cheapConfig, persona, appConfig, telegramAdapter: tgAdapter, sendTyping } = deps;
     const visionConfig = appConfig.vision;
+    // 解析 vision tier LLM 配置（Path B: 独立 vision 模型描述图片）
+    const visionLlmConfig = appConfig.modelTiers.vision
+        ? resolveTierProfile("vision", appConfig)
+        : undefined;
     // 构建下载函数（传给 Executor 用于懒加载 Vision 处理）
     const downloadFn = tgAdapter ? async (fileId: string, chatId?: string, messageId?: string, uniqueFileId?: string): Promise<Buffer> => {
         const result = await tgAdapter.handleCall("telegram.downloadMedia", [fileId, chatId, messageId, uniqueFileId]) as { buffer: string; size: number };
@@ -197,7 +202,7 @@ export function createDispatchHandler(
                         globalState.recordDecision(cb.chatId, `CALLBACK: ${cb.executionType} ${cb.status} (${cb.summary})`);
                     });
                     // Fix 9: 注入 Sandbox + NC + LLM 依赖 + Memory + Vision
-                    executor.setDependencies(sandboxPool, nc, llmConfig, persona, memory, visionConfig, downloadFn, sendTyping);
+                    executor.setDependencies(sandboxPool, nc, llmConfig, persona, memory, visionConfig, downloadFn, sendTyping, visionLlmConfig);
                 }
 
                 executor.enqueue(task);

@@ -392,9 +392,16 @@ export class TopicRegistry extends EventEmitter {
             if (age > 6 * 60 * 60 * 1000) continue; // 超过 6 小时的不恢复
 
             // 决定恢复后的状态
-            const state: TopicState = (t.wasEngaged || t.interventionCount > 0)
-                ? "COOLDOWN"     // 已回复 → 进入 COOLDOWN 避免重复
-                : "ACTIVE";      // 未回复 → ACTIVE 允许重新 triage
+            // 已回复话题总是 COOLDOWN（防止重复回复）
+            // 未回复话题：15分钟内的设 ACTIVE（可能还活跃），超过15分钟的设 STALE
+            let state: TopicState;
+            if (t.wasEngaged || t.interventionCount > 0) {
+                state = "COOLDOWN";
+            } else if (age < 15 * 60 * 1000) {
+                state = "ACTIVE";
+            } else {
+                state = "STALE";  // 老话题但未回复，设 STALE 但不立即归档
+            }
 
             const topic: Topic = {
                 id: t.id,
@@ -405,7 +412,9 @@ export class TopicRegistry extends EventEmitter {
                 messageIds: t.messageIds ?? [],
                 state,
                 createdAt: startedMs,
-                lastActivityAt: startedMs,
+                // Fix: 使用当前时间而非 startedMs，防止 cleanup 立即归档
+                // cleanup 会在 lastActivityAt 超过 15min 时转 STALE，超过 2h 时转 ARCHIVED
+                lastActivityAt: Date.now(),
                 turnCount: 0,
                 maxTurns: 5,
                 pendingMessages: [],

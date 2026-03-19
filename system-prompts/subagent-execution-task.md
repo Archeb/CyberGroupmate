@@ -1,6 +1,12 @@
-═══ 回复任务 {{taskId}} ═══
+═══ {{taskId}} ═══
 聊天对象: {{chatTitle}} ({{chatId}}) [{{chatType}}]
-回复模式: {{replyMode}}
+
+
+## 回复参考
+
+{{decisions}}
+语气: {{toneGuidance}}
+
 
 ## 话题摘要
 {{topicSummary}}
@@ -10,13 +16,5 @@
 
 ## 目标消息
 {{targetMessages}}
-
-
-## 主 Agent 指令
-
-内容方向: {{contentDirection}}
-语气: {{toneGuidance}}
-决策原文：
-{{decisions}}
 
 请根据以上任务信息，编写代码完成回复。
