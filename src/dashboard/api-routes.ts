@@ -210,9 +210,9 @@ export function createApiRouter(deps: DashboardDeps, bridge: EventBridge): Route
 
         // Sort by startedAt descending (most recent first)
         allTopics.sort((a, b) => {
-            const ta = (a.startedAt as string) || "";
-            const tb = (b.startedAt as string) || "";
-            return tb.localeCompare(ta);
+            const ta = a.startedAt ? new Date(a.startedAt as string | number).getTime() : 0;
+            const tb = b.startedAt ? new Date(b.startedAt as string | number).getTime() : 0;
+            return tb - ta;
         });
 
         const total = allTopics.length;

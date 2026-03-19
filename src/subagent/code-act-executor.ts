@@ -176,7 +176,7 @@ export class CodeActExecutor {
     private sandboxPool: SandboxPool | null = null;
     private nc: NotificationCenter | null = null;
     private llmConfig: LLMConfig | null = null;
-    private sessionsDir: string = "workspace/sessions";
+
     /** 持久化文件路径（由外部注入） */
     private sessionFilePath: string | null = null;
     private personaName: string = "赛博群友";
@@ -185,21 +185,24 @@ export class CodeActExecutor {
     private visionConfig: VisionConfig | undefined;
     /** 媒体下载函数（委托给 adapter） */
     private downloadFn: ((fileId: string) => Promise<Buffer>) | undefined;
+    /** 平台无关的 typing 状态发送函数（由宿主注入，如 Telegram sendTyping） */
+    private sendTypingFn: ((chatId: string) => Promise<void>) | undefined;
 
     setDependencies(
         sandboxPool: SandboxPool,
         nc: NotificationCenter,
         llmConfig: LLMConfig,
-        sessionsDir?: string,
+
         persona?: { name: string; description: string },
         memory?: MemoryStoreV2,
         visionConfig?: VisionConfig,
         downloadFn?: (fileId: string) => Promise<Buffer>,
+        sendTyping?: (chatId: string) => Promise<void>,
     ): void {
         this.sandboxPool = sandboxPool;
         this.nc = nc;
         this.llmConfig = llmConfig;
-        if (sessionsDir) this.sessionsDir = sessionsDir;
+
         if (persona) {
             this.personaName = persona.name;
             this.personaDescription = persona.description;
@@ -207,7 +210,8 @@ export class CodeActExecutor {
         if (memory) this.memory = memory;
         this.visionConfig = visionConfig;
         this.downloadFn = downloadFn;
-        log.info("setDependencies", { chatId: this.chatId, hasSandboxPool: true, hasVision: !!visionConfig, hasDownload: !!downloadFn });
+        this.sendTypingFn = sendTyping;
+        log.info("setDependencies", { chatId: this.chatId, hasSandboxPool: true, hasVision: !!visionConfig, hasDownload: !!downloadFn, hasTyping: !!sendTyping });
     }
 
     /**
@@ -412,6 +416,19 @@ export class CodeActExecutor {
         };
         sandbox.on("notify", notifyListener);
 
+        // ═══ Typing 状态指示 ═══
+        // Telegram typing 状态约 5 秒后过期，用 4 秒间隔保持活跃
+        let typingTimer: ReturnType<typeof setInterval> | null = null;
+        if (this.sendTypingFn) {
+            const doTyping = () => {
+                this.sendTypingFn!(this.chatId).catch(err => {
+                    log.debug("sendTyping failed", { chatId: this.chatId, error: String(err) });
+                });
+            };
+            doTyping(); // 立即发送一次
+            typingTimer = setInterval(doTyping, 4000);
+        }
+
         log.info("executeWithSandbox: 开始 CodeAct session", {
             chatId: this.chatId,
             taskId: task.taskId,
@@ -425,12 +442,13 @@ export class CodeActExecutor {
                 sandbox,
                 this.nc!,
                 this.llmConfig!,
-                this.sessionsDir,
                 this.config.maxExecutionTimeMs,
                 sentCollector, // Fix 1: 传入 collector
                 () => this.drainPendingMessages(), // 层 2: turn 间消息注入
             );
         } finally {
+            // 停止 typing 指示
+            if (typingTimer) clearInterval(typingTimer);
             // 清理监听器，释放 sandbox
             sandbox.removeListener("notify", notifyListener);
             this.sandboxPool!.release(this.chatId);

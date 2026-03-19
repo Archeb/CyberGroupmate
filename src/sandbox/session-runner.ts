@@ -6,15 +6,12 @@
  *
  * 在整体架构中的位置：
  * - Orchestrator (main.ts) 在处理事件时调用 runCodeActSession
- * - 每个 session 的完整对话记录保存到 data/sessions/
  */
 
 import { Sandbox, ExecutionResult } from "./sandbox.js";
 import type { NotificationCenter } from "../event/notification-center.js";
 import { callLLM, ChatMessage, LLMResponse } from "../core/llm.js";
 import type { LLMConfig } from "../core/config.js";
-import { appendFileSync, mkdirSync, existsSync } from "node:fs";
-import { join, dirname } from "node:path";
 import { ulid } from "ulid";
 import { createLogger } from "../core/logger.js";
 
@@ -196,14 +193,13 @@ export function parseResponse(response: string): {
  * @param sandbox - Sandbox 实例
  * @param nc - NotificationCenter 实例（用于检查新通知）
  * @param llmConfig - LLM 配置
- * @param sessionsDir - Session transcript 保存目录
  * @returns Session 结果
  *
  * @example
  * ```ts
  * const result = await runCodeActSession(
  *   [{ role: "system", content: systemPrompt }, { role: "user", content: eventContext }],
- *   sandbox, nc, llmConfig, "workspace/sessions"
+ *   sandbox, nc, llmConfig
  * );
  * ```
  */
@@ -212,7 +208,6 @@ export async function runCodeActSession(
     sandbox: Sandbox,
     nc: NotificationCenter,
     llmConfig: LLMConfig,
-    sessionsDir: string = "workspace/sessions",
     /** 每段代码的执行超时（毫秒），默认 30s */
     executeTimeout: number = 30000,
     /** 已发消息收集器，用于将 notify 事件中确认的消息反馈到 observation */
@@ -223,11 +218,7 @@ export async function runCodeActSession(
     const sessionId = ulid();
     const turns: SessionTurn[] = [];
 
-    // 确保 session 目录存在
-    if (!existsSync(sessionsDir)) {
-        mkdirSync(sessionsDir, { recursive: true });
-    }
-    const transcriptPath = join(sessionsDir, `${sessionId}.jsonl`);
+
 
     for (let turnNum = 0; turnNum < MAX_TURNS; turnNum++) {
         // ─── 层 2: turn 间消息注入 ───
@@ -281,7 +272,7 @@ export async function runCodeActSession(
         if (codeBlocks.length === 0) {
             log.debug(`Turn ${turnNum}: 无代码块，session 结束`);
             turns.push(turn);
-            appendTranscript(transcriptPath, turn);
+
             return {
                 sessionId,
                 turns,
@@ -338,7 +329,7 @@ export async function runCodeActSession(
                 if (!sandbox.isAlive()) {
                     log.error("Sandbox worker died, aborting session", { sessionId, turn: turnNum, error: errorMsg });
                     turns.push(turn);
-                    appendTranscript(transcriptPath, turn);
+
                     return {
                         sessionId,
                         turns,
@@ -355,7 +346,6 @@ export async function runCodeActSession(
         }
 
         turns.push(turn);
-        appendTranscript(transcriptPath, turn);
 
         // ─── 组装 observation ───
         let observation = outputParts.join("\n\n");
@@ -398,24 +388,4 @@ function truncateOutput(output: string): string {
     );
 }
 
-/**
- * 追加一个 turn 记录到 session transcript
- */
-function appendTranscript(path: string, turn: SessionTurn): void {
-    try {
-        const record = {
-            turn: turn.turn,
-            thinking: turn.thinking.slice(0, 500),
-            codeBlocks: turn.codeBlocks.length,
-            results: turn.executionResults.map((r) => ({
-                error: r.error,
-                outputLength: r.output.length,
-            })),
-            usage: turn.usage,
-            timestamp: new Date().toISOString(),
-        };
-        appendFileSync(path, JSON.stringify(record) + "\n", "utf-8");
-    } catch {
-        // 写入失败不影响主流程
-    }
-}
+

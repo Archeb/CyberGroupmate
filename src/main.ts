@@ -62,7 +62,6 @@ function ensureDataDirs(): void {
     const dirs = [
         DATA_DIR,
         join(DATA_DIR, "tg-session"),
-        SESSIONS_DIR,
     ];
     for (const dir of dirs) {
         if (!existsSync(dir)) {
@@ -553,9 +552,11 @@ async function main(): Promise<void> {
         llmConfig,
         cheapConfig,
         persona: appConfig.persona,
-        sessionsDir: SESSIONS_DIR,
         appConfig,
         telegramAdapter,
+        sendTyping: async (chatId: string) => {
+            await telegramAdapter.handleCall("telegram.sendTyping", [chatId]);
+        },
     }));
 
     log.info("MainAgentLoop 配置完成");

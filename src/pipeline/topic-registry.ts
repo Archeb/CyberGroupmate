@@ -389,7 +389,7 @@ export class TopicRegistry extends EventEmitter {
             // 计算话题是否过期（2小时不活跃 → 不恢复）
             const startedMs = new Date(t.startedAt).getTime();
             const age = Date.now() - startedMs;
-            if (age > 2 * 60 * 60 * 1000) continue; // 超过 2 小时的不恢复
+            if (age > 6 * 60 * 60 * 1000) continue; // 超过 6 小时的不恢复
 
             // 决定恢复后的状态
             const state: TopicState = (t.wasEngaged || t.interventionCount > 0)

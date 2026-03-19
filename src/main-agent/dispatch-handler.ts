@@ -40,11 +40,13 @@ export interface DispatchHandlerDeps {
     llmConfig: LLMConfig;
     cheapConfig: LLMConfig;
     persona: { name: string; description: string };
-    sessionsDir: string;
+
     /** 完整 AppConfig（用于解析 vision 等配置） */
     appConfig: AppConfig;
     /** Telegram Adapter 引用（用于下载媒体，传给 Executor） */
     telegramAdapter?: { handleCall(method: string, args: unknown[]): Promise<unknown> };
+    /** 平台无关的 typing 状态发送（sandbox 执行期间展示 typing） */
+    sendTyping?: (chatId: string) => Promise<void>;
 }
 
 /**
@@ -55,7 +57,7 @@ export interface DispatchHandlerDeps {
 export function createDispatchHandler(
     deps: DispatchHandlerDeps,
 ): (result: AttendResult) => Promise<void> {
-    const { memory, globalState, subagentManager, sandboxPool, nc, q3, q5, llmConfig, cheapConfig, persona, sessionsDir, appConfig, telegramAdapter: tgAdapter } = deps;
+    const { memory, globalState, subagentManager, sandboxPool, nc, q3, q5, llmConfig, cheapConfig, persona, appConfig, telegramAdapter: tgAdapter, sendTyping } = deps;
     const visionConfig = appConfig.vision;
     // 构建下载函数（传给 Executor 用于懒加载 Vision 处理）
     const downloadFn = tgAdapter ? async (fileId: string, chatId?: string, messageId?: string, uniqueFileId?: string): Promise<Buffer> => {
@@ -79,12 +81,28 @@ export function createDispatchHandler(
                 const topicForDecision = decision.topicId
                     ? allTopics.find((t: any) => String(t.id) === decision.topicId)
                     : allTopics[0];
-                // 构建完整的话题摘要：包含所有非归档话题的状态和上下文
-                const topicSummary = allTopics.length > 0
-                    ? allTopics.map((t: any) =>
+
+                // 构建话题摘要：优先使用 TopicRegistry，空时 fallback 到 MemoryV2
+                let topicSummary = "";
+                if (allTopics.length > 0) {
+                    topicSummary = allTopics.map((t: any) =>
                         `[${t.state}] ${t.label ?? ""}${t.lastSummary ? ` — ${t.lastSummary}` : (t.recentContext ? `: ${t.recentContext.split("\n").slice(-2).join("; ")}` : "")}`
-                    ).join("\n")
-                    : "";
+                    ).join("\n");
+                } else {
+                    // Fallback: TopicRegistry 为空时（Pipeline 尚未 flush 或重启后无近期话题），
+                    // 从 MemoryV2 查询最近 6 小时的持久化话题
+                    try {
+                        const since = new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString();
+                        const memTopics = memory.getTopicsSince(result.chatId, since);
+                        if (memTopics.length > 0) {
+                            topicSummary = memTopics.slice(-10).map(t =>
+                                `${t.label}${t.summary ? ` — ${t.summary}` : ""}${t.wasEngaged ? " [已回复]" : ""}`
+                            ).join("\n");
+                        }
+                    } catch (err) {
+                        // 静默失败，topicSummary 留空
+                    }
+                }
 
                 // 获取最近消息
                 const recentMsgs = memory.getRecentMessages(result.chatId, 20);
@@ -179,7 +197,7 @@ export function createDispatchHandler(
                         globalState.recordDecision(cb.chatId, `CALLBACK: ${cb.executionType} ${cb.status} (${cb.summary})`);
                     });
                     // Fix 9: 注入 Sandbox + NC + LLM 依赖 + Memory + Vision
-                    executor.setDependencies(sandboxPool, nc, llmConfig, sessionsDir, persona, memory, visionConfig, downloadFn);
+                    executor.setDependencies(sandboxPool, nc, llmConfig, persona, memory, visionConfig, downloadFn, sendTyping);
                 }
 
                 executor.enqueue(task);

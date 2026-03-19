@@ -373,7 +373,7 @@ export class GroupSubagent extends EventEmitter {
      * @returns 恢复的话题数量
      */
     loadRecentTopics(memory: MemoryStoreV2): number {
-        const since = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+        const since = new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString();
         const topicNodes = memory.getTopicsSince(this.chatId, since);
 
         if (topicNodes.length === 0) {
