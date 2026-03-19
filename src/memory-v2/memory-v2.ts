@@ -1603,6 +1603,15 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
         return rows.map(r => this.rowToTopicNode(r));
     }
 
+    getRecentTopics(chatId: string, limit: number = 20): TopicNode[] {
+        const rows = this.db.prepare(
+            "SELECT * FROM topics WHERE chat_id = ? ORDER BY started_at DESC LIMIT ?"
+        ).all(chatId, limit) as Record<string, unknown>[];
+        log.debug("getRecentTopics", { chatId, limit, count: rows.length });
+        // 返回按时间正序（旧→新），与 getTopicsSince 行为一致
+        return rows.map(r => this.rowToTopicNode(r)).reverse();
+    }
+
     getInteractionsSince(chatId: string, since: string): InteractionEpisode[] {
         const rows = this.db.prepare(
             "SELECT * FROM interactions WHERE chat_id = ? AND created_at >= ? ORDER BY created_at ASC"

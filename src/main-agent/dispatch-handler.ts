@@ -30,6 +30,20 @@ import type { AppConfig } from "../core/config.js";
 
 const log = createLogger("dispatch-handler");
 
+/** 将 ISO 时间戳格式化为相对时间描述（如 "3小时前"、"2天前"） */
+function formatRelativeTime(isoTimestamp: string | null | undefined): string {
+    if (!isoTimestamp) return "";
+    const diffMs = Date.now() - new Date(isoTimestamp).getTime();
+    if (diffMs < 0) return "刚刚";
+    const minutes = Math.floor(diffMs / 60000);
+    if (minutes < 1) return "刚刚";
+    if (minutes < 60) return `${minutes}分钟前`;
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return `${hours}小时前`;
+    const days = Math.floor(hours / 24);
+    return `${days}天前`;
+}
+
 /** Dispatch handler 依赖 */
 export interface DispatchHandlerDeps {
     memory: MemoryStoreV2;
@@ -92,17 +106,16 @@ export function createDispatchHandler(
                 let topicSummary = "";
                 if (allTopics.length > 0) {
                     topicSummary = allTopics.map((t: any) =>
-                        `[${t.state}] ${t.label ?? ""}${t.lastSummary ? ` — ${t.lastSummary}` : (t.recentContext ? `: ${t.recentContext.split("\n").slice(-2).join("; ")}` : "")}`
+                        `[${t.state}] (${formatRelativeTime(t.lastActivityAt ?? t.createdAt)}) ${t.label ?? ""}${t.lastSummary ? ` — ${t.lastSummary}` : (t.recentContext ? `: ${t.recentContext.split("\n").slice(-2).join("; ")}` : "")}`
                     ).join("\n");
                 } else {
                     // Fallback: TopicRegistry 为空时（Pipeline 尚未 flush 或重启后无近期话题），
-                    // 从 MemoryV2 查询最近 6 小时的持久化话题
+                    // 从 MemoryV2 查询最近 20 条持久化话题（无时间限制）
                     try {
-                        const since = new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString();
-                        const memTopics = memory.getTopicsSince(result.chatId, since);
+                        const memTopics = memory.getRecentTopics(result.chatId, 20);
                         if (memTopics.length > 0) {
-                            topicSummary = memTopics.slice(-10).map(t =>
-                                `${t.label}${t.summary ? ` — ${t.summary}` : ""}${t.wasEngaged ? " [已回复]" : ""}`
+                            topicSummary = memTopics.map(t =>
+                                `(${formatRelativeTime(t.startedAt)}) ${t.label}${t.summary ? ` — ${t.summary}` : ""}${t.wasEngaged ? " [已回复]" : ""}`
                             ).join("\n");
                         }
                     } catch (err) {

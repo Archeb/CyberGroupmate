@@ -448,6 +448,9 @@ export interface IMemoryStoreV2 {
     /** 获取指定 chatId 在 since 之后的 topics */
     getTopicsSince(chatId: string, since: string): TopicNode[];
 
+    /** 获取指定 chatId 最近 N 条 topics（按 started_at DESC，无时间限制） */
+    getRecentTopics(chatId: string, limit?: number): TopicNode[];
+
     /** 获取指定 chatId 在 since 之后的 interactions */
     getInteractionsSince(chatId: string, since: string): InteractionEpisode[];
 
