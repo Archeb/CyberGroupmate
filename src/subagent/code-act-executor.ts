@@ -22,7 +22,7 @@ import { NotificationCenter } from "../event/notification-center.js";
 import { runCodeActSession, SentMessageCollector, type SessionResult, type SentMessageRecord } from "../sandbox/session-runner.js";
 import { renderPrompt, deriveChatType } from "../main-agent/prompt-renderer.js";
 import type { LLMConfig, VisionConfig } from "../core/config.js";
-import { enrichMessages, formatMessageLine } from "../core/message-enricher.js";
+import { enrichMessages, formatMessageLine, resolveReplyText } from "../core/message-enricher.js";
 import type { ChatMessage } from "../core/llm.js";
 import { createLogger } from "../core/logger.js";
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync } from "node:fs";
@@ -649,7 +649,7 @@ export class CodeActExecutor {
      * 层 1: 刷新 task 的目标消息列表
      * 在 processNext() 取出 task 后、execute() 前调用
      */
-    private refreshTaskMessages(task: CodeActReplyTask): void {
+    private async refreshTaskMessages(task: CodeActReplyTask): Promise<void> {
         if (!this.memory) return;
         try {
             const freshMessages = this.memory.getRecentMessages(this.chatId, 20);
@@ -660,16 +660,38 @@ export class CodeActExecutor {
                 msgIdToName.set(m.messageId, m.displayName || `(uid:${m.userId})`);
             }
 
-            task.contextSnapshot.recentMessages = freshMessages.map((m: any) => ({
-                id: String(m.messageId ?? m.id ?? ""),
-                sender: String(m.displayName ?? m.sender ?? m.userId ?? "?"),
-                text: String(m.text ?? ""),
-                timestamp: String(m.timestamp ?? ""),
-                replyTo: m.replyToMessageId
-                    ? (msgIdToName.get(m.replyToMessageId) ?? `msg#${m.replyToMessageId}`)
-                    : undefined,
-                mediaType: m.mediaType ?? undefined,
-                mediaInfo: m.mediaInfo ?? undefined,
+            task.contextSnapshot.recentMessages = await Promise.all(freshMessages.map(async (m: any) => {
+                const isInContext = m.replyToMessageId ? msgIdToName.has(m.replyToMessageId) : false;
+                // 不在上下文中时，从 DB 查询原消息并解析文本/媒体描述（含 vision 处理）
+                let replyToText: string | undefined;
+                if (m.replyToMessageId && !isInContext && this.memory) {
+                    try {
+                        const origMsg = this.memory.getMessageById(this.chatId, m.replyToMessageId);
+                        if (origMsg) {
+                            replyToText = await resolveReplyText(origMsg, {
+                                stickerCache: this.memory ?? undefined,
+                                visionConfig: this.visionConfig,
+                                llmConfig: this.llmConfig ?? undefined,
+                                visionLlmConfig: this.visionLlmConfig,
+                                downloadFn: this.downloadFn,
+                                chatId: this.chatId,
+                            });
+                        }
+                    } catch { /* 非关键路径 */ }
+                }
+                return {
+                    id: String(m.messageId ?? m.id ?? ""),
+                    sender: String(m.displayName ?? m.sender ?? m.userId ?? "?"),
+                    text: String(m.text ?? ""),
+                    timestamp: String(m.timestamp ?? ""),
+                    replyTo: m.replyToMessageId
+                        ? (msgIdToName.get(m.replyToMessageId) ?? `msg#${m.replyToMessageId}`)
+                        : undefined,
+                    replyToMsgId: m.replyToMessageId ?? undefined,
+                    replyToText,
+                    mediaType: m.mediaType ?? undefined,
+                    mediaInfo: m.mediaInfo ?? undefined,
+                };
             }));
 
             log.info("refreshTaskMessages: 已刷新目标消息", {
@@ -707,7 +729,7 @@ export class CodeActExecutor {
                 const task = this.taskQueue.shift()!;
 
                 // 层 1: 执行前刷新目标消息
-                this.refreshTaskMessages(task);
+                await this.refreshTaskMessages(task);
 
                 const callback = await this.execute(task);
 

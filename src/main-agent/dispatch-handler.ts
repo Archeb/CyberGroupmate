@@ -25,6 +25,7 @@ import { buildGroupContext } from "./context-builder.js";
 import { createLogger } from "../core/logger.js";
 import { formatTsForDisplay } from "../core/timezone.js";
 import { resolveTierProfile } from "../core/config.js";
+import { resolveReplyText } from "../core/message-enricher.js";
 import type { AppConfig } from "../core/config.js";
 
 const log = createLogger("dispatch-handler");
@@ -116,16 +117,38 @@ export function createDispatchHandler(
                 for (const m of recentMsgs) {
                     dispatchMsgIdToName.set(m.messageId, m.displayName || `(uid:${m.userId})`);
                 }
-                const formattedMessages = recentMsgs.map((m: any) => ({
-                    id: String(m.messageId ?? m.id ?? m.message_id ?? ""),
-                    sender: String(m.displayName ?? m.display_name ?? m.sender ?? m.user_id ?? "?"),
-                    text: String(m.text ?? ""),
-                    timestamp: formatTsForDisplay(m.timestamp),
-                    replyTo: m.replyToMessageId
-                        ? (dispatchMsgIdToName.get(m.replyToMessageId) ?? `msg#${m.replyToMessageId}`)
-                        : undefined,
-                    mediaType: m.mediaType ?? undefined,
-                    mediaInfo: m.mediaInfo ?? undefined,
+                const formattedMessages = await Promise.all(recentMsgs.map(async (m: any) => {
+                    const isInContext = m.replyToMessageId ? dispatchMsgIdToName.has(m.replyToMessageId) : false;
+                    // 不在上下文中时，从 DB 查询原消息并解析文本/媒体描述（含 vision 处理）
+                    let replyToText: string | undefined;
+                    if (m.replyToMessageId && !isInContext) {
+                        try {
+                            const origMsg = memory.getMessageById(result.chatId, m.replyToMessageId);
+                            if (origMsg) {
+                                replyToText = await resolveReplyText(origMsg, {
+                                    stickerCache: memory,
+                                    visionConfig,
+                                    llmConfig,
+                                    visionLlmConfig,
+                                    downloadFn,
+                                    chatId: result.chatId,
+                                });
+                            }
+                        } catch { /* 非关键路径 */ }
+                    }
+                    return {
+                        id: String(m.messageId ?? m.id ?? m.message_id ?? ""),
+                        sender: String(m.displayName ?? m.display_name ?? m.sender ?? m.user_id ?? "?"),
+                        text: String(m.text ?? ""),
+                        timestamp: formatTsForDisplay(m.timestamp),
+                        replyTo: m.replyToMessageId
+                            ? (dispatchMsgIdToName.get(m.replyToMessageId) ?? `msg#${m.replyToMessageId}`)
+                            : undefined,
+                        replyToMsgId: m.replyToMessageId ?? undefined,
+                        replyToText,
+                        mediaType: m.mediaType ?? undefined,
+                        mediaInfo: m.mediaInfo ?? undefined,
+                    };
                 }));
 
                 // Vision 处理已移至 CodeActExecutor.executeWithSandbox()，

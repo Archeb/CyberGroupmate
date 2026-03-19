@@ -27,6 +27,10 @@ export interface RawMessage {
     text?: string;
     timestamp?: string;
     replyTo?: string;
+    /** 被回复消息的原始 message ID（用于在 reply tag 中标注 #msgId） */
+    replyToMsgId?: string;
+    /** 被回复消息的原文摘要（当被回复消息不在上下文中时填充） */
+    replyToText?: string;
     mediaType?: string;
     /** JSON string from memory（含 fileId, uniqueFileId, type, emoji 等） */
     mediaInfo?: string;
@@ -142,13 +146,14 @@ function mediaTagFromType(mediaType?: string, mediaInfo?: string): string {
  * - includeMediaTags: 当消息无 processedMedia 但有 mediaType 时，自动追加媒体标签
  *   （attend-handler 设 true；enrichMessages 流程中已有 processedMedia 处理，也设 true 作兜底）
  *
- * 格式：[时间] [msgId:xxx] 发送者 (↩ reply to xxx): 消息文本 + 媒体标签
+ * 格式：[时间] [msgId:xxx] 发送者 (↩ reply to xxx #msgId): 消息文本 + 媒体标签
+ * 当被回复消息不在上下文中且有 replyToText 时，追加原文摘要
  */
 export function formatMessageLine(
     m: RawMessage,
     options?: { includeMediaTags?: boolean },
 ): string {
-    const replyTag = m.replyTo ? ` (↩ reply to ${m.replyTo})` : "";
+    const replyTag = buildReplyTag(m);
     let textPart = m.text ?? "";
 
     // 如果没有 processedMedia（未经 vision 处理）但有 mediaType，追加媒体标签
@@ -158,6 +163,104 @@ export function formatMessageLine(
     }
 
     return `[${formatTsForDisplay(m.timestamp) ?? ""}] [msgId:${m.id ?? "?"}] ${m.sender ?? "?"}${replyTag}: ${textPart}`;
+}
+
+/**
+ * 构建 reply tag 文本
+ *
+ * - 有 replyTo: (↩ reply to NAME #MSGID)
+ * - 有 replyToText（不在上下文）: (↩ reply to NAME #MSGID: "原文摘要")
+ * - 无 replyTo: 空字符串
+ */
+function buildReplyTag(m: RawMessage): string {
+    if (!m.replyTo) return "";
+    const msgIdSuffix = m.replyToMsgId ? ` #${m.replyToMsgId}` : "";
+    const textSuffix = m.replyToText
+        ? `: "${m.replyToText.length > 200 ? m.replyToText.slice(0, 200) + "…" : m.replyToText}"`
+        : "";
+    return ` (↩ reply to ${m.replyTo}${msgIdSuffix}${textSuffix})`;
+}
+
+/**
+ * 解析不在上下文中的被回复消息的文本/媒体描述
+ *
+ * 优先级：
+ * 1. 原消息文本（如有）
+ * 2. 贴纸缓存描述（sticker_descriptions 表）
+ * 3. Vision 处理（如有 vision 依赖，下载并识别图片/贴纸）
+ * 4. 媒体类型标签 fallback（如 [📷 图片]）
+ */
+export async function resolveReplyText(
+    origMsg: { text?: string; mediaType?: string; mediaInfo?: string },
+    deps?: {
+        stickerCache?: StickerCache;
+        visionConfig?: VisionConfig;
+        llmConfig?: LLMConfig;
+        visionLlmConfig?: LLMConfig;
+        downloadFn?: DownloadFn;
+        chatId?: string;
+    },
+): Promise<string | undefined> {
+    // 1. 有文本 → 直接返回
+    if (origMsg.text) return origMsg.text;
+
+    // 2. 无媒体 → 无内容
+    if (!origMsg.mediaType) return undefined;
+    if (!origMsg.mediaInfo) return mediaTagFromType(origMsg.mediaType);
+
+    // 3. 解析 mediaInfo
+    let info: Record<string, unknown>;
+    try {
+        info = JSON.parse(origMsg.mediaInfo);
+    } catch {
+        return mediaTagFromType(origMsg.mediaType, origMsg.mediaInfo);
+    }
+
+    // 4. 贴纸：优先查缓存
+    if (origMsg.mediaType === "sticker" && deps?.stickerCache && info.uniqueFileId) {
+        const cached = deps.stickerCache.getStickerDescription(info.uniqueFileId as string);
+        if (cached) {
+            const emoji = (info.emoji as string) ? `${info.emoji} ` : "";
+            return `[🎭 贴纸: ${emoji}${cached.description}]`;
+        }
+    }
+
+    // 5. Vision 处理（photo/sticker/animation 等有 fileId 的媒体）
+    if (deps?.visionConfig && deps?.llmConfig && deps?.downloadFn && info.fileId) {
+        try {
+            const attachment: MediaAttachment = {
+                type: ((info.type as string) ?? origMsg.mediaType) as MediaAttachment["type"],
+                fileId: info.fileId as string,
+                uniqueFileId: (info.uniqueFileId as string) ?? (info.fileId as string),
+                emoji: info.emoji as string | undefined,
+                mimeType: info.mimeType as string | undefined,
+                width: info.width as number | undefined,
+                height: info.height as number | undefined,
+                fileSize: info.fileSize as number | undefined,
+                messageIndex: 0,
+                chatId: deps.chatId,
+            };
+            const processed = await processMediaBatch(
+                [attachment],
+                deps.visionConfig,
+                deps.llmConfig,
+                deps.visionLlmConfig,
+                deps.downloadFn,
+                deps.stickerCache,
+            );
+            if (processed.length > 0) {
+                const pm = processed[0];
+                if (pm.description) {
+                    return `[📷 ${pm.description}]`;
+                }
+            }
+        } catch (err) {
+            log.debug("resolveReplyText: vision 处理失败", { error: String(err) });
+        }
+    }
+
+    // 6. Fallback: 媒体类型标签
+    return mediaTagFromType(origMsg.mediaType, origMsg.mediaInfo);
 }
 
 // ─── 内部函数 ───
@@ -234,7 +337,7 @@ function formatMessages(
             if (tag) textPart = textPart ? `${textPart} ${tag}` : tag;
         }
 
-        const replyTag = m.replyTo ? ` (↩ reply to ${m.replyTo})` : "";
+        const replyTag = buildReplyTag(m);
         return `[${formatTsForDisplay(m.timestamp) ?? ""}] [msgId:${m.id ?? "?"}] ${m.sender ?? "?"}${replyTag}: ${textPart}`;
     });
 

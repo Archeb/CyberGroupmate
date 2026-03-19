@@ -457,6 +457,9 @@ export interface IMemoryStoreV2 {
     /** 获取指定 chatId 最近的原始消息 */
     getRecentMessages(chatId: string, limit?: number): RecentMessageEntry[];
 
+    /** 按 messageId 查询单条消息（用于获取不在上下文窗口中的被回复消息） */
+    getMessageById(chatId: string, messageId: string): RecentMessageEntry | null;
+
     /**
      * 对指定群组进行反思总结
      * 调用 runReflection() 执行 5 步流程

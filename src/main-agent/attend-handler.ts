@@ -23,7 +23,7 @@ import { renderPrompt, buildAttentionVariables, buildMainSystemVariables } from 
 import { callLLM } from "../core/llm.js";
 import { createLogger } from "../core/logger.js";
 import { formatTsForDisplay } from "../core/timezone.js";
-import { formatMessageLine, type RawMessage } from "../core/message-enricher.js";
+import { formatMessageLine, resolveReplyText, type RawMessage } from "../core/message-enricher.js";
 
 const log = createLogger("attend-handler");
 
@@ -129,9 +129,20 @@ export function createAttendHandler(
                     for (const m of recentMsgs) {
                         msgIdToName.set(m.messageId, m.displayName || `(uid:${m.userId})`);
                     }
-                    messagesText = recentMsgs.map(
-                        (m: any) => {
+                    const lines = await Promise.all(recentMsgs.map(
+                        async (m: any) => {
                             // 转换为 RawMessage 格式，复用 formatMessageLine
+                            const isInContext = m.replyToMessageId ? msgIdToName.has(m.replyToMessageId) : false;
+                            // 不在上下文中时，从 DB 查询原消息并解析文本/媒体描述
+                            let replyToText: string | undefined;
+                            if (m.replyToMessageId && !isInContext) {
+                                try {
+                                    const origMsg = memory.getMessageById(entry.chatId, m.replyToMessageId);
+                                    if (origMsg) {
+                                        replyToText = await resolveReplyText(origMsg, { stickerCache: memory });
+                                    }
+                                } catch { /* 非关键路径 */ }
+                            }
                             const raw: RawMessage = {
                                 id: m.messageId,
                                 sender: m.displayName ?? `(uid:${m.userId})`,
@@ -140,12 +151,15 @@ export function createAttendHandler(
                                 replyTo: m.replyToMessageId
                                     ? (msgIdToName.get(m.replyToMessageId) ?? `msg#${m.replyToMessageId}`)
                                     : undefined,
+                                replyToMsgId: m.replyToMessageId ?? undefined,
+                                replyToText,
                                 mediaType: m.mediaType,
                                 mediaInfo: m.mediaInfo,
                             };
                             return formatMessageLine(raw, { includeMediaTags: true });
                         }
-                    ).join("\n");
+                    ));
+                    messagesText = lines.join("\n");
                 }
             }
 

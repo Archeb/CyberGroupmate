@@ -1668,6 +1668,31 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
         }));
     }
 
+    // ── 单条消息查询 ──
+
+    getMessageById(chatId: string, messageId: string): RecentMessageEntry | null {
+        const row = this.db.prepare(
+            `SELECT message_id, chat_id, user_id, display_name, text, reply_to_message_id, timestamp, media_type, media_info
+             FROM message_log
+             WHERE chat_id = ? AND message_id = ?
+             LIMIT 1`
+        ).get(chatId, messageId) as Record<string, unknown> | undefined;
+
+        if (!row) return null;
+
+        return {
+            messageId: row.message_id as string,
+            chatId: row.chat_id as string,
+            userId: row.user_id as string,
+            displayName: (row.display_name as string) ?? "",
+            text: (row.text as string) ?? "",
+            replyToMessageId: (row.reply_to_message_id as string) ?? undefined,
+            timestamp: row.timestamp as string,
+            mediaType: (row.media_type as string) ?? undefined,
+            mediaInfo: (row.media_info as string) ?? undefined,
+        };
+    }
+
     // ── Sticker 描述缓存 ──
 
     getStickerDescription(uniqueFileId: string): { description: string; emoji?: string } | null {
