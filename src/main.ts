@@ -39,6 +39,7 @@ import { createAttendHandler } from "./main-agent/attend-handler.js";
 import { createDispatchHandler } from "./main-agent/dispatch-handler.js";
 import type { FastPathEvent } from "./subagent/fast-path-handler.js";
 import { FastPathHandler } from "./subagent/fast-path-handler.js";
+import { evaluateStickiness, createStickiness, updateStickiness } from "./subagent/stickiness.js";
 
 const log = createLogger("main");
 
@@ -253,6 +254,17 @@ async function main(): Promise<void> {
         memory,  // 用于启动时恢复 TopicRegistry
         sessionsDir: SESSIONS_DIR,
         platformName: "telegram",
+        // Stickiness 恢复：从 GroupModel 查询 avgMessagesPerDay 推断级别（architecture_v2.md §2.2）
+        stickinessProvider: (chatId: string) => {
+            const gm = memory.getGroupModel(chatId);
+            if (!gm) return undefined;
+            const level = evaluateStickiness(gm, 0, "STRANGER");
+            if (level !== "STRANGER") {
+                log.info("stickinessProvider: 从 GroupModel 恢复", { chatId, level, avgMsgs: gm.avgMessagesPerDay });
+                return createStickiness(level);
+            }
+            return undefined;
+        },
     });
     // 启动时恢复已保存的 subagent sessions
     const restoredChatIds = subagentManager.restoreAll();
@@ -523,6 +535,24 @@ async function main(): Promise<void> {
                 try {
                     const result = await memory.reflect(chatId, llmConfig, reflectionCfg);
                     lastReflectedAtMap.set(chatId, Date.now());
+
+                    // Stickiness 重评估（architecture_v2.md §2.2）
+                    const sub = subagentManager.get(chatId);
+                    if (sub) {
+                        const gm = memory.getGroupModel(chatId);
+                        if (gm) {
+                            const daysSinceLastInteraction = gm.lastReflectedAt
+                                ? (Date.now() - new Date(gm.lastReflectedAt).getTime()) / 86400_000
+                                : 0;
+                            const newLevel = evaluateStickiness(gm, daysSinceLastInteraction, sub.stickiness.level);
+                            if (newLevel !== sub.stickiness.level) {
+                                const oldLevel = sub.stickiness.level;
+                                sub.stickiness = updateStickiness(sub.stickiness, newLevel);
+                                log.info("Stickiness 变更", { chatId, from: oldLevel, to: newLevel, avgMsgs: gm.avgMessagesPerDay });
+                            }
+                        }
+                    }
+
                     log.info("Reflection 完成", {
                         chatId,
                         period: `${result.reflectedPeriod.from} → ${result.reflectedPeriod.to}`,

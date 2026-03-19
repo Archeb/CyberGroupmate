@@ -307,9 +307,14 @@ export async function runReflection(
     }
 
     // 4c. 更新群组画像 + lastReflectedAt
+    // 计算近 7 天日均消息量（stickiness 升级依据，architecture_v2.md §2.2）
+    const recentMsgCount = memory.countRecentMessages(chatId, 7);
+    const avgMessagesPerDay = Math.round((recentMsgCount / 7) * 10) / 10;
+
     const gu = llmOutput.groupUpdates;
     const groupUpdateData: Partial<GroupModel> = {
         lastReflectedAt: startTime,
+        avgMessagesPerDay,
     };
     if (gu.agentRole) groupUpdateData.agentRole = gu.agentRole;
     if (gu.engagementLevel) groupUpdateData.engagementLevel = gu.engagementLevel;

@@ -71,6 +71,9 @@ export class Observer {
     /** 独立发言者集合（用于 engagement 计算） */
     private recentSenders = new Map<string, number>(); // userId → lastMessageAt
 
+    /** 独立的消息时间戳追踪（不受 clearBuffer 影响，用于 engagement 计算） */
+    private messageTimestamps: Array<{ timestamp: number; userId: string }> = [];
+
     /** 当前 engagement score 缓存 */
     private cachedEngagement: number = 0;
 
@@ -101,6 +104,7 @@ export class Observer {
         const userId = String(event.userId ?? event.user_id ?? event.senderId ?? "");
         if (userId) {
             this.recentSenders.set(userId, now);
+            this.messageTimestamps.push({ timestamp: now, userId });
         }
 
         // 检测 mention
@@ -109,8 +113,8 @@ export class Observer {
             this.mentionCount++;
         }
 
-        // 清理过期 buffer 条目
-        this.cleanExpiredBuffer(now);
+        // 清理过期条目
+        this.cleanExpired(now);
 
         // 重算 engagement
         this.cachedEngagement = this.calculateEngagement(now);
@@ -182,8 +186,8 @@ export class Observer {
      * 检查是否推荐 FastPath
      */
     checkFastPathRequest(): boolean {
-        return this.cachedEngagement >= this.config.fastPathEngagementThreshold
-            && this.mentionCount > 0;
+        // subagent.md §3.3: FastPath 面向「高 engagement 时段」，不强制要求 @mention
+        return this.cachedEngagement >= this.config.fastPathEngagementThreshold;
     }
 
     /**
@@ -261,10 +265,10 @@ export class Observer {
     clearBuffer(): void {
         this.buffer = [];
         this.mentionCount = 0;
-        // 重算 engagement：buffer 清空后 engagement 归零，
-        // 防止陈旧的高 engagement 导致群组被重复 enqueue 到 Q3
-        this.cachedEngagement = 0;
-        this.recentSenders.clear();
+        // engagement 和 recentSenders 不再清零：
+        // 它们基于时间窗口自然衰减（cleanExpired），
+        // 不因 attend 暴力归零。
+        // Q3 重复入队问题由 attend cooldown 机制（GroupSubagent.isInAttendCooldown）解决。
     }
 
     /**
@@ -273,6 +277,7 @@ export class Observer {
     reset(): void {
         this.buffer = [];
         this.recentSenders.clear();
+        this.messageTimestamps = [];
         this.cachedEngagement = 0;
         this.topicDigests = [];
         this.totalMessageCount = 0;
@@ -285,8 +290,8 @@ export class Observer {
     private calculateEngagement(now: number): number {
         const windowStart = now - this.config.engagementWindowMs;
 
-        // 窗口内消息
-        const windowMessages = this.buffer.filter(m => m.timestamp >= windowStart);
+        // 使用独立的 messageTimestamps（不受 clearBuffer 影响）
+        const windowMessages = this.messageTimestamps.filter(m => m.timestamp >= windowStart);
         const msgCount = windowMessages.length;
 
         // 消息频率（每分钟）
@@ -296,8 +301,7 @@ export class Observer {
         // 独立发言者数
         const activeSenders = new Set<string>();
         for (const m of windowMessages) {
-            const userId = String(m.event.userId ?? m.event.user_id ?? m.event.senderId ?? "");
-            if (userId) activeSenders.add(userId);
+            if (m.userId) activeSenders.add(m.userId);
         }
         const senderDiversity = activeSenders.size;
 
@@ -307,9 +311,10 @@ export class Observer {
         return Math.min(100, Math.round(msgRate * 20 + senderDiversity * 15 + mentionBoost));
     }
 
-    private cleanExpiredBuffer(now: number): void {
+    private cleanExpired(now: number): void {
         const windowStart = now - this.config.engagementWindowMs;
         this.buffer = this.buffer.filter(m => m.timestamp >= windowStart);
+        this.messageTimestamps = this.messageTimestamps.filter(m => m.timestamp >= windowStart);
 
         // 清理过期 sender 追踪
         for (const [userId, lastSeen] of this.recentSenders.entries()) {

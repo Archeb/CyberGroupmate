@@ -649,6 +649,15 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
         log.debug("finalizeTopic", { pipelineTopicId });
     }
 
+    /** 统计指定群组近 N 天的消息总数（用于 stickiness 升级评估） */
+    countRecentMessages(chatId: string, days: number): number {
+        const since = new Date(Date.now() - days * 86400_000).toISOString();
+        const row = this.db.prepare(
+            "SELECT COUNT(*) as cnt FROM message_log WHERE chat_id = ? AND timestamp >= ?"
+        ).get(chatId, since) as { cnt: number } | undefined;
+        return row?.cnt ?? 0;
+    }
+
     storeMessageBatch(messages: MessageLogEntry[]): void {
         if (messages.length === 0) return;
 

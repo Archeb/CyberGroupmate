@@ -59,7 +59,7 @@ const VALID_TRANSITIONS: Record<TopicState, TopicState[]> = {
     ENGAGED:           ["EXITING", "COOLDOWN"],
     EXITING:           ["COOLDOWN"],
     COOLDOWN:          ["ACTIVE"],
-    IGNORED:           ["ACTIVE"],
+    IGNORED:           ["ACTIVE", "STALE"],
     IGNORED_LOW_VALUE: ["STALE"],
     STALE:             ["ACTIVE", "ARCHIVED"],
     ARCHIVED:          [],
@@ -202,7 +202,13 @@ export class TopicRegistry extends EventEmitter {
             topic.participantIds.add(msg.senderId);
         }
         topic.messageCount += messages.length;
-        topic.lastActivityAt = Date.now();
+
+        // 只对活跃状态的话题刷新 lastActivityAt，
+        // STALE/IGNORED/ARCHIVED 状态不应因新消息聚类到此而重置超时计时器
+        const activeStates: TopicState[] = ["ACTIVE", "TRIAGING", "PRELOADING", "ENGAGED", "EXITING", "COOLDOWN"];
+        if (activeStates.includes(topic.state)) {
+            topic.lastActivityAt = Date.now();
+        }
 
         // 更新最近上下文
         const allMsgTexts = messages.map(m => `${m.senderName}: ${m.text}`);
@@ -286,13 +292,13 @@ export class TopicRegistry extends EventEmitter {
                 continue;
             }
 
-            // IGNORED → ACTIVE（TTL 过期，允许重新评估）
+            // IGNORED → STALE（TTL 过期，渐渐淡出而非循环回 ACTIVE 重 triage）
             if (
                 topic.state === "IGNORED" &&
                 topic.lastTriagedAt &&
                 now - topic.lastTriagedAt > IGNORED_TTL
             ) {
-                this.transition(topic.id, "ACTIVE");
+                this.transition(topic.id, "STALE");
                 cleaned++;
                 continue;
             }
