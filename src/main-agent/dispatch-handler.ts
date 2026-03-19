@@ -30,10 +30,12 @@ import type { AppConfig } from "../core/config.js";
 
 const log = createLogger("dispatch-handler");
 
-/** 将 ISO 时间戳格式化为相对时间描述（如 "3小时前"、"2天前"） */
-function formatRelativeTime(isoTimestamp: string | null | undefined): string {
-    if (!isoTimestamp) return "";
-    const diffMs = Date.now() - new Date(isoTimestamp).getTime();
+/** 将时间戳格式化为相对时间描述（如 "3小时前"、"2天前"）。支持 ISO 字符串和毫秒数 */
+function formatRelativeTime(timestamp: string | number | null | undefined): string {
+    if (timestamp == null) return "";
+    const ms = typeof timestamp === "number" ? timestamp : new Date(timestamp).getTime();
+    if (isNaN(ms)) return "";
+    const diffMs = Date.now() - ms;
     if (diffMs < 0) return "刚刚";
     const minutes = Math.floor(diffMs / 60000);
     if (minutes < 1) return "刚刚";
@@ -105,8 +107,12 @@ export function createDispatchHandler(
                 // 构建话题摘要：优先使用 TopicRegistry，空时 fallback 到 MemoryV2
                 let topicSummary = "";
                 if (allTopics.length > 0) {
-                    topicSummary = allTopics.map((t: any) =>
-                        `[${t.state}] (${formatRelativeTime(t.lastActivityAt ?? t.createdAt)}) ${t.label ?? ""}${t.lastSummary ? ` — ${t.lastSummary}` : (t.recentContext ? `: ${t.recentContext.split("\n").slice(-2).join("; ")}` : "")}`
+                    // 按 createdAt 降序排列，取最近 20 条
+                    const sortedTopics = [...allTopics]
+                        .sort((a: any, b: any) => (b.createdAt ?? 0) - (a.createdAt ?? 0))
+                        .slice(0, 20);
+                    topicSummary = sortedTopics.map((t: any) =>
+                        `[${t.state}] (${formatRelativeTime(t.createdAt)}) ${t.label ?? ""}${t.lastSummary ? ` — ${t.lastSummary}` : (t.recentContext ? `: ${t.recentContext.split("\n").slice(-2).join("; ")}` : "")}`
                     ).join("\n");
                 } else {
                     // Fallback: TopicRegistry 为空时（Pipeline 尚未 flush 或重启后无近期话题），
