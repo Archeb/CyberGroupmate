@@ -197,7 +197,7 @@ export class GroupSubagent extends EventEmitter {
     /**
      * 构建 AttentionQueueEntry（供 Q3 入队）
      */
-    buildQueueEntry(): AttentionQueueEntry {
+    buildQueueEntry(sourceOverride?: AttentionQueueEntry["source"]): AttentionQueueEntry {
         const engagement = this.observer.getEngagementScore();
         const alert = this.observer.checkAlert();
         const hasFastPathRequest = this.observer.checkFastPathRequest();
@@ -226,12 +226,13 @@ export class GroupSubagent extends EventEmitter {
             }
         }
 
-        // 来源标记 (subagent.md §2.2)
-        const source: AttentionQueueEntry["source"] = alert
-            ? "OBSERVER_ALERT"
-            : hasFastPathRequest
-                ? "FAST_PATH_REQUEST"
-                : "DIGEST_UPDATE";
+        // 来源标记：优先使用调用方传入的 sourceOverride（如 DIRECT_ADDRESS）
+        const source: AttentionQueueEntry["source"] = sourceOverride
+            ?? (alert
+                ? "OBSERVER_ALERT"
+                : hasFastPathRequest
+                    ? "FAST_PATH_REQUEST"
+                    : "DIGEST_UPDATE");
 
         return {
             chatId: this.chatId,

@@ -18,7 +18,6 @@ import type { GlobalState } from "./global-state.js";
 import type { MainAgentLoop } from "./main-agent-loop.js";
 import { calculateDepth } from "./cosine-decay.js";
 import { buildGroupContext } from "./context-builder.js";
-import { estimateReplyMode, buildReplyDecisions, buildObserveDecision } from "./decision-maker.js";
 import { renderPrompt, buildAttentionVariables, buildMainSystemVariables } from "./prompt-renderer.js";
 import { callLLMWithFallback } from "../core/llm.js";
 import { createLogger } from "../core/logger.js";
@@ -26,6 +25,16 @@ import { formatTsForDisplay } from "../core/timezone.js";
 import { formatMessageLine, resolveReplyText, type RawMessage } from "../core/message-enricher.js";
 
 const log = createLogger("attend-handler");
+
+/** 构建 OBSERVE 决策（LLM 失败时的兼底返回） */
+function buildObserve(chatId: string): AttendResult {
+    return {
+        chatId,
+        replyMode: "NONE",
+        decisions: [{ action: "OBSERVE", confidence: 0, reason: "fallback" }],
+        reasoning: "LLM unavailable",
+    };
+}
 
 /** Attend handler 依赖 */
 export interface AttendHandlerDeps {
@@ -50,7 +59,7 @@ export function createAttendHandler(
 
     return async (entry: AttentionQueueEntry): Promise<AttendResult | null> => {
         const subagent = subagentManager.get(entry.chatId);
-        if (!subagent) return buildObserveDecision(entry.chatId);
+        if (!subagent) return buildObserve(entry.chatId);
 
         // ─── Phase 4: 构建上下文 ───
 
@@ -96,26 +105,8 @@ export function createAttendHandler(
             pendingCodeActTasks: (subagent.codeActExecutor as any)?.getQueueSize?.() ?? 0,
         });
 
-        // 算法预估 replyMode（作为 LLM 参考信号 + fallback）
-        const suggestedReplyMode = estimateReplyMode(
-            contextPkg,
-            entry.newMessageCount,
-            entry.hasFastPathRequest,
-            entry.stickinessLevel,
-            entry.topicDigests.filter(d => d.state === "ACTIVE").length,
-            entry.lastAttendedAt ? Date.now() - new Date(entry.lastAttendedAt).getTime() : Infinity,
-            0,
-        );
-
-        // 算法 fallback 结果（LLM 失败时使用）
-        const algorithmicResult = suggestedReplyMode === "NONE"
-            ? buildObserveDecision(entry.chatId)
-            : buildReplyDecisions(
-                entry.chatId,
-                suggestedReplyMode,
-                entry.topicDigests.map(d => ({ topicId: d.topicId, label: d.label })),
-                `${suggestedReplyMode} (engagement=${Math.round(entry.priority)}, depth=L${depth})`,
-            );
+        // ─── Phase 5: LLM 决策 ───
+        const suggestedReplyMode = "SINGLE"; // 简单提示，LLM 自行判断
 
         // ═══ Phase 5: LLM 决策路径 (subagent.md §12.2 ➋➌➍) ═══
         try {
@@ -223,14 +214,16 @@ export function createAttendHandler(
 
             const llmResult: AttendResult = {
                 chatId: entry.chatId,
-                replyMode: parsed.replyMode ?? suggestedReplyMode,
+                replyMode: parsed.replyMode ?? "NONE",
                 decisions: Array.isArray(parsed.decisions) ? parsed.decisions.map((d: any) => ({
                     action: d.action ?? "REPLY",
-                    topicId: d.topicId,
+                    topicId: d.topicId || undefined,
+                    targetMessageIds: Array.isArray(d.targetMessageIds) ? d.targetMessageIds : undefined,
                     contentDirection: d.contentDirection,
+                    toneGuidance: d.toneGuidance,
                     confidence: d.confidence ?? 0.5,
                     reason: d.reason ?? "",
-                })) : algorithmicResult.decisions,
+                })) : [{ action: "OBSERVE", confidence: 0.3, reason: "LLM 返回格式异常" }],
                 reasoning: parsed.reasoning ?? "",
             };
 
@@ -272,35 +265,18 @@ export function createAttendHandler(
                 mainLoop.tripCircuitBreaker(errMsg);
                 globalState.recordDecision(entry.chatId,
                     `CIRCUIT_BREAKER: 配额耗尽 (error=${errMsg.slice(0, 100)})`);
-                return buildObserveDecision(entry.chatId);
+                return buildObserve(entry.chatId);
             }
 
-            // 瞬时错误（JSON 解析等）→ 保留算法 fallback
-            log.warn("LLM 决策失败(瞬时)，fallback 到算法", {
+            // LLM 失败 → 返回 OBSERVE（不再算法 fallback）
+            log.warn("LLM 决策失败，返回 OBSERVE", {
                 chatId: entry.chatId,
                 error: errMsg.slice(0, 200),
             });
 
-            // 连续 skip 安全阀：最近 3 次 callback 都没发消息则降级为 OBSERVE
-            const recentCbs = subagent.lastCallbacks.slice(-3);
-            const allSkipped = recentCbs.length >= 3 &&
-                recentCbs.every(cb =>
-                    (!cb.sentMessages || cb.sentMessages.length === 0) &&
-                    cb.status !== "ERROR"
-                );
-            if (allSkipped) {
-                log.info("算法 fallback + 连续 skip → OBSERVE", {
-                    chatId: entry.chatId,
-                    consecutiveSkips: recentCbs.length,
-                });
-                globalState.recordDecision(entry.chatId,
-                    `SKIP_VALVE: 连续 ${recentCbs.length} 次 skip，降级 OBSERVE`);
-                return buildObserveDecision(entry.chatId);
-            }
-
             globalState.recordDecision(entry.chatId,
-                `ALGO_FALLBACK: ${suggestedReplyMode} (engagement=${Math.round(entry.priority)}, depth=L${depth}, llm_error=${errMsg.slice(0, 100)})`);
-            return algorithmicResult;
+                `LLM_FAILED: OBSERVE (error=${errMsg.slice(0, 100)})`);
+            return buildObserve(entry.chatId);
         }
     };
 }

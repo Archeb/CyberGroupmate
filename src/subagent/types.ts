@@ -58,7 +58,7 @@ export interface AttentionQueueEntry {
     /** 群组 chatId */
     chatId: string;
     /** 来源标记 (subagent.md §2.2) */
-    source: 'DIGEST_UPDATE' | 'OBSERVER_ALERT' | 'FAST_PATH_REQUEST' | 'DEFERRED_RE_ENTRY';
+    source: 'DIGEST_UPDATE' | 'OBSERVER_ALERT' | 'FAST_PATH_REQUEST' | 'DEFERRED_RE_ENTRY' | 'DIRECT_ADDRESS';
     /** 当前优先级分数 (0-100) */
     priority: number;
     /** 基础优先级（不含时间衰减） */
@@ -321,8 +321,12 @@ export interface Decision {
     action: "REPLY" | "IGNORE" | "DEFER" | "FAST_PATH_AUTH" | "OBSERVE";
     /** 目标话题 ID（可选） */
     topicId?: string;
+    /** 目标消息 ID 列表（main agent 圈定的需要回复的消息） */
+    targetMessageIds?: string[];
     /** 回复方向提示 */
     contentDirection?: string;
+    /** 语气指导（LLM 输出，fallback 到 stickiness 推断） */
+    toneGuidance?: string;
     /** 置信度 */
     confidence: number;
     /** 理由 */

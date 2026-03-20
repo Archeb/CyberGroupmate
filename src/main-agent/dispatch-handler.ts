@@ -175,14 +175,8 @@ export function createDispatchHandler(
                 // Vision 处理已移至 CodeActExecutor.executeWithSandbox()，
                 // 利用 mediaInfo 中的 fileId 在执行时按需下载和识图
 
-                // 获取人物信息
+                // personContext: 由 code-act-executor 执行前根据 recentMessages 中的发言者查询
                 let personContext = "";
-                try {
-                    const recallResult = await memory.recall("", { chatId: result.chatId, maxResults: 5 });
-                    if (recallResult.persons.length > 0) {
-                        personContext = JSON.stringify(recallResult.persons, null, 2);
-                    }
-                } catch { /* 非关键路径 */ }
 
                 // 获取群组画像
                 const groupModel = memory.getGroupModel(result.chatId) ?? undefined;
@@ -204,7 +198,8 @@ export function createDispatchHandler(
                 contextSnapshot.topicSummary = topicSummary;
                 contextSnapshot.recentMessages = formattedMessages;
                 contextSnapshot.personContext = personContext;
-                contextSnapshot.toneGuidance = subagent.stickiness.level === "CORE" ? "随意友好" : "礼貌得体";
+                contextSnapshot.toneGuidance = decision.toneGuidance
+                    ?? (subagent.stickiness.level === "CORE" ? "随意友好" : "礼貌得体");
                 contextSnapshot.contentDirection = decision.contentDirection ?? "";
 
                 // 构建 CodeActReplyTask
@@ -216,6 +211,7 @@ export function createDispatchHandler(
                     contextSnapshot,
                     replyMode: result.replyMode === "BATCH" ? "BATCH" : "SINGLE",
                     createdAt: new Date().toISOString(),
+                    targetMessageIds: decision.targetMessageIds,
                 };
 
                 // 获取或创建 CodeActExecutor

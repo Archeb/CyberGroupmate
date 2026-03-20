@@ -417,7 +417,7 @@ async function main(): Promise<void> {
         const hasNameMention = mentionKeywords.length > 0 && mentionKeywords.some(kw => messageText.includes(kw));
 
         if (isDM || isMention || hasNameMention) {
-            q3.enqueueOrUpdate(sub.buildQueueEntry());
+            q3.enqueueOrUpdate(sub.buildQueueEntry("DIRECT_ADDRESS"));
             log.info("即时 → Q3 入队", {
                 chatId,
                 reason: isDM ? "DM" : isMention ? "@mention" : "文本提及",

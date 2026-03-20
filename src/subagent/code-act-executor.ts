@@ -340,9 +340,43 @@ export class CodeActExecutor {
         // 1. 提取 contextSnapshot 中的执行上下文字段（dispatch-handler 类型安全注入）
         const ctx = task.contextSnapshot;
         const topicSummary = ctx.topicSummary ?? "";
-        const personContext = ctx.personContext ?? "";
         const toneGuidance = ctx.toneGuidance ?? "";
         const contentDirection = ctx.contentDirection ?? task.decisions.map(d => d.contentDirection ?? "").filter(Boolean).join("; ");
+
+        // personContext: dispatch-handler 留空，此处从 recentMessages 发言者查询 memory
+        let personContext = ctx.personContext ?? "";
+        if (!personContext && this.memory && ctx.recentMessages && ctx.recentMessages.length > 0) {
+            try {
+                const senderNames = ctx.recentMessages.map(m => m.sender);
+                const uniqueSenders = [...new Set(senderNames)].slice(0, 10);
+                // 通过 getProfilesForChat 获取群内画像，按 displayName 匹配发言者
+                const allProfiles = this.memory.getProfilesForChat(this.chatId);
+                const relevantProfiles: any[] = [];
+                for (const name of uniqueSenders) {
+                    // 先找 identity（按 displayName 匹配）
+                    const profile = allProfiles.find((p: any) =>
+                        p.userId && this.memory!.getPersonIdentity(p.userId)?.displayName === name
+                    );
+                    if (profile) {
+                        const identity = this.memory.getPersonIdentity(profile.userId);
+                        relevantProfiles.push({
+                            displayName: identity?.displayName ?? name,
+                            userId: profile.userId,
+                            dunbarTier: profile.dunbarTier,
+                            traits: profile.traits,
+                            interests: profile.interests,
+                            communicationStyle: profile.communicationStyle,
+                            relationToAgent: profile.relationToAgent,
+                        });
+                    }
+                }
+                if (relevantProfiles.length > 0) {
+                    personContext = JSON.stringify(relevantProfiles, null, 2);
+                }
+            } catch (err) {
+                log.debug("personContext 查询失败", { chatId: this.chatId, error: String(err) });
+            }
+        }
 
         // 2. 消息富化：媒体处理 + 格式化（委托 message-enricher）
         const recentMessages = ctx.recentMessages ?? [];
