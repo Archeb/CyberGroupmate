@@ -5,8 +5,8 @@
   "decisions": [
     {
       "action": "REPLY | IGNORE | DEFER | FAST_PATH_AUTH",
-      "topicId": "topic_xxx",
-      "targetMessageIds": ["msg_38", "msg_39"],
+      "topicId": "",
+      "targetMessageIds": ["12345", "12346"],
       "contentDirection": "具体的内容方向指示（必填 for REPLY）",
       "toneGuidance": "语气要求",
       "confidence": 0.8,
@@ -25,7 +25,9 @@
 决策规则:
 - 当前粘性级别: {{stickinessLevel}}
 - topicId: 必须使用话题注册表中提供的真实 topicId（格式如 topic_xxx_0001）。如果无活跃话题或不确定归属，topicId 留空字符串 ""。**不要自行编造 topic ID**。
-- REPLY: 需要给出明确的 contentDirection（内容方向）和 toneGuidance（语气）
+- targetMessageIds: 从上下文消息中选择需要回复的消息 ID（即消息原文中的 msg#xxx 编号）。这决定了 subagent 将回复谁。**必须使用上下文中出现的真实消息 ID**。
+- toneGuidance: 根据群组氛围和粘性级别给出具体语气指导（如"随意友好"、"正经讨论"、"带点调侃"）
+- REPLY: 需要给出明确的 contentDirection（内容方向）、targetMessageIds（回复目标）和 toneGuidance（语气）
 - IGNORE: 说明不介入的理由
 - DEFER: 非紧急，下次再看
 - FAST_PATH_AUTH: 仅在高 engagement + 频繁 @ 场景下授权。{{stickinessLevel}} 为 ACQUAINTANCE 或 STRANGER 时禁止授权
