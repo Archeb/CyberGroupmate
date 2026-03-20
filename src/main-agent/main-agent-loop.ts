@@ -226,14 +226,10 @@ export class MainAgentLoop {
             if (!entry.alert && !entry.hasFastPathRequest && !sa.hasTriageEngaged) {
                 continue;
             }
-            // attend 冷却期内，Observer 告警不入队（防止 attend 期间持续 re-enqueue）
-            if (entry.alert && !entry.hasFastPathRequest && !sa.hasTriageEngaged && sa.isInAttendCooldown()) {
-                continue;
-            }
             this.attentionQueue.enqueueOrUpdate(entry);
 
             const alert = sa.observer.checkAlert();
-            if (alert && !sa.isInAttendCooldown()) {
+            if (alert) {
                 this.attentionQueue.boost(sa.chatId, 20);
                 boostedAlerts++;
                 log.debug("Phase 2: alert boost", { chatId: sa.chatId, engagement: alert.engagementScore });

@@ -417,11 +417,10 @@ async function main(): Promise<void> {
         const messageText = String(event.text ?? event.message ?? "").toLowerCase();
         const hasNameMention = mentionKeywords.length > 0 && mentionKeywords.some(kw => messageText.includes(kw));
 
-        // attend 后冷却期内，Observer 告警不触发 Q3 入队，防止 LLM attend 期间
-        // 新消息持续重入队导致重复 attend（DM/@mention/文本提及不受冷却期限制）
-        const alertEffective = alert && !sub.isInAttendCooldown();
+        // attend 后 engagement 被清零（subagent.md §4.5），所以 alert 仅在有新消息
+        // 累积到阈值后才会触发，无需额外冷却期守卫。
 
-        if (alertEffective || isDM || isMention || hasNameMention) {
+        if (alert || isDM || isMention || hasNameMention) {
             q3.enqueueOrUpdate(sub.buildQueueEntry());
             log.info("即时 → Q3 入队", {
                 chatId,

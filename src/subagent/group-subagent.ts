@@ -73,11 +73,7 @@ export class GroupSubagent extends EventEmitter {
     /** 上次被主 Agent attend 的时间 */
     lastAttendedAt: string | null = null;
 
-    /** 上次被主 Agent attend 的时间（毫秒，用于 cooldown 计算） */
-    private lastAttendedAtMs: number = 0;
 
-    /** attend 后冷却期 (ms)，防止观察者告警导致重复入队 */
-    private static readonly ATTEND_COOLDOWN_MS = 30_000;
 
     /** attend 计数 */
     attendCount: number = 0;
@@ -240,7 +236,6 @@ export class GroupSubagent extends EventEmitter {
      */
     markAttended(): void {
         this.lastAttendedAt = new Date().toISOString();
-        this.lastAttendedAtMs = Date.now();
         this.attendCount++;
         this.observer.clearBuffer();
         this.hasTriageEngaged = false;  // attend 后重置 triage-engage 标记
@@ -252,15 +247,7 @@ export class GroupSubagent extends EventEmitter {
         });
     }
 
-    /**
-     * 检查是否处于 attend 冷却期。
-     * 在冷却期内，Observer 告警不应触发 Q3 即时入队，
-     * 防止 LLM attend 期间新消息导致重复 attend。
-     */
-    isInAttendCooldown(): boolean {
-        if (this.lastAttendedAtMs === 0) return false;
-        return (Date.now() - this.lastAttendedAtMs) < GroupSubagent.ATTEND_COOLDOWN_MS;
-    }
+
 
     /**
      * 标记任务已完成（主循环 Phase 1 回调处理时调用）

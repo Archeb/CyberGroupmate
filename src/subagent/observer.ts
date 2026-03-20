@@ -265,10 +265,12 @@ export class Observer {
     clearBuffer(): void {
         this.buffer = [];
         this.mentionCount = 0;
-        // engagement 和 recentSenders 不再清零：
-        // 它们基于时间窗口自然衰减（cleanExpired），
-        // 不因 attend 暴力归零。
-        // Q3 重复入队问题由 attend cooldown 机制（GroupSubagent.isInAttendCooldown）解决。
+        // attend 后清零 engagement 相关状态（subagent.md §4.5）：
+        // 已审视的群组不应因历史 engagement 被反复入队。
+        // 新消息到达时 onMessage() 会重新累积。
+        this.messageTimestamps = [];
+        this.recentSenders.clear();
+        this.cachedEngagement = 0;
     }
 
     /**
