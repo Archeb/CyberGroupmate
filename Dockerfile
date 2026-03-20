@@ -17,7 +17,6 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     ffmpeg zip unzip wget curl jq imagemagick git ca-certificates \
     python3 python3-pip python3-venv \
-    build-essential \
     libmagic-dev \
     pandoc poppler-utils \
     dnsutils \
