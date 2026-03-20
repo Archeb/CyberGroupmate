@@ -26,6 +26,7 @@ import { createLogger } from "../core/logger.js";
 import { formatTsForDisplay } from "../core/timezone.js";
 import { resolveTierProfile } from "../core/config.js";
 import { resolveReplyText } from "../core/message-enricher.js";
+import { MediaDownloader } from "../core/media-downloader.js";
 import type { AppConfig } from "../core/config.js";
 
 const log = createLogger("dispatch-handler");
@@ -86,6 +87,12 @@ export function createDispatchHandler(
         const result = await tgAdapter.handleCall("telegram.downloadMedia", [fileId, chatId, messageId, uniqueFileId]) as { buffer: string; size: number };
         return Buffer.from(result.buffer, "base64");
     } : undefined;
+
+    // 创建共享的媒体下载管理器（所有 executor 共用）
+    const mediaDownloader = new MediaDownloader({
+        retentionDays: visionConfig?.mediaRetentionDays ?? 3,
+        maxFileSize: (visionConfig?.maxMediaDownloadSize ?? 20) * 1024 * 1024,
+    });
 
     return async (result: AttendResult): Promise<void> => {
         const subagent = subagentManager.get(result.chatId);
@@ -244,7 +251,7 @@ export function createDispatchHandler(
                         globalState.recordDecision(cb.chatId, `CALLBACK: ${cb.executionType} ${cb.status} (${cb.summary})`);
                     });
                     // Fix 9: 注入 Sandbox + NC + LLM 依赖 + Memory + Vision
-                    executor.setDependencies(sandboxPool, nc, llmConfig, persona, memory, visionConfig, downloadFn, sendTyping, visionLlmConfig);
+                    executor.setDependencies(sandboxPool, nc, llmConfig, persona, memory, visionConfig, downloadFn, sendTyping, visionLlmConfig, mediaDownloader);
                 }
 
                 executor.enqueue(task);

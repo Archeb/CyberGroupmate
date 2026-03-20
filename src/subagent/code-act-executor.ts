@@ -23,6 +23,7 @@ import { runCodeActSession, SentMessageCollector, type SessionResult, type SentM
 import { renderPrompt, deriveChatType } from "../main-agent/prompt-renderer.js";
 import type { LLMConfig, VisionConfig } from "../core/config.js";
 import { enrichMessages, formatMessageLine, resolveReplyText } from "../core/message-enricher.js";
+import type { MediaDownloader } from "../core/media-downloader.js";
 import type { ChatMessage } from "../core/llm.js";
 import { createLogger } from "../core/logger.js";
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync } from "node:fs";
@@ -192,6 +193,8 @@ export class CodeActExecutor {
     private downloadFn: ((fileId: string) => Promise<Buffer>) | undefined;
     /** 平台无关的 typing 状态发送函数（由宿主注入，如 Telegram sendTyping） */
     private sendTypingFn: ((chatId: string) => Promise<void>) | undefined;
+    /** 媒体下载管理器（保存文件到磁盘） */
+    private mediaDownloader: MediaDownloader | undefined;
 
     setDependencies(
         sandboxPool: SandboxPool,
@@ -204,6 +207,7 @@ export class CodeActExecutor {
         downloadFn?: (fileId: string) => Promise<Buffer>,
         sendTyping?: (chatId: string) => Promise<void>,
         visionLlmConfig?: LLMConfig,
+        mediaDownloader?: MediaDownloader,
     ): void {
         this.sandboxPool = sandboxPool;
         this.nc = nc;
@@ -218,7 +222,8 @@ export class CodeActExecutor {
         this.visionLlmConfig = visionLlmConfig;
         this.downloadFn = downloadFn;
         this.sendTypingFn = sendTyping;
-        log.info("setDependencies", { chatId: this.chatId, hasSandboxPool: true, hasVision: !!visionConfig, hasVisionLlm: !!visionLlmConfig, hasDownload: !!downloadFn, hasTyping: !!sendTyping });
+        this.mediaDownloader = mediaDownloader;
+        log.info("setDependencies", { chatId: this.chatId, hasSandboxPool: true, hasVision: !!visionConfig, hasVisionLlm: !!visionLlmConfig, hasDownload: !!downloadFn, hasTyping: !!sendTyping, hasMediaDownloader: !!mediaDownloader });
     }
 
     /**
@@ -353,6 +358,7 @@ export class CodeActExecutor {
                 downloadFn: this.downloadFn,
                 stickerCache: this.memory ?? undefined,
                 chatId: this.chatId,
+                mediaDownloader: this.mediaDownloader,
             },
         );
 

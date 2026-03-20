@@ -261,6 +261,29 @@ export class Sandbox extends EventEmitter {
     }
 
     /**
+     * 在 sandbox 中执行 shell 命令
+     */
+    async executeShell(command: string, timeout: number = 30000): Promise<ExecutionResult> {
+        if (!this.child || !this.child.stdin) {
+            throw new Error("Sandbox worker is not running");
+        }
+
+        const id = `req_${++this.requestCounter}`;
+
+        return new Promise<ExecutionResult>((resolve, reject) => {
+            const timer = setTimeout(() => {
+                this.pendingRequests.delete(id);
+                reject(new Error(`Shell execution timed out after ${timeout}ms`));
+            }, timeout);
+
+            this.pendingRequests.set(id, { resolve, reject, timer });
+
+            const msg = JSON.stringify({ type: "execute_shell", id, command });
+            this.child!.stdin!.write(msg + "\n");
+        });
+    }
+
+    /**
      * 发送用户输入响应到 worker（回应 runtime.input()）
      *
      * @param id - 输入请求的 ID

@@ -83,6 +83,10 @@ model_tiers:
 #   #   vision_cache — 首次识别后缓存描述，相同贴纸复用
 #   #   vision_each — 每次发送都用 vision 模型识别
 #   sticker_mode: emoji_only
+#   # 聊天媒体/文件自动下载到 workspace/Downloads/ 的大小上限 (MB) (20)
+#   max_media_download_size: 20
+#   # 已下载媒体文件的保留天数，超期自动清理 (3)
+#   media_retention_days: 3
 
 # ─── 人格设置 ───
 persona:

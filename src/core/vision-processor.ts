@@ -13,6 +13,7 @@
 import { callLLM, type ChatMessage } from "./llm.js";
 import type { LLMConfig, VisionConfig } from "./config.js";
 import { createLogger } from "./logger.js";
+import type { MediaDownloader } from "./media-downloader.js";
 
 const log = createLogger("vision-processor");
 
@@ -25,6 +26,7 @@ export interface MediaAttachment {
     uniqueFileId: string;
     emoji?: string;       // sticker only
     mimeType?: string;
+    fileName?: string;
     width?: number;
     height?: number;
     fileSize?: number;
@@ -45,6 +47,8 @@ export interface ProcessedMedia {
     mimeType?: string;
     /** 路径 B/C 或溢出的图片: 文本描述 */
     description?: string;
+    /** 保存到磁盘的文件路径（相对项目根） */
+    filePath?: string;
 }
 
 /** Sticker 描述缓存接口 */
@@ -101,6 +105,7 @@ export async function processMediaBatch(
     visionLlmConfig?: LLMConfig,
     downloadFn?: DownloadFn,
     stickerCache?: StickerCache,
+    mediaDownloader?: MediaDownloader,
 ): Promise<ProcessedMedia[]> {
     const maxImages = config?.maxImagesPerContext ?? DEFAULT_MAX_IMAGES;
     const results: ProcessedMedia[] = [];
@@ -108,14 +113,17 @@ export async function processMediaBatch(
     // 分类
     const photos: MediaAttachment[] = [];
     const stickers: MediaAttachment[] = [];
+    const downloadOnly: MediaAttachment[] = []; // video / document / animation — 只下载不识别
 
     for (const att of attachments) {
         if (att.type === "photo" || (att.type === "document" && att.mimeType?.startsWith("image/"))) {
             photos.push(att);
         } else if (att.type === "sticker") {
             stickers.push(att);
+        } else if (att.type === "video" || att.type === "document" || att.type === "animation") {
+            downloadOnly.push(att);
         }
-        // video / animation / other → 跳过（保留占位文本）
+        // other → 跳过（保留占位文本）
     }
 
     // 确定处理路径
@@ -200,7 +208,104 @@ export async function processMediaBatch(
     const photoResults = await Promise.all(photoTasks);
     results.push(...photoResults);
 
+    // ─── 保存 photo/sticker 到磁盘（如果有 mediaDownloader） ───
+    if (mediaDownloader && downloadFn) {
+        for (const pm of results) {
+            if (pm.filePath) continue; // 已保存
+            // 找到对应的 attachment
+            const att = attachments.find(a => a.messageIndex === pm.index);
+            if (!att) continue;
+            // 已有文件则跳过
+            const existing = mediaDownloader.getExistingPath(att.uniqueFileId);
+            if (existing) {
+                pm.filePath = existing;
+                continue;
+            }
+            // 对有 base64Data 的 (路径A) 直接从 base64 保存
+            if (pm.base64Data) {
+                const buf = Buffer.from(pm.base64Data, "base64");
+                const saved = mediaDownloader.saveMedia(buf, {
+                    chatId: att.chatId,
+                    messageId: att.messageId,
+                    uniqueFileId: att.uniqueFileId,
+                    mediaType: att.type,
+                    mimeType: pm.mimeType ?? att.mimeType,
+                    fileName: att.fileName,
+                });
+                if (saved) pm.filePath = saved.path;
+            }
+        }
+    }
+
+    // ─── 处理 download-only 媒体 (video / document / animation) ───
+    if (downloadFn && mediaDownloader) {
+        for (const att of downloadOnly) {
+            // 大小检查
+            if (!mediaDownloader.isWithinSizeLimit(att.fileSize)) {
+                const sizeMB = att.fileSize ? (att.fileSize / 1024 / 1024).toFixed(1) : "?";
+                results.push({
+                    index: att.messageIndex,
+                    description: `[📎 ${att.type} (${sizeMB}MB, 超出下载限制)]`,
+                });
+                continue;
+            }
+
+            // 已有文件
+            const existing = mediaDownloader.getExistingPath(att.uniqueFileId);
+            if (existing) {
+                results.push({
+                    index: att.messageIndex,
+                    filePath: existing,
+                    description: typeLabel(att.type),
+                });
+                continue;
+            }
+
+            // 下载 + 保存
+            try {
+                const buffer = await downloadFn(att.fileId, att.chatId, att.messageId, att.uniqueFileId);
+                const saved = mediaDownloader.saveMedia(buffer, {
+                    chatId: att.chatId,
+                    messageId: att.messageId,
+                    uniqueFileId: att.uniqueFileId,
+                    mediaType: att.type,
+                    mimeType: att.mimeType,
+                    fileName: att.fileName,
+                });
+                results.push({
+                    index: att.messageIndex,
+                    filePath: saved?.path,
+                    description: typeLabel(att.type),
+                });
+            } catch (err) {
+                log.warn("download-only 媒体下载失败", { fileId: att.fileId, type: att.type, error: String(err) });
+                results.push({
+                    index: att.messageIndex,
+                    description: typeLabel(att.type),
+                });
+            }
+        }
+    } else {
+        // 无 downloader — 返回纯标签
+        for (const att of downloadOnly) {
+            results.push({
+                index: att.messageIndex,
+                description: typeLabel(att.type),
+            });
+        }
+    }
+
     return results;
+}
+
+/** 媒体类型 → 显示标签 */
+function typeLabel(type: string): string {
+    switch (type) {
+        case "video": return "[📹 视频]";
+        case "animation": return "[🎬 GIF]";
+        case "document": return "[📎 文件]";
+        default: return `[📎 ${type}]`;
+    }
 }
 
 // ─── 内部函数 ───

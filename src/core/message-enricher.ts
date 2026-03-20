@@ -13,6 +13,7 @@
 
 import { processMediaBatch, type MediaAttachment, type ProcessedMedia, type DownloadFn, type StickerCache } from "./vision-processor.js";
 import type { LLMConfig, VisionConfig } from "./config.js";
+import type { MediaDownloader } from "./media-downloader.js";
 import { formatTsForDisplay } from "./timezone.js";
 import { createLogger } from "./logger.js";
 
@@ -54,6 +55,8 @@ export interface EnrichOptions {
     stickerCache?: StickerCache;
     /** 所属群组 chatId（fallback，当 message 自身无 chatId 时使用） */
     chatId?: string;
+    /** 媒体下载管理器（可选，启用后保存文件到磁盘） */
+    mediaDownloader?: MediaDownloader;
 }
 
 /** 富化结果 */
@@ -91,6 +94,7 @@ export async function enrichMessages(
                 options.visionLlmConfig,
                 options.downloadFn,
                 options.stickerCache,
+                options.mediaDownloader,
             );
             // 将处理结果写回 messages
             for (const pm of processed) {
@@ -234,6 +238,7 @@ export async function resolveReplyText(
                 uniqueFileId: (info.uniqueFileId as string) ?? (info.fileId as string),
                 emoji: info.emoji as string | undefined,
                 mimeType: info.mimeType as string | undefined,
+                fileName: info.fileName as string | undefined,
                 width: info.width as number | undefined,
                 height: info.height as number | undefined,
                 fileSize: info.fileSize as number | undefined,
@@ -285,6 +290,7 @@ function parseMediaAttachments(messages: RawMessage[], fallbackChatId?: string):
                 uniqueFileId: info.uniqueFileId ?? info.fileId,
                 emoji: info.emoji,
                 mimeType: info.mimeType,
+                fileName: info.fileName,
                 width: info.width,
                 height: info.height,
                 fileSize: info.fileSize,
@@ -321,7 +327,14 @@ function formatMessages(
                     imageParts.push({
                         url: `data:${pm.mimeType};base64,${pm.base64Data}`,
                     });
-                    textPart = textPart ? `${textPart} [📷 图片${imageParts.length}]` : `[📷 图片${imageParts.length}]`;
+                    const fileHint = pm.filePath ? ` 文件: ${pm.filePath}` : "";
+                    textPart = textPart ? `${textPart} [📷 图片${imageParts.length}]${fileHint}` : `[📷 图片${imageParts.length}]${fileHint}`;
+                } else if (pm.filePath && pm.description) {
+                    // 有文件路径 + 描述（video/document/animation 或 vision 描述的图片）
+                    textPart = textPart ? `${textPart} ${pm.description} 文件: ${pm.filePath}` : `${pm.description} 文件: ${pm.filePath}`;
+                } else if (pm.filePath) {
+                    // 仅有文件路径
+                    textPart = textPart ? `${textPart} [📎 文件: ${pm.filePath}]` : `[📎 文件: ${pm.filePath}]`;
                 } else if (pm.description) {
                     // 路径 B/C: 文本描述
                     textPart = textPart ? `${textPart} [📷 图片描述: ${pm.description}]` : `[📷 图片描述: ${pm.description}]`;

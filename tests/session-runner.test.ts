@@ -6,7 +6,7 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { parseResponse, shouldInterruptForEvent } from "../src/sandbox/session-runner.js";
+import { parseResponse } from "../src/sandbox/session-runner.js";
 
 describe("parseResponse", () => {
     it("should parse thinking only (no code blocks)", () => {
@@ -29,7 +29,8 @@ That should work.`;
         const { thinking, codeBlocks } = parseResponse(response);
 
         assert.equal(codeBlocks.length, 1);
-        assert.equal(codeBlocks[0], 'await ctx.tg.sendText(-100123, "Hello!");');
+        assert.equal(codeBlocks[0].lang, "js");
+        assert.equal(codeBlocks[0].code, 'await ctx.tg.sendText(-100123, "Hello!");');
         assert.ok(thinking.includes("Let me send a message"));
         assert.ok(thinking.includes("That should work"));
     });
@@ -41,7 +42,8 @@ console.log("hello")
 
         const { codeBlocks } = parseResponse(response);
         assert.equal(codeBlocks.length, 1);
-        assert.equal(codeBlocks[0], 'console.log("hello")');
+        assert.equal(codeBlocks[0].lang, "js");
+        assert.equal(codeBlocks[0].code, 'console.log("hello")');
     });
 
     it("should parse js code block", () => {
@@ -51,6 +53,7 @@ const x = 42;
 
         const { codeBlocks } = parseResponse(response);
         assert.equal(codeBlocks.length, 1);
+        assert.equal(codeBlocks[0].lang, "js");
     });
 
     it("should parse javascript code block", () => {
@@ -60,6 +63,7 @@ const x = 42;
 
         const { codeBlocks } = parseResponse(response);
         assert.equal(codeBlocks.length, 1);
+        assert.equal(codeBlocks[0].lang, "js");
     });
 
     it("should parse multiple code blocks", () => {
@@ -81,13 +85,15 @@ Done.`;
         const { thinking, codeBlocks } = parseResponse(response);
 
         assert.equal(codeBlocks.length, 2);
-        assert.ok(codeBlocks[0].includes("getMessages"));
-        assert.ok(codeBlocks[1].includes("sendText"));
+        assert.ok(codeBlocks[0].code.includes("getMessages"));
+        assert.ok(codeBlocks[1].code.includes("sendText"));
+        assert.equal(codeBlocks[0].lang, "js");
+        assert.equal(codeBlocks[1].lang, "js");
         assert.ok(thinking.includes("First"));
         assert.ok(thinking.includes("Done"));
     });
 
-    it("should ignore non-ts/js code blocks", () => {
+    it("should ignore non-ts/js/bash code blocks", () => {
         const response = `Here's a Python example:
 
 \`\`\`python
@@ -102,7 +108,8 @@ console.log("hello")
 
         const { codeBlocks } = parseResponse(response);
         assert.equal(codeBlocks.length, 1);
-        assert.ok(codeBlocks[0].includes("console.log"));
+        assert.ok(codeBlocks[0].code.includes("console.log"));
+        assert.equal(codeBlocks[0].lang, "js");
     });
 
     it("should handle multiline code blocks", () => {
@@ -117,15 +124,71 @@ for (const msg of msgs) {
 
         const { codeBlocks } = parseResponse(response);
         assert.equal(codeBlocks.length, 1);
-        assert.ok(codeBlocks[0].includes("scene.enter"));
-        assert.ok(codeBlocks[0].includes("for (const msg"));
+        assert.ok(codeBlocks[0].code.includes("scene.enter"));
+        assert.ok(codeBlocks[0].code.includes("for (const msg"));
     });
 
-    it("should identify events that should interrupt the current session", () => {
-        assert.equal(shouldInterruptForEvent({ type: "nc.message" }), true);
-        assert.equal(shouldInterruptForEvent({ type: "system.reply_task" }), true);
-        assert.equal(shouldInterruptForEvent({ type: "telegram.message" }), true);
-        assert.equal(shouldInterruptForEvent({ type: "system.note" }), false);
-        assert.equal(shouldInterruptForEvent({ type: "system.note", _urgent: true }), true);
+    // ─── Bash code block tests ───
+
+    it("should parse bash code block", () => {
+        const response = `Let me download something.
+
+\`\`\`bash
+curl -s https://example.com/data.json -o /tmp/data.json
+echo "downloaded"
+\`\`\``;
+
+        const { thinking, codeBlocks } = parseResponse(response);
+        assert.equal(codeBlocks.length, 1);
+        assert.equal(codeBlocks[0].lang, "bash");
+        assert.ok(codeBlocks[0].code.includes("curl"));
+        assert.ok(thinking.includes("download"));
     });
+
+    it("should parse sh code block", () => {
+        const response = `\`\`\`sh
+ls -la /tmp
+\`\`\``;
+
+        const { codeBlocks } = parseResponse(response);
+        assert.equal(codeBlocks.length, 1);
+        assert.equal(codeBlocks[0].lang, "bash");
+        assert.ok(codeBlocks[0].code.includes("ls -la"));
+    });
+
+    it("should parse shell code block", () => {
+        const response = `\`\`\`shell
+echo hello
+\`\`\``;
+
+        const { codeBlocks } = parseResponse(response);
+        assert.equal(codeBlocks.length, 1);
+        assert.equal(codeBlocks[0].lang, "bash");
+    });
+
+    it("should parse mixed js and bash code blocks preserving order and lang", () => {
+        const response = `First fetch data with curl.
+
+\`\`\`bash
+curl -s https://api.example.com/info -o /tmp/info.json
+\`\`\`
+
+Now process it.
+
+\`\`\`javascript
+const fs = require("fs");
+const data = JSON.parse(fs.readFileSync("/tmp/info.json", "utf-8"));
+console.log(data.title);
+\`\`\`
+
+Done.`;
+
+        const { codeBlocks } = parseResponse(response);
+        assert.equal(codeBlocks.length, 2);
+        assert.equal(codeBlocks[0].lang, "bash");
+        assert.ok(codeBlocks[0].code.includes("curl"));
+        assert.equal(codeBlocks[1].lang, "js");
+        assert.ok(codeBlocks[1].code.includes("readFileSync"));
+    });
+
 });

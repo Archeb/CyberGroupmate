@@ -112,6 +112,14 @@ const MAX_OUTPUT_CHARS = 4000;
 
 // ─── 类型 ───
 
+/** 解析出的代码块（携带语言标记） */
+export interface CodeBlock {
+    /** 代码块语言类型 */
+    lang: "js" | "bash";
+    /** 代码内容 */
+    code: string;
+}
+
 /** Session 中的一个交互轮次记录 */
 export interface SessionTurn {
     /** 轮次编号 */
@@ -121,7 +129,7 @@ export interface SessionTurn {
     /** 解析出的思考文本 */
     thinking: string;
     /** 解析出的代码块列表 */
-    codeBlocks: string[];
+    codeBlocks: CodeBlock[];
     /** 各代码块执行结果 */
     executionResults: ExecutionResult[];
     /** LLM token 用量 */
@@ -144,29 +152,42 @@ export interface SessionResult {
 
 // ─── 代码块解析 ───
 
+/** 判断语言标记是否为 JS/TS 类 */
+function isJsLang(lang: string): boolean {
+    return ["typescript", "ts", "javascript", "js"].includes(lang);
+}
+
+/** 判断语言标记是否为 bash/shell 类 */
+function isBashLang(lang: string): boolean {
+    return ["bash", "shell", "sh"].includes(lang);
+}
+
 /**
  * 从 LLM response 中提取思考文本和代码块
  *
- * 代码块匹配 ```typescript, ```ts, ```js, ```javascript 围栏。
+ * 代码块匹配 ```typescript, ```ts, ```js, ```javascript,
+ * ```bash, ```shell, ```sh 围栏。
  * 围栏外的文本作为「思考」返回。
  *
  * @param response - LLM 的原始响应文本
- * @returns 思考文本和代码块数组
+ * @returns 思考文本和代码块数组（含语言标记）
  */
 export function parseResponse(response: string): {
     thinking: string;
-    codeBlocks: string[];
+    codeBlocks: CodeBlock[];
 } {
-    const codeBlocks: string[] = [];
+    const codeBlocks: CodeBlock[] = [];
     let thinking = response;
 
-    // 匹配 ```typescript/ts/js/javascript ... ``` 代码块
+    // 匹配 ```typescript/ts/js/javascript/bash/shell/sh ... ``` 代码块
     const codeBlockRegex =
-        /```(?:typescript|ts|javascript|js)\s*\n([\s\S]*?)```/g;
+        /```(typescript|ts|javascript|js|bash|shell|sh)\s*\n([\s\S]*?)```/g;
 
     let match;
     while ((match = codeBlockRegex.exec(response)) !== null) {
-        codeBlocks.push(match[1].trim());
+        const langTag = match[1].toLowerCase();
+        const lang: "js" | "bash" = isBashLang(langTag) ? "bash" : "js";
+        codeBlocks.push({ lang, code: match[2].trim() });
     }
 
     // 思考 = 原文去掉所有代码块
@@ -284,14 +305,16 @@ export async function runCodeActSession(
         // ─── 执行代码块 ───
         const outputParts: string[] = [];
 
-        for (const code of codeBlocks) {
-            const codeIndex = codeBlocks.indexOf(code);
-            log.debug(`Turn ${turnNum}: code[${codeIndex}]`, { code });
+        for (let codeIndex = 0; codeIndex < codeBlocks.length; codeIndex++) {
+            const block = codeBlocks[codeIndex];
+            log.debug(`Turn ${turnNum}: code[${codeIndex}] (${block.lang})`, { code: block.code });
 
             let errorOccurred = false;
 
             try {
-                const result = await sandbox.execute(code, executeTimeout);
+                const result = block.lang === "bash"
+                    ? await sandbox.executeShell(block.code, executeTimeout)
+                    : await sandbox.execute(block.code, executeTimeout);
                 turn.executionResults.push(result);
 
                 // Debug: 输出执行结果

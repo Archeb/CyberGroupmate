@@ -69,7 +69,7 @@ stateDiagram-v2
 **已分派话题追踪 (dispatchedTopicIds)**：`GroupSubagent` 维护一个 `dispatchedTopicIds: Set<string>` 集合。当 dispatch-handler 为某个话题分派 CodeAct 任务时，将 `topicId` 记入此集合。主 Agent 下次 attend 时将已分派话题列表注入 LLM prompt，明确提示 LLM 不要对同一话题重复分派回复任务。话题归档后自动清理。
 
 **跨路径防重复 (lastAgentReplyAt)**：紧急路径（Observer 告警→CodeAct/FastPath）的回复发生在 triage 之前，因此 triage 不知道 agent 已回复过。`GroupSubagent` 维护 `lastAgentReplyAt` 时间戳，每当 callback 包含已发送消息时更新并同步到 `RecordingPipeline`。Pipeline 在 triage 决策阶段检查：如果某话题的最后一条消息早于 `lastAgentReplyAt`，自动标记为"已回复、不介入"，与 `_viaFastPath` 标记并列生效。
-3. **CodeActExecutor (深度执行器)**：拥有完全隔离的 LLM 对话 Session 与通过 `SandboxPool` 按需获取的独立 Sandbox Worker。收到主 Agent 分派的 `CODEACT_REPLY` 任务后才被激活。它有自己的 Q4 任务队列实现串行执行，每个任务调用 `runCodeActSession()` 在沙盒中多轮 LLM 交互（可调用 Telegram API、Memory API、Web 搜索等 Host Call），完事后产出 Callback 到 Q5。Session 具备持久化与恢复能力（磁盘 JSON），以及两层 Compact 机制（Layer 1 结构化快速截断 + Layer 2 LLM token-budget 压缩）。
+3. **CodeActExecutor (深度执行器)**：拥有完全隔离的 LLM 对话 Session 与通过 `SandboxPool` 按需获取的独立 Sandbox Worker。收到主 Agent 分派的 `CODEACT_REPLY` 任务后才被激活。它有自己的 Q4 任务队列实现串行执行，每个任务调用 `runCodeActSession()` 在沙盒中多轮 LLM 交互。**沙盒支持双语言代码块**：`javascript/typescript` 代码块可调用完整 Host Call API（Telegram、Memory、Web 搜索等），`bash/shell` 代码块通过 `child_process.exec()` 直接执行 CLI 命令（ffmpeg、zip、curl 等），默认 `cwd` 为 `workspace/`。完事后产出 Callback 到 Q5。Session 具备持久化与恢复能力（磁盘 JSON），以及两层 Compact 机制（Layer 1 结构化快速截断 + Layer 2 LLM token-budget 压缩）。
 4. **FastPathHandler (应急反射神经)**：仅在主 Agent 显式预授权 (`FAST_PATH_AUTH`) 后才生效。收到授权后，用 `cheapConfig` LLM 自主生成快回复（受 `maxReplies` 次数与过期时间约束，支持 `preauthorizedActions` / `blockedActions` 以及 `__SKIP__` 跳过标记）。每次发送后产出 Callback 到 Q5 回报主 Agent。次数用尽或过期后自动禁用。
 
 **Stickiness (群组亲密度)**：每个群组有一个 `GroupStickiness`，维护四个等级 `CORE → FAMILIAR → ACQUAINTANCE → STRANGER`。不同等级直接影响：优先级乘数 (`priorityMultiplier`)、Cosine Decay 深度周期 (`depthCyclePeriod`)、FastPath 资格 (`fastPathEligible`)、回复频率 (`replyFrequency`)、主动介入级别 (`initiativeLevel`) 等行为参数。亲密度可基于 `GroupModel` 的日均消息量与无交互天数自动升降级。
@@ -115,13 +115,14 @@ stateDiagram-v2
 5. **Reflection 反思引擎**：在冷场达标（沉默超阈值）、最大间隔到期、或处于非清醒时段时定时触发。Reflection 5 步流程：(a) 收集上次反思后的话题与交互数据 → (b) 量化统计每位参与者 → (c) LLM 生成结构化 JSON → (d) 写入画像增量/核心事实/群组模型更新/情感记忆合并/邓巴裁剪 → (e) 返回结果。合并机制支持渐进级联：>7天→周、>30天→月、>90天→季、>365天→年，只保留高显著性事件。
 6. **上下文预算管理 (ContextManager)**：为 CodeActExecutor 和主 Agent 提供对话历史的智能压缩。核心能力包括：token 预算估算、消息分类（protected/compactable/disposable）、话题保护与 reply chain 保护（确保当前活跃话题上下文不被截断），以及 LLM 生成的 Context Briefing。
 
-### 2.4 视觉处理管线 (Vision Pipeline)
-**核心概念**：让 Agent "看得见图"。系统根据模型能力和配置自动选择三条处理路径，在 CodeActExecutor 执行期间按需处理消息中的图片和贴纸。主 Agent 决策阶段不做视觉处理（只看文本标签），视觉能力仅在执行层启用。
+### 2.4 视觉与媒体管线 (Vision & Media Pipeline)
+**核心概念**：让 Agent "看得见图、摸得到文件"。系统根据模型能力和配置自动选择三条处理路径进行视觉处理，并将所有媒体文件（图片、视频、文档、GIF 等）下载到 `workspace/Downloads/` 供 bash 代码块直接操作。主 Agent 决策阶段不做视觉/下载处理（只看文本标签），视觉与媒体下载仅在执行层启用。
 
 **架构分层**：
-1. **消息富化器 (`message-enricher.ts`)**：管线入口。从 `RawMessage.mediaInfo` JSON 中解析出 `MediaAttachment[]`（含 fileId、uniqueFileId、type、emoji 等），调用 Vision 处理器批量处理后，将结果写回消息的 `processedMedia` 字段，最终输出格式化文本 + base64 图片列表。
-2. **视觉处理器 (`vision-processor.ts`)**：核心调度。接收 `MediaAttachment[]`，将其分类为 photos 和 stickers 两类，分别按路径处理。
+1. **消息富化器 (`message-enricher.ts`)**：管线入口。从 `RawMessage.mediaInfo` JSON 中解析出 `MediaAttachment[]`（含 fileId、uniqueFileId、type、emoji 等），调用 Vision 处理器批量处理后，将结果写回消息的 `processedMedia` 字段，最终输出格式化文本 + base64 图片列表 + 文件路径。
+2. **视觉处理器 (`vision-processor.ts`)**：核心调度。接收 `MediaAttachment[]`，将其分类为 photos、stickers 和 download-only（video/document/animation）三类，分别按路径处理。photo/sticker 走 Vision 处理后保存到磁盘；video/document/animation 只做下载保存，不走 Vision。
 3. **下载函数 (`downloadFn`)**：由 `dispatch-handler.ts` 从 Telegram Adapter 构建（`telegram.downloadMedia` Host Call），经 `CodeActExecutor.setDependencies()` 注入到执行器，支持 file reference refetch（需要 chatId + messageId）和文件系统缓存（uniqueFileId 去重）。
+4. **媒体下载管理器 (`media-downloader.ts`)**：负责将下载的 Buffer 保存到 `workspace/Downloads/` 分类目录（photos/videos/stickers/documents/other），按 `uniqueFileId` 去重，自动清理超过保留期（默认 3 天）的文件。由 `dispatch-handler.ts` 创建共享单例，通过 `setDependencies()` 注入到执行器。
 
 **三条图片处理路径**：
 | 路径 | 条件 | 行为 | 缓存策略 |
@@ -130,7 +131,9 @@ stateDiagram-v2
 | **B: Vision 辅助** | A 路溢出，或主模型不支持 vision 但配置了 `vision` tier LLM | 下载图片后调用 vision tier LLM 生成文本描述，以 `[📷 图片描述: ...]` 注入消息 | 内存缓存（`uniqueFileId → description`） |
 | **C: 无 Vision** | 既无原生 vision 也无 vision tier LLM | 占位文本 `[📷 图片]` | 无 |
 
-路径 A 下载失败时自动降级为 B（再失败降级为 C）。
+路径 A 下载失败时自动降级为 B（再失败降级为 C）。所有路径下载成功的图片均同时保存到 `workspace/Downloads/photos/`。
+
+**非图片媒体处理**：video/document/animation 类型跳过 Vision，直接下载保存到对应分类目录。超过大小限制（默认 20MB）的文件不下载，仅显示带大小信息的标签。
 
 **三种贴纸处理模式** (`VisionConfig.stickerMode`):
 | 模式 | 行为 |
@@ -141,20 +144,31 @@ stateDiagram-v2
 
 贴纸 Vision LLM 返回结构化 JSON `{"description": "...", "emoji": "🤣"}`，解析失败时 fallback 为原始文本。
 
+**媒体文件下载到磁盘**：
+- 目录结构：`workspace/Downloads/{photos,videos,stickers,documents,other}/`
+- 文件命名：`{chatId}_{msgId}_{uniqueFileId}.{ext}`
+- 去重：按 `uniqueFileId` 检查已有文件，跳过重复下载
+- 自动清理：超过 `mediaRetentionDays`（默认 3 天）的文件由定时任务清理
+- 过期重下载：清理后再次引用该媒体时，通过 adapter 的 `downloadFn` 重新下载（支持 file reference refetch）
+- LLM 可见：格式化消息中追加文件路径信息，如 `[📹 视频] 文件: workspace/Downloads/videos/xxx.mp4`
+
 **配置** (`config.yaml → vision`)：
 - `maxImagesPerContext`: 单轮上下文最多内联图数（默认 3）
 - `maxImageSize`: 大图压缩阈值长边像素（默认 1024）
 - `stickerMode`: 贴纸处理模式
+- `maxMediaDownloadSize`: 媒体下载大小上限 MB（默认 20）
+- `mediaRetentionDays`: 媒体文件保留天数（默认 3）
 - LLM Profile 层面：`vision: true` 标记该 profile 支持多模态；`model_tiers.vision` 指定专用 vision tier
 
 **调用时机**：
-- **主 Agent 决策阶段**（`attend-handler`）：不做 Vision 处理，使用 `formatMessageLine(includeMediaTags: true)` 生成纯文本媒体标签（如 `[📷 图片]`、`[🎭 贴纸: 😂]`），让主脑知道消息附带了媒体类型即可。
-- **CodeAct 执行阶段**（`code-act-executor.ts → executeWithSandbox()`）：使用完整的 `enrichMessages()` 管线，按需下载图片、调用 Vision LLM、生成描述或内联 base64，让执行层 LLM 能真正 "看到" 图片内容。
+- **主 Agent 决策阶段**（`attend-handler`）：不做 Vision/下载处理，使用 `formatMessageLine(includeMediaTags: true)` 生成纯文本媒体标签（如 `[📷 图片]`、`[🎭 贴纸: 😂]`），让主脑知道消息附带了媒体类型即可。
+- **CodeAct 执行阶段**（`code-act-executor.ts → executeWithSandbox()`）：使用完整的 `enrichMessages()` 管线，按需下载图片/视频/文件、调用 Vision LLM、保存到磁盘、生成描述或内联 base64，让执行层 LLM 能真正 "看到" 图片内容并通过 bash 代码块操作已下载的文件。
 
 ```mermaid
 graph LR
     classDef vfill fill:#9b59b6,stroke:#333,stroke-width:2px,color:#fff;
     classDef afill fill:#e67e22,stroke:#333,stroke-width:2px,color:#fff;
+    classDef dfill fill:#27ae60,stroke:#333,stroke-width:2px,color:#fff;
 
     RM["RawMessage\n(含 mediaInfo JSON)"] -->|解析| ME["message-enricher\nparseMediaAttachments()"]:::afill
     ME -->|MediaAttachment 列表| VP["vision-processor\nprocessMediaBatch()"]:::vfill
@@ -167,6 +181,10 @@ graph LR
     SM -->|emoji_only| SE["emoji 标签"]:::afill
     SM -->|vision_cache| SVC["缓存查/Vision LLM→缓存写"]:::vfill
     SM -->|vision_each| SVE["每次 Vision LLM"]:::vfill
+    VP -->|"video/doc/animation"| DL["download-only:\n下载→保存磁盘"]:::dfill
+    PathA --> SAVE["MediaDownloader\n保存到 workspace/Downloads/"]:::dfill
+    PathB --> SAVE
+    DL --> SAVE
 ```
 
 ---
@@ -232,7 +250,7 @@ graph TD
 | :--- | :--- | :--- |
 | **主 Agent 系统指令** | 全局静态配置库 (`persona`)、全局状态 (`GlobalState`) | `{persona}` (底层人格设定), `{recentDecisions}` (最近决策记录), `{activeTasks}` (当前任务列表), `{attentionSummary}` (全局状态摘要) |
 | **主 Agent 决策输入** (Attend Context) | 群消息的数据库快照 + Observer 产出的话题注册表 + 群组画像 + 历史 Callback + 已分派话题集 | `{topicDigests}`, `{messages}` (L2+深度消息原文), `{engagementScore}`, `{lastCallbacks}`, `{fastPathHistory}`, `{suggestedReplyMode}` (算法预估), `{alertReason}`, `{groupModel}`, `{stickinessLevel}`, `{timeSinceLastAttend}`, `{dispatchedTopicIds}` (已分派回复任务的话题ID，防重复) |
-| **CodeActExecutor 任务指派** | Main Agent 派发到 Q4 的含明确方向的回复任务 + Memory 查询 + **Vision 管线**（`enrichMessages` 按需下载图片/贴纸并生成描述或 base64 内联） | `{targetMessages}` (含 reply-to 关系的消息原文 + 媒体描述/内联图), `{imageParts}` (路径 A 的 base64 图片数据), `{topicSummary}`, `{personContext}` (人物背景), `{contentDirection}` (主脑指示的方向), `{toneGuidance}` (语气指导), `{apiTypeDefs}` (沙盒 API 类型定义) |
+| **CodeActExecutor 任务指派** | Main Agent 派发到 Q4 的含明确方向的回复任务 + Memory 查询 + **Vision & Media 管线**（`enrichMessages` 按需下载图片/视频/文件并生成描述或 base64 内联，同时保存到 `workspace/Downloads/`）。沙盒支持 JS 和 bash 双语言代码块。 | `{targetMessages}` (含 reply-to 关系的消息原文 + 媒体描述/内联图 + 已下载文件路径), `{imageParts}` (路径 A 的 base64 图片数据), `{topicSummary}`, `{personContext}` (人物背景), `{contentDirection}` (主脑指示的方向), `{toneGuidance}` (语气指导), `{apiTypeDefs}` (沙盒 API 类型定义) |
 | **FastPath 快速指令** | Main Agent 授权时圈定的配置选项 | `{preauthorizedActions}` (允许的行动), `{blockedActions}` (绝对不可涉及的话题), `{tonePreset}` (语气预设), `{maxReplyLength}`, `{repliesSent}` / `{maxReplies}` (已用/总额度) |
 | **Reflection 定期反思输入** | MemoryV2 查出的上次反思后的话题与交互数据 + 已有画像 + 群组画像 | `{topics}` (带摘要/情感/AI介入状态), `{interactions}`, `{participantStats}` (量化统计), `{existingProfiles}`, `{groupModel}` |
 

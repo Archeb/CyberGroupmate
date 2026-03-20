@@ -178,6 +178,10 @@ export interface VisionConfig {
     maxImagesPerContext?: number;
     /** Sticker 处理模式。默认 "emoji_only" */
     stickerMode?: "vision_each" | "vision_cache" | "emoji_only";
+    /** 媒体下载文件大小上限 (MB)。默认 20 */
+    maxMediaDownloadSize?: number;
+    /** 媒体文件保留天数。默认 3 */
+    mediaRetentionDays?: number;
 }
 
 /** Dashboard 外部配置 */
@@ -530,6 +534,8 @@ function parseVisionConfig(fileConfig: Record<string, unknown>): VisionConfig | 
         maxImageSize: raw.max_image_size != null ? num(raw.max_image_size, 1024) : undefined,
         maxImagesPerContext: raw.max_images_per_context != null ? num(raw.max_images_per_context, 3) : undefined,
         stickerMode: (str(raw.sticker_mode) as VisionConfig["stickerMode"]) ?? undefined,
+        maxMediaDownloadSize: raw.max_media_download_size != null ? num(raw.max_media_download_size, 20) : undefined,
+        mediaRetentionDays: raw.media_retention_days != null ? num(raw.media_retention_days, 3) : undefined,
     };
 }
 

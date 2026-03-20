@@ -9,6 +9,7 @@ services:
     volumes:
       - ./config.yaml:/app/config.yaml:ro
       - cybergroupmate-data:/app/workspace
+      - cybergroupmate-agent-env:/app/agent-data
     restart: unless-stopped
     # Telegram userbot 首次登录需要交互式输入 OTP/2FA
     # 使用 docker attach cybergroupmate 连接后输入
@@ -17,3 +18,4 @@ services:
 
 volumes:
   cybergroupmate-data:
+  cybergroupmate-agent-env:

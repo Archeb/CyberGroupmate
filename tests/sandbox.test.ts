@@ -241,4 +241,42 @@ describe("Sandbox", () => {
             { message: /timed out/ }
         );
     });
+
+    // ─── Shell execution tests ───
+
+    it("should execute shell command and capture stdout", async () => {
+        const sb = await makeSandbox();
+        const result = await sb.executeShell('echo "hello from bash"');
+        assert.equal(result.error, false);
+        assert.equal(result.output, "hello from bash");
+    });
+
+    it("should capture shell stderr", async () => {
+        const sb = await makeSandbox();
+        const result = await sb.executeShell('echo "stderr message" >&2');
+        assert.equal(result.error, false);
+        assert.ok(result.output.includes("stderr message"));
+    });
+
+    it("should handle shell execution errors (non-zero exit)", async () => {
+        const sb = await makeSandbox();
+        const result = await sb.executeShell('exit 1');
+        assert.equal(result.error, true);
+    });
+
+    it("should handle shell execution timeout", async () => {
+        const sb = await makeSandbox();
+        await assert.rejects(
+            () => sb.executeShell("sleep 30", 500),
+            { message: /timed out/ }
+        );
+    });
+
+    it("should execute multi-command shell script", async () => {
+        const sb = await makeSandbox();
+        const result = await sb.executeShell('echo "line1" && echo "line2"');
+        assert.equal(result.error, false);
+        assert.ok(result.output.includes("line1"));
+        assert.ok(result.output.includes("line2"));
+    });
 });

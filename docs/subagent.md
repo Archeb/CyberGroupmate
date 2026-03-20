@@ -268,7 +268,7 @@ interface Observer {
 
 ### 3.2 CodeActExecutor
 
-**职责**: 接收主 Agent 的指令，在独立环境中执行复杂回复。
+**职责**: 接收主 Agent 的指令，在独立环境中执行复杂回复。支持 **双语言代码块**：JavaScript/TypeScript 代码块可调用 Host Call API（Telegram、Memory、Web），Bash/Shell 代码块通过 `child_process.exec()` 直接执行 CLI 命令（ffmpeg、curl 等），默认 `cwd` 为 `workspace/`。执行前通过 `enrichMessages()` 管线下载媒体文件到 `workspace/Downloads/`，使 bash 代码块可直接操作已下载的图片、视频、文档。
 
 ```typescript
 interface CodeActExecutor {
@@ -302,6 +302,14 @@ interface CodeActExecutor {
 - ✅ 需要多步推理的复杂问答
 - ✅ 涉及发送多媒体/格式化内容
 - ✅ 主 Agent 决定了方向但需要 CodeAct 细化和执行的回复
+- ✅ 需要通过 bash 代码块操作已下载的媒体文件（如 ffmpeg 转码、zip 压缩等）
+
+**双语言代码块支持**：
+
+| 代码块类型 | 执行方式 | 能力 | 用途 |
+|---|---|---|---|
+| `javascript` / `typescript` | Sandbox Worker `executeCode()` | 完整 Host Call API（Telegram、Memory、Web 等） | API 调用、数据查询、消息发送 |
+| `bash` / `shell` / `sh` | `child_process.exec()`，cwd = `workspace/` | CLI 工具（ffmpeg、curl、zip 等） | 文件操作、媒体转码、系统工具 |
 
 ### 3.3 FastPath
 
@@ -839,8 +847,9 @@ interface GroupStickiness {
 |------|------|
 | **Main Agent** | 快层。持有所有决策权, 串行审视, 批量指令 |
 | **Observer** | Subagent 感知组件。始终运行, 不做内容决策 |
-| **CodeActExecutor** | Subagent 执行组件。独立 Session+Sandbox, 执行主 Agent 指令 |
+| **CodeActExecutor** | Subagent 执行组件。独立 Session+Sandbox, 执行主 Agent 指令。支持 JS + bash 双语言代码块，媒体文件自动下载到 workspace/Downloads/ |
 | **FastPath** | Subagent 快速回复组件。唯一允许自主内容决策的组件, 需主 Agent 预授权 |
+| **MediaDownloader** | 媒体下载管理器。将聊天媒体保存到 workspace/Downloads/, 按 uniqueFileId 去重, 3 天自动清理, 过期后通过 adapter refetch 重新下载 |
 | **Snapshot Timestamp** | 时间切片点, 保证消息视图一致性 |
 | **Block/Unblock** | CodeAct 执行期间群组从 Q3 临时移除 |
 | **Q1-Q5** | 五个显式消息队列 |

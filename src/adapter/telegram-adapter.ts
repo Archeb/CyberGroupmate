@@ -107,6 +107,7 @@ export interface MediaInfo {
     uniqueFileId?: string;
     emoji?: string;
     mimeType?: string;
+    fileName?: string;
     width?: number;
     height?: number;
     fileSize?: number;
@@ -681,6 +682,7 @@ export class TelegramAdapter implements PlatformAdapter {
             uniqueFileId: typeof media.uniqueFileId === "string" ? media.uniqueFileId : undefined,
             emoji: typeof media.emoji === "string" ? media.emoji : undefined,
             mimeType: typeof media.mimeType === "string" ? media.mimeType : undefined,
+            fileName: typeof media.fileName === "string" ? media.fileName : undefined,
             width: typeof media.width === "number" ? media.width : undefined,
             height: typeof media.height === "number" ? media.height : undefined,
             fileSize: typeof media.fileSize === "number" ? media.fileSize
