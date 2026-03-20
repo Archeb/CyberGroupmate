@@ -56,7 +56,7 @@ export interface DispatchHandlerDeps {
     nc: NotificationCenter;
     q3: DynamicAttentionQueue;
     q5: CallbackQueue;
-    llmConfig: LLMConfig;
+    llmConfigs: LLMConfig[];
     cheapConfig: LLMConfig;
     persona: { name: string; description: string };
 
@@ -76,7 +76,7 @@ export interface DispatchHandlerDeps {
 export function createDispatchHandler(
     deps: DispatchHandlerDeps,
 ): (result: AttendResult) => Promise<void> {
-    const { memory, globalState, subagentManager, sandboxPool, nc, q3, q5, llmConfig, cheapConfig, persona, appConfig, telegramAdapter: tgAdapter, sendTyping } = deps;
+    const { memory, globalState, subagentManager, sandboxPool, nc, q3, q5, llmConfigs, cheapConfig, persona, appConfig, telegramAdapter: tgAdapter, sendTyping } = deps;
     const visionConfig = appConfig.vision;
     // 解析 vision tier LLM 配置（Path B: 独立 vision 模型描述图片）
     const visionLlmConfig = appConfig.modelTiers.vision
@@ -154,7 +154,7 @@ export function createDispatchHandler(
                                 replyToText = await resolveReplyText(origMsg, {
                                     stickerCache: memory,
                                     visionConfig,
-                                    llmConfig,
+                                    llmConfig: llmConfigs[0],
                                     visionLlmConfig,
                                     downloadFn,
                                     chatId: result.chatId,
@@ -251,7 +251,7 @@ export function createDispatchHandler(
                         globalState.recordDecision(cb.chatId, `CALLBACK: ${cb.executionType} ${cb.status} (${cb.summary})`);
                     });
                     // Fix 9: 注入 Sandbox + NC + LLM 依赖 + Memory + Vision
-                    executor.setDependencies(sandboxPool, nc, llmConfig, persona, memory, visionConfig, downloadFn, sendTyping, visionLlmConfig, mediaDownloader);
+                    executor.setDependencies(sandboxPool, nc, llmConfigs, persona, memory, visionConfig, downloadFn, sendTyping, visionLlmConfig, mediaDownloader);
                 }
 
                 executor.enqueue(task);

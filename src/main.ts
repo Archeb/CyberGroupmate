@@ -617,7 +617,7 @@ async function main(): Promise<void> {
         nc,
         q3,
         q5,
-        llmConfig,
+        llmConfigs: sotaConfigs,
         cheapConfig,
         persona: appConfig.persona,
         appConfig,

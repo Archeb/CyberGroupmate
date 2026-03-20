@@ -10,7 +10,7 @@
 
 import { Sandbox, ExecutionResult } from "./sandbox.js";
 import type { NotificationCenter } from "../event/notification-center.js";
-import { callLLM, ChatMessage, LLMResponse } from "../core/llm.js";
+import { callLLMWithFallback, ChatMessage, LLMResponse } from "../core/llm.js";
 import type { LLMConfig } from "../core/config.js";
 import { ulid } from "ulid";
 import { createLogger } from "../core/logger.js";
@@ -228,7 +228,7 @@ export async function runCodeActSession(
     messages: ChatMessage[],
     sandbox: Sandbox,
     nc: NotificationCenter,
-    llmConfig: LLMConfig,
+    llmConfig: LLMConfig | LLMConfig[],
     /** 每段代码的执行超时（毫秒），默认 30s */
     executeTimeout: number = 30000,
     /** 已发消息收集器，用于将 notify 事件中确认的消息反馈到 observation */
@@ -253,8 +253,9 @@ export async function runCodeActSession(
 
         // ─── 调用 LLM ───
         let llmResponse: LLMResponse;
+        const configs = Array.isArray(llmConfig) ? llmConfig : [llmConfig];
         try {
-            llmResponse = await callLLM(messages, llmConfig, { caller: "session-runner" });
+            llmResponse = await callLLMWithFallback(messages, configs, { caller: "session-runner" });
         } catch (err: unknown) {
             const errorMsg =
                 err instanceof Error ? err.message : String(err);

@@ -220,8 +220,29 @@ export async function callLLM(
                     err.message.includes("502") ||
                     err.message.includes("503"));
 
-            if ((isRateLimit || isServerError) && attempt < MAX_RETRIES) {
+            const isNetworkError =
+                err instanceof Error &&
+                (err.message.includes("fetch failed") ||
+                    err.message.includes("ECONNRESET") ||
+                    err.message.includes("ECONNREFUSED") ||
+                    err.message.includes("ETIMEDOUT") ||
+                    err.message.includes("socket hang up") ||
+                    err.message.includes("UND_ERR") ||
+                    err.message.includes("network"));
+
+            const isEmptyResponse =
+                err instanceof Error &&
+                err.message.includes("empty response");
+
+            const isRetryable = isRateLimit || isServerError || isNetworkError || isEmptyResponse;
+
+            if (isRetryable && attempt < MAX_RETRIES) {
                 const delay = RETRY_DELAYS[attempt] ?? 4000;
+                log.warn(`LLM call failed (attempt ${attempt + 1}/${MAX_RETRIES}), retrying in ${delay}ms`, {
+                    caller,
+                    error: err instanceof Error ? err.message : String(err),
+                    reason: isRateLimit ? "rate_limit" : isServerError ? "server_error" : isNetworkError ? "network_error" : "empty_response",
+                });
                 await new Promise((r) => setTimeout(r, delay));
                 continue;
             }
@@ -282,16 +303,31 @@ export async function callLLMWithFallback(
                 msg.includes("rate limit") ||
                 msg.includes("overloaded");
 
-            if (!isQuota || i === configs.length - 1) {
-                // 非配额错误或最后一个 config → 直接抛出
+            const isTransient = msg.includes("fetch failed") ||
+                msg.includes("ECONNRESET") ||
+                msg.includes("ECONNREFUSED") ||
+                msg.includes("ETIMEDOUT") ||
+                msg.includes("socket hang up") ||
+                msg.includes("UND_ERR") ||
+                msg.includes("network") ||
+                msg.includes("empty response") ||
+                msg.includes("500") ||
+                msg.includes("502") ||
+                msg.includes("503");
+
+            const shouldFallback = isQuota || isTransient;
+
+            if (!shouldFallback || i === configs.length - 1) {
+                // 非可恢复错误或最后一个 config → 直接抛出
                 throw lastError;
             }
 
-            log.warn("callLLMWithFallback: 配额错误，尝试下一个 profile", {
+            log.warn("callLLMWithFallback: 错误，尝试下一个 profile", {
                 failedModel: configs[i].model,
                 nextModel: configs[i + 1]?.model,
                 attempt: i + 1,
                 total: configs.length,
+                reason: isQuota ? "quota" : "transient",
                 error: msg.slice(0, 150),
             });
         }
@@ -368,8 +404,13 @@ async function callOpenAI(
         };
     };
 
+    const content = data.choices?.[0]?.message?.content ?? "";
+    if (!content) {
+        throw new Error(`LLM returned empty response (0 chars) from model ${model}`);
+    }
+
     return {
-        content: data.choices?.[0]?.message?.content ?? "",
+        content,
         usage: data.usage
             ? {
                 promptTokens: data.usage.prompt_tokens,
@@ -470,8 +511,12 @@ async function callAnthropic(
         .map((c) => c.text)
         .join("");
 
+    if (!text) {
+        throw new Error(`LLM returned empty response (0 chars) from model ${model}`);
+    }
+
     return {
-        content: text ?? "",
+        content: text,
         usage: data.usage
             ? {
                 promptTokens: data.usage.input_tokens,

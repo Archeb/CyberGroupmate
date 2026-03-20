@@ -179,7 +179,7 @@ export class CodeActExecutor {
      */
     private sandboxPool: SandboxPool | null = null;
     private nc: NotificationCenter | null = null;
-    private llmConfig: LLMConfig | null = null;
+    private llmConfigs: LLMConfig[] = [];
 
     /** 持久化文件路径（由外部注入） */
     private sessionFilePath: string | null = null;
@@ -199,7 +199,7 @@ export class CodeActExecutor {
     setDependencies(
         sandboxPool: SandboxPool,
         nc: NotificationCenter,
-        llmConfig: LLMConfig,
+        llmConfigs: LLMConfig | LLMConfig[],
 
         persona?: { name: string; description: string },
         memory?: MemoryStoreV2,
@@ -211,7 +211,7 @@ export class CodeActExecutor {
     ): void {
         this.sandboxPool = sandboxPool;
         this.nc = nc;
-        this.llmConfig = llmConfig;
+        this.llmConfigs = Array.isArray(llmConfigs) ? llmConfigs : [llmConfigs];
 
         if (persona) {
             this.personaName = persona.name;
@@ -242,7 +242,7 @@ export class CodeActExecutor {
 
     /** 检查是否已注入依赖 */
     hasDependencies(): boolean {
-        return this.sandboxPool !== null && this.nc !== null && this.llmConfig !== null;
+        return this.sandboxPool !== null && this.nc !== null && this.llmConfigs.length > 0;
     }
 
     /**
@@ -353,7 +353,7 @@ export class CodeActExecutor {
             })),
             {
                 visionConfig: this.visionConfig,
-                llmConfig: this.llmConfig!,
+                llmConfig: this.llmConfigs[0],
                 visionLlmConfig: this.visionLlmConfig,
                 downloadFn: this.downloadFn,
                 stickerCache: this.memory ?? undefined,
@@ -457,7 +457,7 @@ export class CodeActExecutor {
                 messages,
                 sandbox,
                 this.nc!,
-                this.llmConfig!,
+                this.llmConfigs,
                 this.config.maxExecutionTimeMs,
                 sentCollector, // Fix 1: 传入 collector
                 () => this.drainPendingMessages(), // 层 2: turn 间消息注入
@@ -677,7 +677,7 @@ export class CodeActExecutor {
                             replyToText = await resolveReplyText(origMsg, {
                                 stickerCache: this.memory ?? undefined,
                                 visionConfig: this.visionConfig,
-                                llmConfig: this.llmConfig ?? undefined,
+                                llmConfig: this.llmConfigs[0] ?? undefined,
                                 visionLlmConfig: this.visionLlmConfig,
                                 downloadFn: this.downloadFn,
                                 chatId: this.chatId,
@@ -912,7 +912,7 @@ export class CodeActExecutor {
         });
 
         // ═══ Layer 2: token-budget LLM compact (context-manager) ═══
-        if (this.llmConfig) {
+        if (this.llmConfigs.length > 0) {
             const chatMessages: ChatMessage[] = this.session.map(m => ({
                 role: m.role,
                 content: m.content,
@@ -923,7 +923,7 @@ export class CodeActExecutor {
                     messageCount: chatMessages.length,
                 });
                 try {
-                    const compacted = await contextManagerCompact(chatMessages, this.llmConfig);
+                    const compacted = await contextManagerCompact(chatMessages, this.llmConfigs[0]);
                     this.session = compacted.map(m => ({
                         role: m.role as SessionMessage["role"],
                         content: m.content,
