@@ -273,4 +273,222 @@ interface TelegramClient {
         assert.ok(!botDefs.includes("iterDialogs"));
         assert.ok(botDefs.includes("sendText"));
     });
+
+    // ─── /invisible tests ───
+
+    it("/invisible should toggle user invisibility and send confirmation", async () => {
+        const nc = makeNC();
+        const sentTexts: Array<[unknown, unknown]> = [];
+        let newMessageHandler: ((msg: unknown) => void | Promise<void>) | null = null;
+
+        const fakeClient = {
+            async start() {
+                return { id: 99, displayName: "Bot", isBot: true };
+            },
+            onNewMessage: {
+                add(handler: (msg: unknown) => void | Promise<void>) {
+                    newMessageHandler = handler;
+                },
+                remove() { newMessageHandler = null; },
+            },
+            async sendText(chatId: unknown, text: unknown) {
+                sentTexts.push([chatId, text]);
+                return { id: 1, text, date: new Date(), chat: { id: chatId, type: "group" }, sender: { id: 99, isBot: true } };
+            },
+            async destroy() {},
+        };
+
+        const adapter = new TelegramAdapter(
+            makeConfig(), nc, async () => "", () => {},
+            async () => fakeClient,
+        );
+        await adapter.start();
+        assert.ok(newMessageHandler);
+
+        // Send /invisible command
+        await newMessageHandler!({
+            id: 1, text: "/invisible", date: new Date(),
+            chat: { id: -100, title: "Test", type: "group" },
+            sender: { id: 42, displayName: "Alice", isBot: false },
+        });
+
+        // Should send confirmation, not push to NC
+        assert.ok(sentTexts.length >= 1, "should send confirmation message");
+        assert.ok(String(sentTexts[0][1]).includes("隐身"), "confirmation should mention 隐身");
+        assert.ok(adapter.isUserInvisible("42"), "user should be invisible");
+
+        // Subsequent message from user 42 should be dropped
+        sentTexts.length = 0;
+        await newMessageHandler!({
+            id: 2, text: "hello everyone", date: new Date(),
+            chat: { id: -100, title: "Test", type: "group" },
+            sender: { id: 42, displayName: "Alice", isBot: false },
+        });
+
+        // No NC event for invisible user
+        // (NC events are checked by checking sentTexts is empty — no confirmation for normal msgs)
+        assert.equal(sentTexts.length, 0, "invisible user msg should not trigger any response");
+
+        // Toggle off
+        await newMessageHandler!({
+            id: 3, text: "/invisible", date: new Date(),
+            chat: { id: -100, title: "Test", type: "group" },
+            sender: { id: 42, displayName: "Alice", isBot: false },
+        });
+        assert.ok(!adapter.isUserInvisible("42"), "user should no longer be invisible");
+        assert.ok(sentTexts.length >= 1, "should send un-invisible confirmation");
+
+        await adapter.stop();
+        nc.dispose();
+    });
+
+    // ─── /mute tests ───
+
+    it("/mute should mute chat and toggle off on second /mute", async () => {
+        const nc = makeNC();
+        const sentTexts: Array<[unknown, unknown]> = [];
+        let newMessageHandler: ((msg: unknown) => void | Promise<void>) | null = null;
+
+        const fakeClient = {
+            async start() {
+                return { id: 99, displayName: "Bot", isBot: true };
+            },
+            onNewMessage: {
+                add(handler: (msg: unknown) => void | Promise<void>) {
+                    newMessageHandler = handler;
+                },
+                remove() { newMessageHandler = null; },
+            },
+            async sendText(chatId: unknown, text: unknown) {
+                sentTexts.push([chatId, text]);
+                return { id: 1, text, date: new Date(), chat: { id: chatId, type: "group" }, sender: { id: 99, isBot: true } };
+            },
+            async destroy() {},
+        };
+
+        const adapter = new TelegramAdapter(
+            makeConfig(), nc, async () => "", () => {},
+            async () => fakeClient,
+        );
+        await adapter.start();
+        assert.ok(newMessageHandler);
+
+        // Mute for 2 hours
+        await newMessageHandler!({
+            id: 1, text: "/mute 2", date: new Date(),
+            chat: { id: -200, title: "Test", type: "group" },
+            sender: { id: 50, displayName: "Bob", isBot: false },
+        });
+
+        assert.ok(adapter.isChatMuted("-200"), "chat should be muted");
+        assert.ok(sentTexts.length >= 1);
+        assert.ok(String(sentTexts[0][1]).includes("禁言"));
+
+        // handleCall sendText should throw while muted
+        await assert.rejects(
+            () => adapter.handleCall("telegram.sendText", ["-200", "hi"]),
+            (err: Error) => {
+                assert.ok(err.message.includes("禁言中"), `Error should mention 禁言中, got: ${err.message}`);
+                return true;
+            },
+        );
+
+        // Toggle off with bare /mute
+        sentTexts.length = 0;
+        await newMessageHandler!({
+            id: 2, text: "/mute", date: new Date(),
+            chat: { id: -200, title: "Test", type: "group" },
+            sender: { id: 50, displayName: "Bob", isBot: false },
+        });
+        assert.ok(!adapter.isChatMuted("-200"), "chat should be unmuted after toggle");
+        assert.ok(sentTexts.length >= 1);
+        assert.ok(String(sentTexts[0][1]).includes("解除"));
+
+        await adapter.stop();
+        nc.dispose();
+    });
+
+    it("/mute should clamp hours to [1, 24]", async () => {
+        const nc = makeNC();
+        const sentTexts: Array<[unknown, unknown]> = [];
+        let newMessageHandler: ((msg: unknown) => void | Promise<void>) | null = null;
+
+        const fakeClient = {
+            async start() { return { id: 99, displayName: "Bot", isBot: true }; },
+            onNewMessage: {
+                add(handler: (msg: unknown) => void | Promise<void>) { newMessageHandler = handler; },
+                remove() { newMessageHandler = null; },
+            },
+            async sendText(chatId: unknown, text: unknown) {
+                sentTexts.push([chatId, text]);
+                return { id: 1, text, date: new Date(), chat: { id: chatId, type: "group" }, sender: { id: 99, isBot: true } };
+            },
+            async destroy() {},
+        };
+
+        const adapter = new TelegramAdapter(
+            makeConfig(), nc, async () => "", () => {},
+            async () => fakeClient,
+        );
+        await adapter.start();
+
+        // /mute 48 → clamped to 24
+        await newMessageHandler!({
+            id: 1, text: "/mute 48", date: new Date(),
+            chat: { id: -300, title: "Test", type: "group" },
+            sender: { id: 60, displayName: "Carol", isBot: false },
+        });
+        assert.ok(adapter.isChatMuted("-300"));
+        assert.ok(String(sentTexts[0][1]).includes("24"));  // should say 24 hours
+
+        await adapter.stop();
+        nc.dispose();
+    });
+
+    it("/unmute should unmute a muted chat", async () => {
+        const nc = makeNC();
+        const sentTexts: Array<[unknown, unknown]> = [];
+        let newMessageHandler: ((msg: unknown) => void | Promise<void>) | null = null;
+
+        const fakeClient = {
+            async start() { return { id: 99, displayName: "Bot", isBot: true }; },
+            onNewMessage: {
+                add(handler: (msg: unknown) => void | Promise<void>) { newMessageHandler = handler; },
+                remove() { newMessageHandler = null; },
+            },
+            async sendText(chatId: unknown, text: unknown) {
+                sentTexts.push([chatId, text]);
+                return { id: 1, text, date: new Date(), chat: { id: chatId, type: "group" }, sender: { id: 99, isBot: true } };
+            },
+            async destroy() {},
+        };
+
+        const adapter = new TelegramAdapter(
+            makeConfig(), nc, async () => "", () => {},
+            async () => fakeClient,
+        );
+        await adapter.start();
+
+        // Mute first
+        await newMessageHandler!({
+            id: 1, text: "/mute 5", date: new Date(),
+            chat: { id: -400, title: "Test", type: "group" },
+            sender: { id: 70, displayName: "Dave", isBot: false },
+        });
+        assert.ok(adapter.isChatMuted("-400"));
+
+        // Unmute
+        sentTexts.length = 0;
+        await newMessageHandler!({
+            id: 2, text: "/unmute", date: new Date(),
+            chat: { id: -400, title: "Test", type: "group" },
+            sender: { id: 70, displayName: "Dave", isBot: false },
+        });
+        assert.ok(!adapter.isChatMuted("-400"));
+        assert.ok(String(sentTexts[0][1]).includes("解除"));
+
+        await adapter.stop();
+        nc.dispose();
+    });
 });
+

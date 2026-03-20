@@ -16,9 +16,34 @@ import * as path from "node:path";
 
 const log = createLogger("telegram-adapter");
 
-// ─── 媒体文件缓存 ───
+// ─── 常量 ───
 
 const DEFAULT_MEDIA_CACHE_DIR = "workspace/media-cache";
+const INVISIBLE_USERS_PATH = "workspace/invisible-users.json";
+
+// ─── Invisible Users 持久化 ───
+
+function loadInvisibleUsers(): Set<string> {
+    try {
+        if (fs.existsSync(INVISIBLE_USERS_PATH)) {
+            const data = JSON.parse(fs.readFileSync(INVISIBLE_USERS_PATH, "utf-8"));
+            if (Array.isArray(data)) return new Set(data);
+        }
+    } catch { /* ignore corrupt file */ }
+    return new Set();
+}
+
+function saveInvisibleUsers(users: Set<string>): void {
+    try {
+        const dir = path.dirname(INVISIBLE_USERS_PATH);
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(INVISIBLE_USERS_PATH, JSON.stringify([...users]), "utf-8");
+    } catch (err) {
+        log.warn("saveInvisibleUsers: 写入失败", { error: String(err) });
+    }
+}
+
+// ─── 媒体文件缓存 ───
 
 class MediaFileCache {
     private readonly dir: string;
@@ -139,6 +164,10 @@ export class TelegramAdapter implements PlatformAdapter {
     private messageHandler: ((msg: any) => Promise<void>) | null = null;
     private mediaCache = new MediaFileCache();
 
+    // ─── /invisible & /mute 状态 ───
+    private invisibleUsers: Set<string> = loadInvisibleUsers();
+    private mutedChats: Map<string, number> = new Map();  // chatId → expiry timestamp (ms)
+
     constructor(
         private config: TelegramConfig,
         private nc: NotificationCenter,
@@ -171,6 +200,16 @@ export class TelegramAdapter implements PlatformAdapter {
         this.messageHandler = async (msg: any) => {
             const normalized = this.normalizeIncomingMessage(msg);
             if (!normalized || !normalized.messageId || !normalized.text) return;
+
+            // ─── /invisible & /mute 命令拦截 ───
+            const cmdHandled = await this.handleBotCommand(normalized, msg);
+            if (cmdHandled) return;  // 命令消息不进入 NC
+
+            // ─── invisible 用户消息静默丢弃 ───
+            if (this.invisibleUsers.has(normalized.userId)) {
+                log.debug("invisible 用户消息已丢弃", { userId: normalized.userId, chatId: normalized.chatId });
+                return;
+            }
 
             log.debug("接收 Telegram 消息", {
                 messageId: normalized.messageId,
@@ -279,6 +318,18 @@ export class TelegramAdapter implements PlatformAdapter {
     async handleCall(method: string, args: unknown[]): Promise<unknown> {
         if (!this.client) {
             throw new Error("TelegramAdapter is not started");
+        }
+
+        // ─── /mute 写操作拦截 ───
+        const MUTE_BLOCKED_METHODS = ["telegram.sendText", "telegram.sendMedia", "telegram.sendFile", "telegram.sendTyping"];
+        if (MUTE_BLOCKED_METHODS.includes(method)) {
+            const chatId = String(args[0] ?? "");
+            if (this.isChatMuted(chatId)) {
+                const remaining = this.getMuteRemainingHours(chatId);
+                const msg = `[禁言中] Bot 在该聊天已被 /mute，剩余 ${remaining}。所有发送操作已被抑制。`;
+                log.info("mute 拦截写操作", { method, chatId, remaining });
+                throw new Error(msg);
+            }
         }
 
         switch (method) {
@@ -491,6 +542,112 @@ export class TelegramAdapter implements PlatformAdapter {
 
         if (this.config.mode === "userbot" && !this.config.phone) {
             throw new Error("telegram.phone is required in userbot mode");
+        }
+    }
+
+    // ─── /invisible & /mute 公开查询方法 ───
+
+    /** 检查用户是否处于 invisible 状态 */
+    isUserInvisible(userId: string): boolean {
+        return this.invisibleUsers.has(userId);
+    }
+
+    /** 检查聊天是否被 mute（未过期） */
+    isChatMuted(chatId: string): boolean {
+        const expiry = this.mutedChats.get(chatId);
+        if (expiry === undefined) return false;
+        if (Date.now() >= expiry) {
+            this.mutedChats.delete(chatId);
+            return false;
+        }
+        return true;
+    }
+
+    /** 获取 mute 剩余时间的可读字符串 */
+    private getMuteRemainingHours(chatId: string): string {
+        const expiry = this.mutedChats.get(chatId);
+        if (!expiry) return "0 小时";
+        const remainMs = Math.max(0, expiry - Date.now());
+        const remainMin = Math.ceil(remainMs / 60_000);
+        if (remainMin < 60) return `${remainMin} 分钟`;
+        const remainH = (remainMs / 3_600_000).toFixed(1);
+        return `${remainH} 小时`;
+    }
+
+    // ─── /invisible & /mute 命令处理 ───
+
+    /**
+     * 处理 /invisible 和 /mute 命令。
+     * 返回 true 表示消息是命令且已处理，调用者应跳过 NC push。
+     */
+    private async handleBotCommand(
+        normalized: NonNullable<ReturnType<TelegramAdapter["normalizeIncomingMessage"]>>,
+        _rawMsg: any,
+    ): Promise<boolean> {
+        const text = normalized.text.trim();
+
+        // ── /invisible ──
+        if (/^\/invisible(?:@\S+)?$/i.test(text)) {
+            const userId = normalized.userId;
+            if (this.invisibleUsers.has(userId)) {
+                this.invisibleUsers.delete(userId);
+                saveInvisibleUsers(this.invisibleUsers);
+                log.info("/invisible OFF", { userId, chatId: normalized.chatId });
+                await this.replySafe(normalized.chatId, `👁 你已取消隐身。Bot 将正常处理你的消息。`);
+            } else {
+                this.invisibleUsers.add(userId);
+                saveInvisibleUsers(this.invisibleUsers);
+                log.info("/invisible ON", { userId, chatId: normalized.chatId });
+                await this.replySafe(normalized.chatId, `🫥 你已开启隐身。你的所有消息将对 Bot 完全不可见（不处理、不记录）。再次发送 /invisible 可取消。`);
+            }
+            return true;
+        }
+
+        // ── /mute [hours] （toggle：无参数时切换；有参数时设置/重置时长） ──
+        const muteMatch = text.match(/^\/mute(?:@\S+)?(?:\s+(\d+(?:\.\d+)?))?$/i);
+        if (muteMatch) {
+            // 无参数 + 已在 mute 中 → 解除禁言（toggle）
+            if (!muteMatch[1] && this.isChatMuted(normalized.chatId)) {
+                this.mutedChats.delete(normalized.chatId);
+                log.info("/mute OFF (toggle)", { chatId: normalized.chatId });
+                await this.replySafe(normalized.chatId, `🔊 Bot 禁言已解除。`);
+                return true;
+            }
+            let hours = muteMatch[1] ? parseFloat(muteMatch[1]) : 1;
+            hours = Math.max(1, Math.min(24, hours));  // clamp [1, 24]
+            const expiryMs = Date.now() + hours * 3_600_000;
+            this.mutedChats.set(normalized.chatId, expiryMs);
+            log.info("/mute ON", { chatId: normalized.chatId, hours, expiryMs });
+            await this.replySafe(normalized.chatId, `🔇 Bot 已在本聊天禁言 ${hours} 小时。期间消息仍会被记录和处理，但 Bot 不会发送任何消息。再次发送 /mute 可解除。`);
+            return true;
+        }
+
+        // ── /unmute ──
+        if (/^\/unmute(?:@\S+)?$/i.test(text)) {
+            if (this.mutedChats.has(normalized.chatId)) {
+                this.mutedChats.delete(normalized.chatId);
+                log.info("/unmute", { chatId: normalized.chatId });
+                await this.replySafe(normalized.chatId, `🔊 Bot 禁言已解除。`);
+            } else {
+                await this.replySafe(normalized.chatId, `ℹ️ Bot 当前未被禁言。`);
+            }
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * 安全回复：尝试用 client.sendText 发送确认消息，失败时只记日志不抛异常。
+     */
+    private async replySafe(chatId: string, text: string): Promise<void> {
+        try {
+            if (this.client?.sendText) {
+                const peer = await this.ensurePeerCached(chatId);
+                await this.client.sendText(peer, text);
+            }
+        } catch (err) {
+            log.warn("replySafe 发送失败", { chatId, error: String(err) });
         }
     }
 
