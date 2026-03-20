@@ -117,6 +117,35 @@ export function createTelegramClientProxy(env: CapabilityRegistryEnv, sentHistor
             });
             return sent;
         },
+        sendFile: async (chatId: number | string, filePath: string, opts?: { replyTo?: number; caption?: string; fileName?: string; mimeType?: string }) => {
+            // ── 重复消息拦截（基于 caption + filePath）──
+            const fileText = opts?.caption ?? `[file:${filePath}]`;
+            if (isDuplicate(String(chatId), fileText)) {
+                const warning = `[⚠ 运行时警告: 重复消息已拦截] 目标 chat=${String(chatId)} 的文件消息 "${fileText.length > 80 ? fileText.slice(0, 80) + '...' : fileText}" 与本次 session 中已发送的消息内容完全一致，已自动拦截，不会重复发送。`;
+                env.emitOutput(warning);
+                env.notifyHost({
+                    type: "system.duplicate_message_blocked",
+                    scene: "telegram",
+                    chatId: String(chatId),
+                    text: fileText,
+                    timestamp: new Date().toISOString(),
+                });
+                return null;
+            }
+            const sent = hydrateTelegramMessage(await env.callHost("telegram.sendFile", [chatId, filePath, opts]));
+            env.emitOutput(formatTelegramAck("[Telegram] sendFile ok", sent));
+            // 发射 agent_message_sent 通知
+            env.notifyHost({
+                type: "system.agent_message_sent",
+                scene: "telegram",
+                chatId: String(chatId),
+                messageId: typeof sent === "object" && sent && "id" in sent ? (sent as { id?: unknown }).id : undefined,
+                text: opts?.caption ?? `[file:${filePath}]`,
+                replyToMessageId: opts?.replyTo,
+                timestamp: new Date().toISOString(),
+            });
+            return sent;
+        },
         getChat: async (chatId: number | string) =>
             env.callHost("telegram.getChat", [chatId]),
         getUser: async (userId: number | string) =>

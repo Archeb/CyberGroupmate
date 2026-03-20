@@ -60,7 +60,14 @@ interface Emitter<T> {
 interface TelegramClient {
     // ─── 发送与交互 ───
     sendText(chatId: number | string, text: string, opts?: { replyTo?: number }): Promise<Message>;
-    sendMedia(chatId: number | string, media: any, opts?: { replyTo?: number, caption?: string }): Promise<Message>;
+    /**
+     * 发送媒体消息。⚠️ 仅支持 URL，不支持本地文件上传。
+     * 发送本地磁盘文件请使用 sendFile()。
+     * @example sendMedia(chatId, { type: 'photo', file: 'https://example.com/img.jpg', caption: '看看这个' })
+     */
+    sendMedia(chatId: number | string, media: string | { type: 'photo' | 'video' | 'document' | 'audio' | 'auto'; file: string; caption?: string; fileName?: string }, opts?: { replyTo?: number }): Promise<Message>;
+    /** 发送磁盘文件到聊天（通过绝对路径）。host 侧读取文件并上传。 */
+    sendFile(chatId: number | string, filePath: string, opts?: { replyTo?: number; caption?: string; fileName?: string; mimeType?: string }): Promise<Message>;
 
     // ─── 信息获取 ───
     getMe(): Promise<User>;

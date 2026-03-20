@@ -298,6 +298,48 @@ export class TelegramAdapter implements PlatformAdapter {
                     await this.client.sendMedia(peer, args[1], opts),
                 );
             }
+            case "telegram.sendFile": {
+                // args: [chatId, filePath, opts?]
+                // opts: { caption?, replyTo?, fileName?, mimeType? }
+                const peer = await this.ensurePeerCached(args[0]);
+                const filePath = String(args[1] ?? "");
+                const fileOpts = (args[2] ?? {}) as Record<string, unknown>;
+                const sendOpts = this.normalizeReplyOpts(fileOpts);
+
+                // 读取文件到 Buffer（host 侧完成，避免 IPC 序列化问题）
+                const { readFileSync, existsSync, statSync } = await import("node:fs");
+                const pathMod = await import("node:path");
+                const resolvedPath = pathMod.resolve(filePath);
+
+                if (!existsSync(resolvedPath)) {
+                    throw new Error(`sendFile: 文件不存在: ${resolvedPath}`);
+                }
+                const stat = statSync(resolvedPath);
+                if (!stat.isFile()) {
+                    throw new Error(`sendFile: 路径不是文件: ${resolvedPath}`);
+                }
+
+                const buffer = readFileSync(resolvedPath);
+                const fileName = typeof fileOpts.fileName === "string"
+                    ? fileOpts.fileName
+                    : pathMod.basename(resolvedPath);
+
+                const media: Record<string, unknown> = {
+                    type: "document",
+                    file: buffer,
+                    fileName,
+                };
+                if (typeof fileOpts.mimeType === "string") {
+                    media.fileMime = fileOpts.mimeType;
+                }
+                if (typeof fileOpts.caption === "string") {
+                    media.caption = fileOpts.caption;
+                }
+
+                return this.normalizeMessage(
+                    await this.client.sendMedia(peer, media, sendOpts),
+                );
+            }
             case "telegram.getChat": {
                 const peer = await this.ensurePeerCached(args[0]);
                 return this.normalizeChat(await this.client.getChat(peer));
