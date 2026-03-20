@@ -18,6 +18,7 @@
     "better-sqlite3": "^11.0.0",
     "express": "^5.2.1",
     "js-tiktoken": "^1.0.21",
+    "sharp": "^0.34.5",
     "sqlite-vec": "^0.1.7-alpha.2",
     "stream-json": "^1.9.1",
     "ulid": "^2.3.0",

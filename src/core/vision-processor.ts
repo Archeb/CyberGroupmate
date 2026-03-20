@@ -61,6 +61,24 @@ export type DownloadFn = (fileId: string, chatId?: string, messageId?: string, u
 const DEFAULT_MAX_IMAGES = 3;
 const DEFAULT_MAX_IMAGE_SIZE = 1024;
 
+/** API 支持的图片 MIME 类型 */
+const SUPPORTED_MIME = new Set(["image/jpeg", "image/png"]);
+
+/**
+ * 确保图片为 API 支持的格式（JPEG/PNG）
+ * 不支持的格式（如 TIFF、WebP、AVIF 等）自动转码为 PNG
+ */
+async function ensureSupportedFormat(
+    buffer: Buffer,
+    mimeType: string,
+): Promise<{ buffer: Buffer; mimeType: string }> {
+    if (SUPPORTED_MIME.has(mimeType)) return { buffer, mimeType };
+    log.debug("转码不支持的图片格式", { from: mimeType, to: "image/png" });
+    const sharp = (await import("sharp")).default;
+    const converted = await sharp(buffer).png().toBuffer();
+    return { buffer: converted, mimeType: "image/png" };
+}
+
 /** 图片描述内存缓存（Path B）: uniqueFileId → description */
 const photoDescriptionCache = new Map<string, string>();
 
@@ -133,9 +151,10 @@ export async function processMediaBatch(
                 log.debug("图片描述缓存命中", { uniqueFileId: photo.uniqueFileId });
                 return { index: photo.messageIndex, description: cached };
             }
-            // 缓存未命中：下载 + LLM 描述
-            const buffer = await downloadFn!(photo.fileId, photo.chatId, photo.messageId, photo.uniqueFileId);
-            const desc = await describeImage(buffer, photo.mimeType ?? "image/jpeg", visionCfg);
+            // 缓存未命中：下载 + 转码 + LLM 描述
+            const rawBuffer = await downloadFn!(photo.fileId, photo.chatId, photo.messageId, photo.uniqueFileId);
+            const { buffer, mimeType } = await ensureSupportedFormat(rawBuffer, photo.mimeType ?? "image/jpeg");
+            const desc = await describeImage(buffer, mimeType, visionCfg);
             photoDescriptionCache.set(photo.uniqueFileId, desc);
             return { index: photo.messageIndex, description: desc };
         };
@@ -143,13 +162,14 @@ export async function processMediaBatch(
         if (shouldInline) {
             // 路径 A: 内联 base64（不缓存，每次需要完整数据）
             return downloadFn!(photo.fileId, photo.chatId, photo.messageId, photo.uniqueFileId)
-                .then(buffer => ({
+                .then(rawBuffer => ensureSupportedFormat(rawBuffer, photo.mimeType ?? "image/jpeg"))
+                .then(({ buffer, mimeType }) => ({
                     index: photo.messageIndex,
                     base64Data: buffer.toString("base64"),
-                    mimeType: photo.mimeType ?? "image/jpeg",
+                    mimeType,
                 } as ProcessedMedia))
                 .catch(err => {
-                    log.warn("路径 A 下载失败，降级为描述", { fileId: photo.fileId, error: String(err) });
+                    log.warn("路径 A 下载/转码失败，降级为描述", { fileId: photo.fileId, error: String(err) });
                     if (canDescribe) {
                         const visionCfg = isPathA ? llmConfig : visionLlmConfig!;
                         return describeWithCache(visionCfg).catch(err2 => {
@@ -223,9 +243,9 @@ async function processSingleSticker(
 
     // vision_each 或 vision_cache miss: 下载+识别
     try {
-        const buffer = await downloadFn(sticker.fileId, sticker.chatId, sticker.messageId, sticker.uniqueFileId);
-        const mime = sticker.mimeType ?? "image/webp";
-        const result = await describeSticker(buffer, mime, visionLlmConfig, sticker.emoji);
+        const rawBuffer = await downloadFn(sticker.fileId, sticker.chatId, sticker.messageId, sticker.uniqueFileId);
+        const { buffer: stickerBuf, mimeType: mime } = await ensureSupportedFormat(rawBuffer, sticker.mimeType ?? "image/webp");
+        const result = await describeSticker(stickerBuf, mime, visionLlmConfig, sticker.emoji);
 
         // 写入缓存 (vision_cache mode)
         if (mode === "vision_cache" && stickerCache) {
