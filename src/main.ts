@@ -408,23 +408,19 @@ async function main(): Promise<void> {
 
         // Q3 入队策略（architecture_v2.md §3）：
         // - 正常路径：RecordingPipeline flush → triage → triage-engage 事件 → Q3 入队
-        // - 紧急路径：Observer 告警 / DM / @mention / 文本提及 agent 名字 → 立即 Q3 入队
-        // 不对每条消息无条件入队，避免绕过 triage 看门人
+        // - 紧急路径：DM / @mention / 文本提及 agent 名字 → 立即 Q3 入队
+        // Observer engagement 仅用于 Q3 内部优先级排序，不作为入队触发条件。
         const isDM = !!event.isDirectMessage;
         const isMention = !!event.mentionsAgent;
-        const alert = sub.observer.checkAlert();
         // 文本提及检测：检查消息内容是否包含配置的 mention_keywords（agent 名字等）
         const messageText = String(event.text ?? event.message ?? "").toLowerCase();
         const hasNameMention = mentionKeywords.length > 0 && mentionKeywords.some(kw => messageText.includes(kw));
 
-        // attend 后 engagement 被清零（subagent.md §4.5），所以 alert 仅在有新消息
-        // 累积到阈值后才会触发，无需额外冷却期守卫。
-
-        if (alert || isDM || isMention || hasNameMention) {
+        if (isDM || isMention || hasNameMention) {
             q3.enqueueOrUpdate(sub.buildQueueEntry());
             log.info("即时 → Q3 入队", {
                 chatId,
-                reason: isDM ? "DM" : isMention ? "@mention" : hasNameMention ? "文本提及" : "Observer 告警",
+                reason: isDM ? "DM" : isMention ? "@mention" : "文本提及",
                 engagement: sub.observer.getEngagementScore(),
             });
         }

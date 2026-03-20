@@ -183,7 +183,7 @@ export class MainAgentLoop {
      */
     async tick(): Promise<{
         phase1Callbacks: number;
-        phase2Eval: { activeCount: number; blockedCount: number; boostedAlerts: number };
+        phase2Eval: { activeCount: number; blockedCount: number };
         phase3Attended: string[];
         phase5Decisions: AttendResult[];
     }> {
@@ -218,22 +218,15 @@ export class MainAgentLoop {
         }
 
         // ═══ Phase 2: 动态队列评估 (Q3) ═══
-        // 仅在信号级条件下入队：Observer 告警、FastPath 请求、或 triage-engage
-        // 不按 newMessageCount 入队——正常触发依赖 RecordingPipeline flush → triage
-        let boostedAlerts = 0;
+        // 入队条件：FastPath 请求 或 triage-engage（RecordingPipeline 话题介入）
+        // Observer 告警（engagement 超阈值）不作为入队触发——engagement 仅用于 Q3 内部优先级排序。
+        // 直接寻址（@mention/DM/文本提及）由 main.ts nc.onPush 即时入队，不经过 Phase 2。
         for (const sa of this.subagentManager.getAllSubagents()) {
-            const entry = sa.buildQueueEntry();
-            if (!entry.alert && !entry.hasFastPathRequest && !sa.hasTriageEngaged) {
+            if (!sa.observer.checkFastPathRequest() && !sa.hasTriageEngaged) {
                 continue;
             }
+            const entry = sa.buildQueueEntry();
             this.attentionQueue.enqueueOrUpdate(entry);
-
-            const alert = sa.observer.checkAlert();
-            if (alert) {
-                this.attentionQueue.boost(sa.chatId, 20);
-                boostedAlerts++;
-                log.debug("Phase 2: alert boost", { chatId: sa.chatId, engagement: alert.engagementScore });
-            }
         }
 
         // Fix 7: pendingFollowups 驱动的优先级提升 (subagent.md 场景 5)
@@ -262,6 +255,7 @@ export class MainAgentLoop {
         // ═══ Phase 3-6: 按 maxAttendsPerTick 处理 ═══
         const attended: string[] = [];
         const decisions: AttendResult[] = [];
+        const attendedThisTick = new Set<string>();  // 同 tick 防重复 attend
 
         // Circuit Breaker 检查：主 LLM 不可用时跳过 attend
         const cbOpen = Date.now() < this.circuitBreakerOpenUntil;
@@ -302,6 +296,13 @@ export class MainAgentLoop {
             // ─── Phase 3: dequeue 最高优先级群组 ───
             const entry = this.attentionQueue.dequeue();
             if (!entry) break;
+
+            // 同 tick 防重复：LLM 调用期间新消息可能导致同一群被重入队
+            if (attendedThisTick.has(entry.chatId)) {
+                log.debug("Phase 3: 跳过同 tick 重复 attend", { chatId: entry.chatId });
+                continue;
+            }
+            attendedThisTick.add(entry.chatId);
 
             attended.push(entry.chatId);
 
@@ -344,7 +345,6 @@ export class MainAgentLoop {
             callbacks: callbacks.length,
             attended: attended.length,
             decisions: decisions.length,
-            boostedAlerts,
         });
 
         return {
@@ -352,7 +352,6 @@ export class MainAgentLoop {
             phase2Eval: {
                 activeCount: evaluation.activeCount,
                 blockedCount: evaluation.blockedCount,
-                boostedAlerts,
             },
             phase3Attended: attended,
             phase5Decisions: decisions,
