@@ -42,3 +42,26 @@ Observer alert 每 5 秒触发一次 attend-handler 的 LLM 调用，即使群�
 |------|------|
 | `src/main-agent/main-agent-loop.ts` | Phase 2 移除 alert 入队/boost；Phase 3 加 `attendedThisTick` 去重；移除 `boostedAlerts` |
 | `src/main.ts` | `nc.onPush` 移除 alert 入队，仅保留 DM/@mention/文本提及 |
+
+## 2026-03-21: 修复 topicDigests 始终为空 & dispatchedTopicIds 含虚假 ID
+
+### Bug
+
+1. **topicDigests 始终 "(无活跃话题)"**：Observer 的 `topicDigests` 仅在 RecordingPipeline fire `topic:triage-passed` 后才写入。路径 1（DM/mention/文本提及）在 pipeline flush 之前就入队并 attend，`observer.getDigest()` 必然为空。
+2. **dispatchedTopicIds 含非标准 ID**：topicDigests 为空时 LLM 照着 prompt 示例编造 `topic_xxx` 等假 ID，`dispatch-handler` 不验证就写入 `dispatchedTopicIds`。
+
+### 修复方案
+
+- `buildQueueEntry()` fallback：Observer 无 digest 时从 TopicRegistry 生成快照
+- attend 后立即触发 `recordingPipeline.flush()`，确保话题聚类及时更新
+- `markTopicDispatched` 前校验 topicId 是否存在于 TopicRegistry
+- decision prompt 明确禁止 LLM 编造 topicId
+
+### 改动
+
+| 文件 | 改动 |
+|------|------|
+| `src/subagent/group-subagent.ts` | `buildQueueEntry()` 增加 TopicRegistry fallback |
+| `src/main-agent/main-agent-loop.ts` | attend 后触发 `recordingPipeline.flush()` |
+| `src/main-agent/dispatch-handler.ts` | `markTopicDispatched` 前验证 topicId 合法性 |
+| `system-prompts/subagent-decision.md` | 禁止 LLM 编造 topicId |

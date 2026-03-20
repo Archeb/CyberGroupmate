@@ -203,6 +203,29 @@ export class GroupSubagent extends EventEmitter {
         const hasFastPathRequest = this.observer.checkFastPathRequest();
         const basePriority = engagement * this.stickiness.priorityMultiplier;
 
+        // topicDigests: 优先使用 Observer 的 digest（来自 RecordingPipeline triage），
+        // 若为空则 fallback 到 TopicRegistry 生成快照（路径 1 入队时 pipeline 可能尚未 flush）
+        let topicDigests = this.observer.getDigest();
+        if (topicDigests.length === 0) {
+            const allTopics = this.topicRegistry.getByChat(this.chatId);
+            if (allTopics.length > 0) {
+                topicDigests = allTopics.map((t: any) => ({
+                    topicId: String(t.id),
+                    label: String(t.label ?? ""),
+                    summary: String(t.lastSummary ?? t.recentContext ?? ""),
+                    state: String(t.state ?? "ACTIVE"),
+                    participants: [...(t.participantIds ?? [])].map(String),
+                    keywords: Array.isArray(t.keywords) ? t.keywords : [],
+                    messageCount: t.messageIds?.length ?? 0,
+                    lastActivityAt: String(t.lastMessageAt ?? new Date().toISOString()),
+                }));
+                log.debug("buildQueueEntry: Observer digest 为空, fallback 到 TopicRegistry", {
+                    chatId: this.chatId,
+                    topicCount: topicDigests.length,
+                });
+            }
+        }
+
         // 来源标记 (subagent.md §2.2)
         const source: AttentionQueueEntry["source"] = alert
             ? "OBSERVER_ALERT"
@@ -222,7 +245,7 @@ export class GroupSubagent extends EventEmitter {
             hasFastPathRequest,
             alert: alert ?? undefined,
             newMessageCount: this.observer.getBufferSize(),
-            topicDigests: this.observer.getDigest(),
+            topicDigests,
             stickinessLevel: this.stickiness.level,
             // subagent.md §2.2 补齐
             engagementScore: engagement,

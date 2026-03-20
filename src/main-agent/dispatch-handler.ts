@@ -258,8 +258,17 @@ export function createDispatchHandler(
                 hasCodeActTask = true;
 
                 // 记录已分派的 topicId（防重复分派）
+                // 仅标记 TopicRegistry 中真实存在的话题——LLM 在无话题上下文时可能编造 topicId
                 if (decision.topicId) {
-                    subagent.markTopicDispatched(decision.topicId);
+                    const isRealTopic = subagent.topicRegistry.get(decision.topicId) !== undefined;
+                    if (isRealTopic) {
+                        subagent.markTopicDispatched(decision.topicId);
+                    } else {
+                        log.debug("跳过非标准 topicId 的 dispatched 标记", {
+                            chatId: result.chatId,
+                            topicId: decision.topicId,
+                        });
+                    }
                 }
 
                 log.info("分派 CodeActReplyTask", {

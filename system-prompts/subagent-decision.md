@@ -24,6 +24,7 @@
 
 决策规则:
 - 当前粘性级别: {{stickinessLevel}}
+- topicId: 必须使用话题注册表中提供的真实 topicId（格式如 topic_xxx_0001）。如果无活跃话题或不确定归属，topicId 留空字符串 ""。**不要自行编造 topic ID**。
 - REPLY: 需要给出明确的 contentDirection（内容方向）和 toneGuidance（语气）
 - IGNORE: 说明不介入的理由
 - DEFER: 非紧急，下次再看
