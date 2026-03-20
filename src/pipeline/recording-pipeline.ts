@@ -213,15 +213,16 @@ export class RecordingPipeline extends EventEmitter {
     /**
      * 核心 flush 流程（4 步）
      */
-    async flush(): Promise<void> {
+    async flush(options?: { clusterOnly?: boolean }): Promise<void> {
         if (this.isFlushing || this.buffer.length === 0) return;
 
         this.isFlushing = true;
         const messages = [...this.buffer];
         this.buffer = [];
         this.isEagerMode = false;  // 每次 flush 后重置
+        const clusterOnly = options?.clusterOnly ?? false;
 
-        log.info("flush 开始", { messageCount: messages.length });
+        log.info("flush 开始", { messageCount: messages.length, clusterOnly });
         this.emit("flush:start", messages.length);
 
         try {
@@ -233,8 +234,10 @@ export class RecordingPipeline extends EventEmitter {
 
                 const clustering = await this.llmTopicClustering(chatMessages, existingTopics);
 
-                // ─── Step 2: 摘要 + Triage ───
-                const triageResult = await this.llmTopicSummaryTriage(chatMessages, clustering, chatId);
+                // ─── Step 2: 摘要 + Triage（clusterOnly 模式跳过）───
+                const triageResult = clusterOnly
+                    ? { topics: [] } as TopicSummaryTriageResult
+                    : await this.llmTopicSummaryTriage(chatMessages, clustering, chatId);
 
                 // ─── Step 3: 更新 TopicRegistry ───
                 const { topics: updatedTopics, clusterIdMap } = this.updateRegistry(chatId, chatMessages, clustering, triageResult);

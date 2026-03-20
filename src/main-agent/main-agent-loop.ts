@@ -329,12 +329,13 @@ export class MainAgentLoop {
             if (subagent) {
                 subagent.markAttended();
 
-                // attend 后立即触发 RecordingPipeline flush，确保话题聚类及时更新。
+                // attend 后立即触发 RecordingPipeline flush（仅聚类，不 triage）。
                 // 路径 1（DM/mention）入队时 pipeline 可能尚未 flush，
-                // 此处补一次 flush 使下一轮 attend 的 topicDigests 不为空。
+                // 此处补一次聚类使下一轮 attend 的 topicDigests 不为空。
+                // clusterOnly=true: 刚 attend 过的话题不需要重新 triage。
                 // flush() 内部有 isFlushing 锁 + buffer 空检查，不会与定时 flush 冲突。
                 if (subagent.recordingPipeline) {
-                    subagent.recordingPipeline.flush().catch(err => {
+                    subagent.recordingPipeline.flush({ clusterOnly: true }).catch(err => {
                         log.warn("attend 后 pipeline flush 失败", {
                             chatId: entry.chatId,
                             error: String(err),
