@@ -65,3 +65,12 @@ Observer alert 每 5 秒触发一次 attend-handler 的 LLM 调用，即使群�
 | `src/main-agent/main-agent-loop.ts` | attend 后触发 `recordingPipeline.flush()` |
 | `src/main-agent/dispatch-handler.ts` | `markTopicDispatched` 前验证 topicId 合法性 |
 | `system-prompts/subagent-decision.md` | 禁止 LLM 编造 topicId |
+
+### Refactor: 统一话题列表渲染逻辑
+
+提取共享函数 `formatTopicList` / `formatRelativeTime` 到 `prompt-renderer.ts`，attention prompt 和 execution task prompt 共用同一渲染逻辑。
+
+| 文件 | 改动 |
+|------|------|
+| `src/main-agent/prompt-renderer.ts` | 新增 `FormattableTopic`、`formatRelativeTime`、`formatTopicList`；`formatTopicDigests` 委托 |
+| `src/main-agent/dispatch-handler.ts` | 移除本地 `formatRelativeTime`，改用 `formatTopicList` |

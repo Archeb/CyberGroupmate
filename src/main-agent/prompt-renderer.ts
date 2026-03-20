@@ -313,13 +313,72 @@ export function buildFastPathVariables(
     };
 }
 
+/** 话题渲染输入（统一接口，各调用方筛选/排序后传入） */
+export interface FormattableTopic {
+    id?: string;
+    state?: string;
+    label: string;
+    summary?: string;
+    recentContext?: string;
+    createdAt?: number | string;
+    wasEngaged?: boolean;
+    messageCount?: number;
+}
+
 /**
- * 格式化 TopicDigest 列表为可读字符串
+ * 将时间戳格式化为相对时间描述（如 "3小时前"、"2天前"）
+ */
+export function formatRelativeTime(timestamp: string | number | null | undefined): string {
+    if (timestamp == null) return "";
+    const ms = typeof timestamp === "number" ? timestamp : new Date(timestamp).getTime();
+    if (isNaN(ms)) return "";
+    const diffMs = Date.now() - ms;
+    if (diffMs < 0) return "刚刚";
+    const minutes = Math.floor(diffMs / 60000);
+    if (minutes < 1) return "刚刚";
+    if (minutes < 60) return `${minutes}分钟前`;
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return `${hours}小时前`;
+    const days = Math.floor(hours / 24);
+    return `${days}天前`;
+}
+
+/**
+ * 格式化话题列表为可读字符串（统一渲染逻辑）
+ *
+ * 输出格式：
+ *   [STATE] (3小时前) 话题标签 — 摘要文本 {topic_id}
+ *
+ * 如无摘要则 fallback 到 recentContext 最后 2 行。
+ * 调用方负责筛选（时间范围、状态）和排序，此函数只负责渲染。
+ */
+export function formatTopicList(topics: FormattableTopic[], emptyText = "(无活跃话题)"): string {
+    if (topics.length === 0) return emptyText;
+
+    return topics.map(t => {
+        const state = t.state ? `[${t.state}]` : "";
+        const time = t.createdAt ? `(${formatRelativeTime(t.createdAt)})` : "";
+        const id = t.id ? ` {${t.id}}` : "";
+        const engaged = t.wasEngaged ? " [已回复]" : "";
+        const detail = t.summary
+            ? ` — ${t.summary}`
+            : (t.recentContext
+                ? `: ${t.recentContext.split("\n").slice(-2).join("; ")}`
+                : "");
+        return `${state} ${time} ${t.label}${detail}${engaged}${id}`.trim();
+    }).join("\n");
+}
+
+/**
+ * 格式化 TopicDigest 列表为可读字符串（内部调用 formatTopicList）
  */
 function formatTopicDigests(digests: TopicDigest[]): string {
-    if (digests.length === 0) return "(无活跃话题)";
-
-    return digests.map((d, i) =>
-        `${i + 1}. [${d.state}] ${d.label} (${d.messageCount}条消息)\n   摘要: ${d.summary}\n   关键词: ${d.keywords.join(", ")}`
-    ).join("\n");
+    return formatTopicList(digests.map(d => ({
+        id: d.topicId,
+        state: d.state,
+        label: d.label,
+        summary: d.summary,
+        messageCount: d.messageCount,
+        createdAt: d.lastActivityAt,
+    })));
 }

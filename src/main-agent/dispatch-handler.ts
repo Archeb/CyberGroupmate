@@ -22,6 +22,7 @@ import type { GlobalState } from "./global-state.js";
 import { CodeActExecutor } from "../subagent/code-act-executor.js";
 import { FastPathHandler } from "../subagent/fast-path-handler.js";
 import { buildGroupContext } from "./context-builder.js";
+import { formatTopicList, formatRelativeTime } from "./prompt-renderer.js";
 import { createLogger } from "../core/logger.js";
 import { formatTsForDisplay } from "../core/timezone.js";
 import { resolveTierProfile } from "../core/config.js";
@@ -31,21 +32,7 @@ import type { AppConfig } from "../core/config.js";
 
 const log = createLogger("dispatch-handler");
 
-/** 将时间戳格式化为相对时间描述（如 "3小时前"、"2天前"）。支持 ISO 字符串和毫秒数 */
-function formatRelativeTime(timestamp: string | number | null | undefined): string {
-    if (timestamp == null) return "";
-    const ms = typeof timestamp === "number" ? timestamp : new Date(timestamp).getTime();
-    if (isNaN(ms)) return "";
-    const diffMs = Date.now() - ms;
-    if (diffMs < 0) return "刚刚";
-    const minutes = Math.floor(diffMs / 60000);
-    if (minutes < 1) return "刚刚";
-    if (minutes < 60) return `${minutes}分钟前`;
-    const hours = Math.floor(minutes / 60);
-    if (hours < 24) return `${hours}小时前`;
-    const days = Math.floor(hours / 24);
-    return `${days}天前`;
-}
+// formatRelativeTime 和 formatTopicList 已从 prompt-renderer.ts 导入
 
 /** Dispatch handler 依赖 */
 export interface DispatchHandlerDeps {
@@ -118,18 +105,26 @@ export function createDispatchHandler(
                     const sortedTopics = [...allTopics]
                         .sort((a: any, b: any) => (b.createdAt ?? 0) - (a.createdAt ?? 0))
                         .slice(0, 20);
-                    topicSummary = sortedTopics.map((t: any) =>
-                        `[${t.state}] (${formatRelativeTime(t.createdAt)}) ${t.label ?? ""}${t.lastSummary ? ` — ${t.lastSummary}` : (t.recentContext ? `: ${t.recentContext.split("\n").slice(-2).join("; ")}` : "")}`
-                    ).join("\n");
+                    topicSummary = formatTopicList(sortedTopics.map((t: any) => ({
+                        id: t.id,
+                        state: t.state,
+                        label: t.label ?? "",
+                        summary: t.lastSummary,
+                        recentContext: t.recentContext,
+                        createdAt: t.createdAt,
+                    })));
                 } else {
                     // Fallback: TopicRegistry 为空时（Pipeline 尚未 flush 或重启后无近期话题），
                     // 从 MemoryV2 查询最近 20 条持久化话题（无时间限制）
                     try {
                         const memTopics = memory.getRecentTopics(result.chatId, 20);
                         if (memTopics.length > 0) {
-                            topicSummary = memTopics.map(t =>
-                                `(${formatRelativeTime(t.startedAt)}) ${t.label}${t.summary ? ` — ${t.summary}` : ""}${t.wasEngaged ? " [已回复]" : ""}`
-                            ).join("\n");
+                            topicSummary = formatTopicList(memTopics.map(t => ({
+                                label: t.label,
+                                summary: t.summary,
+                                createdAt: t.startedAt,
+                                wasEngaged: t.wasEngaged,
+                            })));
                         }
                     } catch (err) {
                         // 静默失败，topicSummary 留空
