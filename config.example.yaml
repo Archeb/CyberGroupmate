@@ -53,13 +53,20 @@ llm_profiles:
 
 # ─── 模型层级 ───
 # 引用上方 profile 名称，不同场景使用不同层级的模型
+# 每个 tier 可以是单个 profile 名称，或者一个数组（fallback chain）
+# 数组模式下，第一个 profile 失败（配额耗尽/429）时自动切换到下一个
 model_tiers:
   # cheap — 后台分析：话题聚类、Triage、quickTriage
   cheap: gemini-flash
   # mid — 一般介入：问答、知识补充、事实纠正
   mid: gemini-flash
   # sota — 复杂场景：直接 @ 复杂问题、冲突调解
+  # 单个 profile:
   sota: gemini-pro
+  # 或使用数组，配额耗尽时自动 fallback:
+  # sota:
+  #   - gemini-pro
+  #   - gemini-flash
   # vision — 图片理解 (看图/贴纸识别)
   vision: gemini-flash
 

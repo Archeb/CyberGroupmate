@@ -15,7 +15,7 @@ import { NotificationCenter, type NotificationEvent } from "./event/notification
 import { SandboxPool } from "./sandbox/sandbox-pool.js";
 import { createTaskListSkill, buildTaskListHostCalls } from "./sandbox/skills/task-list.js";
 import { MemoryStoreV2 } from "./memory-v2/index.js";
-import { loadConfig, resolveTierProfile, type AppConfig, type LLMConfig } from "./core/config.js";
+import { loadConfig, resolveTierProfile, resolveTierProfiles, type AppConfig, type LLMConfig } from "./core/config.js";
 import {
     TopicRegistry,
     FeedbackLoop,
@@ -105,6 +105,7 @@ async function main(): Promise<void> {
     const cheapConfig = resolveTierProfile("cheap", appConfig);
     const midConfig = resolveTierProfile("mid", appConfig);
     const sotaConfig = resolveTierProfile("sota", appConfig);
+    const sotaConfigs = resolveTierProfiles("sota", appConfig);
 
     // ─── 全局时区初始化 ───
     setGlobalTimezone(appConfig.timezone);
@@ -116,7 +117,7 @@ async function main(): Promise<void> {
 
     log.info("LLM Profiles 加载完成", {
         profiles: Object.keys(appConfig.llmProfiles).join(", "),
-        tiers: Object.entries(appConfig.modelTiers).map(([k, v]) => `${k}→${v}`).join(", "),
+        tiers: Object.entries(appConfig.modelTiers).map(([k, v]) => `${k}→${Array.isArray(v) ? `[${v.join(",")}]` : v}`).join(", "),
     });
     log.info("Telegram 配置", {
         mode: appConfig.telegram.mode,
@@ -603,7 +604,7 @@ async function main(): Promise<void> {
         globalState,
         subagentManager,
         mainLoop,
-        sotaConfig,
+        sotaConfigs,
         persona: appConfig.persona,
     }));
 

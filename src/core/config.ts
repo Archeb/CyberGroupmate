@@ -45,12 +45,12 @@ export interface EmbeddingConfig {
     similarityMetric: SimilarityMetric;
 }
 
-/** 模型层级 — tier name → profile name */
+/** 模型层级 — tier name → profile name 或 profile name 数组（fallback chain） */
 export interface ModelTiersConfig {
-    cheap: string;
-    mid: string;
-    sota: string;
-    [key: string]: string;
+    cheap: string | string[];
+    mid: string | string[];
+    sota: string | string[];
+    [key: string]: string | string[];
 }
 
 export interface PersonaConfig {
@@ -264,13 +264,13 @@ export function loadConfig(configPath?: string, forceReload?: boolean): AppConfi
     const firstProfile = Object.keys(llmProfiles)[0];
 
     const modelTiers: ModelTiersConfig = {
-        cheap: str(fileTiers.cheap) ?? firstProfile,
-        mid: str(fileTiers.mid) ?? firstProfile,
-        sota: str(fileTiers.sota) ?? firstProfile,
+        cheap: parseTierValue(fileTiers.cheap, firstProfile),
+        mid: parseTierValue(fileTiers.mid, firstProfile),
+        sota: parseTierValue(fileTiers.sota, firstProfile),
     };
     for (const [k, v] of Object.entries(fileTiers)) {
-        if (!["cheap", "mid", "sota"].includes(k) && typeof v === "string") {
-            modelTiers[k] = v;
+        if (!["cheap", "mid", "sota"].includes(k)) {
+            modelTiers[k] = parseTierValue(v, firstProfile);
         }
     }
 
@@ -367,16 +367,31 @@ export function resolveLLMProfile(profileName: string, config?: AppConfig): LLMC
     return profile;
 }
 
-/** 根据 tier 名称获取 LLMConfig */
+/** 根据 tier 名称获取 LLMConfig（返回第一个 profile，向后兼容） */
 export function resolveTierProfile(tier: string, config?: AppConfig): LLMConfig {
     const cfg = config ?? loadConfig();
-    const profileName = cfg.modelTiers[tier];
-    if (!profileName) {
+    const tierValue = cfg.modelTiers[tier];
+    if (!tierValue) {
         const fallback = Object.keys(cfg.llmProfiles)[0];
         console.warn(`[Config] tier "${tier}" not configured, using profile "${fallback}"`);
         return cfg.llmProfiles[fallback] ?? DEFAULT_LLM;
     }
-    return resolveLLMProfile(profileName, cfg);
+    const firstName = Array.isArray(tierValue) ? tierValue[0] : tierValue;
+    return resolveLLMProfile(firstName, cfg);
+}
+
+/**
+ * 根据 tier 名称获取所有 fallback LLMConfig（按优先级排序）。
+ * 当 model_tiers 中配置为数组时，返回多个 profile 供 callLLMWithFallback 使用。
+ */
+export function resolveTierProfiles(tier: string, config?: AppConfig): LLMConfig[] {
+    const cfg = config ?? loadConfig();
+    const tierValue = cfg.modelTiers[tier];
+    if (!tierValue) {
+        return [resolveTierProfile(tier, cfg)];
+    }
+    const names = Array.isArray(tierValue) ? tierValue : [tierValue];
+    return names.map(n => resolveLLMProfile(n, cfg));
 }
 
 /** 获取 embedding 配置 */
@@ -542,4 +557,10 @@ function num(val: unknown, fallback: number): number {
     if (val === undefined || val === null) return fallback;
     const n = Number(val);
     return isNaN(n) ? fallback : n;
+}
+
+/** 解析 tier 值：支持字符串或字符串数组 */
+function parseTierValue(val: unknown, fallback: string): string | string[] {
+    if (Array.isArray(val)) return val.map(String);
+    return str(val) ?? fallback;
 }

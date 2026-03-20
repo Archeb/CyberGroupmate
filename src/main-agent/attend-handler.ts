@@ -20,7 +20,7 @@ import { calculateDepth } from "./cosine-decay.js";
 import { buildGroupContext } from "./context-builder.js";
 import { estimateReplyMode, buildReplyDecisions, buildObserveDecision } from "./decision-maker.js";
 import { renderPrompt, buildAttentionVariables, buildMainSystemVariables } from "./prompt-renderer.js";
-import { callLLM } from "../core/llm.js";
+import { callLLMWithFallback } from "../core/llm.js";
 import { createLogger } from "../core/logger.js";
 import { formatTsForDisplay } from "../core/timezone.js";
 import { formatMessageLine, resolveReplyText, type RawMessage } from "../core/message-enricher.js";
@@ -33,7 +33,8 @@ export interface AttendHandlerDeps {
     globalState: GlobalState;
     subagentManager: SubagentManager;
     mainLoop: MainAgentLoop;
-    sotaConfig: LLMConfig;
+    /** SOTA tier 的 LLM 配置列表（按 fallback 顺序） */
+    sotaConfigs: LLMConfig[];
     persona: { name: string; description: string };
 }
 
@@ -45,7 +46,7 @@ export interface AttendHandlerDeps {
 export function createAttendHandler(
     deps: AttendHandlerDeps,
 ): (entry: AttentionQueueEntry) => Promise<AttendResult | null> {
-    const { memory, globalState, subagentManager, mainLoop, sotaConfig, persona } = deps;
+    const { memory, globalState, subagentManager, mainLoop, sotaConfigs, persona } = deps;
 
     return async (entry: AttentionQueueEntry): Promise<AttendResult | null> => {
         const subagent = subagentManager.get(entry.chatId);
@@ -208,9 +209,9 @@ export function createAttendHandler(
                 { role: "user", content: currentTurnPrompt },
             ];
 
-            const llmResponse = await callLLM(
+            const llmResponse = await callLLMWithFallback(
                 messages,
-                sotaConfig,
+                sotaConfigs,
                 { caller: "attend-handler" },
             );
 
@@ -248,16 +249,57 @@ export function createAttendHandler(
                     `[${d.action}] ${d.contentDirection ?? d.reason ?? "(无方向)"} (topic=${d.topicId ?? "N/A"}, conf=${d.confidence})`
                 ),
             });
+
+            // LLM 成功 → 重置熔断器
+            mainLoop.resetCircuitBreaker();
+
             return llmResult;
 
         } catch (err) {
-            // LLM 决策失败 → fallback 到算法结果
-            log.warn("LLM 决策失败，fallback 到算法", {
+            const errMsg = String(err);
+            const isQuotaOrRateLimit = errMsg.includes("429") ||
+                errMsg.includes("quota") ||
+                errMsg.includes("RESOURCE_EXHAUSTED") ||
+                errMsg.includes("rate limit") ||
+                errMsg.includes("overloaded");
+
+            if (isQuotaOrRateLimit) {
+                // 所有 profile 都配额耗尽 → 熔断，不 fallback 到算法
+                log.error("LLM 所有 profile 配额耗尽，触发熔断，返回 OBSERVE", {
+                    chatId: entry.chatId,
+                    error: errMsg.slice(0, 200),
+                });
+                mainLoop.tripCircuitBreaker(errMsg);
+                globalState.recordDecision(entry.chatId,
+                    `CIRCUIT_BREAKER: 配额耗尽 (error=${errMsg.slice(0, 100)})`);
+                return buildObserveDecision(entry.chatId);
+            }
+
+            // 瞬时错误（JSON 解析等）→ 保留算法 fallback
+            log.warn("LLM 决策失败(瞬时)，fallback 到算法", {
                 chatId: entry.chatId,
-                error: String(err),
+                error: errMsg.slice(0, 200),
             });
+
+            // 连续 skip 安全阀：最近 3 次 callback 都没发消息则降级为 OBSERVE
+            const recentCbs = subagent.lastCallbacks.slice(-3);
+            const allSkipped = recentCbs.length >= 3 &&
+                recentCbs.every(cb =>
+                    (!cb.sentMessages || cb.sentMessages.length === 0) &&
+                    cb.status !== "ERROR"
+                );
+            if (allSkipped) {
+                log.info("算法 fallback + 连续 skip → OBSERVE", {
+                    chatId: entry.chatId,
+                    consecutiveSkips: recentCbs.length,
+                });
+                globalState.recordDecision(entry.chatId,
+                    `SKIP_VALVE: 连续 ${recentCbs.length} 次 skip，降级 OBSERVE`);
+                return buildObserveDecision(entry.chatId);
+            }
+
             globalState.recordDecision(entry.chatId,
-                `ALGO_FALLBACK: ${suggestedReplyMode} (engagement=${Math.round(entry.priority)}, depth=L${depth}, llm_error=${String(err).slice(0, 100)})`);
+                `ALGO_FALLBACK: ${suggestedReplyMode} (engagement=${Math.round(entry.priority)}, depth=L${depth}, llm_error=${errMsg.slice(0, 100)})`);
             return algorithmicResult;
         }
     };

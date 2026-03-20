@@ -342,9 +342,13 @@ async function cmdConfig(): Promise<void> {
     }
 
     console.log("\n\x1b[1m模型层级：\x1b[0m");
-    for (const [tier, profileName] of Object.entries(config.modelTiers)) {
-        const profile = config.llmProfiles[profileName];
-        console.log(`  ${tier.padEnd(8)} → ${profileName} (${profile?.model ?? '⚠ profile 不存在'})`);
+    for (const [tier, tierValue] of Object.entries(config.modelTiers)) {
+        const names = Array.isArray(tierValue) ? tierValue : [tierValue];
+        const display = names.map(n => {
+            const p = config.llmProfiles[n];
+            return `${n} (${p?.model ?? '⚠ profile 不存在'})`;
+        }).join(" → ");
+        console.log(`  ${tier.padEnd(8)} → ${display}`);
     }
 
     console.log("\n\x1b[1mPersona：\x1b[0m");

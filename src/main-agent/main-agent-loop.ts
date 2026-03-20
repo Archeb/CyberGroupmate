@@ -75,6 +75,11 @@ export class MainAgentLoop {
     private lastTickAt: number = 0;
     private timer: ReturnType<typeof setTimeout> | null = null;
 
+    /** Circuit Breaker — 主 LLM 不可用时暂停 attend */
+    private circuitBreakerOpenUntil: number = 0;
+    private circuitBreakerBackoff: number = 30_000; // 初始 30s
+    private static readonly CB_MAX_BACKOFF = 10 * 60_000; // 最大 10min
+
     /**
      * 主 Agent LLM 对话历史
      * 按时间顺序存放：attend 上下文 (user) → 决策 (assistant) → callback (user) → ...
@@ -141,6 +146,36 @@ export class MainAgentLoop {
             this.timer = null;
         }
         log.info("stop: 主循环停止", { tickCount: this.tickCount });
+    }
+
+    /**
+     * 触发熔断（attend-handler 在 LLM 配额耗尽时调用）。
+     * 熔断期间 tick() 跳过 Phase 3-6（不 attend），仅处理 callback。
+     * 每次熔断时间指数递增，最大 10 分钟。
+     */
+    tripCircuitBreaker(reason: string): void {
+        this.circuitBreakerOpenUntil = Date.now() + this.circuitBreakerBackoff;
+        log.error("Circuit breaker OPEN", {
+            backoffMs: this.circuitBreakerBackoff,
+            until: new Date(this.circuitBreakerOpenUntil).toISOString(),
+            reason: reason.slice(0, 100),
+        });
+        // 指数退避
+        this.circuitBreakerBackoff = Math.min(
+            this.circuitBreakerBackoff * 2,
+            MainAgentLoop.CB_MAX_BACKOFF,
+        );
+    }
+
+    /**
+     * 重置熔断器（attend-handler 在 LLM 成功时调用）
+     */
+    resetCircuitBreaker(): void {
+        if (this.circuitBreakerBackoff > 30_000) {
+            log.info("Circuit breaker RESET", { previousBackoffMs: this.circuitBreakerBackoff });
+        }
+        this.circuitBreakerOpenUntil = 0;
+        this.circuitBreakerBackoff = 30_000;
     }
 
     /**
@@ -232,6 +267,16 @@ export class MainAgentLoop {
         const attended: string[] = [];
         const decisions: AttendResult[] = [];
 
+        // Circuit Breaker 检查：主 LLM 不可用时跳过 attend
+        const cbOpen = Date.now() < this.circuitBreakerOpenUntil;
+        if (cbOpen) {
+            log.warn("tick: circuit breaker OPEN，跳过 Phase 3-6", {
+                remainingMs: this.circuitBreakerOpenUntil - Date.now(),
+                tickCount: this.tickCount,
+            });
+        }
+
+        if (!cbOpen) {
         for (let i = 0; i < this.config.maxAttendsPerTick; i++) {
             // Fix 6: 在每次 attend 迭代之间 drain Q5
             // (subagent.md §4.5 "→ 立即回到 Phase 1")
@@ -288,7 +333,7 @@ export class MainAgentLoop {
                 subagent.markAttended();
             }
         }
-
+        } // end if (!cbOpen)
         // ═══ Phase 7: 更新全局状态 ═══
         if (this.globalState) {
             const queueSnapshot = this.attentionQueue.getAll();

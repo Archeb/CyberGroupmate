@@ -248,6 +248,58 @@ export async function callLLM(
 }
 
 /**
+ * 带 Profile Fallback 的 LLM 调用。
+ *
+ * 按 configs 顺序依次尝试调用 LLM：
+ * - 配额/rate-limit 错误（429、quota、RESOURCE_EXHAUSTED）→ 自动 fallback 到下一个 config
+ * - 其他错误（如网络异常、JSON 格式错误）→ 直接抛出，不 fallback
+ * - 最后一个 config 失败 → 抛出原始错误
+ *
+ * 每个 config 内部仍走 callLLM 的 3 次指数退避重试。
+ */
+export async function callLLMWithFallback(
+    messages: ChatMessage[],
+    configs: LLMConfig[],
+    options?: LLMCallOptions,
+): Promise<LLMResponse> {
+    if (configs.length === 0) {
+        throw new Error("callLLMWithFallback: no LLM configs provided");
+    }
+    if (configs.length === 1) {
+        return callLLM(messages, configs[0], options);
+    }
+
+    let lastError: Error | null = null;
+    for (let i = 0; i < configs.length; i++) {
+        try {
+            return await callLLM(messages, configs[i], options);
+        } catch (err) {
+            lastError = err instanceof Error ? err : new Error(String(err));
+            const msg = lastError.message;
+            const isQuota = msg.includes("429") ||
+                msg.includes("quota") ||
+                msg.includes("RESOURCE_EXHAUSTED") ||
+                msg.includes("rate limit") ||
+                msg.includes("overloaded");
+
+            if (!isQuota || i === configs.length - 1) {
+                // 非配额错误或最后一个 config → 直接抛出
+                throw lastError;
+            }
+
+            log.warn("callLLMWithFallback: 配额错误，尝试下一个 profile", {
+                failedModel: configs[i].model,
+                nextModel: configs[i + 1]?.model,
+                attempt: i + 1,
+                total: configs.length,
+                error: msg.slice(0, 150),
+            });
+        }
+    }
+    throw lastError ?? new Error("callLLMWithFallback: unexpected state");
+}
+
+/**
  * 调用 OpenAI 兼容 API
  */
 async function callOpenAI(
