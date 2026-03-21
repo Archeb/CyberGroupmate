@@ -222,7 +222,7 @@ export class MainAgentLoop {
         // Observer 告警（engagement 超阈值）不作为入队触发——engagement 仅用于 Q3 内部优先级排序。
         // 直接寻址（@mention/DM/文本提及）由 main.ts nc.onPush 即时入队，不经过 Phase 2。
         for (const sa of this.subagentManager.getAllSubagents()) {
-            if (!sa.observer.checkFastPathRequest() && !sa.hasTriageEngaged) {
+            if (!sa.hasTriageEngaged) {
                 continue;
             }
             const entry = sa.buildQueueEntry();
