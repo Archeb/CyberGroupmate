@@ -33,9 +33,8 @@ export function installCapabilityRegistry(env: CapabilityRegistryEnv): Record<st
     const sentHistory = new Map<string, Set<string>>();
 
     // 挂载 ctx.tg（Telegram 客户端代理）
-    if (!env.ctx.tg) {
-        env.ctx.tg = createTelegramClientProxy(env, sentHistory);
-    }
+    // 每次 executeCode 都重建，确保 sentHistory 是 per-turn 的
+    env.ctx.tg = createTelegramClientProxy(env, sentHistory);
 
     return {
         runtime: installRuntime(env),
