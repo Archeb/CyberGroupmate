@@ -35,12 +35,6 @@ interface ExecuteMessage {
     code: string;
 }
 
-/** Host → Worker: 执行 shell 命令 */
-interface ExecuteShellMessage {
-    type: "execute_shell";
-    id: string;
-    command: string;
-}
 
 /** Host → Worker: 用户输入响应 */
 interface InputResponseMessage {
@@ -93,7 +87,7 @@ interface HostCallMessage {
     args: unknown[];
 }
 
-type IncomingMessage = ExecuteMessage | ExecuteShellMessage | InputResponseMessage | HostCallResultMessage;
+type IncomingMessage = ExecuteMessage | InputResponseMessage | HostCallResultMessage;
 type OutgoingMessage = ResultMessage | NotifyMessage | InputRequestMessage | PrintMessage | HostCallMessage;
 
 // ─── 全局上下文 ───
@@ -300,53 +294,6 @@ async function executeCode(id: string, code: string): Promise<void> {
     }
 }
 
-// ─── Shell 执行 ───
-
-/**
- * 执行 shell 命令，捕获 stdout+stderr 作为输出
- *
- * cwd 优先使用环境变量 SANDBOX_SHELL_CWD，否则默认为 workspace/ 目录
- */
-async function executeShell(id: string, command: string): Promise<void> {
-    const { exec } = await import("node:child_process");
-    const { promisify } = await import("node:util");
-    const execAsync = promisify(exec);
-
-    const cwd = process.env.SANDBOX_SHELL_CWD || "workspace";
-
-    try {
-        const { stdout, stderr } = await execAsync(command, {
-            timeout: 60000,
-            cwd,
-            env: {
-                ...process.env,
-                HOME: cwd,
-            },
-            maxBuffer: 1024 * 1024, // 1MB
-            shell: "/bin/bash",
-        });
-        const output = [stdout, stderr].filter(Boolean).join("\n").trim();
-        sendToHost({
-            type: "result",
-            id,
-            output: output || "(no output)",
-            error: false,
-        });
-    } catch (err: unknown) {
-        // exec() throws on non-zero exit or timeout
-        const execErr = err as { stdout?: string; stderr?: string; message?: string; killed?: boolean };
-        const parts = [execErr.stdout, execErr.stderr].filter(Boolean).map(s => String(s).trim()).filter(Boolean);
-        if (parts.length === 0) {
-            parts.push(execErr.killed ? "Shell command timed out" : (execErr.message ?? String(err)));
-        }
-        sendToHost({
-            type: "result",
-            id,
-            output: parts.join("\n"),
-            error: true,
-        });
-    }
-}
 
 // ─── 主循环 ───
 
@@ -361,8 +308,6 @@ rl.on("line", async (line: string) => {
 
         if (msg.type === "execute") {
             await executeCode(msg.id, msg.code);
-        } else if (msg.type === "execute_shell") {
-            await executeShell(msg.id, msg.command);
         } else if (msg.type === "input_response") {
             // 用户输入响应 — 唤醒等待中的 runtime.input()
             const resolver = pendingInputs.get(msg.id);

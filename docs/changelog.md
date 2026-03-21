@@ -1,5 +1,30 @@
 # Changelog
 
+## 2026-03-21: 沙箱交互式 Shell（node-pty）
+
+将 sandbox 的 shell 执行从一次性 `child_process.exec()` 替换为 **node-pty 持久化交互式 PTY**，解决状态无法保持、cwd 不确定、无法交互的问题。
+
+### 核心变更
+
+- **执行方式**：shell 命令不再经过 worker 进程（IPC），改由 host 侧（`sandbox.ts`）直接管理的 PTY bash 进程执行
+- **Per-chat Home 目录**：每个 Sandbox 实例（每个 chatId）拥有独立的 workspace 目录 `workspace/<chatId>/`，PTY 的 `$HOME` 和初始 cwd 均设为此路径
+- **状态持久化**：`cd`、环境变量、alias 等在同一 Sandbox 实例生命周期内保持
+- **cwd 追踪**：每次命令输出末尾附加 `[cwd: /当前路径]`
+
+### Sentinel 机制
+
+命令写入 PTY 后追加 `echo '__SANDBOX_DONE_<id>'_$?_$(pwd)__`，匹配 sentinel 时提取输出、退出码和当前 cwd。此模式与 VS Code Shell Integration 类似。
+
+### 改动
+
+| 文件 | 改动 |
+|------|------|
+| `src/sandbox/sandbox.ts` | 新增 `startPty()`、`handlePtyData()`；重写 `executeShell()` 为 PTY 模式；构造函数接受 `chatId` |
+| `src/sandbox/sandbox-pool.ts` | `new Sandbox()` 传入 `chatId` |
+| `src/sandbox/sandbox-worker.ts` | 移除 `executeShell`、`ExecuteShellMessage`、`execute_shell` 处理 |
+| `system-prompts/subagent-execution.md` | bash 章节更新为交互式 Shell 说明 |
+| `package.json` | 新增 `node-pty` 依赖 + `postinstall` 修复 spawn-helper 权限 |
+
 ## 2026-03-21: 修复 Q3 Block 机制失效 — CodeAct 执行期间同群重复 Attend
 
 ### Bug

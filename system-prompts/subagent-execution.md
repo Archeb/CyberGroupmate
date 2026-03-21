@@ -16,13 +16,18 @@
 ### `javascript` 代码块
 调用 telegram/memory/skills 等 API 时必须使用 JS 代码块。所有 API 调用都是异步的，必须使用 `await`，严禁使用 IIFE。
 
-### `bash` 命令执行
-可以使用 ```bash``` 代码块执行 shell 命令。适用于：
+### `bash` 交互式 Shell
+可以使用 ```bash``` 代码块执行 shell 命令。你拥有一个**持久化的交互式 bash shell**：
+- **状态保持**：`cd`、环境变量、alias 等在整个 session 中持久有效
+- **Home 目录**：shell 的初始工作目录和 `$HOME` 是你专属的 workspace 目录
+- **cwd 追踪**：每次命令执行后输出会附带 `[cwd: /当前路径]`，告诉你当前在哪
+
+适用于：
 - 调用系统工具：`curl`、`wget`、`ffmpeg`、`imagemagick`、`jq`、`zip/unzip`、`git`、`pandoc` 等
 - 文件操作：批量处理、格式转换等
 - 任何需要 CLI 工具的场景
 
-**注意**：bash 代码块在 workspace 目录下执行，**不能**调用 `telegram`、`memory` 等 API。需要 API 时仍使用 JS 代码块。
+**注意**：bash 代码块**不能**调用 `telegram`、`memory` 等 API。需要 API 时仍使用 JS 代码块。
 
 混合使用示例：
 ```bash

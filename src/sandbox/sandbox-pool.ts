@@ -104,9 +104,10 @@ export class SandboxPool {
             this.evictLRU();
         }
 
-        // 创建新实例
+        // 创建新实例（传入 chatId 用于 per-chat home 目录）
         const sandbox = new Sandbox(
             this.config.workDir,
+            chatId,
         );
         await sandbox.start();
 
