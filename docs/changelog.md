@@ -1,5 +1,34 @@
 # Changelog
 
+## 2026-03-21: 修复 Q3 Block 机制失效 — CodeAct 执行期间同群重复 Attend
+
+### Bug
+
+CodeAct session 正在执行时（session-runner 运行中），同一群组仍被 attend-handler 调用 LLM 做决策。日志表现为两者并发运行：
+
+```
+12:45:06 attend-handler gemini-3-flash-preview 4591ms (28257tok)
+12:45:04 session-runner kimi-k2.5 ±100 还在运行
+```
+
+**根因**：`q3.block()` 是一个空操作。`dequeue()` 在 Phase 3 将 entry 从 Map 中 `delete`，随后 Phase 6 的 `block(chatId)` 调用 `entries.get(chatId)` 返回 `undefined`，`if (entry)` 为 false，静默跳过。后续新消息通过 triage-engage 或 DIRECT_ADDRESS 触发 `enqueueOrUpdate()`，创建全新的 `blocked: false` 条目，下一个 tick 即被出队 attend。
+
+### 方案
+
+在 `DynamicAttentionQueue` 中引入独立于 entry 生命周期的 `blockedChatIds: Set<string>`：
+
+- `block()` → 写入 Set + 标记 entry（如存在）
+- `unblock()` → 从 Set 移除 + 清理 entry（如存在）
+- `enqueueOrUpdate()` → 检查 Set，blocked 的 chatId **直接丢弃，不入队**
+
+丢弃而非保留的理由：正在执行的 sandbox 已通过消息上送机制（`pushPendingMessage`）在 turn 间收到最新消息，不需要也不应该再进行 attend 决策。CodeAct 结束后 unblock，正常管线（triage-engage / DIRECT_ADDRESS）自然恢复入队。
+
+### 改动
+
+| 文件 | 改动 |
+|------|------|
+| `src/subagent/attention-queue.ts` | 新增 `blockedChatIds: Set<string>`；`block()`/`unblock()` 操作 Set 不再依赖 entry 存在；`enqueueOrUpdate()` 开头检查 Set 并静默拒绝；新增 `isBlocked()` 方法；`clear()` 同步清理 Set |
+
 ## 2026-03-21: LLM Prefill + Stop Sequences 支持
 
 新增 LLM 调用层面的 **assistant prefill**（预填充回复开头）和 **stop sequences**（停止生成序列）支持，用于引导模型思考方向和控制输出边界。

@@ -43,6 +43,14 @@ export interface DequeueRecord {
 export class DynamicAttentionQueue {
     private entries = new Map<string, AttentionQueueEntry>();
     private config: AttentionQueueConfig;
+    /**
+     * 独立于 entry 生命周期的阻塞集合。
+     * block() 写入、unblock() 移除。
+     * enqueueOrUpdate() 在此集合中的 chatId 会被静默丢弃，
+     * 因为正在执行 CodeAct 的群组已通过消息上送机制收到最新消息，
+     * 不需要也不应该再进行一次 attend 决策。
+     */
+    private blockedChatIds = new Set<string>();
     /** 已出队历史（环形缓冲） */
     private dequeueHistory: DequeueRecord[] = [];
     private maxDequeueHistory = 50;
@@ -61,6 +69,12 @@ export class DynamicAttentionQueue {
      * 如果 chatId 已存在，合并数据（priority 取最高值）。
      */
     enqueueOrUpdate(entry: Partial<AttentionQueueEntry> & { chatId: string }): void {
+        // 阻塞中的 chatId 直接丢弃：CodeAct 正在执行，sandbox 已通过消息上送收到最新消息
+        if (this.blockedChatIds.has(entry.chatId)) {
+            log.debug("enqueueOrUpdate: REJECTED (blocked)", { chatId: entry.chatId, source: entry.source });
+            return;
+        }
+
         const existing = this.entries.get(entry.chatId);
 
         if (existing) {
@@ -94,8 +108,8 @@ export class DynamicAttentionQueue {
                 enqueuedAt: entry.enqueuedAt ?? Date.now(),
                 lastAttendedAt: entry.lastAttendedAt ?? null,
                 attendCount: entry.attendCount ?? 0,
-                blocked: entry.blocked ?? false,
-                blockReason: entry.blockReason,
+                blocked: false,
+                blockReason: undefined,
                 hasFastPathRequest: entry.hasFastPathRequest ?? false,
                 alert: entry.alert,
                 newMessageCount: entry.newMessageCount ?? 0,
@@ -124,24 +138,34 @@ export class DynamicAttentionQueue {
      * 阻塞指定 chatId（正在执行任务）
      */
     block(chatId: string, reason?: string): void {
+        this.blockedChatIds.add(chatId);
+        // 如果 entry 恰好还在 Map 中（理论上 dequeue 后不会），也标记
         const entry = this.entries.get(chatId);
         if (entry) {
             entry.blocked = true;
             entry.blockReason = reason;
-            log.debug("block", { chatId, reason });
         }
+        log.debug("block", { chatId, reason });
     }
 
     /**
      * 解除阻塞
      */
     unblock(chatId: string): void {
+        this.blockedChatIds.delete(chatId);
         const entry = this.entries.get(chatId);
         if (entry) {
             entry.blocked = false;
             entry.blockReason = undefined;
-            log.debug("unblock", { chatId });
         }
+        log.debug("unblock", { chatId });
+    }
+
+    /**
+     * 检查指定 chatId 是否被阻塞
+     */
+    isBlocked(chatId: string): boolean {
+        return this.blockedChatIds.has(chatId);
     }
 
     /**
@@ -235,6 +259,7 @@ export class DynamicAttentionQueue {
      */
     clear(): void {
         this.entries.clear();
+        this.blockedChatIds.clear();
     }
 
     /**
