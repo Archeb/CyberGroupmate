@@ -14,6 +14,27 @@ import { callLLMWithFallback, ChatMessage, LLMResponse } from "../core/llm.js";
 import type { LLMConfig } from "../core/config.js";
 import { ulid } from "ulid";
 import { createLogger } from "../core/logger.js";
+import { EventEmitter } from "node:events";
+
+// ─── CodeAct Progress Events ───
+
+/** 全局 CodeAct 进度事件发射器（与 llmEvents 同模式） */
+export const codeActEvents = new EventEmitter();
+codeActEvents.setMaxListeners(20);
+
+/** CodeAct 进度事件 payload */
+export interface CodeActProgressEvent {
+    chatId: string;
+    sessionId: string;
+    turn: number;
+    phase: "thinking" | "executing" | "observation" | "end";
+    thinking?: string;
+    codeBlocks?: CodeBlock[];
+    executionOutput?: string;
+    isProcessing: boolean;
+    endReason?: string;
+    timestamp: string;
+}
 
 const log = createLogger("session");
 
@@ -239,9 +260,23 @@ export async function runCodeActSession(
     prefill?: string,
     /** LLM stop sequences */
     stopSequences?: string[],
+    /** 关联的 chatId，用于进度事件 */
+    chatId?: string,
 ): Promise<SessionResult> {
     const sessionId = ulid();
     const turns: SessionTurn[] = [];
+
+    /** 发射进度事件的辅助函数 */
+    const emitProgress = (event: Omit<CodeActProgressEvent, "chatId" | "sessionId" | "timestamp">) => {
+        if (!chatId) return;
+        const payload: CodeActProgressEvent = {
+            chatId,
+            sessionId,
+            timestamp: new Date().toISOString(),
+            ...event,
+        };
+        codeActEvents.emit("codeact:progress", payload);
+    };
 
 
 
@@ -271,6 +306,7 @@ export async function runCodeActSession(
             // 重要：如果在请求 LLM 时就失败（如 400 Bad Request），我们不能将当前这轮（破损的）遗留下来，
             // 不然外层拿到断裂的 sessionMessages 可能会出问题。
             // 直接带着出错原因返回即可保护 session 不被完全销毁，或者至少日志能体现。
+            emitProgress({ turn: turnNum, phase: "end", isProcessing: false, endReason: "error" });
             return {
                 sessionId,
                 turns,
@@ -298,10 +334,22 @@ export async function runCodeActSession(
         // ─── Debug: 输出本轮的思考和代码 ───
         log.debug(`Turn ${turnNum}: thinking`, { text: thinking });
 
+        // 发射 thinking 进度事件
+        emitProgress({
+            turn: turnNum,
+            phase: "thinking",
+            thinking,
+            codeBlocks: codeBlocks.length > 0 ? codeBlocks : undefined,
+            isProcessing: true,
+        });
+
         // ─── 无代码块 → session 结束 ───
         if (codeBlocks.length === 0) {
             log.debug(`Turn ${turnNum}: 无代码块，session 结束`);
             turns.push(turn);
+
+            // 发射结束事件
+            emitProgress({ turn: turnNum, phase: "end", thinking, isProcessing: false, endReason: "no_code" });
 
             return {
                 sessionId,
@@ -362,6 +410,7 @@ export async function runCodeActSession(
                     log.error("Sandbox worker died, aborting session", { sessionId, turn: turnNum, error: errorMsg });
                     turns.push(turn);
 
+                    emitProgress({ turn: turnNum, phase: "end", isProcessing: false, endReason: "error" });
                     return {
                         sessionId,
                         turns,
@@ -392,6 +441,14 @@ export async function runCodeActSession(
             }
         }
 
+        // 发射 observation 进度事件
+        emitProgress({
+            turn: turnNum,
+            phase: "observation",
+            executionOutput: observation || undefined,
+            isProcessing: true,
+        });
+
         // 将 observation 作为 user 消息追加
         if (observation.trim()) {
             messages.push({ role: "user", content: observation });
@@ -401,6 +458,8 @@ export async function runCodeActSession(
     }
 
     // 达到最大轮次
+    emitProgress({ turn: MAX_TURNS, phase: "end", isProcessing: false, endReason: "max_turns" });
+
     return {
         sessionId,
         turns,

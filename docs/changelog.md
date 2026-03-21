@@ -1,5 +1,24 @@
 # Changelog
 
+## 2026-03-21: CodeActPanel 实时流式更新 & 侧栏样式修复
+
+CodeActPanel 从轮询 REST API 改为 **WebSocket 实时推送**，每轮 LLM 思考和代码执行结果 **即时显示**，不再需要等 session 完成。侧栏群组列表样式统一为 MessagesPanel 的 `button` + `chatTitle` + 动画效果。
+
+### 架构
+
+新增全局 `codeActEvents` EventEmitter（与 `llmEvents` 同模式），`session-runner.ts` 在每轮 thinking / observation / end / error 时 emit 进度事件，`event-bridge.ts` 订阅并广播 `codeact:progress` 到 WebSocket，前端 store 接收后实时渲染。
+
+### 改动
+
+| 文件 | 改动 |
+|------|------|
+| `src/sandbox/session-runner.ts` | 新增 `codeActEvents` EventEmitter + `CodeActProgressEvent` 类型；`runCodeActSession` 新增 `chatId` 参数；每轮 thinking/observation/end/error 时 emit 进度事件 |
+| `src/subagent/code-act-executor.ts` | 调用 `runCodeActSession` 时传入 `this.chatId` |
+| `src/dashboard/event-bridge.ts` | 新增 `hookCodeActEvents()` 订阅全局 emitter，广播 `codeact:progress` |
+| `src/dashboard/ui/src/lib/stores.js` | 新增 `codeActProgress` store + `handleCodeActProgress()` + `clearCodeActProgress()` |
+| `src/dashboard/ui/src/lib/ws.js` | 路由 `codeact:progress` 事件到 store |
+| `src/dashboard/ui/src/panels/CodeActPanel.svelte` | 重写：侧栏 `<button>` + `getGroupLabel` + chatTitle + badge + hover/active 动画；实时进度流式渲染（thinking/code/output 分区 + fade-in 动画）；自动滚动跟踪 |
+
 ## 2026-03-21: 沙箱交互式 Shell（node-pty）
 
 将 sandbox 的 shell 执行从一次性 `child_process.exec()` 替换为 **node-pty 持久化交互式 PTY**，解决状态无法保持、cwd 不确定、无法交互的问题。

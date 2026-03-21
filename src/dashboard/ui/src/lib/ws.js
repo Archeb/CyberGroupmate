@@ -8,6 +8,7 @@ import { getToken } from './api.js';
 import {
   wsStatus, appState, messages, llmLogs, llmStats,
   addMessage, handleLLMCall, handleLLMResponse, setTokenPricing,
+  handleCodeActProgress,
 } from './stores.js';
 import { get } from 'svelte/store';
 
@@ -73,6 +74,9 @@ function handleEvent(event) {
       break;
     case 'llm:response':
       handleLLMResponse(event.data);
+      break;
+    case 'codeact:progress':
+      handleCodeActProgress(event.data);
       break;
   }
 }

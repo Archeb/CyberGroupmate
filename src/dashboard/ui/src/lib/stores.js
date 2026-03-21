@@ -139,3 +139,34 @@ export const topicDetailId = writable(null);
 
 // ─── Memory sub-tab ───
 export const activeMemoryTab = writable('m-persons');
+
+// ─── CodeAct Progress (real-time streaming) ───
+/** Map<chatId, Array<progressEvent>> — 每个 chat 的实时进度事件列表 */
+export const codeActProgress = writable({});
+
+const MAX_PROGRESS_EVENTS = 100;
+
+export function handleCodeActProgress(data) {
+  codeActProgress.update(map => {
+    const chatId = data.chatId;
+    if (!map[chatId]) map[chatId] = [];
+    map[chatId].push(data);
+    // 限制每个 chat 的事件数量
+    if (map[chatId].length > MAX_PROGRESS_EVENTS) {
+      map[chatId] = map[chatId].slice(-MAX_PROGRESS_EVENTS);
+    }
+    return map;
+  });
+}
+
+/** 清空指定 chat 的进度事件 */
+export function clearCodeActProgress(chatId) {
+  codeActProgress.update(map => {
+    if (chatId) {
+      delete map[chatId];
+    } else {
+      return {};
+    }
+    return map;
+  });
+}

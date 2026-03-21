@@ -9,6 +9,7 @@ import type { WebSocket } from "ws";
 import type { DashboardDeps, WsEvent } from "./types.js";
 import { createLogger } from "../core/logger.js";
 import { llmEvents, type LLMCallEvent, type LLMResponseEvent } from "../core/llm.js";
+import { codeActEvents, type CodeActProgressEvent } from "../sandbox/session-runner.js";
 
 const log = createLogger("dashboard-bridge");
 
@@ -23,6 +24,7 @@ export class EventBridge {
         this.deps = deps;
         this.hookNC();
         this.hookLLMEvents();
+        this.hookCodeActEvents();
     }
 
     addClient(ws: WebSocket): void {
@@ -95,6 +97,17 @@ export class EventBridge {
             if (data.usage && !data.error) {
                 this.deps.tokenStats.record(model, data.usage);
             }
+        });
+    }
+
+    /** 订阅 CodeAct 进度事件并广播到 WebSocket */
+    private hookCodeActEvents(): void {
+        codeActEvents.on("codeact:progress", (data: CodeActProgressEvent) => {
+            this.broadcast({
+                type: "codeact:progress",
+                timestamp: data.timestamp,
+                data,
+            });
         });
     }
 
