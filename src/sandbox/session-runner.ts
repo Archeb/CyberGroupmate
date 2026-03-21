@@ -173,6 +173,9 @@ export interface SessionResult {
 
 // ─── 代码块解析 ───
 
+/** 支持的代码围栏语言标记（用于构建正则） */
+const CODE_FENCE_LANGS = "typescript|ts|javascript|js|bash|shell|sh";
+
 /** 判断语言标记是否为 JS/TS 类 */
 function isJsLang(lang: string): boolean {
     return ["typescript", "ts", "javascript", "js"].includes(lang);
@@ -181,6 +184,23 @@ function isJsLang(lang: string): boolean {
 /** 判断语言标记是否为 bash/shell 类 */
 function isBashLang(lang: string): boolean {
     return ["bash", "shell", "sh"].includes(lang);
+}
+
+/**
+ * 截断 LLM 输出：只保留第一个完整代码块及其前面的自然语言，
+ * 丢弃第一个代码块结束围栏之后的所有内容。
+ * 如果没有完整的代码块，则原样返回。
+ */
+export function trimAfterFirstCodeBlock(response: string): string {
+    // 非贪婪匹配第一个完整代码块（含闭合 ```）
+    const firstBlockRe = new RegExp(
+        "```(?:" + CODE_FENCE_LANGS + ")\\s*\\n[\\s\\S]*?```"
+    );
+    const m = firstBlockRe.exec(response);
+    if (!m) return response; // 没有完整代码块，原样返回
+
+    // 保留：从开头到第一个代码块闭合围栏的末尾
+    return response.slice(0, m.index + m[0].length);
 }
 
 /**
@@ -202,7 +222,7 @@ export function parseResponse(response: string): {
 
     // 匹配 ```typescript/ts/js/javascript/bash/shell/sh ... ``` 代码块
     const codeBlockRegex =
-        /```(typescript|ts|javascript|js|bash|shell|sh)\s*\n([\s\S]*?)```/g;
+        new RegExp("```(" + CODE_FENCE_LANGS + ")\\s*\\n([\\s\\S]*?)```", "g");
 
     let match;
     while ((match = codeBlockRegex.exec(response)) !== null) {
@@ -316,7 +336,16 @@ export async function runCodeActSession(
             };
         }
 
-        const assistantText = llmResponse.content;
+        const rawAssistantText = llmResponse.content;
+        // ─── 截断：只保留第一个完整代码块及其前面的文本 ───
+        const assistantText = trimAfterFirstCodeBlock(rawAssistantText);
+        if (assistantText.length < rawAssistantText.length) {
+            log.info(`Turn ${turnNum}: 截断模型输出`, {
+                before: rawAssistantText.length,
+                after: assistantText.length,
+                discarded: rawAssistantText.length - assistantText.length,
+            });
+        }
         messages.push({ role: "assistant", content: assistantText });
 
         // ─── 解析 response ───
