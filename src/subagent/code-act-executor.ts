@@ -91,11 +91,14 @@ export interface CodeActExecutorConfig {
     maxExecutionTimeMs: number;
     /** session 最大消息数（超过后 compact）。默认 100 */
     maxSessionMessages: number;
+    /** 最大交互轮次。默认 30 */
+    maxTurns: number;
 }
 
 const DEFAULT_EXECUTOR_CONFIG: CodeActExecutorConfig = {
     maxExecutionTimeMs: 60_000,
     maxSessionMessages: 100,
+    maxTurns: 30,
 };
 
 /** 简化的 ChatMessage 用于 session 持久化 */
@@ -501,6 +504,7 @@ export class CodeActExecutor {
                 `让${this.personaName}想想，`,  // prefill: 引导 LLM 以角色开始思考
                 ["[Execution Output]"],  // stop sequences
                 this.chatId,  // 关联 chatId，用于 codeActEvents 进度广播
+                this.config.maxTurns,  // 最大交互轮次
             );
         } finally {
             // 停止 typing 指示

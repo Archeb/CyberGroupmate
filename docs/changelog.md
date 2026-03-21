@@ -1,5 +1,24 @@
 # Changelog
 
+## 2026-03-21: CodeAct 轮次可配置 + 轮次状态注入
+
+`MAX_TURNS` 从硬编码 15 改为可配置（默认 30）。每轮 observation 末尾注入 `[📊 轮次状态: 第 X/Y 轮，剩余 Z 轮]`，LLM 可感知剩余行动预算。最后 2 轮追加紧迫提醒。
+
+```yaml
+subagent:
+  code_act:
+    max_turns: 30  # 默认 30
+```
+
+### 改动
+
+| 文件 | 改动 |
+|------|------|
+| `src/sandbox/session-runner.ts` | `MAX_TURNS` → `DEFAULT_MAX_TURNS=30`；`runCodeActSession` 新增 `maxTurns` 参数；observation 注入 `[📊 轮次状态]` + 最后 2 轮警告 |
+| `src/core/config.ts` | `SubagentExternalConfig.codeAct` 新增 `maxTurns?: number`；解析 `max_turns` |
+| `src/subagent/code-act-executor.ts` | `CodeActExecutorConfig` 新增 `maxTurns`（默认 30）；调用 `runCodeActSession` 时传入 |
+| `config.example.yaml` | 新增 `subagent.code_act` 配置示例段 |
+
 ## 2026-03-21: Per-Model 上下文输入限制 (maxContextTokens)
 
 新增 `max_context_tokens` 配置项，允许为每个 LLM Profile 单独指定最大上下文输入 token 数，compact 触发阈值随模型实际窗口大小动态调整，取代硬编码的 32000 默认值。

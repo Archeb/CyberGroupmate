@@ -194,6 +194,7 @@ export interface SubagentExternalConfig {
     codeAct?: {
         maxExecutionTimeMs?: number;
         maxSessionMessages?: number;
+        maxTurns?: number;
     };
 }
 
@@ -540,6 +541,7 @@ function parseSubagentConfig(fileConfig: Record<string, unknown>): SubagentExter
         codeAct: Object.keys(rawCA).length > 0 ? {
             maxExecutionTimeMs: rawCA.max_execution_time_ms != null ? num(rawCA.max_execution_time_ms, 60000) : undefined,
             maxSessionMessages: rawCA.max_session_messages != null ? num(rawCA.max_session_messages, 100) : undefined,
+            maxTurns: rawCA.max_turns != null ? num(rawCA.max_turns, 30) : undefined,
         } : undefined,
     };
 }

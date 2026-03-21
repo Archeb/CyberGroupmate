@@ -271,6 +271,18 @@ dashboard:
   # 认证 Token（访问时需携带 ?token=xxx）
   token: "your-secret-token"
 
+# ─── Subagent / CodeAct 设置 ───
+# 控制 CodeAct 交互引擎的行为参数
+# 所有字段可选，缺省使用括号内默认值
+# subagent:
+#   code_act:
+#     # 最大交互轮次 (30)
+#     max_turns: 30
+#     # 单次代码执行超时 ms (60000)
+#     max_execution_time_ms: 60000
+#     # session 最大消息数，超过后自动 compact (100)
+#     max_session_messages: 100
+
 # ─── Tavily 网络搜索 ───
 # Tavily Search API key，用于 subagent 的联网搜索能力 (web.search / web.extract)
 # 在 https://app.tavily.com 注册获取。可选，未配置时 web 模块不可用。

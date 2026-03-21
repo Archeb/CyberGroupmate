@@ -125,8 +125,8 @@ export class SentMessageCollector {
 
 // ─── 常量 ───
 
-/** 最大交互轮次 */
-const MAX_TURNS = 15;
+/** 默认最大交互轮次 */
+const DEFAULT_MAX_TURNS = 30;
 
 /** 代码执行输出最大字符数 */
 const MAX_OUTPUT_CHARS = 4000;
@@ -282,6 +282,8 @@ export async function runCodeActSession(
     stopSequences?: string[],
     /** 关联的 chatId，用于进度事件 */
     chatId?: string,
+    /** 最大交互轮次，默认 15 */
+    maxTurns: number = DEFAULT_MAX_TURNS,
 ): Promise<SessionResult> {
     const sessionId = ulid();
     const turns: SessionTurn[] = [];
@@ -300,7 +302,7 @@ export async function runCodeActSession(
 
 
 
-    for (let turnNum = 0; turnNum < MAX_TURNS; turnNum++) {
+    for (let turnNum = 0; turnNum < maxTurns; turnNum++) {
         // ─── 层 2: turn 间消息注入 ───
         if (pendingMessagesDrain) {
             const newMessages = pendingMessagesDrain();
@@ -470,6 +472,17 @@ export async function runCodeActSession(
             }
         }
 
+        // ─── 轮次状态注入 ───
+        const currentTurn = turnNum + 1; // 1-indexed for display
+        const remaining = maxTurns - currentTurn;
+        let turnStatus = `[📊 轮次状态: 第 ${currentTurn}/${maxTurns} 轮，剩余 ${remaining} 轮]`;
+        if (remaining === 0) {
+            turnStatus += `\n[⚠ 这是最后一轮，请确保在本轮内完成所有必要操作并发送最终回复]`;
+        } else if (remaining === 1) {
+            turnStatus += `\n[⚠ 仅剩 1 轮，请尽快完成操作]`;
+        }
+        observation = observation ? `${observation}\n\n${turnStatus}` : turnStatus;
+
         // 发射 observation 进度事件
         emitProgress({
             turn: turnNum,
@@ -487,7 +500,7 @@ export async function runCodeActSession(
     }
 
     // 达到最大轮次
-    emitProgress({ turn: MAX_TURNS, phase: "end", isProcessing: false, endReason: "max_turns" });
+    emitProgress({ turn: maxTurns, phase: "end", isProcessing: false, endReason: "max_turns" });
 
     return {
         sessionId,
