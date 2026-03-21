@@ -1,6 +1,7 @@
 import { createLogger } from "../core/logger.js";
 import { callLLM, type ChatMessage } from "../core/llm.js";
 import type { LLMConfig } from "../core/config.js";
+import { loadConfig } from "../core/config.js";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { encodingForModel } from "js-tiktoken";
@@ -37,6 +38,20 @@ export const DEFAULT_CONTEXT_BUDGET: ContextBudget = {
     minRecentMessages: 6,
     maxBriefingTokens: 3000,
 };
+
+/**
+ * 从 config.yaml 加载 context_budget 配置，与 DEFAULT_CONTEXT_BUDGET 合并。
+ * 未配置时直接返回默认值。
+ */
+function getConfiguredBudget(): ContextBudget {
+    try {
+        const cfg = loadConfig();
+        if (!cfg.contextBudget) return DEFAULT_CONTEXT_BUDGET;
+        return { ...DEFAULT_CONTEXT_BUDGET, ...cfg.contextBudget };
+    } catch {
+        return DEFAULT_CONTEXT_BUDGET;
+    }
+}
 
 /** 消息分类结果 */
 export interface ClassifiedMessages {
@@ -156,12 +171,14 @@ function resolveEffectiveWindow(
  */
 export function shouldCompact(
     messages: ChatMessage[],
-    budget: ContextBudget = DEFAULT_CONTEXT_BUDGET,
+    budget?: ContextBudget,
     llmConfig?: LLMConfig,
 ): boolean {
     if (messages.length === 0) return false;
 
-    const effectiveWindow = resolveEffectiveWindow(budget, llmConfig);
+    const effectiveBudget = budget ?? getConfiguredBudget();
+
+    const effectiveWindow = resolveEffectiveWindow(effectiveBudget, llmConfig);
     const totalTokens = estimateMessagesTokens(messages);
     const threshold = effectiveWindow * 0.85;
 
@@ -368,16 +385,18 @@ function getContextCompactionPrompt(): string {
 export async function compact(
     messages: ChatMessage[],
     llmConfig: LLMConfig,
-    budget: ContextBudget = DEFAULT_CONTEXT_BUDGET,
+    budget?: ContextBudget,
     options?: {
         replyChain?: Map<number, number>;
         engagedIndices?: Set<number>;
     },
 ): Promise<ChatMessage[]> {
+    const resolvedBudget = budget ?? getConfiguredBudget();
+
     // 使用 llmConfig 中的 maxContextTokens 覆盖 budget 的 effectiveContextWindow
     const effectiveBudget = llmConfig.maxContextTokens && llmConfig.maxContextTokens > 0
-        ? { ...budget, effectiveContextWindow: llmConfig.maxContextTokens }
-        : budget;
+        ? { ...resolvedBudget, effectiveContextWindow: llmConfig.maxContextTokens }
+        : resolvedBudget;
 
     // 不需要压缩时原样返回
     if (!shouldCompact(messages, effectiveBudget, llmConfig)) {
