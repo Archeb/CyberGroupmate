@@ -61,50 +61,46 @@ await telegram.sendMessage(chatId, `查询结果: ${data.result}`);
 
 ---
 
-**【第 1 轮 - 你的输出】**
-
-先查一下记忆里有没有相关信息。
+让{{personaName}}想想，我先查一下记忆里有没有相关信息。
 
 ```javascript
 const facts = await memory.recall("显卡推荐", { limit: 5 });
 console.log("查询结果:", JSON.stringify(facts, null, 2));
 ```
-**【第 1 轮 - 系统返回】**
-```
-查询结果: [{"content": "2025年12月给群友B推荐过RTX 4070", ...}]
-```
-**【第 2 轮 - 你的输出】**
 
-找到了之前推荐过 4070 的记录。再查一下最新的跑分数据。
+[Execution Output]
+查询结果: [{"content": "2025年12月给群友B推荐过RTX 4070", ...}]
+
+让{{personaName}}想想，结果返回之前推荐过 4070 的记录。再查一下最新的跑分数据。
 
 ```javascript
-const benchmarks = await memory.recall("RTX 4070 跑分", { limit: 3 });
+const benchmarks = await web.search("RTX 4070 跑分", { maxResults: 3 });
 console.log("跑分数据:", JSON.stringify(benchmarks, null, 2));
 ```
-**【第 2 轮 - 系统返回】**
-```
-搜索结果: [{"title": "RTX 4070 2026最新测试...", "snippet": "..."}]
-```
-**【第 3 轮 - 你的输出】**
 
-信息够了，组织回复。
+[Execution Output]
+搜索结果: [{"title": "RTX 4070 2026最新测试...", "snippet": "..."}]
+
+让{{personaName}}想想，信息够了，组织回复。
+
 ```javascript
 await telegram.sendMessage(chatId, "上次给你推的4070现在跑分又涨了...", {
   replyToMessageId: 12345
 });
 console.log("回复已发送");
 ```
-**【第 3 轮 - 系统返回】**
-```
+
+[Execution Output]
 回复已发送
-```
-**【第 4 轮 - 你的输出】**
+
+让{{personaName}}想想，信息已经发出去了
 
 状态: completed
 
 已发送消息数: 1
 摘要: 查询记忆和网络跑分数据后回复了硬件讨论
-```
+
+---
 
 要结束一轮对话，**不要输出任何代码块**。最后一条纯文本消息（通常为callback）将作为总结记录保存。
 

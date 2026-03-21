@@ -499,7 +499,7 @@ export class CodeActExecutor {
                 sentCollector, // Fix 1: 传入 collector
                 () => this.drainPendingMessages(), // 层 2: turn 间消息注入
                 `让${this.personaName}想想，`,  // prefill: 引导 LLM 以角色开始思考
-                ["**【第", "系统返回】**"],  // stop sequences
+                ["[Execution Output]"],  // stop sequences
                 this.chatId,  // 关联 chatId，用于 codeActEvents 进度广播
             );
         } finally {
