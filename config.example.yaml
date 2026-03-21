@@ -3,7 +3,7 @@
 
 # ─── LLM Profiles ───
 # 定义多个 LLM 配置 profile，每个 profile 有独立的 provider/key/model
-# 在 model_tiers 中通过名称引用
+# 在 llm_routing 中通过名称引用
 llm_profiles:
   # 示例：Google Gemini
   gemini-flash:
@@ -14,6 +14,10 @@ llm_profiles:
     temperature: 0.7
     max_tokens: 8192
     vision: true  # 启用后此 profile 支持多模态图片输入
+    # pricing:                 # 可选，每百万 token USD，用于 Dashboard 费用统计
+    #   input: 0.15
+    #   output: 0.60
+    #   cached_input: 0.0375
 
   gemini-pro:
     provider: openai
@@ -23,6 +27,10 @@ llm_profiles:
     temperature: 1
     max_tokens: 8192
     thinking_level: medium  # none | low | medium | high（Gemini 特有）
+    # pricing:
+    #   input: 1.25
+    #   output: 10.00
+    #   cached_input: 0.3125
 
   # 示例：Anthropic Claude
   # claude:
@@ -32,6 +40,11 @@ llm_profiles:
   #   model: claude-sonnet-4-20250514
   #   temperature: 0.7
   #   max_tokens: 4096
+  #   pricing:
+  #     input: 3.00
+  #     output: 15.00
+  #     cached_input: 0.30
+  #     cache_creation: 3.75
 
   # 示例：OpenAI
   # openai:
@@ -41,6 +54,10 @@ llm_profiles:
   #   model: gpt-4o
   #   temperature: 0.7
   #   max_tokens: 4096
+  #   pricing:
+  #     input: 2.50
+  #     output: 10.00
+  #     cached_input: 1.25
 
   # 示例：Moonshot (OpenAI 兼容)
   # moonshot:
@@ -51,27 +68,35 @@ llm_profiles:
   #   temperature: 1
   #   max_tokens: 8192
 
-# ─── 模型层级 ───
-# 引用上方 profile 名称，不同场景使用不同层级的模型
-# 每个 tier 可以是单个 profile 名称，或者一个数组（fallback chain）
+# ─── 组件级 LLM 路由 ───
+# 为每个组件指定使用的 LLM profile（引用 llm_profiles 名称）
+# 支持单个字符串或数组（fallback chain），未配置的组件使用第一个 profile
 # 数组模式下，第一个 profile 失败（配额耗尽/429）时自动切换到下一个
-model_tiers:
-  # cheap — 后台分析：话题聚类、Triage、quickTriage
-  cheap: gemini-flash
-  # mid — 一般介入：问答、知识补充、事实纠正
-  mid: gemini-flash
-  # sota — 复杂场景：直接 @ 复杂问题、冲突调解
+llm_routing:
+  # attend — 注意力决策（判断是否回复）
+  attend: gemini-flash
+  # session — CodeAct 多轮交互（实际生成回复）
   # 单个 profile:
-  sota: gemini-pro
+  session: gemini-pro
   # 或使用数组，配额耗尽时自动 fallback:
-  # sota:
+  # session:
   #   - gemini-pro
   #   - gemini-flash
-  # vision — 图片理解 (看图/贴纸识别)
+  # fast_path — 快速回复（轻量级回复生成）
+  fast_path: gemini-flash
+  # recording — 话题聚类 + Triage（后台分析）
+  recording: gemini-flash
+  # reflection — 反思引擎（人物画像/话题总结）
+  reflection: gemini-flash
+  # compact — 上下文压缩（对话历史摘要）
+  compact: gemini-flash
+  # memory — Deep recall / 意图解析（记忆检索辅助）
+  memory: gemini-flash
+  # vision — 图片/贴纸描述（独立 vision 模型）
   vision: gemini-flash
 
 # ─── Vision 看图设置 ───
-# 控制图片和贴纸的处理行为。需要配合 model_tiers.vision 或 llm_profiles 中设置 vision: true 使用。
+# 控制图片和贴纸的处理行为。需要配合 llm_routing.vision 或 llm_profiles 中设置 vision: true 使用。
 # 所有字段可选，缺省使用括号内默认值
 # vision:
 #   # 以 file 形式发送的大图压缩阈值（长边像素）(1024)
@@ -129,7 +154,7 @@ telegram:
 # 控制反思引擎的行为参数
 reflection:
   # 使用的 LLM profile（引用 llm_profiles 中的名称）
-  # 未设置则使用调用者传入的默认模型（通常为 mid tier）
+  # 若设置，优先于 llm_routing.reflection
   # 如需自定义 temperature/max_tokens，请在 llm_profiles 中新建专用 profile
   profile: gemini-flash
 

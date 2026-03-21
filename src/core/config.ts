@@ -5,7 +5,7 @@
  *
  * LLM 配置使用 Profile 体系：
  *   llm_profiles: 定义多个命名 LLM 配置
- *   model_tiers: cheap/mid/sota 引用 profile 名称
+ *   llm_routing: 按组件路由到指定 profile
  */
 
 import { readFileSync, existsSync } from "node:fs";
@@ -24,6 +24,17 @@ export interface LLMConfig {
     thinkingLevel?: string;
     /** 此 profile 是否支持多模态图片输入。默认 false */
     vision?: boolean;
+    /** Token 价格（每百万 token，USD），可选 */
+    pricing?: {
+        /** 输入 token 单价 */
+        input: number;
+        /** 输出 token 单价 */
+        output: number;
+        /** 缓存命中输入单价 */
+        cachedInput?: number;
+        /** Anthropic 缓存创建单价 */
+        cacheCreation?: number;
+    };
 }
 
 /** 相似度度量方法 */
@@ -45,12 +56,24 @@ export interface EmbeddingConfig {
     similarityMetric: SimilarityMetric;
 }
 
-/** 模型层级 — tier name → profile name 或 profile name 数组（fallback chain） */
-export interface ModelTiersConfig {
-    cheap: string | string[];
-    mid: string | string[];
-    sota: string | string[];
-    [key: string]: string | string[];
+/** 组件级 LLM 路由 — 每个组件可指定一个或多个 profile（fallback chain） */
+export interface LLMRoutingConfig {
+    /** 注意力决策（attend-handler） */
+    attend?: string | string[];
+    /** CodeAct 多轮交互（session-runner） */
+    session?: string | string[];
+    /** 快速回复（fast-path-handler） */
+    fast_path?: string | string[];
+    /** 话题聚类 + Triage（recording-pipeline） */
+    recording?: string | string[];
+    /** 反思引擎（reflection） */
+    reflection?: string | string[];
+    /** 上下文压缩（context-manager compact） */
+    compact?: string | string[];
+    /** Deep recall / browse（memory-v2） */
+    memory?: string | string[];
+    /** Vision 描述（vision-processor，独立配置） */
+    vision?: string | string[];
 }
 
 export interface PersonaConfig {
@@ -194,9 +217,12 @@ export interface DashboardExternalConfig {
     token?: string;
 }
 
+/** Token 价格配置（每百万 token，USD） */
+export type TokenPricingEntry = NonNullable<LLMConfig["pricing"]>;
+
 export interface AppConfig {
     llmProfiles: Record<string, LLMConfig>;
-    modelTiers: ModelTiersConfig;
+    llmRouting: LLMRoutingConfig;
     persona: PersonaConfig;
     /** Agent 所处时区 (IANA 标识符，如 "Asia/Shanghai")。影响 LLM prompt 中的时间展示和作息判断。 */
     timezone?: string;
@@ -263,20 +289,18 @@ export function loadConfig(configPath?: string, forceReload?: boolean): AppConfi
         llmProfiles["default"] = { ...DEFAULT_LLM };
     }
 
-    // ─── Model Tiers ───
-    const fileTiers = (fileConfig.model_tiers ?? {}) as Record<string, unknown>;
-    const firstProfile = Object.keys(llmProfiles)[0];
-
-    const modelTiers: ModelTiersConfig = {
-        cheap: parseTierValue(fileTiers.cheap, firstProfile),
-        mid: parseTierValue(fileTiers.mid, firstProfile),
-        sota: parseTierValue(fileTiers.sota, firstProfile),
+    // ─── LLM Routing（组件级路由） ───
+    const fileRouting = (fileConfig.llm_routing ?? {}) as Record<string, unknown>;
+    const llmRouting: LLMRoutingConfig = {
+        attend: parseRoutingValue(fileRouting.attend),
+        session: parseRoutingValue(fileRouting.session),
+        fast_path: parseRoutingValue(fileRouting.fast_path),
+        recording: parseRoutingValue(fileRouting.recording),
+        reflection: parseRoutingValue(fileRouting.reflection),
+        compact: parseRoutingValue(fileRouting.compact),
+        memory: parseRoutingValue(fileRouting.memory),
+        vision: parseRoutingValue(fileRouting.vision),
     };
-    for (const [k, v] of Object.entries(fileTiers)) {
-        if (!["cheap", "mid", "sota"].includes(k)) {
-            modelTiers[k] = parseTierValue(v, firstProfile);
-        }
-    }
 
     // ─── 其他配置 ───
     const filePersona = (fileConfig.persona ?? {}) as Record<string, unknown>;
@@ -314,7 +338,7 @@ export function loadConfig(configPath?: string, forceReload?: boolean): AppConfi
 
     const config: AppConfig = {
         llmProfiles,
-        modelTiers,
+        llmRouting,
         persona: {
             name: str(filePersona.name) ?? "赛博群友",
             description: str(filePersona.description) ?? "",
@@ -371,30 +395,21 @@ export function resolveLLMProfile(profileName: string, config?: AppConfig): LLMC
     return profile;
 }
 
-/** 根据 tier 名称获取 LLMConfig（返回第一个 profile，向后兼容） */
-export function resolveTierProfile(tier: string, config?: AppConfig): LLMConfig {
-    const cfg = config ?? loadConfig();
-    const tierValue = cfg.modelTiers[tier];
-    if (!tierValue) {
-        const fallback = Object.keys(cfg.llmProfiles)[0];
-        console.warn(`[Config] tier "${tier}" not configured, using profile "${fallback}"`);
-        return cfg.llmProfiles[fallback] ?? DEFAULT_LLM;
-    }
-    const firstName = Array.isArray(tierValue) ? tierValue[0] : tierValue;
-    return resolveLLMProfile(firstName, cfg);
-}
-
 /**
- * 根据 tier 名称获取所有 fallback LLMConfig（按优先级排序）。
- * 当 model_tiers 中配置为数组时，返回多个 profile 供 callLLMWithFallback 使用。
+ * 根据组件名获取所有 fallback LLMConfig（按优先级排序）。
+ * 查找顺序：llm_routing[component] → 第一个 llmProfile（兜底）
+ * 当 llm_routing 中配置为数组时，返回多个 profile 供 callLLMWithFallback 使用。
  */
-export function resolveTierProfiles(tier: string, config?: AppConfig): LLMConfig[] {
+export function resolveComponentProfiles(component: keyof LLMRoutingConfig, config?: AppConfig): LLMConfig[] {
     const cfg = config ?? loadConfig();
-    const tierValue = cfg.modelTiers[tier];
-    if (!tierValue) {
-        return [resolveTierProfile(tier, cfg)];
+    const routingValue = cfg.llmRouting[component];
+    if (!routingValue) {
+        // 未配置路由：fallback 到第一个 profile
+        const fallback = Object.keys(cfg.llmProfiles)[0];
+        console.warn(`[Config] llm_routing.${component} not configured, using profile "${fallback}"`);
+        return [cfg.llmProfiles[fallback] ?? DEFAULT_LLM];
     }
-    const names = Array.isArray(tierValue) ? tierValue : [tierValue];
+    const names = Array.isArray(routingValue) ? routingValue : [routingValue];
     return names.map(n => resolveLLMProfile(n, cfg));
 }
 
@@ -542,6 +557,16 @@ function parseVisionConfig(fileConfig: Record<string, unknown>): VisionConfig | 
 // ─── 内部辅助 ───
 
 function parseLLMProfile(raw: Record<string, unknown>): LLMConfig {
+    const rawPricing = raw.pricing as Record<string, unknown> | undefined;
+    let pricing: LLMConfig["pricing"] = undefined;
+    if (rawPricing && typeof rawPricing === "object" && rawPricing.input != null && rawPricing.output != null) {
+        pricing = {
+            input: num(rawPricing.input, 0),
+            output: num(rawPricing.output, 0),
+            cachedInput: rawPricing.cached_input != null ? num(rawPricing.cached_input, 0) : undefined,
+            cacheCreation: rawPricing.cache_creation != null ? num(rawPricing.cache_creation, 0) : undefined,
+        };
+    }
     return {
         provider: (str(raw.provider) as "anthropic" | "openai") ?? DEFAULT_LLM.provider,
         baseUrl: str(raw.base_url) ?? DEFAULT_LLM.baseUrl,
@@ -551,6 +576,7 @@ function parseLLMProfile(raw: Record<string, unknown>): LLMConfig {
         maxTokens: num(raw.max_tokens, DEFAULT_LLM.maxTokens),
         thinkingLevel: str(raw.thinking_level),
         vision: raw.vision === true ? true : undefined,
+        pricing,
     };
 }
 
@@ -565,8 +591,10 @@ function num(val: unknown, fallback: number): number {
     return isNaN(n) ? fallback : n;
 }
 
-/** 解析 tier 值：支持字符串或字符串数组 */
-function parseTierValue(val: unknown, fallback: string): string | string[] {
+/** 解析 routing 值：支持字符串或字符串数组，未配置返回 undefined */
+function parseRoutingValue(val: unknown): string | string[] | undefined {
+    if (val === undefined || val === null) return undefined;
     if (Array.isArray(val)) return val.map(String);
-    return str(val) ?? fallback;
+    return str(val);
 }
+

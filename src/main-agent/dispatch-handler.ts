@@ -25,7 +25,7 @@ import { buildGroupContext } from "./context-builder.js";
 import { formatTopicList, formatRelativeTime } from "./prompt-renderer.js";
 import { createLogger } from "../core/logger.js";
 import { formatTsForDisplay } from "../core/timezone.js";
-import { resolveTierProfile } from "../core/config.js";
+import { resolveComponentProfiles } from "../core/config.js";
 import { resolveReplyText } from "../core/message-enricher.js";
 import { MediaDownloader } from "../core/media-downloader.js";
 import type { AppConfig } from "../core/config.js";
@@ -44,7 +44,7 @@ export interface DispatchHandlerDeps {
     q3: DynamicAttentionQueue;
     q5: CallbackQueue;
     llmConfigs: LLMConfig[];
-    cheapConfig: LLMConfig;
+    fastPathConfig: LLMConfig;
     persona: { name: string; description: string };
 
     /** 完整 AppConfig（用于解析 vision 等配置） */
@@ -63,11 +63,11 @@ export interface DispatchHandlerDeps {
 export function createDispatchHandler(
     deps: DispatchHandlerDeps,
 ): (result: AttendResult) => Promise<void> {
-    const { memory, globalState, subagentManager, sandboxPool, nc, q3, q5, llmConfigs, cheapConfig, persona, appConfig, telegramAdapter: tgAdapter, sendTyping } = deps;
+    const { memory, globalState, subagentManager, sandboxPool, nc, q3, q5, llmConfigs, fastPathConfig, persona, appConfig, telegramAdapter: tgAdapter, sendTyping } = deps;
     const visionConfig = appConfig.vision;
-    // 解析 vision tier LLM 配置（Path B: 独立 vision 模型描述图片）
-    const visionLlmConfig = appConfig.modelTiers.vision
-        ? resolveTierProfile("vision", appConfig)
+    // 解析 vision LLM 配置（Path B: 独立 vision 模型描述图片）
+    const visionLlmConfig = appConfig.llmRouting.vision
+        ? resolveComponentProfiles("vision", appConfig)[0]
         : undefined;
     // 构建下载函数（传给 Executor 用于懒加载 Vision 处理）
     const downloadFn = tgAdapter ? async (fileId: string, chatId?: string, messageId?: string, uniqueFileId?: string): Promise<Buffer> => {
@@ -281,7 +281,7 @@ export function createDispatchHandler(
                     fp = new FastPathHandler(result.chatId);
                     fp.setCallbackHandler((cb: SubagentCallback) => q5.enqueue(cb));
                     const fpGroupModel = memory.getGroupModel(result.chatId);
-                    fp.setLLMConfig(cheapConfig, persona, fpGroupModel?.chatTitle ?? result.chatId);
+                    fp.setLLMConfig(fastPathConfig, persona, fpGroupModel?.chatTitle ?? result.chatId);
                     subagent.fastPathHandler = fp;
                 }
                 fp.authorize(result.fastPathAuth);

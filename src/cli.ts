@@ -14,7 +14,7 @@ import { createInterface } from "node:readline";
 import { Sandbox } from "./sandbox/sandbox.js";
 import { NotificationCenter } from "./event/notification-center.js";
 import { MemoryStoreV2 } from "./memory-v2/index.js";
-import { loadConfig, resolveTierProfile, resolveEmbeddingConfig } from "./core/config.js";
+import { loadConfig, resolveComponentProfiles, resolveEmbeddingConfig } from "./core/config.js";
 import { createLogger } from "./core/logger.js";
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
@@ -192,7 +192,7 @@ async function cmdMemory(args: string[]): Promise<void> {
 
     const cfg = loadConfig();
     const embeddingConfig = resolveEmbeddingConfig(cfg);
-    const cheapLlmConfig = resolveTierProfile("cheap", cfg);
+    const cheapLlmConfig = resolveComponentProfiles("memory", cfg)[0];
     const memory = new MemoryStoreV2(dbPath, {
         embeddingConfig,
         cheapLlmConfig,
@@ -341,14 +341,18 @@ async function cmdConfig(): Promise<void> {
         console.log(`    API Key:        ${profile.apiKey ? "***" + profile.apiKey.slice(-4) : "(未设置)"}`);
     }
 
-    console.log("\n\x1b[1m模型层级：\x1b[0m");
-    for (const [tier, tierValue] of Object.entries(config.modelTiers)) {
-        const names = Array.isArray(tierValue) ? tierValue : [tierValue];
+    console.log("\n\x1b[1m组件 LLM 路由：\x1b[0m");
+    for (const [component, routeValue] of Object.entries(config.llmRouting)) {
+        if (routeValue == null) {
+            console.log(`  ${component.padEnd(12)} → (未配置，使用默认 profile)`);
+            continue;
+        }
+        const names = Array.isArray(routeValue) ? routeValue : [routeValue];
         const display = names.map(n => {
             const p = config.llmProfiles[n];
             return `${n} (${p?.model ?? '⚠ profile 不存在'})`;
         }).join(" → ");
-        console.log(`  ${tier.padEnd(8)} → ${display}`);
+        console.log(`  ${component.padEnd(12)} → ${display}`);
     }
 
     console.log("\n\x1b[1mPersona：\x1b[0m");

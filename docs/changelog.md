@@ -1,5 +1,45 @@
 # Changelog
 
+## 2026-03-21: 组件级 LLM 路由（替代 model_tiers）
+
+移除 `model_tiers`（cheap/mid/sota）配置，替换为按组件粒度的 `llm_routing`。每个组件可独立指定 LLM profile，支持单个或数组（fallback chain）。
+
+**8 个路由键**：`attend`（注意力决策）、`session`（CodeAct 交互）、`fast_path`（快速回复）、`recording`（话题聚类）、`reflection`（反思引擎）、`compact`（上下文压缩）、`memory`（记忆检索）、`vision`（图片描述，独立配置）。
+
+```yaml
+llm_routing:
+  attend: gemini-flash
+  session: gemini-pro       # 或 [gemini-pro, gemini-flash] fallback
+  fast_path: gemini-flash
+  recording: gemini-flash
+  reflection: gemini-flash
+  compact: gemini-flash
+  memory: gemini-flash
+  vision: gemini-flash
+```
+
+### 改动
+
+| 文件 | 改动 |
+|------|------|
+| `src/core/config.ts` | `ModelTiersConfig` → `LLMRoutingConfig`；`resolveTierProfile`/`resolveTierProfiles` → `resolveComponentProfiles` |
+| `src/main.ts` | 按组件解析 LLM 配置，传递给各子系统 |
+| `src/main-agent/dispatch-handler.ts` | `cheapConfig` → `fastPathConfig`；vision 路由改用 `llmRouting.vision` |
+| `src/cli.ts` | `config` 命令显示组件路由 |
+| `config.yaml` | `model_tiers` → `llm_routing` |
+| `config.example.yaml` | 同上 |
+
+## 2026-03-21: 全深度消息获取 + 移除 noMessages 机制
+
+消息获取不再受 cosine decay 深度限制。所有深度级别均提供消息原文，数量随深度递增：L0=10、L1=30、L2=50、L3=100（旧值：L0=0、L1=5、L2=20）。移除 `hasMessages`/`noMessages` 模板变量和条件块。
+
+| 文件 | 改动 |
+|------|------|
+| `src/main-agent/attend-handler.ts` | `messageLimit` 公式改为全深度覆盖；移除 `depth >= 2` 消息构建门控 |
+| `src/main-agent/context-builder.ts` | 移除 `depth >= 1` 的 messages 注入门控 |
+| `src/main-agent/prompt-renderer.ts` | 移除 `hasMessages`/`noMessages` 变量 |
+| `system-prompts/subagent-attention.md` | 移除 `{{#hasMessages}}`/`{{#noMessages}}` 条件块 |
+
 ## 2026-03-21: Refactor dashboard frontend to Svelte
 
 ### Overview
