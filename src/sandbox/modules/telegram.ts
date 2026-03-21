@@ -158,20 +158,7 @@ export function createTelegramClientProxy(env: CapabilityRegistryEnv, sentHistor
             return sent;
         },
         sendSticker: async (chatId: number | string, uniqueFileId: string, opts?: { replyTo?: number }) => {
-            // ── 重复贴纸拦截 ──
-            const stickerKey = `[sticker:${uniqueFileId}]`;
-            if (isDuplicate(String(chatId), stickerKey)) {
-                const warning = `[⚠ 运行时警告: 重复贴纸已拦截] 目标 chat=${String(chatId)} 的贴纸 "${uniqueFileId}" 已拦截。`;
-                env.emitOutput(warning);
-                env.notifyHost({
-                    type: "system.duplicate_message_blocked",
-                    scene: "telegram",
-                    chatId: String(chatId),
-                    text: stickerKey,
-                    timestamp: new Date().toISOString(),
-                });
-                return null;
-            }
+            // ── 贴纸重复发送很正常，不拦截 ──
             const sent = hydrateTelegramMessage(await env.callHost("telegram.sendSticker", [chatId, uniqueFileId, opts]));
             env.emitOutput(formatTelegramAck("[Telegram] sendSticker ok", sent));
             env.notifyHost({
