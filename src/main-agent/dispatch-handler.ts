@@ -53,6 +53,8 @@ export interface DispatchHandlerDeps {
     telegramAdapter?: { handleCall(method: string, args: unknown[]): Promise<unknown> };
     /** 平台无关的 typing 状态发送（sandbox 执行期间展示 typing） */
     sendTyping?: (chatId: string) => Promise<void>;
+    /** 共享的媒体下载管理器 */
+    mediaDownloader: MediaDownloader;
 }
 
 /**
@@ -63,7 +65,7 @@ export interface DispatchHandlerDeps {
 export function createDispatchHandler(
     deps: DispatchHandlerDeps,
 ): (result: AttendResult) => Promise<void> {
-    const { memory, globalState, subagentManager, sandboxPool, nc, q3, q5, llmConfigs, fastPathConfig, persona, appConfig, telegramAdapter: tgAdapter, sendTyping } = deps;
+    const { memory, globalState, subagentManager, sandboxPool, nc, q3, q5, llmConfigs, fastPathConfig, persona, appConfig, telegramAdapter: tgAdapter, sendTyping, mediaDownloader } = deps;
     const visionConfig = appConfig.vision;
     // 解析 vision LLM 配置（Path B: 独立 vision 模型描述图片）
     const visionLlmConfig = appConfig.llmRouting.vision
@@ -74,12 +76,6 @@ export function createDispatchHandler(
         const result = await tgAdapter.handleCall("telegram.downloadMedia", [fileId, chatId, messageId, uniqueFileId]) as { buffer: string; size: number };
         return Buffer.from(result.buffer, "base64");
     } : undefined;
-
-    // 创建共享的媒体下载管理器（所有 executor 共用）
-    const mediaDownloader = new MediaDownloader({
-        retentionDays: visionConfig?.mediaRetentionDays ?? 3,
-        maxFileSize: (visionConfig?.maxMediaDownloadSize ?? 20) * 1024 * 1024,
-    });
 
     return async (result: AttendResult): Promise<void> => {
         const subagent = subagentManager.get(result.chatId);

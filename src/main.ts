@@ -657,6 +657,7 @@ async function main(): Promise<void> {
         sendTyping: async (chatId: string) => {
             await telegramAdapter.handleCall("telegram.sendTyping", [chatId]);
         },
+        mediaDownloader: sharedMediaDownloader,
     }));
 
     log.info("MainAgentLoop 配置完成");
