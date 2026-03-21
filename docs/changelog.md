@@ -1,5 +1,49 @@
 # Changelog
 
+## 2026-03-21: Token 用量与费用统计
+
+新增 Dashboard Token 费用追踪功能：支持 per-profile 价格配置、OpenAI/Anthropic 缓存 token 解析、持久化按模型统计、独立统计面板。
+
+### 价格配置
+
+在 `llm_profiles` 中为每个 profile 添加可选 `pricing` 字段（每百万 token，USD）：
+
+```yaml
+llm_profiles:
+  gemini-flash:
+    model: gemini-3-flash-preview
+    pricing:
+      input: 0.15
+      output: 0.60
+      cached_input: 0.0375
+  claude:
+    model: claude-sonnet-4-20250514
+    pricing:
+      input: 3.00
+      output: 15.00
+      cached_input: 0.30
+      cache_creation: 3.75    # Anthropic 特有
+```
+
+### 改动
+
+| 文件 | 改动 |
+|------|------|
+| `src/core/llm.ts` | `LLMResponse.usage` 新增 `cachedTokens`/`cacheCreationTokens`；OpenAI 解析 `prompt_tokens_details.cached_tokens`，Anthropic 解析 `cache_read_input_tokens`/`cache_creation_input_tokens` |
+| `src/core/config.ts` | `LLMConfig` 新增 `pricing?` 子对象；`TokenPricingEntry` 类型导出；`parseLLMProfile` 解析 pricing |
+| `src/dashboard/token-stats.ts` | **[NEW]** `TokenStatsCollector` — 按模型持久化统计（`workspace/token-stats.json`），30s debounce 写入；`calculateCallCost()` 费用计算 |
+| `src/dashboard/types.ts` | `DashboardDeps` 新增 `tokenStats` |
+| `src/dashboard/event-bridge.ts` | `llm:response` 时调用 `tokenStats.record()`；snapshot 包含 `tokenPricing` |
+| `src/dashboard/api-routes.ts` | 新增 `GET /token-stats`、`POST /token-stats/reset`、`GET /token-pricing` |
+| `src/main.ts` | 创建 `TokenStatsCollector` 并注入 Dashboard |
+| `src/dashboard/ui/src/lib/stores.js` | 新增 `tokenPricing` store、`calculateCallCost()`、`setTokenPricing()`；`llmStats` 增加 `totalCost` |
+| `src/dashboard/ui/src/lib/ws.js` | snapshot 时设置 tokenPricing |
+| `src/dashboard/ui/src/panels/LLMLogPanel.svelte` | 工具栏显示会话总费用；列表行显示单笔费用；详情显示 cached/cacheCreation token 明细 + 费用 |
+| `src/dashboard/ui/src/panels/TokenStatsPanel.svelte` | **[NEW]** 独立面板：汇总卡片 + 按模型统计表 + 清零按钮 |
+| `src/dashboard/ui/src/components/TabNav.svelte` | 新增「Token 统计」tab |
+| `src/dashboard/ui/src/App.svelte` | 注册 TokenStatsPanel |
+| `config.example.yaml` | 各 profile 示例中添加 `pricing` 注释 |
+
 ## 2026-03-21: 组件级 LLM 路由（替代 model_tiers）
 
 移除 `model_tiers`（cheap/mid/sota）配置，替换为按组件粒度的 `llm_routing`。每个组件可独立指定 LLM profile，支持单个或数组（fallback chain）。

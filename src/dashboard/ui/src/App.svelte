@@ -12,6 +12,7 @@
   import DecisionsPanel from './panels/DecisionsPanel.svelte';
   import CodeActPanel from './panels/CodeActPanel.svelte';
   import LLMLogPanel from './panels/LLMLogPanel.svelte';
+  import TokenStatsPanel from './panels/TokenStatsPanel.svelte';
   import MemoryPanel from './panels/MemoryPanel.svelte';
   import StickersPanel from './panels/StickersPanel.svelte';
   import SystemPanel from './panels/SystemPanel.svelte';
@@ -61,6 +62,7 @@
     <div class:hidden={$activeTab !== 'decisions'}><DecisionsPanel /></div>
     <div class:hidden={$activeTab !== 'codeact'}><CodeActPanel /></div>
     <div class:hidden={$activeTab !== 'llm-log'}><LLMLogPanel /></div>
+    <div class:hidden={$activeTab !== 'token-stats'}><TokenStatsPanel /></div>
     <div class:hidden={$activeTab !== 'memory'}><MemoryPanel /></div>
     <div class:hidden={$activeTab !== 'stickers'}><StickersPanel /></div>
     <div class:hidden={$activeTab !== 'system'}><SystemPanel /></div>

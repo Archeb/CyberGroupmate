@@ -11,6 +11,7 @@ import type { SandboxPool } from "../sandbox/sandbox-pool.js";
 import type { MemoryStoreV2 } from "../memory-v2/index.js";
 import type { NotificationCenter } from "../event/notification-center.js";
 import type { FeedbackLoop } from "../pipeline/feedback-loop.js";
+import type { TokenStatsCollector } from "./token-stats.js";
 
 /** Dashboard 需要的所有组件引用 */
 export interface DashboardDeps {
@@ -23,6 +24,7 @@ export interface DashboardDeps {
     sandboxPool: SandboxPool;
     memory: MemoryStoreV2;
     feedbackLoop: FeedbackLoop;
+    tokenStats: TokenStatsCollector;
 }
 
 /** Dashboard 配置 */

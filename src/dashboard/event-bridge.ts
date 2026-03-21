@@ -70,7 +70,11 @@ export class EventBridge {
 
     /** 订阅 LLM 事件并广播到 WebSocket */
     private hookLLMEvents(): void {
+        /** callId → model 映射（用于在 response 中还原 model） */
+        const callIdToModel = new Map<string, string>();
+
         llmEvents.on("llm:call", (data: LLMCallEvent) => {
+            callIdToModel.set(data.callId, data.model);
             this.broadcast({
                 type: "llm:call",
                 timestamp: data.timestamp,
@@ -84,6 +88,13 @@ export class EventBridge {
                 timestamp: data.timestamp,
                 data,
             });
+
+            // 持久化 token 统计
+            const model = callIdToModel.get(data.callId) ?? "unknown";
+            callIdToModel.delete(data.callId);
+            if (data.usage && !data.error) {
+                this.deps.tokenStats.record(model, data.usage);
+            }
         });
     }
 
@@ -143,6 +154,7 @@ export class EventBridge {
             feedbackLoop: {
                 activeWindows: feedbackLoop.getActiveWindows(),
             },
+            tokenPricing: this.deps.tokenStats.getPricing() ?? {},
         };
     }
 }

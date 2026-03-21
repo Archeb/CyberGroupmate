@@ -554,5 +554,20 @@ export function createApiRouter(deps: DashboardDeps, bridge: EventBridge): Route
         res.json({ ok });
     });
 
+    // ─── Token Stats ───
+    router.get("/token-stats", (_req, res) => {
+        res.json(deps.tokenStats.getStats());
+    });
+
+    router.post("/token-stats/reset", (_req, res) => {
+        deps.tokenStats.reset();
+        log.info("Token 统计已清零");
+        res.json({ ok: true });
+    });
+
+    router.get("/token-pricing", (_req, res) => {
+        res.json(deps.tokenStats.getPricing() ?? {});
+    });
+
     return router;
 }

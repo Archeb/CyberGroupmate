@@ -126,6 +126,10 @@ export interface LLMResponse {
         promptTokens?: number;
         completionTokens?: number;
         totalTokens?: number;
+        /** 缓存命中的 token 数（OpenAI: prompt_tokens_details.cached_tokens, Anthropic: cache_read_input_tokens） */
+        cachedTokens?: number;
+        /** Anthropic 缓存创建 token 数（cache_creation_input_tokens） */
+        cacheCreationTokens?: number;
     };
 }
 
@@ -401,6 +405,9 @@ async function callOpenAI(
             prompt_tokens?: number;
             completion_tokens?: number;
             total_tokens?: number;
+            prompt_tokens_details?: {
+                cached_tokens?: number;
+            };
         };
     };
 
@@ -416,6 +423,7 @@ async function callOpenAI(
                 promptTokens: data.usage.prompt_tokens,
                 completionTokens: data.usage.completion_tokens,
                 totalTokens: data.usage.total_tokens,
+                cachedTokens: data.usage.prompt_tokens_details?.cached_tokens,
             }
             : undefined,
     };
@@ -503,6 +511,8 @@ async function callAnthropic(
         usage?: {
             input_tokens?: number;
             output_tokens?: number;
+            cache_read_input_tokens?: number;
+            cache_creation_input_tokens?: number;
         };
     };
 
@@ -523,6 +533,8 @@ async function callAnthropic(
                 completionTokens: data.usage.output_tokens,
                 totalTokens:
                     (data.usage.input_tokens ?? 0) + (data.usage.output_tokens ?? 0),
+                cachedTokens: data.usage.cache_read_input_tokens,
+                cacheCreationTokens: data.usage.cache_creation_input_tokens,
             }
             : undefined,
     };

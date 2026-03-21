@@ -48,9 +48,48 @@ export const selectedCodeActChatId = writable(null);
 
 // ─── LLM Logs ───
 export const llmLogs = writable([]);
-export const llmStats = writable({ total: 0, success: 0, error: 0, totalTokens: 0 });
+export const llmStats = writable({ total: 0, success: 0, error: 0, totalTokens: 0, totalCost: 0 });
 export const selectedLLMCallId = writable(null);
+export const tokenPricing = writable({});
 const MAX_LLM_LOGS = 200;
+
+/** profile name → model name reverse map (built from snapshot) */
+let _modelToProfile = {};
+
+/** Called when pricing config is available (from snapshot) */
+export function setTokenPricing(pricing, llmProfiles) {
+  tokenPricing.set(pricing || {});
+  // Build reverse map: model → profile name  
+  if (llmProfiles && typeof llmProfiles === 'object') {
+    _modelToProfile = {};
+    for (const [name, cfg] of Object.entries(llmProfiles)) {
+      if (cfg && cfg.model) _modelToProfile[cfg.model] = name;
+    }
+  }
+}
+
+/** Calculate cost for a single call */
+export function calculateCallCost(usage, model) {
+  if (!usage) return 0;
+  const pricing = get(tokenPricing);
+  const profileName = _modelToProfile[model];
+  const p = profileName ? pricing[profileName] : undefined;
+  if (!p) return 0;
+
+  const M = 1_000_000;
+  const prompt = usage.promptTokens ?? 0;
+  const completion = usage.completionTokens ?? 0;
+  const cached = usage.cachedTokens ?? 0;
+  const cacheCreation = usage.cacheCreationTokens ?? 0;
+  const regularPrompt = Math.max(0, prompt - cached);
+
+  let cost = 0;
+  cost += (regularPrompt / M) * p.input;
+  cost += (completion / M) * p.output;
+  cost += (cached / M) * (p.cachedInput ?? p.input);
+  cost += (cacheCreation / M) * (p.cacheCreation ?? p.input);
+  return cost;
+}
 
 export function handleLLMCall(data) {
   llmStats.update(s => ({ ...s, total: s.total + 1 }));
@@ -62,11 +101,18 @@ export function handleLLMCall(data) {
 }
 
 export function handleLLMResponse(data) {
+  // Find the model for this call
+  const logs = get(llmLogs);
+  const entry = logs.find(e => e.callId === data.callId);
+  const model = entry?.model ?? '';
+
   llmLogs.update(logs => {
-    const entry = logs.find(e => e.callId === data.callId);
-    if (entry) entry.response = data;
+    const e = logs.find(e => e.callId === data.callId);
+    if (e) e.response = data;
     return logs;
   });
+
+  const cost = data.error ? 0 : calculateCallCost(data.usage, model);
 
   llmStats.update(s => {
     if (data.error) {
@@ -77,13 +123,14 @@ export function handleLLMResponse(data) {
     if (data.usage?.totalTokens) {
       s.totalTokens += data.usage.totalTokens;
     }
+    s.totalCost += cost;
     return s;
   });
 }
 
 export function clearLLMLogs() {
   llmLogs.set([]);
-  llmStats.set({ total: 0, success: 0, error: 0, totalTokens: 0 });
+  llmStats.set({ total: 0, success: 0, error: 0, totalTokens: 0, totalCost: 0 });
   selectedLLMCallId.set(null);
 }
 

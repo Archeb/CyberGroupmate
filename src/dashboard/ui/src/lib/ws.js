@@ -7,7 +7,7 @@
 import { getToken } from './api.js';
 import {
   wsStatus, appState, messages, llmLogs, llmStats,
-  addMessage, handleLLMCall, handleLLMResponse,
+  addMessage, handleLLMCall, handleLLMResponse, setTokenPricing,
 } from './stores.js';
 import { get } from 'svelte/store';
 
@@ -48,6 +48,10 @@ function handleEvent(event) {
         data.queue = { active: data.queue, dequeued: [] };
       }
       appState.set(data);
+      // Token pricing config
+      if (data.tokenPricing) {
+        setTokenPricing(data.tokenPricing);
+      }
       break;
     }
     case 'nc:message':

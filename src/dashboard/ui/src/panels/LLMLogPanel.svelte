@@ -4,8 +4,16 @@
     llmStats,
     selectedLLMCallId,
     clearLLMLogs,
+    calculateCallCost,
   } from "../lib/stores.js";
   import { escapeHtml } from "../lib/utils.js";
+
+  function formatCost(cost) {
+    if (cost === 0) return '';
+    if (cost < 0.001) return `$${cost.toFixed(6)}`;
+    if (cost < 0.01) return `$${cost.toFixed(5)}`;
+    return `$${cost.toFixed(4)}`;
+  }
 
   const CALLER_COLORS = {
     "attend-handler": "badge-primary",
@@ -51,6 +59,11 @@
       <span class="text-xs opacity-60"
         >Tok <b>{$llmStats.totalTokens.toLocaleString()}</b></span
       >
+      {#if $llmStats.totalCost > 0}
+        <span class="text-xs text-warning"
+          >💰 <b>{formatCost($llmStats.totalCost)}</b></span
+        >
+      {/if}
       <button
         class="btn btn-xs btn-ghost"
         onclick={() => {
@@ -72,7 +85,8 @@
           {@const hasImages = entry.messageSummaries?.some(
             (m) => m.imageCount > 0,
           )}
-          <div
+          <button
+            type="button"
             class="llm-log-row"
             class:llm-log-active={$selectedLLMCallId === entry.callId}
             class:llm-log-error={r?.error}
@@ -93,9 +107,9 @@
             <span class="llm-row-duration">
               {#if r}{r.durationMs}ms{r.usage?.totalTokens
                   ? ` (${r.usage.totalTokens}tok)`
-                  : ""}{:else}...{/if}
+                  : ""}{@const cost = calculateCallCost(r.usage, entry.model)}{cost > 0 ? ` ${formatCost(cost)}` : ""}{:else}...{/if}
             </span>
-          </div>
+          </button>
         {/each}
       {/if}
     </div>
@@ -121,11 +135,19 @@
           >
           {#if r}
             <span class="opacity-60">{r.durationMs}ms</span>
-            {#if r.usage}<span class="opacity-40"
-                >prompt:{r.usage.promptTokens ?? "?"} / completion:{r.usage
-                  .completionTokens ?? "?"} / total:{r.usage.totalTokens ??
-                  "?"}</span
-              >{/if}
+            {#if r.usage}
+              <span class="opacity-40">
+                prompt:{r.usage.promptTokens ?? "?"}
+                {#if r.usage.cachedTokens}(cached:{r.usage.cachedTokens}){/if}
+                {#if r.usage.cacheCreationTokens}(创建:{r.usage.cacheCreationTokens}){/if}
+                / completion:{r.usage.completionTokens ?? "?"}
+                / total:{r.usage.totalTokens ?? "?"}
+              </span>
+              {@const detailCost = calculateCallCost(r.usage, selectedEntry.model)}
+              {#if detailCost > 0}
+                <span class="text-warning">{formatCost(detailCost)}</span>
+              {/if}
+            {/if}
           {:else}
             <span class="text-warning">进行中...</span>
           {/if}
@@ -275,9 +297,14 @@
     font-family: ui-monospace, monospace;
     white-space: nowrap;
     flex-wrap: nowrap;
+    border: none;
     border-bottom: 1px solid
       color-mix(in srgb, var(--color-base-content) 5%, transparent);
     transition: background 0.1s;
+    background: transparent;
+    color: inherit;
+    text-align: left;
+    width: 100%;
   }
 
   .llm-log-row:hover {
