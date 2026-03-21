@@ -1,5 +1,43 @@
 # Changelog
 
+## 2026-03-21: LLM Prefill + Stop Sequences 支持
+
+新增 LLM 调用层面的 **assistant prefill**（预填充回复开头）和 **stop sequences**（停止生成序列）支持，用于引导模型思考方向和控制输出边界。
+
+### Prefill
+
+在消息列表末尾追加一条 `role=assistant` 消息作为生成起点，返回的 `content` 自动拼接 prefill 前缀，调用方拿到完整文本。
+
+- `session-runner` → `让{{name}}想想，`（引导 CodeAct 以角色身份思考）
+- `attend-handler` → `让{{name}}看看，`（引导注意力决策）
+
+### Stop Sequences
+
+LLM 遇到指定字符串时停止生成。OpenAI 使用 `stop` 字段，Anthropic 使用 `stop_sequences` 字段。
+
+- `session-runner` → `["系统返回】**"]`
+
+### 兼容性
+
+部分模型不支持 prefill，可在 `llm_profiles` 中设置 `supports_prefill: false` 关闭（默认 `true`）。
+
+```yaml
+llm_profiles:
+  openai-gpt4o:
+    supports_prefill: false  # 原版 OpenAI 不支持 prefill
+```
+
+### 改动
+
+| 文件 | 改动 |
+|------|------|
+| `src/core/llm.ts` | `LLMCallOptions` 新增 `prefill?`/`stop?`；`callLLM` 按 `supportsPrefill` 决定是否应用；`callOpenAI`/`callAnthropic` 追加 assistant 消息 + stop 字段；返回值自动拼接 prefill 前缀 |
+| `src/core/config.ts` | `LLMConfig` 新增 `supportsPrefill?: boolean`；`parseLLMProfile` 解析 `supports_prefill` |
+| `src/sandbox/session-runner.ts` | `runCodeActSession` 新增 `prefill`/`stopSequences` 可选参数，传给 `callLLMWithFallback` |
+| `src/subagent/code-act-executor.ts` | 调用处传入 prefill `让${personaName}想想，` + stop `["系统返回】**"]` |
+| `src/main-agent/attend-handler.ts` | 调用处传入 prefill `让${persona.name}看看，`；JSON 解析增强以兼容 prefill 前缀 |
+| `config.example.yaml` | 新增 `supports_prefill` 配置说明 |
+
 ## 2026-03-21: Token 用量与费用统计
 
 新增 Dashboard Token 费用追踪功能：支持 per-profile 价格配置、OpenAI/Anthropic 缓存 token 解析、持久化按模型统计、独立统计面板。

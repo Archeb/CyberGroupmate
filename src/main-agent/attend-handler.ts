@@ -203,14 +203,20 @@ export function createAttendHandler(
             const llmResponse = await callLLMWithFallback(
                 messages,
                 sotaConfigs,
-                { caller: "attend-handler" },
+                {
+                    caller: "attend-handler",
+                    prefill: `让${persona.name}看看，`,
+                },
             );
 
-            // 解析 LLM 返回的 JSON
+            // 解析 LLM 返回的 JSON（需兼容 prefill 前缀文本）
             const jsonContent = llmResponse.content.trim();
-            // 尝试提取 JSON（处理 markdown 围栏情况）
-            const jsonMatch = jsonContent.match(/```(?:json)?\s*\n?([\s\S]*?)```/) ?? [null, jsonContent];
-            const parsed = JSON.parse(jsonMatch[1] ?? jsonContent);
+            // 先尝试 markdown 围栏，再尝试匹配第一个 JSON 对象
+            const fenceMatch = jsonContent.match(/```(?:json)?\s*\n?([\s\S]*?)```/);
+            const jsonStr = fenceMatch?.[1]
+                ?? jsonContent.match(/(\{[\s\S]*\})\s*$/)?.[1]
+                ?? jsonContent;
+            const parsed = JSON.parse(jsonStr);
 
             const llmResult: AttendResult = {
                 chatId: entry.chatId,

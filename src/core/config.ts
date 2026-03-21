@@ -24,6 +24,8 @@ export interface LLMConfig {
     thinkingLevel?: string;
     /** 此 profile 是否支持多模态图片输入。默认 false */
     vision?: boolean;
+    /** 此 profile 是否支持 assistant prefill（预填充）。默认 true（anthropic/大多数 openai 兼容 API 均支持） */
+    supportsPrefill?: boolean;
     /** Token 价格（每百万 token，USD），可选 */
     pricing?: {
         /** 输入 token 单价 */
@@ -576,6 +578,7 @@ function parseLLMProfile(raw: Record<string, unknown>): LLMConfig {
         maxTokens: num(raw.max_tokens, DEFAULT_LLM.maxTokens),
         thinkingLevel: str(raw.thinking_level),
         vision: raw.vision === true ? true : undefined,
+        supportsPrefill: raw.supports_prefill === false ? false : undefined,
         pricing,
     };
 }

@@ -14,6 +14,8 @@ llm_profiles:
     temperature: 0.7
     max_tokens: 8192
     vision: true  # 启用后此 profile 支持多模态图片输入
+    # supports_prefill: true   # 是否支持 assistant prefill（预填充回复开头引导思考方向）。默认 true。
+                               # 不支持的模型（如原版 OpenAI）设为 false 以避免报错
     # pricing:                 # 可选，每百万 token USD，用于 Dashboard 费用统计
     #   input: 0.15
     #   output: 0.60

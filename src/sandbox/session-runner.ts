@@ -235,6 +235,10 @@ export async function runCodeActSession(
     sentMessageCollector?: SentMessageCollector,
     /** 层 2 消息前送：每轮 LLM 调用前检查是否有新消息到达 */
     pendingMessagesDrain?: () => string | null,
+    /** LLM prefill（预填充回复开头） */
+    prefill?: string,
+    /** LLM stop sequences */
+    stopSequences?: string[],
 ): Promise<SessionResult> {
     const sessionId = ulid();
     const turns: SessionTurn[] = [];
@@ -255,7 +259,11 @@ export async function runCodeActSession(
         let llmResponse: LLMResponse;
         const configs = Array.isArray(llmConfig) ? llmConfig : [llmConfig];
         try {
-            llmResponse = await callLLMWithFallback(messages, configs, { caller: "session-runner" });
+            llmResponse = await callLLMWithFallback(messages, configs, {
+                caller: "session-runner",
+                ...(prefill ? { prefill } : {}),
+                ...(stopSequences ? { stop: stopSequences } : {}),
+            });
         } catch (err: unknown) {
             const errorMsg =
                 err instanceof Error ? err.message : String(err);

@@ -31,7 +31,7 @@ export function createPromiseTracker(): PromiseTracker {
                         const result = val.apply(target, args);
                         if (result instanceof Promise) {
                             // 吞掉错误防止 unhandled rejection（原始调用者仍能 catch）
-                            pending.push(result.catch(() => {}));
+                            pending.push(result.catch(() => { }));
                         }
                         return result;
                     };
@@ -59,7 +59,7 @@ export function createPromiseTracker(): PromiseTracker {
         return {
             count: total,
             warning: total > 0
-                ? "[System] 检测到未 await 的异步 API 调用，系统已自动等待执行完毕。下次请对所有异步操作使用 await。"
+                ? `异步方法调用数：${total}`
                 : null,
         };
     }

@@ -115,6 +115,15 @@ export interface LLMCallOptions {
     thinkingLevel?: string;
     /** 调用方模块标识（用于 Dashboard 日志显示） */
     caller?: string;
+    /**
+     * Assistant prefill — 预填充 LLM 的回复开头。
+     * 如果 LLMConfig.supportsPrefill !== false，会在消息列表末尾追加
+     * 一条 role=assistant 消息作为生成起点。返回的 content 会自动拼接
+     * prefill 前缀，调用方拿到的是完整文本。
+     */
+    prefill?: string;
+    /** Stop sequences — LLM 遇到这些字符串时停止生成 */
+    stop?: string[];
 }
 
 /** LLM 调用结果 */
@@ -189,11 +198,22 @@ export async function callLLM(
 
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
         try {
+            // ── 解析 prefill（仅当 config 支持时应用） ──
+            const prefill = (options?.prefill && config.supportsPrefill !== false)
+                ? options.prefill
+                : undefined;
+            const stop = options?.stop;
+
             let result: LLMResponse;
             if (config.provider === "anthropic") {
-                result = await callAnthropic(messages, config, model, temperature, maxTokens);
+                result = await callAnthropic(messages, config, model, temperature, maxTokens, prefill, stop);
             } else {
-                result = await callOpenAI(messages, config, model, temperature, maxTokens, thinkingLevel);
+                result = await callOpenAI(messages, config, model, temperature, maxTokens, thinkingLevel, prefill, stop);
+            }
+
+            // ── 自动拼接 prefill 前缀到返回内容 ──
+            if (prefill) {
+                result = { ...result, content: prefill + result.content };
             }
 
             // ── 发射 llm:response 事件 ──
@@ -349,6 +369,8 @@ async function callOpenAI(
     temperature: number,
     maxTokens: number,
     thinkingLevel?: string,
+    prefill?: string,
+    stop?: string[],
 ): Promise<LLMResponse> {
     const url = `${config.baseUrl.replace(/\/$/, "")}/chat/completions`;
 
@@ -359,36 +381,46 @@ async function callOpenAI(
         headers["Authorization"] = `Bearer ${config.apiKey}`;
     }
 
+    // 组装 API 消息列表（含可选 prefill）
+    const apiMessages = messages.map(m => {
+        // 有 imageParts 时组装为多模态 content parts
+        if (m.imageParts && m.imageParts.length > 0 && m.role === "user") {
+            const parts: Array<Record<string, unknown>> = [
+                { type: "text", text: m.content },
+            ];
+            for (const img of m.imageParts) {
+                parts.push({
+                    type: "image_url",
+                    image_url: {
+                        url: img.url,
+                        ...(img.detail ? { detail: img.detail } : {}),
+                    },
+                });
+            }
+            return { role: m.role, content: parts };
+        }
+        return { role: m.role, content: m.content };
+    });
+
+    // Prefill: 追加 assistant 消息作为生成起点
+    if (prefill) {
+        apiMessages.push({ role: "assistant", content: prefill });
+    }
+
     const response = await fetch(url, {
         method: "POST",
         headers,
         body: JSON.stringify({
             model,
-            messages: messages.map(m => {
-                // 有 imageParts 时组装为多模态 content parts
-                if (m.imageParts && m.imageParts.length > 0 && m.role === "user") {
-                    const parts: Array<Record<string, unknown>> = [
-                        { type: "text", text: m.content },
-                    ];
-                    for (const img of m.imageParts) {
-                        parts.push({
-                            type: "image_url",
-                            image_url: {
-                                url: img.url,
-                                ...(img.detail ? { detail: img.detail } : {}),
-                            },
-                        });
-                    }
-                    return { role: m.role, content: parts };
-                }
-                return { role: m.role, content: m.content };
-            }),
+            messages: apiMessages,
             temperature,
             max_tokens: maxTokens,
             // Gemini thinking 参数（OpenAI 兼容格式：reasoning_effort）
             ...(thinkingLevel && thinkingLevel !== "none" ? {
                 reasoning_effort: thinkingLevel,
             } : {}),
+            // Stop sequences
+            ...(stop && stop.length > 0 ? { stop } : {}),
         }),
     });
 
@@ -437,7 +469,9 @@ async function callAnthropic(
     config: LLMConfig,
     model: string,
     temperature: number,
-    maxTokens: number
+    maxTokens: number,
+    prefill?: string,
+    stop?: string[],
 ): Promise<LLMResponse> {
     const url = `${config.baseUrl.replace(/\/$/, "")}/messages`;
 
@@ -450,43 +484,53 @@ async function callAnthropic(
         "anthropic-version": "2023-06-01",
     };
 
+    // 组装 API 消息列表
+    const apiMessages = nonSystemMsgs.map((m) => {
+        // 有 imageParts 时组装为 Anthropic 多模态格式
+        if (m.imageParts && m.imageParts.length > 0 && m.role === "user") {
+            const parts: Array<Record<string, unknown>> = [
+                { type: "text", text: m.content },
+            ];
+            for (const img of m.imageParts) {
+                // Anthropic 需要 base64 source 格式
+                const dataMatch = img.url.match(/^data:([^;]+);base64,(.+)$/);
+                if (dataMatch) {
+                    parts.push({
+                        type: "image",
+                        source: {
+                            type: "base64",
+                            media_type: dataMatch[1],
+                            data: dataMatch[2],
+                        },
+                    });
+                } else {
+                    // URL 格式（Anthropic 也支持）
+                    parts.push({
+                        type: "image",
+                        source: {
+                            type: "url",
+                            url: img.url,
+                        },
+                    });
+                }
+            }
+            return { role: m.role, content: parts };
+        }
+        return { role: m.role, content: m.content };
+    });
+
+    // Prefill: 追加 assistant 消息作为生成起点
+    if (prefill) {
+        apiMessages.push({ role: "assistant", content: prefill });
+    }
+
     const body: Record<string, unknown> = {
         model,
-        messages: nonSystemMsgs.map((m) => {
-            // 有 imageParts 时组装为 Anthropic 多模态格式
-            if (m.imageParts && m.imageParts.length > 0 && m.role === "user") {
-                const parts: Array<Record<string, unknown>> = [
-                    { type: "text", text: m.content },
-                ];
-                for (const img of m.imageParts) {
-                    // Anthropic 需要 base64 source 格式
-                    const dataMatch = img.url.match(/^data:([^;]+);base64,(.+)$/);
-                    if (dataMatch) {
-                        parts.push({
-                            type: "image",
-                            source: {
-                                type: "base64",
-                                media_type: dataMatch[1],
-                                data: dataMatch[2],
-                            },
-                        });
-                    } else {
-                        // URL 格式（Anthropic 也支持）
-                        parts.push({
-                            type: "image",
-                            source: {
-                                type: "url",
-                                url: img.url,
-                            },
-                        });
-                    }
-                }
-                return { role: m.role, content: parts };
-            }
-            return { role: m.role, content: m.content };
-        }),
+        messages: apiMessages,
         temperature,
         max_tokens: maxTokens,
+        // Stop sequences（Anthropic 使用 stop_sequences 字段）
+        ...(stop && stop.length > 0 ? { stop_sequences: stop } : {}),
     };
 
     if (systemMsg) {
