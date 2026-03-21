@@ -79,9 +79,9 @@ export function createAttendHandler(
             depth = 2 as import("./cosine-decay.js").ContextDepth;
         }
 
-        // L1: 少量最近消息（3-5条）提供基本上下文感知
-        // L2+: 完整消息列表（20条）提供详细上下文
-        const messageLimit = depth >= 2 ? 20 : depth >= 1 ? 5 : 0;
+        // 所有深度都获取消息原文，数量随深度递增
+        // L0: 10条  L1: 30条  L2: 50条  L3: 100条
+        const messageLimit = depth >= 3 ? 100 : depth >= 2 ? 50 : depth >= 1 ? 30 : 10;
         const recentMessages = messageLimit > 0
             ? memory.getRecentMessages(entry.chatId, messageLimit).map(m => ({
                 ...m,
@@ -110,10 +110,10 @@ export function createAttendHandler(
 
         // ═══ Phase 5: LLM 决策路径 (subagent.md §12.2 ➋➌➍) ═══
         try {
-            // 构建消息原文（L2+ 深度）
+            // 构建消息原文（所有深度均获取）
             let messagesText = "";
-            if (depth >= 2) {
-                const recentMsgs = memory.getRecentMessages(entry.chatId, 20);
+            {
+                const recentMsgs = memory.getRecentMessages(entry.chatId, messageLimit);
                 recentMsgs.reverse(); // DESC→ASC: LLM 需要时间正序
                 if (recentMsgs.length > 0) {
                     // 构建 messageId → displayName 映射，用于解析 replyTo 关系

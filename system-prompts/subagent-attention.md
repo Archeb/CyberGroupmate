@@ -7,15 +7,8 @@
 ## 话题注册表
 {{topicDigests}}
 
-{{#hasMessages}}
 ## 新消息 (自上次关注以来, 共 {{newMessageCount}} 条)
 {{messages}}
-{{/hasMessages}}
-
-{{#noMessages}}
-## 消息概览
-新消息 {{newMessageCount}} 条 (L{{depth}} 深度, 消息原文省略)
-{{/noMessages}}
 
 ## Engagement
 分数: {{engagementScore}}/100

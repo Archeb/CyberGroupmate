@@ -171,7 +171,6 @@ export function buildAttentionVariables(
     },
 ): Record<string, unknown> {
     const opts = options ?? {};
-    const hasMessages = !!opts.messages;
 
     return {
         chatId: pkg.chatId,
@@ -206,9 +205,7 @@ export function buildAttentionVariables(
         hasCallbacks: !!opts.callbacks?.length,
         callbacks: opts.callbacks?.map(cb => `- [${cb.status}] ${cb.summary}`).join("\n") ?? "",
 
-        // Messages (L2+)
-        hasMessages,
-        noMessages: !hasMessages,
+        // Messages
         messages: opts.messages ?? "",
 
         // Alert

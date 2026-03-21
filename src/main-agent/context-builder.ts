@@ -79,9 +79,8 @@ export function buildGroupContext(input: ContextBuildInput): GroupContextPackage
         pkg.activePersons = input.activePersons;
     }
 
-    if (input.depth >= 1) {
-        pkg.messages = input.messages;
-    }
+    // 所有深度都包含消息（数量由 attend-handler 按深度控制）
+    pkg.messages = input.messages;
 
     if (input.depth >= 3) {
         pkg.deepSummary = input.deepSummary;
