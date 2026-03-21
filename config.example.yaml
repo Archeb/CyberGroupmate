@@ -12,7 +12,10 @@ llm_profiles:
     api_key: ""
     model: gemini-3-flash-preview
     temperature: 0.7
-    max_tokens: 8192
+    max_tokens: 8192            # 输出 token 上限
+    # max_context_tokens: 200000  # 可选，模型允许的最大上下文输入 token 数。
+                                  # 设置后 compact 按此值触发，而非全局默认的 32000。
+                                  # 建议设为模型实际上下文窗口减去 max_tokens 的值。
     vision: true  # 启用后此 profile 支持多模态图片输入
     # supports_prefill: true   # 是否支持 assistant prefill（预填充回复开头引导思考方向）。默认 true。
                                # 不支持的模型（如原版 OpenAI）设为 false 以避免报错
@@ -28,6 +31,7 @@ llm_profiles:
     model: gemini-3.1-pro-preview
     temperature: 1
     max_tokens: 8192
+    # max_context_tokens: 500000
     thinking_level: medium  # none | low | medium | high（Gemini 特有）
     # pricing:
     #   input: 1.25
@@ -41,6 +45,7 @@ llm_profiles:
   #   api_key: ""
   #   model: claude-sonnet-4-20250514
   #   temperature: 0.7
+  #   max_context_tokens: 180000  # Claude 200K 窗口，预留输出空间
   #   max_tokens: 4096
   #   pricing:
   #     input: 3.00
@@ -55,6 +60,7 @@ llm_profiles:
   #   api_key: ""
   #   model: gpt-4o
   #   temperature: 0.7
+  #   max_context_tokens: 120000  # GPT-4o 128K 窗口
   #   max_tokens: 4096
   #   pricing:
   #     input: 2.50
@@ -68,6 +74,7 @@ llm_profiles:
   #   api_key: ""
   #   model: kimi-k2.5
   #   temperature: 1
+  #   max_context_tokens: 120000  # Moonshot 128K 窗口
   #   max_tokens: 8192
 
 # ─── 组件级 LLM 路由 ───
