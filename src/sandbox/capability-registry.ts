@@ -29,11 +29,18 @@ export interface CapabilityRegistryEnv {
 // ─── 注册入口 ───
 
 export function installCapabilityRegistry(env: CapabilityRegistryEnv): Record<string, unknown> {
-    // 创建 session 级别的发送历史，用于去重检测
-    const sentHistory = new Map<string, Set<string>>();
+    // sentHistory 持久化到 ctx 上，跨 executeCode 调用保留。
+    // 原因：LLM 生成的 unawaited async 函数可能在 executeCode 返回后
+    // 继续执行 sendText（"逃逸"），导致 tracker.flush() 之后的消息无法追踪。
+    // 持久化 sentHistory 可以保证下一个 turn 的 isDuplicate() 检测到
+    // 这些逃逸消息已发送过，从而拦截 LLM 的重复发送。
+    if (!env.ctx._sentHistory) {
+        env.ctx._sentHistory = new Map<string, Set<string>>();
+    }
+    const sentHistory = env.ctx._sentHistory as Map<string, Set<string>>;
 
-    // 挂载 ctx.tg（Telegram 客户端代理）
-    // 每次 executeCode 都重建，确保 sentHistory 是 per-turn 的
+    // 每次 executeCode 都重建 ctx.tg，确保使用当前 turn 的 env 闭包
+    // （emitOutput、notifyHost 等是 per-executeCode 的局部变量）
     env.ctx.tg = createTelegramClientProxy(env, sentHistory);
 
     return {

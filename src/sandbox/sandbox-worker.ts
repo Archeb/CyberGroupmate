@@ -205,18 +205,42 @@ async function executeCode(id: string, code: string): Promise<void> {
     console.info = captureLog;
 
     try {
+        // ─── 执行守卫：防止 dangling async 在 executeCode 结束后继续调用 host API ───
+        // LLM 生成的 unawaited async 函数可能包含 setTimeout 等异步延迟，
+        // 导致 tracker.flush() 无法等到所有 sendText 调用。这些"逃逸"的调用
+        // 会在 executeCode 返回后继续执行，产生不受追踪的副作用（如重复发消息）。
+        // 通过 execGuardId 标记当前执行，结束后使旧 guard 失效，阻止逃逸调用。
+        const execGuardId = `exec_${id}`;
+        let activeExecGuard = execGuardId;
+
+        const guardedCallHost = (method: string, args?: unknown[]) => {
+            if (activeExecGuard !== execGuardId) {
+                // 逃逸调用：当前 executeCode 已结束，拒绝 host call
+                printToHost(`[⚠ 逃逸调用已拦截] ${method} — 代码执行已结束，该调用来自未被 await 的异步函数`);
+                return Promise.reject(new Error(
+                    `Stale async call blocked: ${method}. 代码执行已结束，请确保所有异步函数都使用 await 调用。`
+                ));
+            }
+            return callHost(method, args);
+        };
+
+        const guardedNotifyHost = (event: Record<string, unknown>) => {
+            if (activeExecGuard !== execGuardId) return; // 静默丢弃逃逸 notify
+            notifyHost(event);
+        };
+
         const { runtime, memory, scene, actions, skills } = installCapabilityRegistry({
             ctx,
             emitOutput: (line) => {
                 outputLines.push(line);
             },
-            notifyHost,
+            notifyHost: guardedNotifyHost,
             requestInput,
             printToHost,
             spawnTask,
             killTask,
             listTasks,
-            callHost,
+            callHost: guardedCallHost,
         }) as {
             runtime: unknown;
             memory: unknown;
@@ -264,6 +288,9 @@ async function executeCode(id: string, code: string): Promise<void> {
         // 兜底：等待所有未被 await 的 API 调用完成
         const { warning } = await tracker.flush();
         if (warning) outputLines.push(warning);
+
+        // 使执行守卫失效：此后任何逃逸的 async 调用将被 guardedCallHost 拦截
+        activeExecGuard = "";
 
         sendToHost({
             type: "result",
