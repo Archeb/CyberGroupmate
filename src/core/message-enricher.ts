@@ -161,9 +161,13 @@ export function formatMessageLine(
     let textPart = m.text ?? "";
 
     // 如果没有 processedMedia（未经 vision 处理）但有 mediaType，追加媒体标签
+    // 注意：Telegram adapter 可能已在 event.text 中设置了媒体标签（如 "[🎭 贴纸: 👀]"），
+    // 此时不再重复追加
     if (options?.includeMediaTags && (!m.processedMedia || m.processedMedia.length === 0) && m.mediaType) {
         const tag = mediaTagFromType(m.mediaType, m.mediaInfo);
-        if (tag) textPart = textPart ? `${textPart} ${tag}` : tag;
+        if (tag && !textPart.includes(tag)) {
+            textPart = textPart ? `${textPart} ${tag}` : tag;
+        }
     }
 
     return `[${formatTsForDisplay(m.timestamp) ?? ""}] [msgId:${m.id ?? "?"}] ${m.sender ?? "?"}${replyTag}: ${textPart}`;
@@ -347,7 +351,9 @@ function formatMessages(
         const hasProcessedMedia = m.processedMedia && m.processedMedia.length > 0;
         if (!hasProcessedMedia && m.mediaType) {
             const tag = mediaTagFromType(m.mediaType, m.mediaInfo);
-            if (tag) textPart = textPart ? `${textPart} ${tag}` : tag;
+            if (tag && !textPart.includes(tag)) {
+                textPart = textPart ? `${textPart} ${tag}` : tag;
+            }
         }
 
         const replyTag = buildReplyTag(m);

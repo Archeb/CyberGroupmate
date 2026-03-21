@@ -321,7 +321,7 @@ export class TelegramAdapter implements PlatformAdapter {
         }
 
         // ─── /mute 写操作拦截 ───
-        const MUTE_BLOCKED_METHODS = ["telegram.sendText", "telegram.sendMedia", "telegram.sendFile", "telegram.sendTyping"];
+        const MUTE_BLOCKED_METHODS = ["telegram.sendText", "telegram.sendMedia", "telegram.sendFile", "telegram.sendSticker", "telegram.sendTyping"];
         if (MUTE_BLOCKED_METHODS.includes(method)) {
             const chatId = String(args[0] ?? "");
             if (this.isChatMuted(chatId)) {
@@ -345,8 +345,30 @@ export class TelegramAdapter implements PlatformAdapter {
             case "telegram.sendMedia": {
                 const peer = await this.ensurePeerCached(args[0]);
                 const opts = this.normalizeReplyOpts(args[2]);
+                let mediaArg = args[1] as any;
+
+                // 支持本地文件路径：当 media.file 是本地路径时，从磁盘读取
+                if (mediaArg && typeof mediaArg === "object" && typeof mediaArg.file === "string") {
+                    const fileStr = mediaArg.file as string;
+                    const isLocalPath = fileStr.startsWith("/") || fileStr.startsWith("./") || fileStr.startsWith("../");
+                    if (isLocalPath) {
+                        const { readFileSync, existsSync } = await import("node:fs");
+                        const pathMod = await import("node:path");
+                        const resolvedPath = pathMod.resolve(fileStr);
+                        if (!existsSync(resolvedPath)) {
+                            throw new Error(`sendMedia: 文件不存在: ${resolvedPath}`);
+                        }
+                        const buffer = readFileSync(resolvedPath);
+                        mediaArg = {
+                            ...mediaArg,
+                            file: buffer,
+                            fileName: mediaArg.fileName ?? pathMod.basename(resolvedPath),
+                        };
+                    }
+                }
+
                 return this.normalizeMessage(
-                    await this.client.sendMedia(peer, args[1], opts),
+                    await this.client.sendMedia(peer, mediaArg, opts),
                 );
             }
             case "telegram.sendFile": {

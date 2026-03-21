@@ -30,3 +30,9 @@ export async function api(path, opts = {}) {
 export function getToken() {
   return TOKEN;
 }
+
+/** Returns a full API URL for the given path (useful for img src, etc.) */
+export function apiBase(path = '') {
+  const sep = path.includes('?') ? '&' : '?';
+  return `${API}${path}${sep}token=${TOKEN}`;
+}

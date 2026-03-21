@@ -422,6 +422,9 @@ export class CodeActExecutor {
             contentDirection,
             toneGuidance,
             decisions: formattedDecisions,
+            availableStickers: ctx.availableStickers && ctx.availableStickers.length > 0
+                ? ctx.availableStickers.map(s => `- ${s.emoji} ${s.description} (uniqueFileId: ${s.uniqueFileId})`).join("\n")
+                : "",
         };
         const taskPrompt = renderPrompt("EXECUTION_TASK", taskVars);
 

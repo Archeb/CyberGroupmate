@@ -12,6 +12,7 @@ import type { MemoryStoreV2 } from "../memory-v2/index.js";
 import type { NotificationCenter } from "../event/notification-center.js";
 import type { FeedbackLoop } from "../pipeline/feedback-loop.js";
 import type { TokenStatsCollector } from "./token-stats.js";
+import type { MediaDownloader } from "../core/media-downloader.js";
 
 /** Dashboard 需要的所有组件引用 */
 export interface DashboardDeps {
@@ -25,6 +26,8 @@ export interface DashboardDeps {
     memory: MemoryStoreV2;
     feedbackLoop: FeedbackLoop;
     tokenStats: TokenStatsCollector;
+    /** 媒体下载管理器（用于贴纸预览等） */
+    mediaDownloader?: MediaDownloader;
 }
 
 /** Dashboard 配置 */

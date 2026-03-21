@@ -227,6 +227,7 @@ export function createAttendHandler(
                     targetMessageIds: Array.isArray(d.targetMessageIds) ? d.targetMessageIds : undefined,
                     contentDirection: d.contentDirection,
                     toneGuidance: d.toneGuidance,
+                    suggestedEmojis: Array.isArray(d.suggestedEmojis) ? d.suggestedEmojis : undefined,
                     confidence: d.confidence ?? 0.5,
                     reason: d.reason ?? "",
                 })) : [{ action: "OBSERVE", confidence: 0.3, reason: "LLM 返回格式异常" }],

@@ -5,6 +5,7 @@
  */
 
 import { Router } from "express";
+import * as fs from "node:fs";
 import type { DashboardDeps } from "./types.js";
 import type { EventBridge } from "./event-bridge.js";
 import type { FastPathHandler } from "../subagent/fast-path-handler.js";
@@ -447,7 +448,26 @@ export function createApiRouter(deps: DashboardDeps, bridge: EventBridge): Route
 
     // ─── Sticker Management ───
     router.get("/stickers", (_req, res) => {
-        res.json(deps.memory.getAllStickerDescriptions());
+        const stickers = deps.memory.getAllStickerDescriptions();
+        // 附加 hasImage 标记
+        const result = stickers.map(s => ({
+            ...s,
+            hasImage: deps.mediaDownloader ? !!deps.mediaDownloader.getExistingPath(s.uniqueFileId) : false,
+        }));
+        res.json(result);
+    });
+
+    router.get("/stickers/:uniqueFileId/image", (req, res) => {
+        if (!deps.mediaDownloader) { res.status(404).json({ error: "mediaDownloader not available" }); return; }
+        const filePath = deps.mediaDownloader.getExistingPath(req.params.uniqueFileId);
+        if (!filePath || !fs.existsSync(filePath)) { res.status(404).json({ error: "sticker image not found" }); return; }
+        try {
+            res.setHeader("Content-Type", "image/webp");
+            res.setHeader("Cache-Control", "public, max-age=86400");
+            fs.createReadStream(filePath).pipe(res);
+        } catch (err) {
+            res.status(500).json({ error: String(err) });
+        }
     });
 
     router.delete("/stickers/:uniqueFileId", (req, res) => {

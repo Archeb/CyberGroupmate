@@ -132,6 +132,12 @@ async function main(): Promise<void> {
         botToken: appConfig.telegram.botToken ? "✓" : "✗",
     });
 
+    // 共享 MediaDownloader 实例（用于 sendSticker、Dashboard 等）
+    const { MediaDownloader } = await import("./core/media-downloader.js");
+    const sharedMediaDownloader = new MediaDownloader({
+        retentionDays: appConfig.vision?.mediaRetentionDays ?? 3,
+        maxFileSize: (appConfig.vision?.maxMediaDownloadSize ?? 20) * 1024 * 1024,
+    });
 
     const nc = new NotificationCenter(EVENTS_PATH);
     const sandboxPool = new SandboxPool({
@@ -143,6 +149,29 @@ async function main(): Promise<void> {
                 nc.push(event as { type: string;[key: string]: unknown });
             });
             sandbox.setHostCallHandler(async (method, args) => {
+                // ── telegram.sendSticker: 通过 uniqueFileId 发送贴纸 ──
+                if (method === "telegram.sendSticker") {
+                    const targetChatId = String(args[0] ?? "");
+                    if (targetChatId !== chatId) {
+                        throw new Error(`[Sandbox 安全限制] sendSticker 被拦截：sandbox 绑定 chat=${chatId}，不允许向 chat=${targetChatId} 发送。`);
+                    }
+                    const uniqueFileId = String(args[1] ?? "");
+                    if (!uniqueFileId) throw new Error("sendSticker: uniqueFileId 为空");
+                    const stickerPath = sharedMediaDownloader.getExistingPath(uniqueFileId);
+                    if (!stickerPath) throw new Error(`sendSticker: 未找到贴纸文件 uniqueFileId=${uniqueFileId}`);
+                    const { readFileSync, existsSync } = await import("node:fs");
+                    if (!existsSync(stickerPath)) throw new Error(`sendSticker: 文件不存在 ${stickerPath}`);
+                    const buffer = readFileSync(stickerPath);
+                    const opts = args[2] ?? undefined;
+                    // 直接调用底层 client.sendMedia，绕过 adapter 的本地路径处理
+                    // mtcute 需要 type: 'sticker' 来正确发送贴纸
+                    return telegramAdapter.handleCall("telegram.sendMedia", [
+                        targetChatId,
+                        { type: "sticker", file: buffer },
+                        opts,
+                    ]);
+                }
+
                 if (telegramAdapter.canHandle(method)) {
                     // ── ChatId 发送限制：write 操作只允许绑定的 chatId ──
                     const WRITE_METHODS = ["telegram.sendText", "telegram.sendMedia", "telegram.sendFile", "telegram.sendTyping", "telegram.joinChat", "telegram.leaveChat"];
@@ -649,7 +678,7 @@ async function main(): Promise<void> {
         process.on("exit", () => tokenStats.shutdown());
 
         const dashboard = new DashboardServer(
-            { nc, subagentManager, q3, q5, mainLoop, globalState, sandboxPool, memory, feedbackLoop, tokenStats },
+            { nc, subagentManager, q3, q5, mainLoop, globalState, sandboxPool, memory, feedbackLoop, tokenStats, mediaDownloader: sharedMediaDownloader },
             { port: dashboardPort, token: dashboardToken, enabled: true },
         );
         await dashboard.start();

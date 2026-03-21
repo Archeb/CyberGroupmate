@@ -140,6 +140,7 @@ export async function processMediaBatch(
             isPathA ? llmConfig : visionLlmConfig,
             downloadFn,
             stickerCache,
+            mediaDownloader,
         );
         results.push(processed);
     }
@@ -320,6 +321,7 @@ async function processSingleSticker(
     visionLlmConfig?: LLMConfig,
     downloadFn?: DownloadFn,
     stickerCache?: StickerCache,
+    mediaDownloader?: MediaDownloader,
 ): Promise<ProcessedMedia> {
     const mode = config?.stickerMode ?? "emoji_only";
 
@@ -349,6 +351,18 @@ async function processSingleSticker(
     // vision_each 或 vision_cache miss: 下载+识别
     try {
         const rawBuffer = await downloadFn(sticker.fileId, sticker.chatId, sticker.messageId, sticker.uniqueFileId);
+
+        // 保存贴纸原始文件到磁盘（用于后续发送）
+        if (mediaDownloader) {
+            mediaDownloader.saveMedia(Buffer.from(rawBuffer), {
+                chatId: sticker.chatId,
+                messageId: sticker.messageId,
+                uniqueFileId: sticker.uniqueFileId,
+                mediaType: "sticker",
+                mimeType: sticker.mimeType ?? "image/webp",
+            });
+        }
+
         const { buffer: stickerBuf, mimeType: mime } = await ensureSupportedFormat(rawBuffer, sticker.mimeType ?? "image/webp");
         const result = await describeSticker(stickerBuf, mime, visionLlmConfig, sticker.emoji);
 

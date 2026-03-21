@@ -90,10 +90,21 @@ export function createTelegramClientProxy(env: CapabilityRegistryEnv, sentHistor
             return sent;
         },
         sendMedia: async (chatId: number | string, media: unknown, opts?: { replyTo?: number; caption?: string }) => {
-            // ── 重复消息拦截（基于 caption）──
-            const mediaText = opts?.caption ?? "[media]";
+            // ── 重复消息拦截（基于 caption + 媒体标识）──
+            // 从 media 对象中提取可区分的标识（file/url/fileId/type），避免不同媒体被误判为重复
+            let mediaIdentifier = "[media]";
+            if (media && typeof media === "object") {
+                const m = media as Record<string, unknown>;
+                if (typeof m.file === "string") mediaIdentifier = `[media:file=${m.file}]`;
+                else if (typeof m.url === "string") mediaIdentifier = `[media:url=${m.url}]`;
+                else if (typeof m.fileId === "string") mediaIdentifier = `[media:fileId=${m.fileId}]`;
+                else if (typeof m.id === "string") mediaIdentifier = `[media:id=${m.id}]`;
+                else if (typeof m.type === "string") mediaIdentifier = `[media:type=${m.type}]`;
+            }
+            const mediaText = opts?.caption ? `${opts.caption}|${mediaIdentifier}` : mediaIdentifier;
             if (isDuplicate(String(chatId), mediaText)) {
-                const warning = `[⚠ 运行时警告: 重复消息已拦截] 目标 chat=${String(chatId)} 的媒体消息 "${mediaText.length > 80 ? mediaText.slice(0, 80) + '...' : mediaText}" 与本次 session 中已发送的消息内容完全一致，已自动拦截，不会重复发送。`;
+                const preview = mediaText.length > 80 ? mediaText.slice(0, 80) + '...' : mediaText;
+                const warning = `[⚠ 运行时警告: 重复消息已拦截] 目标 chat=${String(chatId)} 的媒体消息 "${preview}" 与本次 session 中已发送的消息内容完全一致，已自动拦截，不会重复发送。`;
                 env.emitOutput(warning);
                 env.notifyHost({
                     type: "system.duplicate_message_blocked",
@@ -142,6 +153,33 @@ export function createTelegramClientProxy(env: CapabilityRegistryEnv, sentHistor
                 messageId: typeof sent === "object" && sent && "id" in sent ? (sent as { id?: unknown }).id : undefined,
                 text: opts?.caption ?? `[file:${filePath}]`,
                 replyToMessageId: opts?.replyTo,
+                timestamp: new Date().toISOString(),
+            });
+            return sent;
+        },
+        sendSticker: async (chatId: number | string, uniqueFileId: string, opts?: { replyTo?: number }) => {
+            // ── 重复贴纸拦截 ──
+            const stickerKey = `[sticker:${uniqueFileId}]`;
+            if (isDuplicate(String(chatId), stickerKey)) {
+                const warning = `[⚠ 运行时警告: 重复贴纸已拦截] 目标 chat=${String(chatId)} 的贴纸 "${uniqueFileId}" 已拦截。`;
+                env.emitOutput(warning);
+                env.notifyHost({
+                    type: "system.duplicate_message_blocked",
+                    scene: "telegram",
+                    chatId: String(chatId),
+                    text: stickerKey,
+                    timestamp: new Date().toISOString(),
+                });
+                return null;
+            }
+            const sent = hydrateTelegramMessage(await env.callHost("telegram.sendSticker", [chatId, uniqueFileId, opts]));
+            env.emitOutput(formatTelegramAck("[Telegram] sendSticker ok", sent));
+            env.notifyHost({
+                type: "system.agent_message_sent",
+                scene: "telegram",
+                chatId: String(chatId),
+                messageId: typeof sent === "object" && sent && "id" in sent ? (sent as { id?: unknown }).id : undefined,
+                text: `[🎭 贴纸: ${uniqueFileId}]`,
                 timestamp: new Date().toISOString(),
             });
             return sent;

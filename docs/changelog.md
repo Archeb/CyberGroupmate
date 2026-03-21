@@ -1,5 +1,48 @@
 # Changelog
 
+## 2026-03-21: 贴纸发送功能 + sendSticker API
+
+完整的贴纸发送管线：贴纸 webp 文件永久保存到本地 → LLM 决策时输出相关 emoji → 按 emoji 查找可用贴纸 → 注入 CodeAct 上下文 → bot 通过 `sendSticker(chatId, uniqueFileId)` 发送。
+
+### 贴纸存储与保留
+
+- `vision-processor.ts` 处理贴纸时调用 `mediaDownloader.saveMedia` 将 webp 文件保存到 `workspace/Downloads/stickers/`
+- `media-downloader.ts` 的 `cleanupExpired()` 跳过 `stickers/` 目录，贴纸文件永久保留
+- 使用 `uniqueFileId` 作为贴纸索引键
+
+### 贴纸查找与上下文注入
+
+- `memory-v2.ts` 新增 `searchStickersByEmoji(emojis[])` 和 `deleteStickerDescription()`
+- `types.ts` 的 `Decision` 新增 `suggestedEmojis?: string[]`；`GroupContextPackage` 新增 `availableStickers`（emoji + description + uniqueFileId）
+- `attend-handler.ts` 解析 LLM 输出的 `suggestedEmojis`
+- `dispatch-handler.ts` 按 emoji 查找贴纸 → 验证文件存在（`fs.existsSync`）→ 清理过期 DB 条目 → 注入 `availableStickers` 到 `contextSnapshot`
+- `subagent-decision.md` 新增 `suggestedEmojis` 字段规则
+- `subagent-execution-task.md` 新增可用贴纸段落
+
+### sendSticker API
+
+`sendSticker(chatId, uniqueFileId)` —— 专用贴纸发送函数，host 侧解析 uniqueFileId → 本地文件路径 → 读取 buffer → 通过 mtcute `sendMedia({type:'sticker', file: buffer})` 发送。
+
+| 文件 | 改动 |
+|------|------|
+| `src/main.ts` | 共享 `MediaDownloader` 实例；`telegram.sendSticker` host call 拦截器（uniqueFileId → 文件路径 → buffer → sendMedia） |
+| `src/sandbox/modules/telegram.ts` | `sendSticker` 代理方法：重复发送拦截 + `agent_message_sent` 事件 |
+| `src/sandbox/modules/telegram.d.ts` | 新增 `sendSticker(chatId, uniqueFileId, opts?)` 类型定义 |
+| `src/adapter/telegram-adapter.ts` | `sendMedia` 支持本地文件路径（非 sticker）；`sendSticker` 加入 mute 屏蔽列表 |
+
+### Dashboard 贴纸预览
+
+| 文件 | 改动 |
+|------|------|
+| `src/dashboard/api-routes.ts` | 新增 `GET /stickers/:uniqueFileId/image`；`GET /stickers` 新增 `hasImage` 字段 |
+| `src/dashboard/types.ts` | `DashboardDeps` 新增 `mediaDownloader` |
+| `src/dashboard/ui/src/panels/StickersPanel.svelte` | 48×48 贴纸缩略图预览列 |
+| `src/dashboard/ui/src/lib/api.js` | 新增 `apiBase()` 辅助函数 |
+
+### Bug Fix: 贴纸标签重复
+
+`message-enricher.ts` 的 `formatMessageLine` 和 `formatMessages` 中，当 `m.text` 已包含媒体标签时（Telegram adapter 在 `event.text` 中预设），不再通过 `mediaTagFromType` 重复追加。
+
 ## 2026-03-21: CodeActPanel 实时流式更新 & 侧栏样式修复
 
 CodeActPanel 从轮询 REST API 改为 **WebSocket 实时推送**，每轮 LLM 思考和代码执行结果 **即时显示**，不再需要等 session 完成。侧栏群组列表样式统一为 MessagesPanel 的 `button` + `chatTitle` + 动画效果。

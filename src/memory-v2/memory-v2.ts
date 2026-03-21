@@ -1748,6 +1748,20 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
         return result.changes > 0;
     }
 
+    /** 根据 emoji 列表批量查找匹配的已知贴纸（用于贴纸发送功能） */
+    searchStickersByEmoji(emojis: string[], limit = 10): Array<{ uniqueFileId: string; description: string; emoji: string }> {
+        if (emojis.length === 0) return [];
+        const placeholders = emojis.map(() => "?").join(", ");
+        const rows = this.db.prepare(
+            `SELECT unique_file_id, description, emoji FROM sticker_descriptions WHERE emoji IN (${placeholders}) LIMIT ?`
+        ).all(...emojis, limit) as Array<{ unique_file_id: string; description: string; emoji: string }>;
+        return rows.map(r => ({
+            uniqueFileId: r.unique_file_id,
+            description: r.description,
+            emoji: r.emoji,
+        }));
+    }
+
     // ── Dashboard CRUD 方法 ──
 
     /** 分页列出全部 person_identities */

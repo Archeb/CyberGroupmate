@@ -300,6 +300,8 @@ export interface GroupContextPackage {
     toneGuidance?: string;
     /** 回复方向 */
     contentDirection?: string;
+    /** 可用贴纸目录（emoji + 描述 + 本地文件路径） */
+    availableStickers?: Array<{ emoji: string; description: string; uniqueFileId: string }>;
 }
 
 /** 主 Agent attend 后的决策结果 */
@@ -327,6 +329,8 @@ export interface Decision {
     contentDirection?: string;
     /** 语气指导（LLM 输出，fallback 到 stickiness 推断） */
     toneGuidance?: string;
+    /** 建议的相关 emoji（用于查找可发送的贴纸） */
+    suggestedEmojis?: string[];
     /** 置信度 */
     confidence: number;
     /** 理由 */

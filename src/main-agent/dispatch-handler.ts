@@ -202,6 +202,40 @@ export function createDispatchHandler(
                     ?? (subagent.stickiness.level === "CORE" ? "随意友好" : "礼貌得体");
                 contextSnapshot.contentDirection = decision.contentDirection ?? "";
 
+                // 贴纸查找：根据 suggestedEmojis 查找可发送的贴纸
+                if (decision.suggestedEmojis && decision.suggestedEmojis.length > 0) {
+                    try {
+                        const { existsSync } = await import("node:fs");
+                        const stickerMatches = memory.searchStickersByEmoji(decision.suggestedEmojis);
+                        const availableStickers: Array<{ emoji: string; description: string; uniqueFileId: string }> = [];
+                        for (const s of stickerMatches) {
+                            const filePath = mediaDownloader.getExistingPath(s.uniqueFileId);
+                            if (filePath && existsSync(filePath)) {
+                                availableStickers.push({
+                                    emoji: s.emoji,
+                                    description: s.description,
+                                    uniqueFileId: s.uniqueFileId,
+                                });
+                            } else {
+                                // 文件不存在：清理 DB 中的过期条目
+                                memory.deleteStickerDescription(s.uniqueFileId);
+                                log.debug("贴纸文件不存在，已删除 DB 条目", { uniqueFileId: s.uniqueFileId });
+                            }
+                        }
+                        if (availableStickers.length > 0) {
+                            contextSnapshot.availableStickers = availableStickers;
+                            log.debug("贴纸查找完成", {
+                                chatId: result.chatId,
+                                suggestedEmojis: decision.suggestedEmojis,
+                                matched: stickerMatches.length,
+                                withFile: availableStickers.length,
+                            });
+                        }
+                    } catch (err) {
+                        log.debug("贴纸查找失败", { error: String(err) });
+                    }
+                }
+
                 // 构建 CodeActReplyTask
                 const task: CodeActReplyTask = {
                     type: "CODEACT_REPLY",

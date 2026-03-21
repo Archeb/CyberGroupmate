@@ -1,7 +1,6 @@
 <script>
   import { activeTab } from '../lib/stores.js';
-  import { api } from '../lib/api.js';
-  import { escapeHtml } from '../lib/utils.js';
+  import { api, apiBase } from '../lib/api.js';
 
   let stickers = [];
   let editId = '';
@@ -39,6 +38,10 @@
     editModal.close();
     loadStickers();
   }
+
+  function getStickerImageUrl(uniqueFileId) {
+    return apiBase(`/stickers/${encodeURIComponent(uniqueFileId)}/image`);
+  }
 </script>
 
 <div class="card bg-base-100">
@@ -53,14 +56,26 @@
     <div class="overflow-x-auto">
       <table class="table table-xs">
         <thead><tr>
-          <th>Emoji</th><th>描述</th><th>UniqueFileId</th><th>创建时间</th><th>操作</th>
+          <th>预览</th><th>Emoji</th><th>描述</th><th>UniqueFileId</th><th>创建时间</th><th>操作</th>
         </tr></thead>
         <tbody>
           {#if !stickers.length}
-            <tr><td colspan="5" class="text-center opacity-60">暂无贴纸缓存</td></tr>
+            <tr><td colspan="6" class="text-center opacity-60">暂无贴纸缓存</td></tr>
           {:else}
             {#each stickers as s}
               <tr>
+                <td>
+                  {#if s.hasImage}
+                    <img
+                      src={getStickerImageUrl(s.uniqueFileId)}
+                      alt={s.emoji || '贴纸'}
+                      class="sticker-thumb"
+                      loading="lazy"
+                    />
+                  {:else}
+                    <span class="text-xs opacity-40">-</span>
+                  {/if}
+                </td>
                 <td class="text-xl">{s.emoji || '-'}</td>
                 <td class="max-w-xs truncate" title={s.description}>{s.description}</td>
                 <td class="font-mono text-xs max-w-32 truncate" title={s.uniqueFileId}>{s.uniqueFileId.slice(-16)}</td>
@@ -95,3 +110,13 @@
     </div>
   </div>
 </dialog>
+
+<style>
+  .sticker-thumb {
+    width: 48px;
+    height: 48px;
+    object-fit: contain;
+    border-radius: 4px;
+    background: transparent;
+  }
+</style>

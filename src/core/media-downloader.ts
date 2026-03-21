@@ -214,7 +214,8 @@ export class MediaDownloader {
         const cutoffMs = Date.now() - this.retentionDays * 24 * 60 * 60 * 1000;
         let removed = 0;
 
-        for (const cat of ["photos", "videos", "stickers", "documents", "other"]) {
+        // 贴纸文件永久保留，不参与清理
+        for (const cat of ["photos", "videos", "documents", "other"]) {
             const dir = path.join(this.downloadDir, cat);
             try {
                 const files = fs.readdirSync(dir);
