@@ -174,7 +174,7 @@ async function main(): Promise<void> {
 
                 if (telegramAdapter.canHandle(method)) {
                     // ── ChatId 发送限制：write 操作只允许绑定的 chatId ──
-                    const WRITE_METHODS = ["telegram.sendText", "telegram.sendMedia", "telegram.sendFile", "telegram.sendTyping", "telegram.joinChat", "telegram.leaveChat"];
+                    const WRITE_METHODS = ["telegram.sendText", "telegram.sendMedia", "telegram.sendFile", "telegram.sendTyping"];
                     if (WRITE_METHODS.includes(method)) {
                         const targetChatId = String(args[0] ?? "");
                         if (targetChatId !== chatId) {
