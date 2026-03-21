@@ -10,6 +10,8 @@ node_modules/
 
 # Build artifacts
 dist/
+src/dashboard/public/
+src/dashboard/ui/node_modules/
 
 # Environment
 .env

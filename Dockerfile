@@ -9,7 +9,15 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
 
-# ── Stage 2: Runtime ──
+# ── Stage 2: Build dashboard UI ──
+FROM node:22-bookworm AS ui-build
+WORKDIR /app
+COPY src/dashboard/ui/package.json src/dashboard/ui/package-lock.json ./src/dashboard/ui/
+RUN cd src/dashboard/ui && npm ci
+COPY src/dashboard/ui/ ./src/dashboard/ui/
+RUN cd src/dashboard/ui && npm run build
+
+# ── Stage 3: Runtime ──
 FROM node:22-bookworm
 
 # 预装常用 CLI 工具（供 Agent bash 代码块使用）
@@ -34,6 +42,9 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY package.json ./
 COPY src ./src
 COPY system-prompts ./system-prompts
+
+# Copy built dashboard assets from ui-build stage
+COPY --from=ui-build /app/src/dashboard/public ./src/dashboard/public
 
 # Data directory (mount as volume for persistence)
 RUN mkdir -p /app/workspace

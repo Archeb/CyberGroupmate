@@ -1,0 +1,74 @@
+/**
+ * ws.js — WebSocket connection manager
+ *
+ * Auto-reconnects. Dispatches events to update stores.
+ */
+
+import { getToken } from './api.js';
+import {
+  wsStatus, appState, messages, llmLogs, llmStats,
+  addMessage, handleLLMCall, handleLLMResponse,
+} from './stores.js';
+import { get } from 'svelte/store';
+
+let ws = null;
+
+export function connectWS() {
+  const token = getToken();
+  const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const url = `${protocol}//${location.host}/ws?token=${token}`;
+
+  ws = new WebSocket(url);
+
+  ws.onopen = () => {
+    wsStatus.set('connected');
+  };
+
+  ws.onclose = () => {
+    wsStatus.set('disconnected');
+    setTimeout(connectWS, 3000);
+  };
+
+  ws.onerror = () => ws.close();
+
+  ws.onmessage = (ev) => {
+    try {
+      const event = JSON.parse(ev.data);
+      handleEvent(event);
+    } catch { /* ignore */ }
+  };
+}
+
+function handleEvent(event) {
+  switch (event.type) {
+    case 'snapshot': {
+      const data = event.data;
+      // Normalize queue format
+      if (Array.isArray(data.queue)) {
+        data.queue = { active: data.queue, dequeued: [] };
+      }
+      appState.set(data);
+      break;
+    }
+    case 'nc:message':
+      addMessage(event.data, event.timestamp);
+      break;
+    case 'queue:update': {
+      appState.update(s => {
+        if (Array.isArray(event.data)) {
+          s.queue = { active: event.data, dequeued: s.queue?.dequeued || [] };
+        } else {
+          s.queue = event.data;
+        }
+        return s;
+      });
+      break;
+    }
+    case 'llm:call':
+      handleLLMCall(event.data);
+      break;
+    case 'llm:response':
+      handleLLMResponse(event.data);
+      break;
+  }
+}

@@ -1,5 +1,41 @@
 # Changelog
 
+## 2026-03-21: Refactor dashboard frontend to Svelte
+
+### Overview
+
+Migrated the monolithic dashboard frontend (~2850 lines in `app.js` + `index.html` + `style.css`) to a modular **Svelte 5 + Vite + TailwindCSS 4 + DaisyUI 5** SPA. No backend changes required.
+
+### New: `src/dashboard/ui/`
+
+| Category | Files |
+|----------|-------|
+| Build config | `package.json`, `vite.config.js`, `svelte.config.js`, `index.html` |
+| Entry | `src/main.js`, `src/App.svelte`, `src/app.css` |
+| Core libs | `src/lib/api.js` (REST + token), `ws.js` (WebSocket + reconnect), `stores.js` (Svelte stores), `utils.js` (shared utils) |
+| Layout | `Navbar.svelte`, `StatsBar.svelte`, `TabNav.svelte` |
+| Panels (10) | `MessagesPanel`, `TopicsPanel`, `QueuePanel`, `DecisionsPanel`, `CodeActPanel`, `LLMLogPanel`, `MemoryPanel`, `StickersPanel`, `SystemPanel`, `TopicDetailPanel` |
+| Memory sub-tabs (6) | `PersonsTab`, `ProfilesTab`, `GroupsTab`, `FactsTab`, `InteractionsTab`, `RecallTab` |
+| Modals | `EnqueueModal.svelte`, `MemoryEditModal.svelte` |
+
+### Modified
+
+| File | Change |
+|------|--------|
+| `.gitignore` | Added `src/dashboard/public/`, `src/dashboard/ui/node_modules/` |
+| `package.json` | Added `dashboard:dev`, `dashboard:build` scripts |
+| `Dockerfile` | Added `ui-build` stage for Svelte compilation |
+| `.vscode/launch.json` | Added `🖥️ Dashboard Dev Server (Vite)` + compound `🚀+🖥️ Agent + Dashboard Dev` |
+
+### CSS modularization
+
+Component-specific styles moved from global `app.css` into scoped `<style>` blocks: `LLMLogPanel`, `MessagesPanel`, `TopicsPanel`, `QueuePanel`, `DecisionsPanel`. Global `app.css` reduced from 466 → 168 lines (tab-nav, codeact, scrollbar, JSON, clickable utilities remain global).
+
+### Build output
+
+- 148 modules, ~771ms build time
+- CSS: 77.74 kB (gzip 14.24 kB), JS: 159.21 kB (gzip 54.31 kB)
+
 ## 2026-03-20: 修复 Observer Alert 重复触发导致 Token 快速消耗
 
 ### Bug

@@ -280,6 +280,21 @@
             "skipFiles": [
                 "<node_internals>/**"
             ]
+        },
+        {
+            "type": "node",
+            "request": "launch",
+            "name": "🖥️ Dashboard Dev Server (Vite)",
+            "runtimeExecutable": "npm",
+            "runtimeArgs": [
+                "run",
+                "dev"
+            ],
+            "cwd": "${workspaceFolder}/src/dashboard/ui",
+            "console": "integratedTerminal",
+            "skipFiles": [
+                "<node_internals>/**"
+            ]
         }
     ],
     "inputs": [
@@ -318,6 +333,16 @@
             "type": "promptString",
             "description": "通知内容",
             "default": ""
+        }
+    ],
+    "compounds": [
+        {
+            "name": "🚀+🖥️ Agent + Dashboard Dev",
+            "configurations": [
+                "🚀 启动 Agent (main.ts)",
+                "🖥️ Dashboard Dev Server (Vite)"
+            ],
+            "stopAll": true
         }
     ]
 }

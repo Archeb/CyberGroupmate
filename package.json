@@ -10,7 +10,9 @@
     "dev": "tsx watch src/main.ts",
     "test": "tsx --test tests/**/*.test.ts",
     "cli": "tsx src/cli.ts",
-    "tg-convert": "tsx src/tools/tg-to-jsonl.ts"
+    "tg-convert": "tsx src/tools/tg-to-jsonl.ts",
+    "dashboard:dev": "cd src/dashboard/ui && npm run dev",
+    "dashboard:build": "cd src/dashboard/ui && npm run build"
   },
   "dependencies": {
     "@mtcute/node": "latest",
