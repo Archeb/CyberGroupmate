@@ -1,4 +1,5 @@
 <script>
+  import { tick } from "svelte";
   import {
     llmLogs,
     llmStats,
@@ -28,6 +29,12 @@
 
   let expandedMsgs = {};
   let expandedResp = {};
+  let autoExpand = false;
+  let currentVisibleIdx = -1;
+  let totalMsgCount = 0;
+  let detailPane;
+  let msgElements = [];
+  let respElement;
 
   function selectLog(callId) {
     selectedLLMCallId.set(callId);
@@ -36,6 +43,23 @@
   $: selectedEntry = $selectedLLMCallId
     ? $llmLogs.find((e) => e.callId === $selectedLLMCallId)
     : null;
+
+  // Auto-scroll to last message/response when selecting a new log entry
+  let prevSelectedId = null;
+  $: if (selectedEntry && selectedEntry.callId !== prevSelectedId) {
+    prevSelectedId = selectedEntry.callId;
+    scrollToLatest();
+  }
+
+  async function scrollToLatest() {
+    await tick();
+    // Try scrolling to response first, then last message
+    if (respElement) {
+      respElement.scrollIntoView({ behavior: "smooth", block: "start" });
+    } else if (msgElements.length > 0) {
+      msgElements[msgElements.length - 1]?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }
 
   function toggleMsg(callId, idx) {
     const key = `${callId}-${idx}`;
@@ -46,6 +70,87 @@
   function toggleResp(callId) {
     expandedResp[callId] = !expandedResp[callId];
     expandedResp = expandedResp;
+  }
+
+  function toggleAutoExpand() {
+    autoExpand = !autoExpand;
+    if (autoExpand && selectedEntry) {
+      // Expand all for current entry
+      (selectedEntry.messageSummaries || []).forEach((_, i) => {
+        expandedMsgs[`${selectedEntry.callId}-${i}`] = true;
+      });
+      expandedResp[selectedEntry.callId] = true;
+      expandedMsgs = expandedMsgs;
+      expandedResp = expandedResp;
+    }
+  }
+
+  // Navigate to prev/next message
+  function navigateMsg(direction) {
+    if (!msgElements.length) return;
+    let target = currentVisibleIdx + direction;
+    // Include response as last "element"
+    const maxIdx = msgElements.length; // msgElements.length = response slot
+    if (target < 0) target = 0;
+    if (target > maxIdx) target = maxIdx;
+
+    if (target < msgElements.length && msgElements[target]) {
+      msgElements[target].scrollIntoView({ behavior: "smooth", block: "center" });
+    } else if (target === msgElements.length && respElement) {
+      respElement.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+  }
+
+  // IntersectionObserver for scroll position tracking
+  let observer;
+  function setupObserver() {
+    if (observer) observer.disconnect();
+    if (!detailPane) return;
+
+    observer = new IntersectionObserver(
+      (entries) => {
+        // Find the topmost visible entry
+        let best = null;
+        for (const e of entries) {
+          if (e.isIntersecting) {
+            const idx = parseInt(e.target.dataset.msgIdx, 10);
+            if (!isNaN(idx) && (best === null || idx < best)) {
+              best = idx;
+            }
+          }
+        }
+        if (best !== null) currentVisibleIdx = best;
+      },
+      { root: detailPane, threshold: 0.1 }
+    );
+
+    // Observe all message elements + response
+    msgElements.forEach((el) => {
+      if (el) observer.observe(el);
+    });
+    if (respElement) observer.observe(respElement);
+  }
+
+  // Re-setup observer when selected entry changes
+  $: if (selectedEntry && detailPane) {
+    tick().then(() => {
+      totalMsgCount = msgElements.length + (respElement ? 1 : 0);
+      setupObserver();
+    });
+  }
+
+  // Export currently selected log entry as JSON
+  function exportCurrentLog() {
+    if (!selectedEntry) return;
+    const data = JSON.stringify(selectedEntry, null, 2);
+    const blob = new Blob([data], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    const ts = new Date(selectedEntry.timestamp).toISOString().replace(/[:.]/g, "-").slice(0, 19);
+    a.download = `llm-log-${selectedEntry.caller}-${ts}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
   }
 </script>
 
@@ -64,6 +169,7 @@
           >💰 <b>{formatCost($llmStats.totalCost)}</b></span
         >
       {/if}
+
       <button
         class="btn btn-xs btn-ghost"
         onclick={() => {
@@ -117,7 +223,7 @@
 
   <!-- Right: detail -->
   <div class="llm-log-right">
-    <div class="llm-log-detail-pane">
+    <div class="llm-log-detail-pane" bind:this={detailPane}>
       {#if !selectedEntry}
         <div class="text-sm opacity-40 p-4">← 点击左侧条目查看详情</div>
       {:else}
@@ -126,31 +232,55 @@
           CALLER_COLORS[selectedEntry.caller] || "badge-ghost"}
         <!-- Header -->
         <div class="llm-detail-header">
-          <span class="badge badge-sm {callerBadge}"
-            >{selectedEntry.caller}</span
-          >
-          <span class="opacity-70">{selectedEntry.model}</span>
-          <span class="opacity-40"
-            >T={selectedEntry.temperature} max={selectedEntry.maxTokens}</span
-          >
-          {#if r}
-            <span class="opacity-60">{r.durationMs}ms</span>
-            {#if r.usage}
-              <span class="opacity-40">
-                prompt:{r.usage.promptTokens ?? "?"}
-                {#if r.usage.cachedTokens}(cached:{r.usage.cachedTokens}){/if}
-                {#if r.usage.cacheCreationTokens}(创建:{r.usage.cacheCreationTokens}){/if}
-                / completion:{r.usage.completionTokens ?? "?"}
-                / total:{r.usage.totalTokens ?? "?"}
-              </span>
-              {@const detailCost = calculateCallCost(r.usage, selectedEntry.model)}
-              {#if detailCost > 0}
-                <span class="text-warning">{formatCost(detailCost)}</span>
+          <div class="llm-detail-header-top">
+            <span class="badge badge-sm {callerBadge}"
+              >{selectedEntry.caller}</span
+            >
+            <span class="opacity-70">{selectedEntry.model}</span>
+            <span class="opacity-40"
+              >T={selectedEntry.temperature} max={selectedEntry.maxTokens}</span
+            >
+            {#if r}
+              <span class="opacity-60">{r.durationMs}ms</span>
+              {#if r.usage}
+                <span class="opacity-40">
+                  prompt:{r.usage.promptTokens ?? "?"}
+                  {#if r.usage.cachedTokens}(cached:{r.usage.cachedTokens}){/if}
+                  {#if r.usage.cacheCreationTokens}(创建:{r.usage.cacheCreationTokens}){/if}
+                  / completion:{r.usage.completionTokens ?? "?"}
+                  / total:{r.usage.totalTokens ?? "?"}
+                </span>
+                {@const detailCost = calculateCallCost(r.usage, selectedEntry.model)}
+                {#if detailCost > 0}
+                  <span class="text-warning">{formatCost(detailCost)}</span>
+                {/if}
               {/if}
+            {:else}
+              <span class="text-warning">进行中...</span>
             {/if}
-          {:else}
-            <span class="text-warning">进行中...</span>
-          {/if}
+          </div>
+          <div class="llm-detail-nav-bar">
+            <button
+              class="btn btn-xs btn-ghost"
+              class:btn-active={autoExpand}
+              onclick={() => toggleAutoExpand()}
+              title="自动展开全部内容"
+            >
+              {autoExpand ? "🔽 收起全部" : "🔼 展开全部"}
+            </button>
+            <span class="llm-nav-divider"></span>
+            <button class="btn btn-xs btn-ghost" onclick={() => navigateMsg(-1)} title="上一个 message">▲</button>
+            <span class="llm-nav-pos">
+              {#if totalMsgCount > 0}
+                {currentVisibleIdx + 1}/{totalMsgCount}
+              {/if}
+            </span>
+            <button class="btn btn-xs btn-ghost" onclick={() => navigateMsg(1)} title="下一个 message">▼</button>
+            <span class="llm-nav-divider"></span>
+            <button class="btn btn-xs btn-ghost" onclick={() => scrollToLatest()} title="定位到最新">⏬</button>
+            <span class="llm-nav-divider"></span>
+            <button class="btn btn-xs btn-ghost" onclick={() => exportCurrentLog()} title="导出当前日志为 JSON">📥</button>
+          </div>
         </div>
 
         <!-- Messages -->
@@ -166,13 +296,13 @@
                   ? "llm-role-assistant"
                   : "llm-role-user"}
             {@const content = m.contentPreview || ""}
-            {@const isExpanded = expandedMsgs[`${selectedEntry.callId}-${mi}`]}
+            {@const isExpanded = autoExpand || expandedMsgs[`${selectedEntry.callId}-${mi}`]}
             {@const displayContent = isExpanded
               ? content
               : content.length > 200
                 ? content.slice(0, 200) + "..."
                 : content}
-            <div class="llm-detail-msg">
+            <div class="llm-detail-msg" bind:this={msgElements[mi]} data-msg-idx={mi}>
               <div class="llm-detail-msg-role {roleClass}">{m.role}</div>
               <div class="llm-detail-msg-content">{displayContent}</div>
               {#if content.length > 200}
@@ -180,7 +310,7 @@
                   class="llm-msg-toggle"
                   onclick={() => toggleMsg(selectedEntry.callId, mi)}
                 >
-                  {isExpanded ? "收起" : "展开"}
+                  {isExpanded && !autoExpand ? "收起" : autoExpand ? "" : "展开"}
                 </button>
               {/if}
               {#if m.imageCount > 0}
@@ -218,19 +348,19 @@
               <div class="llm-detail-error">{r.error}</div>
             {:else}
               {@const respContent = r.contentPreview || "(empty)"}
-              {@const respExpanded = expandedResp[selectedEntry.callId]}
+              {@const respExpanded = autoExpand || expandedResp[selectedEntry.callId]}
               {@const displayResp = respExpanded
                 ? respContent
                 : respContent.length > 500
                   ? respContent.slice(0, 500) + "..."
                   : respContent}
-              <div class="llm-detail-response-body">{displayResp}</div>
+              <div class="llm-detail-response-body" bind:this={respElement} data-msg-idx={selectedEntry.messageSummaries?.length ?? 0}>{displayResp}</div>
               {#if respContent.length > 500}
                 <button
                   class="llm-msg-toggle"
                   onclick={() => toggleResp(selectedEntry.callId)}
                 >
-                  {respExpanded ? "收起" : "展开"}
+                  {respExpanded && !autoExpand ? "收起" : autoExpand ? "" : "展开"}
                 </button>
               {/if}
             {/if}
@@ -362,10 +492,9 @@
 
   .llm-detail-header {
     display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    flex-wrap: wrap;
-    padding-bottom: 0.75rem;
+    flex-direction: column;
+    gap: 0.4rem;
+    padding-bottom: 0.5rem;
     margin-bottom: 0.75rem;
     border-bottom: 1px solid
       color-mix(in srgb, var(--color-base-content) 10%, transparent);
@@ -375,6 +504,35 @@
     z-index: 10;
     background: var(--color-base-100);
     padding-top: 0.75rem;
+  }
+
+  .llm-detail-header-top {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+  }
+
+  .llm-detail-nav-bar {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    font-size: 0.7rem;
+  }
+
+  .llm-nav-divider {
+    width: 1px;
+    height: 1em;
+    background: color-mix(in srgb, var(--color-base-content) 15%, transparent);
+    margin: 0 0.25rem;
+  }
+
+  .llm-nav-pos {
+    font-size: 0.65rem;
+    opacity: 0.6;
+    font-family: ui-monospace, monospace;
+    min-width: 3em;
+    text-align: center;
   }
 
   .llm-detail-section {
