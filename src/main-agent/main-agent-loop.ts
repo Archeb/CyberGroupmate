@@ -420,7 +420,7 @@ export class MainAgentLoop {
         }
 
         // Layer 2: token-budget LLM compact
-        if (this.llmConfig && shouldCompact(this.conversationHistory)) {
+        if (this.llmConfig && shouldCompact(this.conversationHistory, undefined, this.llmConfig)) {
             try {
                 log.info("主 Agent 对话历史 compact: token 超预算", {
                     messageCount: this.conversationHistory.length,

@@ -1,5 +1,28 @@
 # Changelog
 
+## 2026-03-21: Per-Model 上下文输入限制 (maxContextTokens)
+
+新增 `max_context_tokens` 配置项，允许为每个 LLM Profile 单独指定最大上下文输入 token 数，compact 触发阈值随模型实际窗口大小动态调整，取代硬编码的 32000 默认值。
+
+```yaml
+llm_profiles:
+  gemini-flash:
+    max_tokens: 65536
+    max_context_tokens: 200000  # 输入上下文限制
+  deepseek-v3:
+    max_tokens: 8192
+    max_context_tokens: 60000
+```
+
+### 改动
+
+| 文件 | 改动 |
+|------|------|
+| `src/core/config.ts` | `LLMConfig` 新增 `maxContextTokens?: number`；`parseLLMProfile` 解析 `max_context_tokens` |
+| `src/memory-v2/context-manager.ts` | 新增 `resolveEffectiveWindow()` 辅助函数；`shouldCompact()` 新增可选 `llmConfig` 参数，优先使用 `maxContextTokens`；`compact()` 用 `maxContextTokens` 覆盖 budget |
+| `src/main-agent/main-agent-loop.ts` | `appendToHistory()` 的 Layer 2 compact 传递 `this.llmConfig` |
+| `src/subagent/code-act-executor.ts` | `compactSession()` 的 Layer 2 compact 传递 `this.llmConfigs[0]` |
+
 ## 2026-03-21: 贴纸发送功能 + sendSticker API
 
 完整的贴纸发送管线：贴纸 webp 文件永久保存到本地 → LLM 决策时输出相关 emoji → 按 emoji 查找可用贴纸 → 注入 CodeAct 上下文 → bot 通过 `sendSticker(chatId, uniqueFileId)` 发送。

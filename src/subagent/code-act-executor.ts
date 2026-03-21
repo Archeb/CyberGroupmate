@@ -957,7 +957,7 @@ export class CodeActExecutor {
                 role: m.role,
                 content: m.content,
             }));
-            if (shouldCompact(chatMessages)) {
+            if (shouldCompact(chatMessages, undefined, this.llmConfigs[0])) {
                 log.info("compactSession Layer 2: token 仍超预算，调用 context-manager compact", {
                     chatId: this.chatId,
                     messageCount: chatMessages.length,

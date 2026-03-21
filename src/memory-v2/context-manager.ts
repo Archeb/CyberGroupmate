@@ -1,5 +1,6 @@
 import { createLogger } from "../core/logger.js";
-import { callLLM, type ChatMessage, type LLMConfig } from "../core/llm.js";
+import { callLLM, type ChatMessage } from "../core/llm.js";
+import type { LLMConfig } from "../core/config.js";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { encodingForModel } from "js-tiktoken";
@@ -134,24 +135,43 @@ export function estimateMessagesTokens(messages: ChatMessage[]): number {
 // ─── Compaction 判断 ───
 
 /**
+ * 根据 LLMConfig 计算有效上下文窗口。
+ * 优先使用 maxContextTokens，不存在时 fallback 到 budget.effectiveContextWindow。
+ */
+function resolveEffectiveWindow(
+    budget: ContextBudget,
+    llmConfig?: LLMConfig,
+): number {
+    if (llmConfig?.maxContextTokens && llmConfig.maxContextTokens > 0) {
+        return llmConfig.maxContextTokens;
+    }
+    return budget.effectiveContextWindow;
+}
+
+/**
  * 判断是否需要触发 compaction
  *
  * 触发条件：总 token 超过有效上下文窗口的 85%
+ * 当传入 llmConfig 且其 maxContextTokens 已设置时，使用该值替代 budget 中的默认值。
  */
 export function shouldCompact(
     messages: ChatMessage[],
     budget: ContextBudget = DEFAULT_CONTEXT_BUDGET,
+    llmConfig?: LLMConfig,
 ): boolean {
     if (messages.length === 0) return false;
 
+    const effectiveWindow = resolveEffectiveWindow(budget, llmConfig);
     const totalTokens = estimateMessagesTokens(messages);
-    const threshold = budget.effectiveContextWindow * 0.85;
+    const threshold = effectiveWindow * 0.85;
 
     log.debug("shouldCompact 检查", {
         totalTokens,
         threshold: Math.floor(threshold),
+        effectiveWindow,
         messageCount: messages.length,
         triggered: totalTokens > threshold,
+        source: llmConfig?.maxContextTokens ? `model(${llmConfig.model})` : "default",
     });
 
     return totalTokens > threshold;
@@ -354,13 +374,18 @@ export async function compact(
         engagedIndices?: Set<number>;
     },
 ): Promise<ChatMessage[]> {
+    // 使用 llmConfig 中的 maxContextTokens 覆盖 budget 的 effectiveContextWindow
+    const effectiveBudget = llmConfig.maxContextTokens && llmConfig.maxContextTokens > 0
+        ? { ...budget, effectiveContextWindow: llmConfig.maxContextTokens }
+        : budget;
+
     // 不需要压缩时原样返回
-    if (!shouldCompact(messages, budget)) {
+    if (!shouldCompact(messages, effectiveBudget, llmConfig)) {
         log.debug("compact: 未超预算，跳过压缩");
         return messages;
     }
 
-    const classified = classifyMessages(messages, budget);
+    const classified = classifyMessages(messages, effectiveBudget);
 
     // 无候选消息可压缩
     if (classified.candidates.length === 0) {
@@ -412,7 +437,7 @@ export async function compact(
         unprotectedCandidates,
         classified.briefing?.content, // 已有的 briefing 也传入合并
         llmConfig,
-        budget,
+        effectiveBudget,
     );
 
     // 重组消息数组

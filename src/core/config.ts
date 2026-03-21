@@ -20,6 +20,8 @@ export interface LLMConfig {
     model: string;
     temperature: number;
     maxTokens: number;
+    /** 模型允许的最大上下文输入 token 数。用于触发 compact。未设置则使用 context_budget.effective_context_window（默认 32000） */
+    maxContextTokens?: number;
     /** Gemini thinking level: "none" | "low" | "medium" | "high" */
     thinkingLevel?: string;
     /** 此 profile 是否支持多模态图片输入。默认 false */
@@ -576,6 +578,7 @@ function parseLLMProfile(raw: Record<string, unknown>): LLMConfig {
         model: str(raw.model) ?? DEFAULT_LLM.model,
         temperature: num(raw.temperature, DEFAULT_LLM.temperature),
         maxTokens: num(raw.max_tokens, DEFAULT_LLM.maxTokens),
+        maxContextTokens: raw.max_context_tokens != null ? num(raw.max_context_tokens, 0) : undefined,
         thinkingLevel: str(raw.thinking_level),
         vision: raw.vision === true ? true : undefined,
         supportsPrefill: raw.supports_prefill === false ? false : undefined,
