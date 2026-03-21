@@ -70,7 +70,8 @@ const SUPPORTED_MIME = new Set(["image/jpeg", "image/png"]);
 
 /**
  * 确保图片为 API 支持的格式（JPEG/PNG）
- * 不支持的格式（如 TIFF、WebP、AVIF 等）自动转码为 PNG
+ * 不支持的格式（如 TIFF、WebP、AVIF 等）通过 ffmpeg 转码为 PNG
+ * 如果 ffmpeg 不可用，返回原始 buffer（多数 Vision API 支持 WebP）
  */
 async function ensureSupportedFormat(
     buffer: Buffer,
@@ -78,9 +79,25 @@ async function ensureSupportedFormat(
 ): Promise<{ buffer: Buffer; mimeType: string }> {
     if (SUPPORTED_MIME.has(mimeType)) return { buffer, mimeType };
     log.debug("转码不支持的图片格式", { from: mimeType, to: "image/png" });
-    const sharp = (await import("sharp")).default;
-    const converted = await sharp(buffer).png().toBuffer();
-    return { buffer: converted, mimeType: "image/png" };
+    try {
+        const { execFileSync } = await import("node:child_process");
+        // ffmpeg: 从 stdin 读取, 输出 png 到 stdout
+        const converted = execFileSync("ffmpeg", [
+            "-hide_banner", "-loglevel", "error",
+            "-f", "image2pipe", "-i", "pipe:0",
+            "-f", "image2", "-c:v", "png",
+            "pipe:1",
+        ], {
+            input: buffer,
+            maxBuffer: 20 * 1024 * 1024, // 20MB
+            timeout: 10000,
+        });
+        return { buffer: Buffer.from(converted), mimeType: "image/png" };
+    } catch (err) {
+        log.warn("ffmpeg 转码失败，使用原始格式", { from: mimeType, error: String(err).slice(0, 200) });
+        // 降级：直接使用原始 buffer（多数 Vision API 支持 WebP）
+        return { buffer, mimeType };
+    }
 }
 
 /** 图片描述内存缓存（Path B）: uniqueFileId → description */
