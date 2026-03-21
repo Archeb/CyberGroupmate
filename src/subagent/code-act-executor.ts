@@ -496,7 +496,7 @@ export class CodeActExecutor {
                 sentCollector, // Fix 1: 传入 collector
                 () => this.drainPendingMessages(), // 层 2: turn 间消息注入
                 `让${this.personaName}想想，`,  // prefill: 引导 LLM 以角色开始思考
-                ["系统返回】**"],  // stop sequences
+                ["**【第", "系统返回】**"],  // stop sequences
             );
         } finally {
             // 停止 typing 指示
