@@ -50,6 +50,9 @@
 
   $: if ($activeTab === 'config' && !config) loadConfigData();
 
+  // Reactive snapshot of routing — forces {#key} re-render when routing changes
+  $: routingSnapshot = config ? JSON.stringify(config.llmRouting) : '';
+
   async function loadConfigData() {
     loading = true;
     try {
@@ -283,6 +286,7 @@
           {#if currentSection === 'llmRouting'}
             <h3 class="card-title text-sm"><i class="fa-solid fa-route opacity-50 mr-1"></i> 组件级 LLM 路由</h3>
             <p class="text-xs opacity-50 mb-3">为每个组件分配 LLM profile。支持多个（fallback chain）。</p>
+            {#key routingSnapshot}
             <div class="space-y-2">
               {#each ROUTING_COMPONENTS as comp}
                 {@const assigned = getRoutingValue(comp.key)}
@@ -314,6 +318,7 @@
                 </div>
               {/each}
             </div>
+            {/key}
           {/if}
 
           <!-- ══ Persona & Notification (merged) ══ -->
@@ -353,8 +358,8 @@
             <input type="text" class="input input-sm input-bordered w-full max-w-xs" bind:value={config.timezone}
               placeholder="Asia/Shanghai" list="tz-list" />
             <datalist id="tz-list">
-              <option value="Asia/Shanghai" /><option value="Asia/Tokyo" /><option value="America/New_York" />
-              <option value="America/Los_Angeles" /><option value="Europe/London" /><option value="UTC" />
+              <option value="Asia/Shanghai"></option><option value="Asia/Tokyo"></option><option value="America/New_York"></option>
+              <option value="America/Los_Angeles"></option><option value="Europe/London"></option><option value="UTC"></option>
             </datalist>
           {/if}
 
