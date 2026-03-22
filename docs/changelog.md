@@ -1,5 +1,26 @@
 # Changelog
 
+## 2026-03-22: TelegramAdapter 拟人化发送延迟
+
+新增拟人化延迟功能：当同一 chat 连续发送多条消息时，根据文字长度自动计算延迟（模拟打字速度），避免瞬间刷屏。通过 `config.yaml` 中 `telegram.humanized_delay` 控制开关和参数。
+
+```yaml
+telegram:
+  humanized_delay:
+    enabled: true
+    ms_per_char: 50       # 每字符延迟（ms），默认 50
+    min_delay: 500        # 最短延迟（ms），默认 500
+    max_delay: 5000       # 最长延迟（ms），默认 5000
+```
+
+### 改动
+
+| 文件 | 改动 |
+|------|------|
+| `src/core/config.ts` | `TelegramConfig` 新增 `humanizedDelay?` 字段；新增 `parseHumanizedDelay()` 解析函数 |
+| `src/adapter/telegram-adapter.ts` | 新增 `lastSendTimes` Map + `applyHumanizedDelay()` 方法；`sendText`/`sendMedia`/`sendFile` 发送前调用延迟 |
+| `config.example.yaml` | telegram 区块新增 `humanized_delay` 注释示例 |
+
 ## 2026-03-21: CodeAct 轮次可配置 + 轮次状态注入
 
 `MAX_TURNS` 从硬编码 15 改为可配置（默认 30）。每轮 observation 末尾注入 `[📊 轮次状态: 第 X/Y 轮，剩余 Z 轮]`，LLM 可感知剩余行动预算。最后 2 轮追加紧迫提醒。

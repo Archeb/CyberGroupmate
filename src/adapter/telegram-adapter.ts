@@ -164,6 +164,9 @@ export class TelegramAdapter implements PlatformAdapter {
     private messageHandler: ((msg: any) => Promise<void>) | null = null;
     private mediaCache = new MediaFileCache();
 
+    // ─── 拟人化延迟状态 ───
+    private lastSendTimes = new Map<string, number>();
+
     // ─── /invisible & /mute 状态 ───
     private invisibleUsers: Set<string> = loadInvisibleUsers();
     private mutedChats: Map<string, number> = new Map();  // chatId → expiry timestamp (ms)
@@ -338,6 +341,8 @@ export class TelegramAdapter implements PlatformAdapter {
             case "telegram.sendText": {
                 const peer = await this.ensurePeerCached(args[0]);
                 const opts = this.normalizeReplyOpts(args[2]);
+                const textLen = typeof args[1] === "string" ? args[1].length : 0;
+                await this.applyHumanizedDelay(String(args[0] ?? ""), textLen);
                 return this.normalizeMessage(
                     await this.client.sendText(peer, args[1], opts),
                 );
@@ -367,6 +372,8 @@ export class TelegramAdapter implements PlatformAdapter {
                     }
                 }
 
+                const captionLen = typeof mediaArg?.caption === "string" ? mediaArg.caption.length : 0;
+                await this.applyHumanizedDelay(String(args[0] ?? ""), captionLen);
                 return this.normalizeMessage(
                     await this.client.sendMedia(peer, mediaArg, opts),
                 );
@@ -409,6 +416,8 @@ export class TelegramAdapter implements PlatformAdapter {
                     media.caption = fileOpts.caption;
                 }
 
+                const fileCaptionLen = typeof fileOpts.caption === "string" ? (fileOpts.caption as string).length : 0;
+                await this.applyHumanizedDelay(String(args[0] ?? ""), fileCaptionLen);
                 return this.normalizeMessage(
                     await this.client.sendMedia(peer, media, sendOpts),
                 );
@@ -671,6 +680,31 @@ export class TelegramAdapter implements PlatformAdapter {
         } catch (err) {
             log.warn("replySafe 发送失败", { chatId, error: String(err) });
         }
+    }
+
+    // ─── 拟人化延迟 ───
+
+    /**
+     * 根据文字长度计算延迟并 sleep，模拟打字速度。
+     * 仅当 humanizedDelay.enabled 且距上次发送时间不足时生效。
+     */
+    private async applyHumanizedDelay(chatId: string, textLength: number): Promise<void> {
+        const hd = this.config.humanizedDelay;
+        if (!hd?.enabled) return;
+
+        const { msPerChar, minDelay, maxDelay } = hd;
+        const targetDelay = Math.max(minDelay, Math.min(maxDelay, textLength * msPerChar));
+
+        const lastSend = this.lastSendTimes.get(chatId) ?? 0;
+        const elapsed = Date.now() - lastSend;
+
+        if (elapsed < targetDelay) {
+            const waitMs = targetDelay - elapsed;
+            log.debug("applyHumanizedDelay: 等待", { chatId, waitMs, textLength, targetDelay });
+            await new Promise(resolve => setTimeout(resolve, waitMs));
+        }
+
+        this.lastSendTimes.set(chatId, Date.now());
     }
 
     private readLimit(value: unknown, fallback: number): number {

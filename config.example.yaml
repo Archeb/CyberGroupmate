@@ -158,6 +158,12 @@ telegram:
   api_hash: ""
   # 手机号 (userbot 模式下使用；首次登录时会在终端提示输入 OTP / 2FA)
   phone: ""
+  # 拟人化发送延迟（多条消息连续发送时模拟打字速度）
+  # humanized_delay:
+  #   enabled: true
+  #   ms_per_char: 50       # 每字符延迟（ms），默认 50
+  #   min_delay: 500        # 最短延迟（ms），默认 500
+  #   max_delay: 5000       # 最长延迟（ms），默认 5000
 
 # ─── Reflection 设置 ───
 # 控制反思引擎的行为参数

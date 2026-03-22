@@ -96,6 +96,17 @@ export interface TelegramConfig {
     apiId: string;
     apiHash: string;
     phone: string;
+    /** 拟人化发送延迟配置 */
+    humanizedDelay?: {
+        /** 是否启用 */
+        enabled: boolean;
+        /** 每个字符的延迟毫秒数（打字速度），默认 50 */
+        msPerChar: number;
+        /** 最小延迟 ms，默认 500 */
+        minDelay: number;
+        /** 最大延迟 ms，默认 5000 */
+        maxDelay: number;
+    };
 }
 
 export interface ReflectionExternalConfig {
@@ -355,6 +366,7 @@ export function loadConfig(configPath?: string, forceReload?: boolean): AppConfi
             apiId: str(fileTG.api_id) ?? "",
             apiHash: str(fileTG.api_hash) ?? "",
             phone: str(fileTG.phone) ?? "",
+            humanizedDelay: parseHumanizedDelay(fileTG),
         },
         notification: {
             mentionKeywords: Array.isArray(fileNotification.mention_keywords)
@@ -604,5 +616,17 @@ function parseRoutingValue(val: unknown): string | string[] | undefined {
     if (val === undefined || val === null) return undefined;
     if (Array.isArray(val)) return val.map(String);
     return str(val);
+}
+
+/** 解析 humanized_delay 配置 */
+function parseHumanizedDelay(fileTG: Record<string, unknown>): TelegramConfig["humanizedDelay"] {
+    const raw = fileTG.humanized_delay as Record<string, unknown> | undefined;
+    if (!raw || typeof raw !== "object") return undefined;
+    return {
+        enabled: raw.enabled !== false,
+        msPerChar: raw.ms_per_char != null ? num(raw.ms_per_char, 50) : 50,
+        minDelay: raw.min_delay != null ? num(raw.min_delay, 500) : 500,
+        maxDelay: raw.max_delay != null ? num(raw.max_delay, 5000) : 5000,
+    };
 }
 
