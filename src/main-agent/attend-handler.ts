@@ -20,6 +20,7 @@ import { calculateDepth } from "./cosine-decay.js";
 import { buildGroupContext } from "./context-builder.js";
 import { renderPrompt, buildAttentionVariables, buildMainSystemVariables } from "./prompt-renderer.js";
 import { callLLMWithFallback } from "../core/llm.js";
+import { getRawId } from "../core/chat-id.js";
 import { createLogger } from "../core/logger.js";
 import { formatTsForDisplay } from "../core/timezone.js";
 import { formatMessageLine, resolveReplyText, type RawMessage } from "../core/message-enricher.js";
@@ -108,7 +109,7 @@ export function createAttendHandler(
                     const profile = profiles.find(p => p.userId === uid);
                     const identity = memory.getPersonIdentity(uid);
                     activePersons.push({
-                        userId: uid,
+                        userId: getRawId(uid),
                         displayName: name,
                         recentMessageCount: count,
                         ...(profile ? { dunbarTier: profile.dunbarTier, relationToAgent: profile.relationToAgent } : {}),

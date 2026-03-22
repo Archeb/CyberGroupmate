@@ -11,7 +11,7 @@
  */
 
 import { NotificationCenter, type NotificationEvent } from "./event/notification-center.js";
-
+import { ensureCompositeId, getRawId } from "./core/chat-id.js";
 import { SandboxPool } from "./sandbox/sandbox-pool.js";
 import { createTaskListSkill, buildTaskListHostCalls } from "./sandbox/skills/task-list.js";
 import { MemoryStoreV2 } from "./memory-v2/index.js";
@@ -151,7 +151,8 @@ async function main(): Promise<void> {
             sandbox.setHostCallHandler(async (method, args) => {
                 // ── telegram.sendSticker: 通过 uniqueFileId 发送贴纸 ──
                 if (method === "telegram.sendSticker") {
-                    const targetChatId = String(args[0] ?? "");
+                    const rawTarget = String(args[0] ?? "");
+                    const targetChatId = ensureCompositeId("telegram", rawTarget);
                     if (targetChatId !== chatId) {
                         throw new Error(`[Sandbox 安全限制] sendSticker 被拦截：sandbox 绑定 chat=${chatId}，不允许向 chat=${targetChatId} 发送。`);
                     }
@@ -176,7 +177,8 @@ async function main(): Promise<void> {
                     // ── ChatId 发送限制：write 操作只允许绑定的 chatId ──
                     const writeMethods = telegramAdapter.getWriteMethods();
                     if (writeMethods.includes(method)) {
-                        const targetChatId = String(args[0] ?? "");
+                        const rawTarget = String(args[0] ?? "");
+                        const targetChatId = ensureCompositeId("telegram", rawTarget);
                         if (targetChatId !== chatId) {
                             throw new Error(
                                 `[Sandbox 安全限制] ${method} 被拦截：当前 sandbox 绑定 chat=${chatId}，` +

@@ -888,7 +888,7 @@ export class TelegramAdapter implements PlatformAdapter {
 
         return {
             chatId: composeChatId("telegram", plain.chat.id),
-            userId: senderId,
+            userId: /^-?\d+$/.test(senderId) ? composeChatId("telegram", senderId) : senderId,
             displayName: plain.sender?.displayName ?? plain.sender?.firstName ?? "Unknown",
             text,
             timestamp: plain.date,

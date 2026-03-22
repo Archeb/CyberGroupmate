@@ -227,3 +227,42 @@ export function isValidCompositeChatId(compositeId: string): boolean {
     if (colonIdx === -1) return false;
     return VALID_PLATFORMS.has(compositeId.slice(0, colonIdx));
 }
+
+/**
+ * 从 composite ID 中提取裸 ID（去掉平台前缀）。
+ * 如果已经是裸 ID（没有平台前缀），原样返回。
+ *
+ * 用途：面向 LLM/sandbox 展示时，隐藏平台前缀。
+ *
+ * @example
+ * getRawId("telegram:682932098")       → "682932098"
+ * getRawId("discord:guild:chan")        → "guild:chan"
+ * getRawId("682932098")                → "682932098"  (已经是裸 ID)
+ * getRawId("agent")                    → "agent"      (非 composite，原样返回)
+ */
+export function getRawId(compositeOrRawId: string): string {
+    if (!compositeOrRawId) return compositeOrRawId;
+    const colonIdx = compositeOrRawId.indexOf(":");
+    if (colonIdx === -1) return compositeOrRawId;  // 无 `:` → 已经是裸 ID
+    const maybePlatform = compositeOrRawId.slice(0, colonIdx);
+    if (VALID_PLATFORMS.has(maybePlatform)) {
+        return compositeOrRawId.slice(colonIdx + 1);
+    }
+    return compositeOrRawId;  // `:` 存在但不是已知平台前缀 → 原样返回
+}
+
+/**
+ * 确保 ID 为 composite 格式。如果已有平台前缀则原样返回，
+ * 否则自动加上指定平台的前缀。
+ *
+ * 用途：sandbox 传入的 raw chatId 自动补全为 composite key 做安全检查。
+ *
+ * @example
+ * ensureCompositeId("telegram", "682932098")            → "telegram:682932098"
+ * ensureCompositeId("telegram", "telegram:682932098")   → "telegram:682932098"  (已有前缀)
+ * ensureCompositeId("telegram", "-1001234567")           → "telegram:-1001234567"
+ */
+export function ensureCompositeId(platform: PlatformName, id: string): string {
+    if (isValidCompositeChatId(id)) return id;
+    return composeChatId(platform, id);
+}

@@ -26,6 +26,7 @@ import { enrichMessages, formatMessageLine, resolveReplyText } from "../core/mes
 import type { MediaDownloader } from "../core/media-downloader.js";
 import type { ChatMessage } from "../core/llm.js";
 import { createLogger } from "../core/logger.js";
+import { getRawId } from "../core/chat-id.js";
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -365,7 +366,7 @@ export class CodeActExecutor {
                         relevantProfiles.push({
                             displayName: identity?.displayName ?? name,
                             aliases: identity?.aliases ?? [],
-                            userId: profile.userId,
+                            userId: getRawId(profile.userId),
                             dunbarTier: profile.dunbarTier,
                             traits: profile.traits,
                             interests: profile.interests,
@@ -415,9 +416,9 @@ export class CodeActExecutor {
 
         // 5. 渲染任务 prompt (每次任务不同)
         const taskVars = {
-            chatId: this.chatId,
+            chatId: getRawId(this.chatId),
             chatType: deriveChatType(ctx.isDirectMessage),
-            chatTitle: ctx.chatTitle ?? ctx.groupModel?.chatTitle ?? this.chatId,
+            chatTitle: ctx.chatTitle ?? ctx.groupModel?.chatTitle ?? getRawId(this.chatId),
             taskId: task.taskId,
             replyMode: task.replyMode,
             targetMessages,
@@ -663,7 +664,7 @@ export class CodeActExecutor {
         const response = await callLLM(
             [
                 { role: "system", content: systemPrompt },
-                { role: "user", content: `chatId: ${this.chatId}\n\n${dialogText}` },
+                { role: "user", content: `chatId: ${getRawId(this.chatId)}\n\n${dialogText}` },
             ],
             cheapConfig,
             { caller: "post-session-extract" },

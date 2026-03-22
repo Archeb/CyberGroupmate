@@ -20,6 +20,7 @@ import type { GroupContextPackage, TopicDigest, SubagentCallback, FastPathConfig
 import type { GlobalState } from "./global-state.js";
 import type { GroupModel } from "../memory-v2/types.js";
 import { createLogger } from "../core/logger.js";
+import { getRawId } from "../core/chat-id.js";
 import { readFileSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -174,7 +175,7 @@ export function buildAttentionVariables(
     const opts = options ?? {};
 
     return {
-        chatId: pkg.chatId,
+        chatId: getRawId(pkg.chatId),
         chatType: deriveChatType(pkg.isDirectMessage),
         depth: pkg.depth,
         snapshotTimestamp: pkg.snapshotTimestamp,
@@ -245,10 +246,10 @@ export function buildMainSystemVariables(
     decisionPrompt: string,
 ): Record<string, unknown> {
     const recentDecisions = globalState.getRecentDecisions().slice(-5)
-        .map(d => `- [${d.chatId}] ${d.decision}`).join("\n") || "（无）";
+        .map(d => `- [${getRawId(d.chatId)}] ${d.decision}`).join("\n") || "（无）";
     const activeTasks = globalState.getTaskList()
         .filter(t => t.status !== "DONE" && t.status !== "CANCELLED")
-        .map(t => `- [${t.priority}][${t.status}] ${t.description}${t.chatId ? ` (群:${t.chatId})` : ""}`)
+        .map(t => `- [${t.priority}][${t.status}] ${t.description}${t.chatId ? ` (群:${getRawId(t.chatId)})` : ""}`)
         .join("\n") || "（无待办任务）";
 
     return {
@@ -278,7 +279,7 @@ export function buildCallbackVariables(
         : "（无）";
 
     return {
-        chatId: cb.chatId,
+        chatId: getRawId(cb.chatId),
         chatType: deriveChatType(isDirectMessage),
         chatTitle: chatTitle || cb.chatId,
         taskId: cb.taskId,
