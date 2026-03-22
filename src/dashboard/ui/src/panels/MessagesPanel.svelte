@@ -2,7 +2,7 @@
   import { onMount, tick } from 'svelte';
   import { messages, selectedChatId, appState, activeTab } from '../lib/stores.js';
   import { api } from '../lib/api.js';
-  import { escapeHtml, shortId, getGroupLabel, isAtBottom, scrollToBottom } from '../lib/utils.js';
+  import { escapeHtml, shortId, getGroupLabel, isAtBottom, scrollToBottom, getPlatform, platformLabel } from '../lib/utils.js';
 
   let streamEl;
 
@@ -63,9 +63,13 @@
                onclick={() => selectChat(null)}>全部</button>
           {#each allChatIds as chatId}
             {@const count = $messages.filter(m => m.chatId === chatId).length}
+            {@const plat = getPlatform(chatId)}
             <button class="chat-item" class:active={$selectedChatId === chatId}
                  onclick={() => selectChat(chatId)} title={chatId}>
-              <span>{getGroupLabel(chatId)}</span>
+              <span class="flex items-center gap-1">
+                {#if plat}<span class="platform-badge platform-{plat}">{platformLabel(plat)}</span>{/if}
+                {getGroupLabel(chatId)}
+              </span>
               <span class="badge badge-sm">{count}</span>
             </button>
           {/each}
@@ -89,7 +93,10 @@
             <div class="msg-item" class:is-agent={isAgent} class:is-mention={isMention}>
               <span class="msg-time">{time}</span>
               {#if !$selectedChatId}
-                <span class="msg-group-tag" title={m.chatId}>{getGroupLabel(m.chatId)}</span>
+                <span class="msg-group-tag" title={m.chatId}>
+                  {#if getPlatform(m.chatId)}<span class="platform-badge platform-{getPlatform(m.chatId)}" style="font-size:0.5rem">{platformLabel(getPlatform(m.chatId))}</span>{/if}
+                  {getGroupLabel(m.chatId)}
+                </span>
               {/if}
               {#if isAgent}
                 <span class="msg-user">🤖 Agent</span>

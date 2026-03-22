@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import { activeTab } from '../lib/stores.js';
   import { api } from '../lib/api.js';
-  import { escapeHtml, shortId, formatCodeActContent } from '../lib/utils.js';
+  import { escapeHtml, shortId, formatCodeActContent, getPlatform, platformLabel } from '../lib/utils.js';
 
   let decisions = [];
   let history = [];
@@ -28,7 +28,10 @@
         {#each decisions as d}
           <div class="decision-item">
             <span class="opacity-50">{d.timestamp ? new Date(d.timestamp).toLocaleTimeString() : ''}</span>
-            <button class="clickable-link" onclick={() => quickQueryGroup(d.chatId)}>{shortId(d.chatId)}</button>
+            <button class="clickable-link" onclick={() => quickQueryGroup(d.chatId)}>
+              {#if getPlatform(d.chatId)}<span class="platform-badge platform-{getPlatform(d.chatId)}">{platformLabel(getPlatform(d.chatId))}</span>{/if}
+              {shortId(d.chatId)}
+            </button>
             {d.decision || d.content || JSON.stringify(d)}
           </div>
         {/each}

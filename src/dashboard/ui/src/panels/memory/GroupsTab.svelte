@@ -1,7 +1,7 @@
 <script>
   import { activeTab, activeMemoryTab } from '../../lib/stores.js';
   import { api } from '../../lib/api.js';
-  import { shortId, escapeHtml } from '../../lib/utils.js';
+  import { shortId, escapeHtml, getPlatform, platformLabel } from '../../lib/utils.js';
 
   let groups = [];
 
@@ -33,7 +33,10 @@
           {:else}
             {#each groups as g}
               <tr>
-                <td class="font-mono text-xs" title={g.chatId}>{shortId(g.chatId)}</td>
+                <td class="font-mono text-xs" title={g.chatId}>
+                  {#if getPlatform(g.chatId)}<span class="platform-badge platform-{getPlatform(g.chatId)}">{platformLabel(getPlatform(g.chatId))}</span>{/if}
+                  {shortId(g.chatId)}
+                </td>
                 <td>{g.chatTitle || '-'}</td>
                 <td class="max-w-40 truncate" title={g.description || ''}>{g.description || '-'}</td>
                 <td>{g.dominantLanguage || '-'}</td>

@@ -1,7 +1,7 @@
 <script>
   import { appState, activeTab, topicDetailId } from '../lib/stores.js';
   import { api } from '../lib/api.js';
-  import { escapeHtml, shortId, getGroupLabel } from '../lib/utils.js';
+  import { escapeHtml, shortId, getGroupLabel, getPlatform, platformLabel } from '../lib/utils.js';
 
   let topicCache = {};
   let expandedGroups = new Set();
@@ -96,7 +96,10 @@
           <div class="collapse collapse-arrow collapse-open bg-base-200">
             <input type="checkbox" checked />
             <div class="collapse-title text-sm font-medium">
-              <span>{getGroupLabel(chatId)}</span>
+              <span class="inline-flex items-center gap-1">
+                {#if getPlatform(chatId)}<span class="platform-badge platform-{getPlatform(chatId)}">{platformLabel(getPlatform(chatId))}</span>{/if}
+                {getGroupLabel(chatId)}
+              </span>
               <span class="badge badge-sm ml-2">{topics.length} 匹配</span>
             </div>
             <div class="collapse-content">
@@ -128,7 +131,10 @@
           <div class="collapse collapse-arrow bg-base-200">
             <input type="checkbox" checked={isExpanded} onchange={(e) => toggleGroup(g.chatId, e.target.checked)} />
             <div class="collapse-title text-sm font-medium flex justify-between items-center">
-              <span>{getGroupLabel(g.chatId)}</span>
+              <span class="inline-flex items-center gap-1">
+                {#if getPlatform(g.chatId)}<span class="platform-badge platform-{getPlatform(g.chatId)}">{platformLabel(getPlatform(g.chatId))}</span>{/if}
+                {getGroupLabel(g.chatId)}
+              </span>
               <span class="badge badge-sm">
                 {cached ? `${cached.topics.length}${cached.hasMore ? '+' : ''} / ${cached.total || '?'}` : g.topicCount} 话题
               </span>

@@ -1,7 +1,7 @@
 <script>
   import { activeMemoryTab, activeTab } from '../../lib/stores.js';
   import { api } from '../../lib/api.js';
-  import { escapeHtml } from '../../lib/utils.js';
+  import { escapeHtml, getPlatform, platformLabel, stripPlatform } from '../../lib/utils.js';
 
   let items = [];
   let total = 0;
@@ -49,7 +49,10 @@
           {:else}
             {#each items as p}
               <tr>
-                <td class="font-mono text-xs">{p.userId}</td>
+                <td class="font-mono text-xs">
+                  {#if getPlatform(p.userId)}<span class="platform-badge platform-{getPlatform(p.userId)}">{platformLabel(getPlatform(p.userId))}</span>{/if}
+                  {stripPlatform(p.userId)}
+                </td>
                 <td>{p.displayName}</td>
                 <td class="max-w-32 truncate" title={(p.aliases || []).join(', ')}>{(p.aliases || []).join(', ') || '-'}</td>
                 <td>{p.totalMessageCount}</td>

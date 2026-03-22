@@ -1,6 +1,6 @@
 <script>
   import { api } from '../../lib/api.js';
-  import { shortId, escapeHtml } from '../../lib/utils.js';
+  import { shortId, escapeHtml, getPlatform, platformLabel, stripPlatform } from '../../lib/utils.js';
 
   let items = [];
   let total = 0;
@@ -50,8 +50,14 @@
             {#each items as i}
               <tr>
                 <td class="text-xs opacity-60">{i.date ? new Date(i.date).toLocaleString() : '-'}</td>
-                <td class="font-mono text-xs">{shortId(i.chatId)}</td>
-                <td class="font-mono text-xs">{i.userId}</td>
+                <td class="font-mono text-xs">
+                  {#if getPlatform(i.chatId)}<span class="platform-badge platform-{getPlatform(i.chatId)}">{platformLabel(getPlatform(i.chatId))}</span>{/if}
+                  {shortId(i.chatId)}
+                </td>
+                <td class="font-mono text-xs">
+                  {#if getPlatform(i.userId)}<span class="platform-badge platform-{getPlatform(i.userId)}">{platformLabel(getPlatform(i.userId))}</span>{/if}
+                  {stripPlatform(i.userId)}
+                </td>
                 <td><span class="badge badge-xs">{i.type}</span></td>
                 <td class="max-w-64 truncate" title={i.summary}>{i.summary}</td>
                 <td>{i.sentiment}</td>

@@ -1,7 +1,7 @@
 <script>
   import { appState, activeTab } from '../lib/stores.js';
   import { api } from '../lib/api.js';
-  import { shortId, escapeHtml, renderJsonHighlighted } from '../lib/utils.js';
+  import { shortId, escapeHtml, renderJsonHighlighted, getPlatform, platformLabel } from '../lib/utils.js';
 
   let globalStateEl;
   let pool = {};
@@ -46,7 +46,10 @@
         <div class="mt-2 space-y-1">
           {#each pool.instances as i}
             <div class="flex justify-between text-xs px-2 py-1 bg-base-200 rounded">
-              <span class="font-mono">{shortId(i.chatId)}</span>
+              <span class="font-mono">
+                {#if getPlatform(i.chatId)}<span class="platform-badge platform-{getPlatform(i.chatId)}">{platformLabel(getPlatform(i.chatId))}</span>{/if}
+                {shortId(i.chatId)}
+              </span>
               <span class="badge badge-xs" class:badge-error={i.inUse} class:badge-success={!i.inUse}>
                 {i.inUse ? '使用中' : '空闲'}
               </span>
@@ -64,7 +67,10 @@
       {#if feedbackWindows.length}
         {#each feedbackWindows as w}
           <div class="flex justify-between text-xs px-2 py-1 bg-base-200 rounded mb-1">
-            <span class="font-mono">{shortId(w.chatId)}</span>
+            <span class="font-mono">
+              {#if getPlatform(w.chatId)}<span class="platform-badge platform-{getPlatform(w.chatId)}">{platformLabel(getPlatform(w.chatId))}</span>{/if}
+              {shortId(w.chatId)}
+            </span>
             <span>剩余 {(w.remainingMs / 1000).toFixed(0)}s</span>
           </div>
         {/each}
@@ -87,7 +93,10 @@
             {#each groups as g}
               {@const fp = g.fastPathStatus || {}}
               <tr>
-                <td class="font-mono text-xs">{shortId(g.chatId)}</td>
+                <td class="font-mono text-xs">
+                  {#if getPlatform(g.chatId)}<span class="platform-badge platform-{getPlatform(g.chatId)}">{platformLabel(getPlatform(g.chatId))}</span>{/if}
+                  {shortId(g.chatId)}
+                </td>
                 <td class="stickiness-{g.stickiness}">{g.stickiness}</td>
                 <td>{(g.engagement || 0).toFixed(1)}</td>
                 <td>{g.bufferSize || 0}</td>
@@ -118,7 +127,10 @@
           {#each callbacks.slice(-20) as cb}
             <div class="decision-item">
               <span class="badge badge-xs" class:badge-success={cb.status === 'COMPLETED'} class:badge-error={cb.status !== 'COMPLETED'}>{cb.status}</span>
-              <span class="font-mono">{shortId(cb.chatId)}</span>
+              <span class="font-mono">
+                {#if getPlatform(cb.chatId)}<span class="platform-badge platform-{getPlatform(cb.chatId)}">{platformLabel(getPlatform(cb.chatId))}</span>{/if}
+                {shortId(cb.chatId)}
+              </span>
               <span class="badge badge-xs">{cb.executionType}</span>
               {cb.summary || ''}
               <span class="opacity-50">{cb.durationMs}ms</span>

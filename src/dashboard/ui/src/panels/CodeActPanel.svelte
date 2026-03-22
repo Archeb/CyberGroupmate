@@ -1,7 +1,7 @@
 <script>
   import { appState, selectedCodeActChatId, activeTab, codeActProgress } from '../lib/stores.js';
   import { api } from '../lib/api.js';
-  import { shortId, getGroupLabel, formatCodeActContent, isAtBottom, scrollToBottom } from '../lib/utils.js';
+  import { shortId, getGroupLabel, formatCodeActContent, isAtBottom, scrollToBottom, getPlatform, platformLabel } from '../lib/utils.js';
   import { onDestroy, tick } from 'svelte';
 
   let sessionData = { session: [], queueSize: 0, sessionSize: '-', executionCount: '-', isProcessing: false };
@@ -74,7 +74,10 @@
             {@const isActive = $selectedCodeActChatId === g.chatId}
             <button class="chat-item" class:active={isActive}
                  onclick={() => selectChat(g.chatId)} title={g.chatId}>
-              <span>{getGroupLabel(g.chatId)}</span>
+              <span class="flex items-center gap-1">
+                {#if getPlatform(g.chatId)}<span class="platform-badge platform-{getPlatform(g.chatId)}">{platformLabel(getPlatform(g.chatId))}</span>{/if}
+                {getGroupLabel(g.chatId)}
+              </span>
               <span class="flex items-center gap-1">
                 {#if g.codeActProcessing}
                   <span class="badge badge-xs badge-warning animate-pulse">执行中</span>
@@ -96,7 +99,10 @@
         <div class="flex justify-between items-center shrink-0 mb-2">
           <h3 class="card-title text-sm">
             CodeAct Session
-            <span class="text-xs opacity-60">{$selectedCodeActChatId ? getGroupLabel($selectedCodeActChatId) : ''}</span>
+            {#if $selectedCodeActChatId}
+              {#if getPlatform($selectedCodeActChatId)}<span class="platform-badge platform-{getPlatform($selectedCodeActChatId)}">{platformLabel(getPlatform($selectedCodeActChatId))}</span>{/if}
+              <span class="text-xs opacity-60">{getGroupLabel($selectedCodeActChatId)}</span>
+            {/if}
             {#if sessionData.isProcessing}
               <span class="badge badge-xs badge-warning animate-pulse ml-1">执行中</span>
             {/if}

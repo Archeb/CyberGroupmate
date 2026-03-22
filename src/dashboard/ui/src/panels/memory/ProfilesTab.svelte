@@ -1,6 +1,6 @@
 <script>
   import { api } from '../../lib/api.js';
-  import { shortId, escapeHtml } from '../../lib/utils.js';
+  import { shortId, escapeHtml, getPlatform, platformLabel, stripPlatform } from '../../lib/utils.js';
 
   let chatIdInput = '';
   let profiles = [];
@@ -42,8 +42,14 @@
           {:else}
             {#each profiles as p}
               <tr>
-                <td class="font-mono text-xs">{p.userId}</td>
-                <td class="font-mono text-xs">{shortId(p.chatId)}</td>
+                <td class="font-mono text-xs">
+                  {#if getPlatform(p.userId)}<span class="platform-badge platform-{getPlatform(p.userId)}">{platformLabel(getPlatform(p.userId))}</span>{/if}
+                  {stripPlatform(p.userId)}
+                </td>
+                <td class="font-mono text-xs">
+                  {#if getPlatform(p.chatId)}<span class="platform-badge platform-{getPlatform(p.chatId)}">{platformLabel(getPlatform(p.chatId))}</span>{/if}
+                  {shortId(p.chatId)}
+                </td>
                 <td><span class="badge badge-xs">T{p.dunbarTier}</span></td>
                 <td class="max-w-32 truncate" title={(p.traits || []).join(', ')}>{(p.traits || []).join(', ') || '-'}</td>
                 <td class="max-w-32 truncate" title={(p.interests || []).join(', ')}>{(p.interests || []).join(', ') || '-'}</td>

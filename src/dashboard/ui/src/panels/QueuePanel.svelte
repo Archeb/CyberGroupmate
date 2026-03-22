@@ -1,7 +1,7 @@
 <script>
   import { appState, activeTab } from '../lib/stores.js';
   import { api } from '../lib/api.js';
-  import { shortId } from '../lib/utils.js';
+  import { shortId, getPlatform, platformLabel } from '../lib/utils.js';
 
   $: queueData = $appState.queue || { active: [], dequeued: [] };
   $: activeList = [...(queueData.active || [])].sort((a, b) => b.priority - a.priority);
@@ -45,7 +45,10 @@
           {:else}
             {#each activeList as e}
               <tr class="queue-row" class:is-blocked={e.blocked}>
-                <td class="font-mono text-xs clickable-id" onclick={() => quickQueryGroup(e.chatId)}>{shortId(e.chatId)}</td>
+                <td class="font-mono text-xs clickable-id" onclick={() => quickQueryGroup(e.chatId)}>
+                  {#if getPlatform(e.chatId)}<span class="platform-badge platform-{getPlatform(e.chatId)}">{platformLabel(getPlatform(e.chatId))}</span>{/if}
+                  {shortId(e.chatId)}
+                </td>
                 <td class={e.priority > 50 ? 'priority-high' : e.priority > 20 ? 'priority-mid' : 'priority-low'}>{e.priority.toFixed(1)}</td>
                 <td><span class="badge badge-xs">{e.source}</span></td>
                 <td class="stickiness-{e.stickinessLevel}">{e.stickinessLevel}</td>
@@ -85,7 +88,10 @@
           {:else}
             {#each dequeuedList as d}
               <tr class="dequeued-row">
-                <td class="font-mono text-xs clickable-id" onclick={() => quickQueryGroup(d.entry.chatId)}>{shortId(d.entry.chatId)}</td>
+                <td class="font-mono text-xs clickable-id" onclick={() => quickQueryGroup(d.entry.chatId)}>
+                  {#if getPlatform(d.entry.chatId)}<span class="platform-badge platform-{getPlatform(d.entry.chatId)}">{platformLabel(getPlatform(d.entry.chatId))}</span>{/if}
+                  {shortId(d.entry.chatId)}
+                </td>
                 <td>{d.entry.priority.toFixed(1)}</td>
                 <td><span class="badge badge-xs">{d.entry.source}</span></td>
                 <td class="stickiness-{d.entry.stickinessLevel}">{d.entry.stickinessLevel}</td>

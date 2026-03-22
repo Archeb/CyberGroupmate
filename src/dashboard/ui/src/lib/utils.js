@@ -25,9 +25,57 @@ export function escapeHtml(str) {
     .replace(/"/g, '&quot;');
 }
 
+/**
+ * Extract platform from composite ID (e.g. "telegram:123" → "telegram")
+ */
+export function getPlatform(id) {
+  if (!id) return '';
+  const s = String(id);
+  const idx = s.indexOf(':');
+  if (idx > 0 && idx < s.length - 1 && /^[a-z]+$/.test(s.slice(0, idx))) {
+    return s.slice(0, idx);
+  }
+  return '';
+}
+
+/**
+ * Strip platform prefix from composite ID (e.g. "telegram:123" → "123")
+ */
+export function stripPlatform(id) {
+  if (!id) return '';
+  const s = String(id);
+  const idx = s.indexOf(':');
+  if (idx > 0 && idx < s.length - 1 && /^[a-z]+$/.test(s.slice(0, idx))) {
+    return s.slice(idx + 1);
+  }
+  return s;
+}
+
+/**
+ * Get platform icon/label for badge display
+ */
+export function platformIcon(platform) {
+  switch (platform) {
+    case 'telegram': return '✈️';
+    case 'discord': return '🎮';
+    default: return '';
+  }
+}
+
+/**
+ * Get short platform label for text display
+ */
+export function platformLabel(platform) {
+  switch (platform) {
+    case 'telegram': return 'TG';
+    case 'discord': return 'DC';
+    default: return platform.toUpperCase().slice(0, 2);
+  }
+}
+
 export function shortId(id) {
   if (!id) return '?';
-  const s = String(id);
+  const s = stripPlatform(String(id));
   return s.length > 15 ? '…' + s.slice(-12) : s;
 }
 
