@@ -200,10 +200,10 @@ export async function processMediaBatch(
                         const visionCfg = isPathA ? llmConfig : visionLlmConfig!;
                         return describeWithCache(visionCfg).catch(err2 => {
                             log.warn("降级描述也失败", { fileId: photo.fileId, error: String(err2) });
-                            return { index: photo.messageIndex, description: "[📷 图片]" } as ProcessedMedia;
+                            return { index: photo.messageIndex, description: "[📷 图片（加载失败）]" } as ProcessedMedia;
                         });
                     }
-                    return { index: photo.messageIndex, description: "[📷 图片]" } as ProcessedMedia;
+                    return { index: photo.messageIndex, description: "[📷 图片（加载失败）]" } as ProcessedMedia;
                 });
         }
 
@@ -212,14 +212,14 @@ export async function processMediaBatch(
             const visionCfg = isPathA ? llmConfig : visionLlmConfig!;
             return describeWithCache(visionCfg).catch(err => {
                 log.warn("Vision 描述失败，使用占位符", { fileId: photo.fileId, error: String(err) });
-                return { index: photo.messageIndex, description: "[📷 图片]" } as ProcessedMedia;
+                return { index: photo.messageIndex, description: "[📷 图片（加载失败）]" } as ProcessedMedia;
             });
         }
 
         // 路径 C 或无下载能力
         return Promise.resolve({
             index: photo.messageIndex,
-            description: "[📷 图片]",
+            description: "[📷 图片（不支持查看）]",
         } as ProcessedMedia);
     });
 

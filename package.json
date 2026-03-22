@@ -13,7 +13,7 @@
     "tg-convert": "tsx src/tools/tg-to-jsonl.ts",
     "dashboard:dev": "cd src/dashboard/ui && npm run dev",
     "dashboard:build": "cd src/dashboard/ui && npm run build",
-    "postinstall": "chmod +x node_modules/node-pty/prebuilds/darwin-arm64/spawn-helper 2>/dev/null || true"
+    "postinstall": "patch-package && chmod +x node_modules/node-pty/prebuilds/darwin-arm64/spawn-helper 2>/dev/null || true"
   },
   "dependencies": {
     "@mtcute/node": "latest",
@@ -34,6 +34,7 @@
     "@types/express": "^5.0.6",
     "@types/node": "^22.0.0",
     "@types/ws": "^8.18.1",
+    "patch-package": "^8.0.1",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",
     "vite": "^8.0.1"

@@ -1,9 +1,13 @@
 /**
- * memory.d.ts — Memory V2 场景类型定义 (L1)
+ * memory.d.ts — Memory V2 Agent API 类型定义
  *
- * 记忆系统 V2 接口。Agent 进入 memory 场景后看到这些类型，
- * 用于统一检索（recall）、消息档案（browseHistory）、
- * 以及兼容的搜索/存储/画像管理功能。
+ * 记忆系统 V2 接口。Agent 可通过 memory 全局对象使用：
+ * - recall()：统一记忆检索（向量 + 关键词混合搜索）
+ * - browseHistory()：消息档案检索（LLM 深度阅读）
+ * - reflect()：触发群组反思总结
+ *
+ * 注意：记忆的写入由后台 Pipeline 自动完成（RecordingPipeline +
+ * post-session fact extraction），Agent 不需要手动写入。
  *
  * memory: MemoryStore — 全局可用
  */
@@ -34,7 +38,7 @@ interface TopicNode {
     startedAt: string;
     endedAt: string | null;
     sentiment: 'positive' | 'neutral' | 'negative' | 'mixed';
-    tags: string[];
+    keywords: string[];
     createdAt: string;
     updatedAt: string;
 }
@@ -71,45 +75,6 @@ interface PersonGroupProfile {
     relationToAgent: string;
     messageCount: number;
     lastSeenAt: string;
-}
-
-// ─── V1 兼容类型 ───
-
-/** 记忆条目（V1 兼容） */
-interface MemoryEntry {
-    id: string;
-    content: string;
-    metadata: Record<string, unknown>;
-    timestamp: string;
-}
-
-/** 群友画像（V1 兼容） */
-interface PersonProfile {
-    userId: string;
-    displayName?: string;
-    notes?: string;
-    traits?: string[];
-    lastInteraction?: string;
-    [key: string]: unknown;
-}
-
-/** 对话摘要（V1 兼容） */
-interface ConversationSummary {
-    id: string;
-    chatId: string;
-    chatTitle: string;
-    summary: string;
-    keyPoints: string[];
-    timestamp: string;
-}
-
-/** 待办事项 */
-interface TodoItem {
-    id: string;
-    description: string;
-    createdAt: string;
-    dueDate?: string;
-    done: boolean;
 }
 
 // ─── 检索接口 ───
@@ -172,51 +137,18 @@ interface HistoryBrowseResult {
 }
 
 /**
- * Memory V2 — 记忆存储系统
+ * Memory V2 — 记忆存储系统（只读 API）
  *
  * 三层记忆模型：短期（上下文）、中期（话题/画像）、长期（核心事实）。
- * 当前为 V2 stub 实现（读空+写弃），后续接入真实数据层。
+ * 记忆的写入由后台 Pipeline 自动完成，Agent 仅负责读取。
  */
 interface MemoryStore {
-    // ─── V1 兼容方法 ───
-
     /**
-     * 搜索记忆（全文搜索）
-     * @example const results = memory.search("抹茶", 5);
-     */
-    search(query: string, limit?: number): MemoryEntry[];
-
-    /**
-     * 存入一条记忆
-     * @example memory.store("alice 喜欢抹茶", { source: "chat" })
-     */
-    store(content: string, metadata?: Record<string, unknown>): string;
-
-    /** 获取群友画像（V1 兼容） */
-    getPerson(userId: string): PersonProfile | null;
-
-    /** 更新群友画像（V1 兼容，merge 模式） */
-    updatePerson(userId: string, data: Partial<PersonProfile>): void;
-
-    /** 获取最近的对话摘要 */
-    getRecentConversations(chatId?: string, limit?: number): ConversationSummary[];
-
-    /** 获取待办事项 */
-    getPendingTasks(includeCompleted?: boolean): TodoItem[];
-
-    /** 添加待办事项 */
-    addTodo(description: string, dueDate?: string): string;
-
-    /** 直接执行 SQL 查询（高级用法） */
-    rawQuery(sql: string, ...params: unknown[]): unknown;
-
-    // ─── V2 新方法 ───
-
-    /**
-     * 统一记忆检索入口（V2）
+     * 统一记忆检索入口
      * 使用向量搜索 + 关键词搜索混合检索
      * @example
      * const result = await memory.recall("alice 东京", {
+     *   chatId: "-100xxx",
      *   userId: "alice_123",
      *   categories: ['preference', 'plan'],
      * });
@@ -224,7 +156,7 @@ interface MemoryStore {
     recall(query: string, options?: RecallOptions): Promise<RecallResult>;
 
     /**
-     * 消息档案检索（V2）
+     * 消息档案检索
      * 话题索引引导 + 模糊搜索 + cheap model 深度阅读
      * @example
      * const result = await memory.browseHistory({
@@ -235,7 +167,7 @@ interface MemoryStore {
     browseHistory(request: HistoryBrowseRequest): Promise<HistoryBrowseResult>;
 
     /**
-     * 对指定群组进行反思总结（V2）
+     * 对指定群组进行反思总结
      * 读取上次反思以来的 topics 和 interactions，生成结构化总结
      */
     reflect(chatId: string): Promise<{
