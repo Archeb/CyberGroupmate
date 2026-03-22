@@ -1,5 +1,44 @@
 # Changelog
 
+## 2026-03-22: Dashboard 在线配置编辑器 + 热重载
+
+新增 Dashboard「配置编辑」面板，支持在线编辑全部 `config.yaml` 选项，保存后大部分配置即时生效（无需重启）。
+
+### 后端 API
+
+| 端点 | 功能 |
+|------|------|
+| `GET /config` | 返回当前配置 JSON |
+| `PUT /config` | 验证 → 保存 → 热重载 |
+| `POST /config/test-profile` | 测试 LLM Profile API 连通性（支持 OpenAI/Anthropic） |
+| `POST /restart` | 优雅重启进程（依赖 pm2/systemd） |
+
+### 热重载重构
+
+将启动时捕获到闭包/本地变量的配置改为每次使用时从 `loadConfig()` 动态读取：
+
+| 文件 | 改动 |
+|------|------|
+| `src/main.ts` | `mentionKeywords` 每次消息到达时动态读取；reflection 参数（silenceThreshold/maxInterval/awakeHours）每次定时器 tick 动态读取 |
+| `src/main-agent/attend-handler.ts` | `persona` 每次 attend 都从 `loadConfig()` 读取 |
+| `src/main-agent/dispatch-handler.ts` | `persona`、`visionConfig`、`visionLlmConfig` 每次 dispatch 都从 `loadConfig()` 读取 |
+
+### 热重载分类
+
+- ✅ **即时生效**：LLM Profiles/Routing、Context Budget、Persona、Timezone、Notification、Reflection、Vision
+- ⚠️ **部分需重启**：Telegram（连接参数需重启，humanizedDelay 即时）、Subagent
+- 🚫 **需重启**：Embedding、Dashboard（port/token）、Tavily API Key
+
+### 前端
+
+| 文件 | 改动 |
+|------|------|
+| `src/core/config.ts` | 新增 `serializeConfigToObject()`、`serializeConfigToYAML()`、`saveConfig()`、`validateConfig()` |
+| `src/dashboard/api-routes.ts` | 新增 4 个配置 API 端点 |
+| `src/dashboard/ui/src/panels/ConfigPanel.svelte` | **[NEW]** 13 个可折叠区段，含 Profile 连通性测试、多选路由、标签输入、保存/重置/重启按钮 |
+| `src/dashboard/ui/src/components/TabNav.svelte` | 新增「配置编辑」tab |
+| `src/dashboard/ui/src/App.svelte` | 注册 ConfigPanel |
+
 ## 2026-03-22: TelegramAdapter 拟人化发送延迟
 
 新增拟人化延迟功能：当同一 chat 连续发送多条消息时，根据文字长度自动计算延迟（模拟打字速度），避免瞬间刷屏。通过 `config.yaml` 中 `telegram.humanized_delay` 控制开关和参数。

@@ -23,6 +23,7 @@ import { callLLMWithFallback } from "../core/llm.js";
 import { createLogger } from "../core/logger.js";
 import { formatTsForDisplay } from "../core/timezone.js";
 import { formatMessageLine, resolveReplyText, type RawMessage } from "../core/message-enricher.js";
+import { loadConfig } from "../core/config.js";
 
 const log = createLogger("attend-handler");
 
@@ -55,9 +56,11 @@ export interface AttendHandlerDeps {
 export function createAttendHandler(
     deps: AttendHandlerDeps,
 ): (entry: AttentionQueueEntry) => Promise<AttendResult | null> {
-    const { memory, globalState, subagentManager, mainLoop, sotaConfigs, persona } = deps;
+    const { memory, globalState, subagentManager, mainLoop, sotaConfigs } = deps;
 
     return async (entry: AttentionQueueEntry): Promise<AttendResult | null> => {
+        // 动态读取 persona（支持热重载）
+        const persona = loadConfig().persona;
         const subagent = subagentManager.get(entry.chatId);
         if (!subagent) return buildObserve(entry.chatId);
 

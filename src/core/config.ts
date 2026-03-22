@@ -8,8 +8,8 @@
  *   llm_routing: 按组件路由到指定 profile
  */
 
-import { readFileSync, existsSync } from "node:fs";
-import { parse as parseYAML } from "yaml";
+import { readFileSync, existsSync, writeFileSync } from "node:fs";
+import { parse as parseYAML, stringify as stringifyYAML } from "yaml";
 
 // ─── 类型定义 ───
 
@@ -630,3 +630,321 @@ function parseHumanizedDelay(fileTG: Record<string, unknown>): TelegramConfig["h
     };
 }
 
+// ─── 序列化 + 验证（Dashboard Config Editor 用） ───
+
+/** 将 AppConfig 序列化为 YAML 格式的对象（snake_case keys） */
+export function serializeConfigToObject(config: AppConfig): Record<string, unknown> {
+    const obj: Record<string, unknown> = {};
+
+    // llm_profiles
+    const profiles: Record<string, unknown> = {};
+    for (const [name, p] of Object.entries(config.llmProfiles)) {
+        const entry: Record<string, unknown> = {
+            provider: p.provider,
+            base_url: p.baseUrl,
+            api_key: p.apiKey,
+            model: p.model,
+            temperature: p.temperature,
+            max_tokens: p.maxTokens,
+        };
+        if (p.maxContextTokens != null) entry.max_context_tokens = p.maxContextTokens;
+        if (p.thinkingLevel != null) entry.thinking_level = p.thinkingLevel;
+        if (p.vision === true) entry.vision = true;
+        if (p.supportsPrefill === false) entry.supports_prefill = false;
+        if (p.pricing) {
+            const pricing: Record<string, unknown> = {
+                input: p.pricing.input,
+                output: p.pricing.output,
+            };
+            if (p.pricing.cachedInput != null) pricing.cached_input = p.pricing.cachedInput;
+            if (p.pricing.cacheCreation != null) pricing.cache_creation = p.pricing.cacheCreation;
+            entry.pricing = pricing;
+        }
+        profiles[name] = entry;
+    }
+    obj.llm_profiles = profiles;
+
+    // llm_routing
+    const routing: Record<string, unknown> = {};
+    for (const [key, val] of Object.entries(config.llmRouting)) {
+        if (val != null) routing[key] = val;
+    }
+    obj.llm_routing = routing;
+
+    // persona
+    obj.persona = { name: config.persona.name, description: config.persona.description };
+
+    // timezone
+    if (config.timezone) obj.timezone = config.timezone;
+
+    // notification
+    obj.notification = { mention_keywords: config.notification.mentionKeywords };
+
+    // telegram
+    const tg: Record<string, unknown> = {
+        mode: config.telegram.mode,
+        bot_token: config.telegram.botToken,
+        api_id: config.telegram.apiId,
+        api_hash: config.telegram.apiHash,
+        phone: config.telegram.phone,
+    };
+    if (config.telegram.humanizedDelay) {
+        tg.humanized_delay = {
+            enabled: config.telegram.humanizedDelay.enabled,
+            ms_per_char: config.telegram.humanizedDelay.msPerChar,
+            min_delay: config.telegram.humanizedDelay.minDelay,
+            max_delay: config.telegram.humanizedDelay.maxDelay,
+        };
+    }
+    obj.telegram = tg;
+
+    // reflection
+    const refl: Record<string, unknown> = {};
+    const r = config.reflection;
+    if (r.profile) refl.profile = r.profile;
+    if (r.silenceThreshold != null) refl.silence_threshold = r.silenceThreshold;
+    if (r.maxInterval != null) refl.max_interval = r.maxInterval;
+    if (r.checkInterval != null) refl.check_interval = r.checkInterval;
+    if (r.mergeThresholds) {
+        const mt: Record<string, unknown> = {};
+        if (r.mergeThresholds.episodeToWeek != null) mt.episode_to_week = r.mergeThresholds.episodeToWeek;
+        if (r.mergeThresholds.weekToMonth != null) mt.week_to_month = r.mergeThresholds.weekToMonth;
+        if (r.mergeThresholds.monthToQuarter != null) mt.month_to_quarter = r.mergeThresholds.monthToQuarter;
+        if (r.mergeThresholds.quarterToYear != null) mt.quarter_to_year = r.mergeThresholds.quarterToYear;
+        refl.merge_thresholds = mt;
+    }
+    if (r.tierLimits) {
+        const tl: Record<string, unknown> = {};
+        for (const [tier, limits] of Object.entries(r.tierLimits)) {
+            const entry: Record<string, unknown> = {};
+            if (limits.maxTraits != null) entry.max_traits = limits.maxTraits;
+            if (limits.maxInterests != null) entry.max_interests = limits.maxInterests;
+            if (limits.episodeDays != null) entry.episode_days = limits.episodeDays;
+            tl[tier] = entry;
+        }
+        refl.tier_limits = tl;
+    }
+    if (r.awakeHours) refl.awake_hours = r.awakeHours;
+    obj.reflection = refl;
+
+    // context_budget
+    if (config.contextBudget) {
+        const cb: Record<string, unknown> = {};
+        const b = config.contextBudget;
+        if (b.effectiveContextWindow != null) cb.effective_context_window = b.effectiveContextWindow;
+        if (b.systemPromptRatio != null) cb.system_prompt_ratio = b.systemPromptRatio;
+        if (b.briefingRatio != null) cb.briefing_ratio = b.briefingRatio;
+        if (b.recentHistoryRatio != null) cb.recent_history_ratio = b.recentHistoryRatio;
+        if (b.outputReserve != null) cb.output_reserve = b.outputReserve;
+        if (b.minRecentMessages != null) cb.min_recent_messages = b.minRecentMessages;
+        if (b.maxBriefingTokens != null) cb.max_briefing_tokens = b.maxBriefingTokens;
+        obj.context_budget = cb;
+    }
+
+    // embedding
+    const emb: Record<string, unknown> = {
+        provider: config.embedding.provider,
+        base_url: config.embedding.baseUrl,
+        api_key: config.embedding.apiKey,
+        model: config.embedding.model,
+        dimensions: config.embedding.dimensions,
+        similarity_metric: config.embedding.similarityMetric,
+    };
+    obj.embedding = emb;
+
+    // vision
+    if (config.vision) {
+        const v: Record<string, unknown> = {};
+        if (config.vision.maxImageSize != null) v.max_image_size = config.vision.maxImageSize;
+        if (config.vision.maxImagesPerContext != null) v.max_images_per_context = config.vision.maxImagesPerContext;
+        if (config.vision.stickerMode != null) v.sticker_mode = config.vision.stickerMode;
+        if (config.vision.maxMediaDownloadSize != null) v.max_media_download_size = config.vision.maxMediaDownloadSize;
+        if (config.vision.mediaRetentionDays != null) v.media_retention_days = config.vision.mediaRetentionDays;
+        obj.vision = v;
+    }
+
+    // dashboard
+    if (config.dashboard) {
+        const d: Record<string, unknown> = {};
+        if (config.dashboard.enabled != null) d.enabled = config.dashboard.enabled;
+        if (config.dashboard.port != null) d.port = config.dashboard.port;
+        if (config.dashboard.token != null) d.token = config.dashboard.token;
+        obj.dashboard = d;
+    }
+
+    // subagent
+    if (config.subagent) {
+        const s: Record<string, unknown> = {};
+        const sa = config.subagent;
+        if (sa.maxSandboxInstances != null) s.max_sandbox_instances = sa.maxSandboxInstances;
+        if (sa.sandboxIdleTimeout != null) s.sandbox_idle_timeout = sa.sandboxIdleTimeout;
+        if (sa.pollInterval != null) s.poll_interval = sa.pollInterval;
+        if (sa.alertEngagementThreshold != null) s.alert_engagement_threshold = sa.alertEngagementThreshold;
+        if (sa.cosineDecay) s.cosine_decay = { default_cycle_period: sa.cosineDecay.defaultCyclePeriod };
+        if (sa.fastPath) {
+            s.fast_path = {
+                default_max_replies: sa.fastPath.defaultMaxReplies,
+                default_expires_minutes: sa.fastPath.defaultExpiresMinutes,
+                engagement_threshold: sa.fastPath.engagementThreshold,
+            };
+        }
+        if (sa.stickiness) {
+            const stick: Record<string, unknown> = {};
+            for (const [level, cfg] of Object.entries(sa.stickiness)) {
+                stick[level] = {
+                    priority_multiplier: cfg.priorityMultiplier,
+                    depth_cycle_period: cfg.depthCyclePeriod,
+                };
+            }
+            s.stickiness = stick;
+        }
+        if (sa.stickinessThresholds) {
+            const st: Record<string, unknown> = {};
+            if (sa.stickinessThresholds.upgrade) {
+                st.upgrade = {
+                    stranger_to_acquaintance: sa.stickinessThresholds.upgrade.strangerToAcquaintance,
+                    acquaintance_to_familiar: sa.stickinessThresholds.upgrade.acquaintanceToFamiliar,
+                    familiar_to_core: sa.stickinessThresholds.upgrade.familiarToCore,
+                };
+            }
+            if (sa.stickinessThresholds.downgrade) {
+                st.downgrade = {
+                    core_to_familiar: sa.stickinessThresholds.downgrade.coreToFamiliar,
+                    familiar_to_acquaintance: sa.stickinessThresholds.downgrade.familiarToAcquaintance,
+                    acquaintance_to_stranger: sa.stickinessThresholds.downgrade.acquaintanceToStranger,
+                };
+            }
+            s.stickiness_thresholds = st;
+        }
+        if (sa.attentionQueue) {
+            s.attention_queue = {
+                time_decay_per_second: sa.attentionQueue.timeDecayPerSecond,
+                max_size: sa.attentionQueue.maxSize,
+            };
+        }
+        if (sa.observer) s.observer = { engagement_window_ms: sa.observer.engagementWindowMs };
+        if (sa.mainLoop) s.main_loop = { max_attends_per_tick: sa.mainLoop.maxAttendsPerTick };
+        if (sa.decision) {
+            s.decision = {
+                batch_threshold: sa.decision.batchThreshold,
+                none_threshold: sa.decision.noneThreshold,
+                batch_message_threshold: sa.decision.batchMessageThreshold,
+            };
+        }
+        if (sa.globalState) {
+            s.global_state = {
+                max_recent_decisions: sa.globalState.maxRecentDecisions,
+                auto_save_interval: sa.globalState.autoSaveInterval,
+            };
+        }
+        if (sa.codeAct) {
+            s.code_act = {
+                max_execution_time_ms: sa.codeAct.maxExecutionTimeMs,
+                max_session_messages: sa.codeAct.maxSessionMessages,
+                max_turns: sa.codeAct.maxTurns,
+            };
+        }
+        obj.subagent = s;
+    }
+
+    // tavily_api_key
+    if (config.tavilyApiKey) obj.tavily_api_key = config.tavilyApiKey;
+
+    return obj;
+}
+
+/** 将 AppConfig 序列化为 YAML 字符串 */
+export function serializeConfigToYAML(config: AppConfig): string {
+    return stringifyYAML(serializeConfigToObject(config), { lineWidth: 120 });
+}
+
+/** 将 AppConfig 写入 config.yaml 并热重载 */
+export function saveConfig(config: AppConfig, configPath?: string): { ok: boolean; error?: string } {
+    try {
+        const path = configPath ?? "config.yaml";
+        const yaml = serializeConfigToYAML(config);
+        writeFileSync(path, yaml, "utf-8");
+        clearConfigCache();
+        loadConfig(path, true);
+        return { ok: true };
+    } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+}
+
+/** 验证配置有效性 */
+export function validateConfig(config: unknown): { valid: boolean; errors: string[] } {
+    const errors: string[] = [];
+    if (!config || typeof config !== "object") {
+        return { valid: false, errors: ["配置不能为空"] };
+    }
+    const c = config as Record<string, unknown>;
+
+    // llmProfiles
+    const profiles = c.llmProfiles as Record<string, unknown> | undefined;
+    if (!profiles || typeof profiles !== "object" || Object.keys(profiles).length === 0) {
+        errors.push("至少需要一个 LLM Profile");
+    } else {
+        for (const [name, raw] of Object.entries(profiles)) {
+            const p = raw as Record<string, unknown>;
+            if (!p.provider) errors.push(`Profile "${name}": provider 不能为空`);
+            if (!p.baseUrl) errors.push(`Profile "${name}": baseUrl 不能为空`);
+            if (!p.apiKey) errors.push(`Profile "${name}": apiKey 不能为空`);
+            if (!p.model) errors.push(`Profile "${name}": model 不能为空`);
+            if (typeof p.temperature === "number" && (p.temperature < 0 || p.temperature > 2)) {
+                errors.push(`Profile "${name}": temperature 应在 0-2 之间`);
+            }
+            if (typeof p.maxTokens === "number" && p.maxTokens <= 0) {
+                errors.push(`Profile "${name}": maxTokens 应大于 0`);
+            }
+        }
+    }
+
+    // llmRouting
+    const routing = c.llmRouting as Record<string, unknown> | undefined;
+    const profileNames = profiles ? new Set(Object.keys(profiles)) : new Set<string>();
+    if (routing && typeof routing === "object") {
+        for (const [comp, val] of Object.entries(routing)) {
+            if (val == null) continue;
+            const names = Array.isArray(val) ? val : [val];
+            for (const n of names) {
+                if (typeof n === "string" && !profileNames.has(n)) {
+                    errors.push(`Routing "${comp}" 引用了不存在的 profile: "${n}"`);
+                }
+            }
+        }
+    }
+
+    // persona
+    const persona = c.persona as Record<string, unknown> | undefined;
+    if (!persona?.name) errors.push("persona.name 不能为空");
+
+    // telegram
+    const tg = c.telegram as Record<string, unknown> | undefined;
+    if (tg) {
+        if (!tg.mode || (tg.mode !== "bot" && tg.mode !== "userbot")) {
+            errors.push("telegram.mode 必须是 \"bot\" 或 \"userbot\"");
+        }
+    }
+
+    // contextBudget
+    const cb = c.contextBudget as Record<string, unknown> | undefined;
+    if (cb) {
+        const ratioFields = ["systemPromptRatio", "briefingRatio", "recentHistoryRatio"];
+        for (const field of ratioFields) {
+            if (typeof cb[field] === "number" && (cb[field] as number < 0 || cb[field] as number > 1)) {
+                errors.push(`contextBudget.${field} 应在 0-1 之间`);
+            }
+        }
+    }
+
+    // embedding
+    const emb = c.embedding as Record<string, unknown> | undefined;
+    if (emb) {
+        if (emb.provider && emb.provider !== "openai" && emb.provider !== "local") {
+            errors.push("embedding.provider 必须是 \"openai\" 或 \"local\"");
+        }
+    }
+
+    return { valid: errors.length === 0, errors };
+}

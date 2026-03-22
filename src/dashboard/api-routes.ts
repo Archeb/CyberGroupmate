@@ -11,6 +11,7 @@ import type { EventBridge } from "./event-bridge.js";
 import type { FastPathHandler } from "../subagent/fast-path-handler.js";
 import type { CodeActExecutor } from "../subagent/code-act-executor.js";
 import { createLogger } from "../core/logger.js";
+import { loadConfig, validateConfig, saveConfig } from "../core/config.js";
 
 const log = createLogger("dashboard-api");
 
@@ -587,6 +588,90 @@ export function createApiRouter(deps: DashboardDeps, bridge: EventBridge): Route
 
     router.get("/token-pricing", (_req, res) => {
         res.json(deps.tokenStats.getPricing() ?? {});
+    });
+
+    // ─── Config Editor ───
+    router.get("/config", (_req, res) => {
+        try {
+            const config = loadConfig();
+            res.json(config);
+        } catch (err) {
+            res.status(500).json({ error: String(err) });
+        }
+    });
+
+    router.put("/config", (req, res) => {
+        try {
+            const newConfig = req.body;
+            const validation = validateConfig(newConfig);
+            if (!validation.valid) {
+                res.status(400).json({ ok: false, errors: validation.errors });
+                return;
+            }
+            const result = saveConfig(newConfig);
+            if (!result.ok) {
+                res.status(500).json({ ok: false, error: result.error });
+                return;
+            }
+            log.info("配置已保存并热重载");
+            res.json({ ok: true });
+        } catch (err) {
+            res.status(500).json({ ok: false, error: String(err) });
+        }
+    });
+
+    router.post("/config/test-profile", async (req, res) => {
+        try {
+            const profile = req.body;
+            if (!profile.provider || !profile.baseUrl || !profile.apiKey || !profile.model) {
+                res.status(400).json({ ok: false, error: "provider, baseUrl, apiKey, model 为必填" });
+                return;
+            }
+            const start = Date.now();
+            const isAnthropic = profile.provider === "anthropic";
+            const url = isAnthropic
+                ? `${profile.baseUrl.replace(/\/$/, "")}/messages`
+                : `${profile.baseUrl.replace(/\/$/, "")}/chat/completions`;
+            const headers: Record<string, string> = { "Content-Type": "application/json" };
+            if (isAnthropic) {
+                headers["x-api-key"] = profile.apiKey;
+                headers["anthropic-version"] = "2023-06-01";
+            } else {
+                headers["Authorization"] = `Bearer ${profile.apiKey}`;
+            }
+            const body = isAnthropic
+                ? { model: profile.model, max_tokens: 10, messages: [{ role: "user", content: "ping" }] }
+                : { model: profile.model, max_tokens: 10, messages: [{ role: "user", content: "ping" }] };
+
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 15000);
+            const response = await fetch(url, {
+                method: "POST",
+                headers,
+                body: JSON.stringify(body),
+                signal: controller.signal,
+            });
+            clearTimeout(timeout);
+            const latency = Date.now() - start;
+
+            if (response.ok) {
+                const data = await response.json();
+                const model = isAnthropic ? data.model : data.model;
+                res.json({ ok: true, latency, model, status: response.status });
+            } else {
+                const text = await response.text().catch(() => "");
+                res.json({ ok: false, latency, status: response.status, error: text.slice(0, 500) });
+            }
+        } catch (err: unknown) {
+            const errMsg = err instanceof Error ? err.message : String(err);
+            res.json({ ok: false, error: errMsg.includes("abort") ? "连接超时 (15s)" : errMsg });
+        }
+    });
+
+    router.post("/restart", (_req, res) => {
+        log.info("收到重启请求，进程将在 1 秒后退出");
+        res.json({ ok: true, message: "进程将在 1 秒后退出，请确保有进程管理器（pm2/systemd）自动重启" });
+        setTimeout(() => process.exit(0), 1000);
     });
 
     return router;

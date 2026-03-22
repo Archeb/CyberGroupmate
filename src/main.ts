@@ -342,7 +342,7 @@ async function main(): Promise<void> {
     );
 
     // ─── NC.onPush: 消息实时处理管线 ───
-    const mentionKeywords = (appConfig.notification?.mentionKeywords ?? []).map(k => k.toLowerCase()).filter(k => k.length > 0);
+    // mentionKeywords 现在在每次消息到达时动态从 loadConfig() 读取（支持热重载）
 
     // Hook 2: 消息分发到 per-group GroupSubagent (Observer + RecordingPipeline) → 更新 Q3
     nc.onPush(event => {
@@ -450,6 +450,8 @@ async function main(): Promise<void> {
         const isDM = !!event.isDirectMessage;
         const isMention = !!event.mentionsAgent;
         // 文本提及检测：检查消息内容是否包含配置的 mention_keywords（agent 名字等）
+        // 动态读取（支持热重载）
+        const mentionKeywords = (loadConfig().notification?.mentionKeywords ?? []).map(k => k.toLowerCase()).filter(k => k.length > 0);
         const messageText = String(event.text ?? event.message ?? "").toLowerCase();
         const hasNameMention = mentionKeywords.length > 0 && mentionKeywords.some(kw => messageText.includes(kw));
 
@@ -544,16 +546,14 @@ async function main(): Promise<void> {
     // Sandbox 空闲回收由 SandboxPool 独立管理。
 
     // ─── Reflection 定时器 ───
-    const reflectionCfg = appConfig.reflection ?? {};
-    const silenceThreshold = reflectionCfg.silenceThreshold ?? 7200;
-    const maxInterval = reflectionCfg.maxInterval ?? 86400;
-    const awakeHours = reflectionCfg.awakeHours;
-    const checkInterval = (reflectionCfg.checkInterval ?? 300) * 1000;
+    // 参数现在在定时器内动态读取，支持热重载
+    const checkInterval = ((appConfig.reflection?.checkInterval ?? 300)) * 1000;
     const lastActivityPerChat = new Map<string, number>();
     const lastReflectedAtMap = new Map<string, number>();
     const reflectionInProgress = new Set<string>();
 
     function isOutsideAwakeHours(): boolean {
+        const awakeHours = loadConfig().reflection?.awakeHours;
         if (!awakeHours) return false;
         const [start, end] = awakeHours;
         let currentHour: number;
@@ -589,6 +589,11 @@ async function main(): Promise<void> {
             const lastReflected = lastReflectedAtMap.get(chatId) ?? 0;
             const sinceReflectionSec = lastReflected > 0 ? (now - lastReflected) / 1000 : Infinity;
 
+            // 动态读取 reflection 参数（支持热重载）
+            const reflCfg = loadConfig().reflection ?? {};
+            const silenceThreshold = reflCfg.silenceThreshold ?? 7200;
+            const maxInterval = reflCfg.maxInterval ?? 86400;
+
             const silenceTriggered = silentSec >= silenceThreshold;
             const maxIntervalTriggered = sinceReflectionSec >= maxInterval;
             const scheduleTriggered = isOutsideAwakeHours() && sinceReflectionSec > 3600;
@@ -598,7 +603,7 @@ async function main(): Promise<void> {
                 const reason = silenceTriggered ? "冷场触发" : maxIntervalTriggered ? "最大间隔触发" : "作息触发";
                 log.info(`${reason} Reflection`, { chatId });
                 try {
-                    const result = await memory.reflect(chatId, reflectionConfig, reflectionCfg);
+                    const result = await memory.reflect(chatId, reflectionConfig, reflCfg);
                     lastReflectedAtMap.set(chatId, Date.now());
 
                     // Stickiness 重评估（architecture_v2.md §2.2）

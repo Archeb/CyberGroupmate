@@ -25,7 +25,7 @@ import { buildGroupContext } from "./context-builder.js";
 import { formatTopicList, formatRelativeTime } from "./prompt-renderer.js";
 import { createLogger } from "../core/logger.js";
 import { formatTsForDisplay } from "../core/timezone.js";
-import { resolveComponentProfiles } from "../core/config.js";
+import { loadConfig, resolveComponentProfiles } from "../core/config.js";
 import { resolveReplyText } from "../core/message-enricher.js";
 import { MediaDownloader } from "../core/media-downloader.js";
 import type { AppConfig } from "../core/config.js";
@@ -65,12 +65,7 @@ export interface DispatchHandlerDeps {
 export function createDispatchHandler(
     deps: DispatchHandlerDeps,
 ): (result: AttendResult) => Promise<void> {
-    const { memory, globalState, subagentManager, sandboxPool, nc, q3, q5, llmConfigs, fastPathConfig, persona, appConfig, telegramAdapter: tgAdapter, sendTyping, mediaDownloader } = deps;
-    const visionConfig = appConfig.vision;
-    // 解析 vision LLM 配置（Path B: 独立 vision 模型描述图片）
-    const visionLlmConfig = appConfig.llmRouting.vision
-        ? resolveComponentProfiles("vision", appConfig)[0]
-        : undefined;
+    const { memory, globalState, subagentManager, sandboxPool, nc, q3, q5, llmConfigs, fastPathConfig, appConfig: _appConfig, telegramAdapter: tgAdapter, sendTyping, mediaDownloader } = deps;
     // 构建下载函数（传给 Executor 用于懒加载 Vision 处理）
     const downloadFn = tgAdapter ? async (fileId: string, chatId?: string, messageId?: string, uniqueFileId?: string): Promise<Buffer> => {
         const result = await tgAdapter.handleCall("telegram.downloadMedia", [fileId, chatId, messageId, uniqueFileId]) as { buffer: string; size: number };
@@ -78,6 +73,14 @@ export function createDispatchHandler(
     } : undefined;
 
     return async (result: AttendResult): Promise<void> => {
+        // 动态读取 persona 和 vision 配置（支持热重载）
+        const currentConfig = loadConfig();
+        const persona = currentConfig.persona;
+        const visionConfig = currentConfig.vision;
+        // 解析 vision LLM 配置（Path B: 独立 vision 模型描述图片）
+        const visionLlmConfig = currentConfig.llmRouting.vision
+            ? resolveComponentProfiles("vision", currentConfig)[0]
+            : undefined;
         const subagent = subagentManager.get(result.chatId);
         if (!subagent) return;
 

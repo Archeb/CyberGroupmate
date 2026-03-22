@@ -16,6 +16,7 @@
   import MemoryPanel from './panels/MemoryPanel.svelte';
   import StickersPanel from './panels/StickersPanel.svelte';
   import SystemPanel from './panels/SystemPanel.svelte';
+  import ConfigPanel from './panels/ConfigPanel.svelte';
   import TopicDetailPanel from './panels/TopicDetailPanel.svelte';
   import EnqueueModal from './panels/EnqueueModal.svelte';
 
@@ -66,6 +67,7 @@
     <div class:hidden={$activeTab !== 'memory'}><MemoryPanel /></div>
     <div class:hidden={$activeTab !== 'stickers'}><StickersPanel /></div>
     <div class:hidden={$activeTab !== 'system'}><SystemPanel /></div>
+    <div class:hidden={$activeTab !== 'config'}><ConfigPanel /></div>
     <div class:hidden={$activeTab !== 'topic-detail'}><TopicDetailPanel /></div>
 
     <EnqueueModal />
