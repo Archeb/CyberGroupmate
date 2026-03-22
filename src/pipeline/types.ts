@@ -43,6 +43,8 @@ export interface Message {
     mediaType?: string;
     /** 媒体元数据 JSON（含 fileId, uniqueFileId, emoji 等） */
     mediaInfo?: string;
+    /** 原始平台消息对象（供 adapter.downloadMedia 回调使用） */
+    rawMessage?: unknown;
 }
 
 // ─── 话题状态 ───
