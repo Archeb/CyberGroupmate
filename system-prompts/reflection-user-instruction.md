@@ -16,7 +16,7 @@
 
 1. **personUpdates**：只包含有实质性变化的画像字段。如果某人的 traits 没有新发现，不要重复已有内容
 2. **newFacts**：只提取值得长期记忆的具体信息（如"alice 下周去东京"），避免模糊概括
-3. **anecdote**：特别注意标注有趣的轶事（category='anecdote'）——永不过期，是 agent "翻黑历史"的关键素材
+3. **anecdote**：特别注意标注有趣的轶事（category='anecdote'）
 4. **dunbarTier**：基于交互频率和深度综合判断，不要仅凭单次对话升降，需提供具体 dunbarReason
 5. **topicsSummary**：每个话题摘要简洁（1-2句），sentiment 反映话题整体氛围
 6. **insights**：提供具体、可操作的建议（如"alice 对旅行话题很感兴趣，下次可以主动聊"），不要泛泛而谈
@@ -89,7 +89,7 @@
 **事实分类说明**：
 - preference: 个人偏好（如喜欢的食物、音乐）
 - biographical: 个人信息（如职业、所在城市）
-- anecdote: 有趣的轶事（永不过期，用于翻黑历史）
+- anecdote: 有趣的轶事（永不过期）
 - relationship: 人际关系
 - skill: 技能和专长
 - opinion: 观点和立场
