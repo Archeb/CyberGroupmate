@@ -10,6 +10,7 @@
 import type { NotificationCenter } from "../event/notification-center.js";
 import type { TelegramConfig } from "../core/config.js";
 import type { PlatformAdapter } from "./platform-adapter.js";
+import { composeChatId, parseChatId, isTelegram, isValidCompositeChatId } from "../core/chat-id.js";
 import { createLogger } from "../core/logger.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -717,12 +718,16 @@ export class TelegramAdapter implements PlatformAdapter {
 
     private normalizePeerArg(value: unknown): unknown {
         if (typeof value !== "string") return value;
-        const trimmed = value.trim();
+        let trimmed = value.trim();
+        // Strip composite key prefix: "telegram:-1001234567" → "-1001234567"
+        if (trimmed.startsWith("telegram:")) {
+            trimmed = trimmed.slice("telegram:".length);
+        }
         if (/^-?\d+$/.test(trimmed)) {
             const asNumber = Number(trimmed);
             if (Number.isSafeInteger(asNumber)) return asNumber;
         }
-        return value;
+        return trimmed;
     }
 
     /**
@@ -872,7 +877,7 @@ export class TelegramAdapter implements PlatformAdapter {
         }
 
         return {
-            chatId: plain.chat.id,
+            chatId: composeChatId("telegram", plain.chat.id),
             userId: senderId,
             displayName: plain.sender?.displayName ?? plain.sender?.firstName ?? "Unknown",
             text,

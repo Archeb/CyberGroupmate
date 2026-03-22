@@ -184,7 +184,7 @@ export class MediaDownloader {
 
         const category = categorize(opts.mediaType);
         const ext = resolveExt(opts.mimeType, opts.fileName);
-        const chatId = opts.chatId ?? "unknown";
+        const chatId = (opts.chatId ?? "unknown").replace(/:/g, "_");
         const msgId = opts.messageId ?? "0";
         // 清理 uniqueFileId 中的非法文件名字符
         const safeUniqueId = opts.uniqueFileId.replace(/[^a-zA-Z0-9_-]/g, "_");
