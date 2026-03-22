@@ -325,6 +325,10 @@ function formatMessages(
 
         // 注入媒体描述（从 processedMedia）
         if (m.processedMedia && m.processedMedia.length > 0) {
+            // 移除 adapter 层写入的媒体占位标签（如 [📷 图片]、[🎭 贴纸: 💛]、[🎬 视频] 等），
+            // 避免和 vision/download 产生的更丰富描述重复
+            textPart = textPart.replace(/\[(?:📷 图片|🎭 贴纸[^\]]*|📹 视频|🎬 (?:视频|GIF)|🎞 GIF|📎 (?:文件|媒体))\]\s*/g, "").trim();
+
             for (const pm of m.processedMedia) {
                 if (pm.base64Data && pm.mimeType) {
                     // 路径 A: 收集 base64 图片，追加带序号的标签
