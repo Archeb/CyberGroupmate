@@ -13,4 +13,8 @@ export interface PlatformAdapter {
     canHandle(method: string): boolean;
     handleCall(method: string, args: unknown[]): Promise<unknown>;
     getSceneTypeDefs?(scene: string, baseTypeDefs: string): string | undefined;
+    /** 返回该平台的写操作方法名列表，用于 sandbox 安全限制 */
+    getWriteMethods(): string[];
+    /** 通过 adapter 下载媒体文件（各平台下载逻辑不同） */
+    downloadMedia?(rawMessage: unknown, mediaRef: string): Promise<Buffer>;
 }

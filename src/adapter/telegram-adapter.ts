@@ -305,6 +305,16 @@ export class TelegramAdapter implements PlatformAdapter {
         return method.startsWith("telegram.");
     }
 
+    getWriteMethods(): string[] {
+        return [
+            "telegram.sendText",
+            "telegram.sendMedia",
+            "telegram.sendFile",
+            "telegram.sendSticker",
+            "telegram.sendTyping",
+        ];
+    }
+
     getSceneTypeDefs(scene: string, baseTypeDefs: string): string | undefined {
         if (scene !== "telegram") return undefined;
 
