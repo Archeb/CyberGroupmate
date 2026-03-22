@@ -83,7 +83,13 @@
     <div class="card bg-base-100 h-full">
       <div class="card-body p-3 min-h-0 flex flex-col">
         <h3 class="card-title text-sm shrink-0">
-          消息流 <span class="text-xs opacity-60">{$selectedChatId ? `Chat: ${$selectedChatId}` : '全部'}</span>
+          消息流
+          {#if $selectedChatId}
+            {#if getPlatform($selectedChatId)}<span class="platform-badge platform-{getPlatform($selectedChatId)}">{platformLabel(getPlatform($selectedChatId))}</span>{/if}
+            <span class="text-xs opacity-60">{getGroupLabel($selectedChatId)}</span>
+          {:else}
+            <span class="text-xs opacity-60">全部</span>
+          {/if}
         </h3>
         <div bind:this={streamEl} class="overflow-y-auto flex-1 min-h-0 space-y-1 font-mono text-sm">
           {#each displayMessages as m}
