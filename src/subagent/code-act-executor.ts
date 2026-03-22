@@ -26,7 +26,7 @@ import { enrichMessages, formatMessageLine, resolveReplyText } from "../core/mes
 import type { MediaDownloader } from "../core/media-downloader.js";
 import type { ChatMessage } from "../core/llm.js";
 import { createLogger } from "../core/logger.js";
-import { getRawId } from "../core/chat-id.js";
+import { getRawId, ensureCompositeId, getPlatform } from "../core/chat-id.js";
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -680,8 +680,10 @@ export class CodeActExecutor {
 
         for (const f of parsed.facts) {
             if (!f.subject || !f.content || !f.category) continue;
+            // LLM 看到的是裸 ID（getRawId 剥离），存储时需要还原 composite key
+            const subject = /^-?\d+$/.test(f.subject) ? ensureCompositeId(getPlatform(this.chatId), f.subject) : f.subject;
             this.memory!.storeFact(
-                f.subject,
+                subject,
                 f.content,
                 f.category,
                 `session:${task.taskId}`,
