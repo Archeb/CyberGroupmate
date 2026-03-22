@@ -23,6 +23,18 @@ llm_profiles:
     #   input: 0.15
     #   output: 0.60
     #   cached_input: 0.0375
+    #
+    # ── 多 Key 负载均衡池 ──
+    # 当拥有多个 API key（不同 Google Cloud 项目）时，可配置 pool 实现请求级负载均衡
+    # 配置 pool 后，上方的 api_key 字段会被忽略
+    # pool:
+    #   strategy: round_robin  # round_robin | least_pending | random
+    #   keys:
+    #     - api_key: "AIzaSy...key1"
+    #       # base_url: "..."  # 可选，不同 key 可用不同 base_url（如 AI Studio vs Vertex AI）
+    #       # weight: 1        # 可选，权重（用于区分不同 key 的配额差异）
+    #     - api_key: "AIzaSy...key2"
+    #     - api_key: "AIzaSy...key3"
 
   gemini-pro:
     provider: openai

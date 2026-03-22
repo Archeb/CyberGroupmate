@@ -3,6 +3,7 @@
  *
  * 统一的 LLM 调用接口，支持 Anthropic Claude API 和 OpenAI 兼容 API。
  * 处理 rate limiting、重试和错误恢复。
+ * 支持多 key 负载均衡池（通过 LLMConfig.pool）。
  *
  * 配置加载已迁移到 config.ts。
  */
@@ -11,6 +12,7 @@
 export { type LLMConfig } from "./config.js";
 
 import type { LLMConfig } from "./config.js";
+import { getOrCreatePool } from "./llm-pool.js";
 import { createLogger } from "./logger.js";
 import { EventEmitter } from "node:events";
 
@@ -148,10 +150,34 @@ const MAX_RETRIES = 3;
 const RETRY_DELAYS = [1000, 2000, 4000]; // 指数退避
 
 /**
+ * 检测错误是否为 quota/rate-limit 类型
+ */
+function isQuotaError(err: unknown): boolean {
+    if (!(err instanceof Error)) return false;
+    const msg = err.message;
+    return msg.includes("429") || msg.includes("rate limit") ||
+        msg.includes("quota") || msg.includes("RESOURCE_EXHAUSTED") ||
+        msg.includes("overloaded");
+}
+
+/**
+ * 检测错误是否为认证/权限类型（key 无效、billing 被关）
+ */
+function isAuthError(err: unknown): boolean {
+    if (!(err instanceof Error)) return false;
+    const msg = err.message;
+    return msg.includes("401") || msg.includes("403") ||
+        msg.includes("PERMISSION_DENIED") || msg.includes("API key not valid") ||
+        msg.includes("billing") || msg.includes("Unauthorized") ||
+        msg.includes("Forbidden");
+}
+
+/**
  * 调用 LLM API
  *
  * 支持 Anthropic Claude API 和 OpenAI 兼容 API。
  * 自动处理 rate limiting 和重试。
+ * 当 config 配置了 pool 时，自动在多个 API key 之间进行负载均衡。
  *
  * @param messages - OpenAI 格式消息数组
  * @param config - LLM 配置
@@ -162,6 +188,90 @@ export async function callLLM(
     messages: ChatMessage[],
     config: LLMConfig,
     options?: LLMCallOptions
+): Promise<LLMResponse> {
+    // ── Pool 模式：委托给 callLLMWithPool ──
+    if (config.pool && config.pool.members.length > 0) {
+        return callLLMWithPool(messages, config, options);
+    }
+
+    // ── 单 key 模式（原有逻辑） ──
+    return callLLMSingleKey(messages, config, options);
+}
+
+/**
+ * Pool 模式调用：从池中获取 key，调用 API，释放 key。
+ * 如果当前 key 遇到 429/quota 错误，会尝试从池中获取另一个 key 重试。
+ */
+async function callLLMWithPool(
+    messages: ChatMessage[],
+    config: LLMConfig,
+    options?: LLMCallOptions,
+): Promise<LLMResponse> {
+    const poolConfig = config.pool!;
+    // poolId 包含 model + baseUrl + members 指纹，避免不同 profile 共享同一 pool
+    const memberFingerprint = poolConfig.members
+        .map(m => m.apiKey.slice(0, 8))
+        .sort()
+        .join(",");
+    const pool = getOrCreatePool(`${config.model}:${config.baseUrl}:${memberFingerprint}`, poolConfig);
+
+    // 最多尝试 pool.size 次不同的 key
+    const maxPoolAttempts = pool.size;
+    let lastError: Error | null = null;
+
+    for (let i = 0; i < maxPoolAttempts; i++) {
+        const handle = pool.acquire();
+        if (!handle) {
+            // 所有 key 冷却中或已禁用，跳出走 fallback（如果有）或抛错
+            break;
+        }
+
+        // 构造使用选中 key 的临时 config
+        const effectiveConfig: LLMConfig = {
+            ...config,
+            apiKey: handle.apiKey,
+            baseUrl: handle.baseUrl ?? config.baseUrl,
+            pool: undefined, // 避免递归
+        };
+
+        try {
+            const result = await callLLMSingleKey(messages, effectiveConfig, options, true);
+            pool.release(handle, true);
+            return result;
+        } catch (err) {
+            const quota = isQuotaError(err);
+            const auth = isAuthError(err);
+            pool.release(handle, false, quota, auth);
+            lastError = err instanceof Error ? err : new Error(String(err));
+
+            // quota 或 auth 错误 → 尝试下一个 key
+            if ((quota || auth) && i < maxPoolAttempts - 1) {
+                log.warn(`Pool key ${auth ? "认证" : "quota"} 失败，尝试下一个 key`, {
+                    poolId: pool.id,
+                    attempt: i + 1,
+                    total: maxPoolAttempts,
+                    apiKeyPreview: handle.apiKey.slice(0, 10) + "...",
+                });
+                continue;
+            }
+
+            // 非 quota/auth 错误，或最后一个 key 也失败 → 抛出
+            throw lastError;
+        }
+    }
+
+    // 所有 key 都在冷却中或已禁用
+    throw lastError ?? new Error(`LLM Pool "${pool.id}" 所有 key 均不可用（冷却中或已禁用）`);
+}
+
+/**
+ * 单 key 模式调用（原有 callLLM 逻辑，含内部 3 次重试）
+ */
+async function callLLMSingleKey(
+    messages: ChatMessage[],
+    config: LLMConfig,
+    options?: LLMCallOptions,
+    skipRetryOnQuota = false,
 ): Promise<LLMResponse> {
     // ── 擦屁股：清洗空 assistant 消息 ──
     for (const msg of messages) {
@@ -260,7 +370,8 @@ export async function callLLM(
 
             const isRetryable = isRateLimit || isServerError || isNetworkError || isEmptyResponse;
 
-            if (isRetryable && attempt < MAX_RETRIES) {
+            // Pool 模式下，429/quota 不在此层重试（由 pool 层切换 key 处理）
+            if (isRetryable && attempt < MAX_RETRIES && !(skipRetryOnQuota && isRateLimit)) {
                 const delay = RETRY_DELAYS[attempt] ?? 4000;
                 log.warn(`LLM call failed (attempt ${attempt + 1}/${MAX_RETRIES}), retrying in ${delay}ms`, {
                     caller,

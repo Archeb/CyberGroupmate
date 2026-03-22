@@ -1,5 +1,57 @@
 # Changelog
 
+## 2026-03-22: LLM API Key 负载均衡池
+
+新增 Profile 级多 Key 负载均衡：同一 `llm_profiles` 下可配置多个 API key，系统自动在 key 之间分发请求，突破单 key 的 RPM/TPM 限制。
+
+### 配置
+
+```yaml
+llm_profiles:
+  gemini-flash:
+    provider: openai
+    base_url: https://generativelanguage.googleapis.com/v1beta/openai/
+    model: gemini-3-flash-preview
+    temperature: 0.7
+    max_tokens: 65536
+    pool:
+      strategy: round_robin  # round_robin | least_pending | random
+      keys:
+        - api_key: "AIzaSy...key1"
+        - api_key: "AIzaSy...key2"
+          base_url: "https://vertex.example.com/v1"  # 可选，per-key base_url
+        - api_key: "AIzaSy...key3"
+```
+
+配置 `pool` 后，顶层 `api_key` 字段被忽略。不配置 `pool` 时行为与之前完全一致。
+
+### 调度策略
+
+- **round_robin**：轮转分发（默认），适合 key 配额相同的场景
+- **least_pending**：选择当前 pending 请求最少的 key，负载最均匀
+- **random**：随机选择
+
+### 错误处理
+
+| 错误类型 | 行为 |
+|----------|------|
+| 429/RESOURCE_EXHAUSTED (quota) | 跳过内部 3 次重试，立即切换到下一个 key；该 key 进入指数退避冷却（5s→10s→...→120s） |
+| 连续 5 次 quota 失败 | 判定为余额耗尽，**永久禁用**该 key（直到配置重载） |
+| 401/403 (认证/权限) | **立即永久禁用** + 切换到下一个 key |
+| 所有 key 不可用 | 抛出错误，交由上层 `callLLMWithFallback` 走 profile 级 fallback |
+| 5xx/网络错误 | 正常走 `callLLMSingleKey` 内部 3 次重试，不触发 key 切换 |
+
+### 改动
+
+| 文件 | 改动 |
+|------|------|
+| `src/core/llm-pool.ts` | **[NEW]** `LLMPool` 类 — 调度器（acquire/release/getStatus）+ 全局注册表 |
+| `src/core/config.ts` | 新增 `PoolConfig`/`PoolMemberConfig`/`PoolStrategy` 类型；`parseLLMProfile` 解析 pool；`serializeConfigToObject` 序列化 pool；`validateConfig` 校验 pool；`clearConfigCache` 联动 `clearAllPools` |
+| `src/core/llm.ts` | `callLLM` 检测 pool 后委托 `callLLMWithPool`；新增 `isQuotaError`/`isAuthError` 检测；`callLLMSingleKey` 新增 `skipRetryOnQuota` 参数 |
+| `config.example.yaml` | 新增 pool 配置文档 |
+| `config.yaml` | 清理废弃的 `model_tiers` 段 |
+| `tests/llm-pool.test.ts` | **[NEW]** 15 个单元测试 |
+
 ## 2026-03-22: Dashboard 在线配置编辑器 + 热重载
 
 新增 Dashboard「配置编辑」面板，支持在线编辑全部 `config.yaml` 选项，保存后大部分配置即时生效（无需重启）。

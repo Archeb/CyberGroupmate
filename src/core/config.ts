@@ -10,8 +10,27 @@
 
 import { readFileSync, existsSync, writeFileSync } from "node:fs";
 import { parse as parseYAML, stringify as stringifyYAML } from "yaml";
+import { clearAllPools } from "./llm-pool.js";
 
 // ─── 类型定义 ───
+
+/** Pool 调度策略 */
+export type PoolStrategy = "round_robin" | "least_pending" | "random";
+
+/** Pool 成员配置（YAML 中 pool.keys 的每一项） */
+export interface PoolMemberConfig {
+    apiKey: string;
+    /** 可选，不同 key 可使用不同 base_url（如 AI Studio vs Vertex AI） */
+    baseUrl?: string;
+    /** 权重，默认 1 */
+    weight?: number;
+}
+
+/** Pool 配置 */
+export interface PoolConfig {
+    strategy: PoolStrategy;
+    members: PoolMemberConfig[];
+}
 
 export interface LLMConfig {
     provider: "anthropic" | "openai";
@@ -39,6 +58,8 @@ export interface LLMConfig {
         /** Anthropic 缓存创建单价 */
         cacheCreation?: number;
     };
+    /** 多 key 负载均衡池。设置后 apiKey 字段将被忽略，由 pool 调度器选择实际 key */
+    pool?: PoolConfig;
 }
 
 /** 相似度度量方法 */
@@ -438,6 +459,8 @@ export function resolveEmbeddingConfig(config?: AppConfig): EmbeddingConfig {
 
 export function clearConfigCache(): void {
     _cached = null;
+    // Pool 实例与配置绑定，配置变更时需同步清理以保证新 pool 生效
+    clearAllPools();
 }
 
 // ─── Embedding 配置解析 ───
@@ -585,6 +608,35 @@ function parseLLMProfile(raw: Record<string, unknown>): LLMConfig {
             cacheCreation: rawPricing.cache_creation != null ? num(rawPricing.cache_creation, 0) : undefined,
         };
     }
+
+    // 解析 pool 配置
+    let pool: PoolConfig | undefined = undefined;
+    const rawPool = raw.pool as Record<string, unknown> | undefined;
+    if (rawPool && typeof rawPool === "object") {
+        const rawKeys = rawPool.keys as Array<Record<string, unknown>> | undefined;
+        if (Array.isArray(rawKeys) && rawKeys.length > 0) {
+            const members: PoolMemberConfig[] = rawKeys.map(k => ({
+                apiKey: str(k.api_key) ?? "",
+                baseUrl: str(k.base_url),
+                weight: k.weight != null ? num(k.weight, 1) : undefined,
+            })).filter(m => m.apiKey.length > 0);
+            if (members.length > 0) {
+                const VALID_STRATEGIES = new Set(["round_robin", "least_pending", "random"]);
+                const rawStrategy = str(rawPool.strategy) ?? "round_robin";
+                const strategy = VALID_STRATEGIES.has(rawStrategy)
+                    ? rawStrategy as PoolStrategy
+                    : (() => {
+                        console.warn(`[Config] pool.strategy "${rawStrategy}" 无效，使用 round_robin`);
+                        return "round_robin" as PoolStrategy;
+                    })();
+                pool = {
+                    strategy,
+                    members,
+                };
+            }
+        }
+    }
+
     return {
         provider: (str(raw.provider) as "anthropic" | "openai") ?? DEFAULT_LLM.provider,
         baseUrl: str(raw.base_url) ?? DEFAULT_LLM.baseUrl,
@@ -597,6 +649,7 @@ function parseLLMProfile(raw: Record<string, unknown>): LLMConfig {
         vision: raw.vision === true ? true : undefined,
         supportsPrefill: raw.supports_prefill === false ? false : undefined,
         pricing,
+        pool,
     };
 }
 
@@ -659,6 +712,17 @@ export function serializeConfigToObject(config: AppConfig): Record<string, unkno
             if (p.pricing.cachedInput != null) pricing.cached_input = p.pricing.cachedInput;
             if (p.pricing.cacheCreation != null) pricing.cache_creation = p.pricing.cacheCreation;
             entry.pricing = pricing;
+        }
+        if (p.pool) {
+            entry.pool = {
+                strategy: p.pool.strategy,
+                keys: p.pool.members.map(m => {
+                    const k: Record<string, unknown> = { api_key: m.apiKey };
+                    if (m.baseUrl) k.base_url = m.baseUrl;
+                    if (m.weight != null && m.weight !== 1) k.weight = m.weight;
+                    return k;
+                }),
+            };
         }
         profiles[name] = entry;
     }
@@ -889,13 +953,18 @@ export function validateConfig(config: unknown): { valid: boolean; errors: strin
             const p = raw as Record<string, unknown>;
             if (!p.provider) errors.push(`Profile "${name}": provider 不能为空`);
             if (!p.baseUrl) errors.push(`Profile "${name}": baseUrl 不能为空`);
-            if (!p.apiKey) errors.push(`Profile "${name}": apiKey 不能为空`);
+            // apiKey 在有 pool 时可选
+            const pool = p.pool as PoolConfig | undefined;
+            if (!p.apiKey && !pool) errors.push(`Profile "${name}": apiKey 不能为空（除非配置了 pool）`);
             if (!p.model) errors.push(`Profile "${name}": model 不能为空`);
             if (typeof p.temperature === "number" && (p.temperature < 0 || p.temperature > 2)) {
                 errors.push(`Profile "${name}": temperature 应在 0-2 之间`);
             }
             if (typeof p.maxTokens === "number" && p.maxTokens <= 0) {
                 errors.push(`Profile "${name}": maxTokens 应大于 0`);
+            }
+            if (pool && (!pool.members || pool.members.length === 0)) {
+                errors.push(`Profile "${name}": pool.keys 不能为空`);
             }
         }
     }
