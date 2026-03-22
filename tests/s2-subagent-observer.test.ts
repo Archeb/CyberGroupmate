@@ -18,7 +18,7 @@ function mockEvent(overrides: Partial<NotificationEvent> & { chatId: string }): 
     return {
         _id: `test-${Date.now()}-${Math.random().toString(36).slice(2)}`,
         _ts: new Date().toISOString(),
-        type: "telegram.message",
+        type: "nc.message",
         ...overrides,
     };
 }
@@ -59,9 +59,9 @@ describe("S2: SubagentManager + Observer", () => {
             const platformDir = join(tmpDir, "telegram");
             mkdirSync(platformDir, { recursive: true });
 
-            // 写入一个模拟的 session 文件
-            writeFileSync(join(platformDir, "chatA.json"), JSON.stringify({
-                chatId: "chatA",
+            // 写入一个模拟的 session 文件（使用 composite key 文件名格式）
+            writeFileSync(join(platformDir, "telegram_chatA.json"), JSON.stringify({
+                chatId: "telegram:chatA",
                 session: [{ role: "user", content: "test", timestamp: new Date().toISOString() }],
                 executionRecords: [],
                 executionCount: 3,
@@ -72,10 +72,10 @@ describe("S2: SubagentManager + Observer", () => {
             const mgr = new SubagentManager({ sessionsDir: tmpDir, platformName: "telegram" });
             const restored = mgr.restoreAll();
 
-            assert.deepEqual(restored, ["chatA"]);
+            assert.deepEqual(restored, ["telegram:chatA"]);
             assert.equal(mgr.size, 1);
-            const sub = mgr.get("chatA");
-            assert.ok(sub, "chatA should exist");
+            const sub = mgr.get("telegram:chatA");
+            assert.ok(sub, "telegram:chatA should exist");
 
             mgr.dispose();
             rmSync(tmpDir, { recursive: true, force: true });

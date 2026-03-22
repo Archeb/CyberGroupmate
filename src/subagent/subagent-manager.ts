@@ -20,6 +20,7 @@ import { DEFAULT_SUBAGENT_CONFIG } from "./types.js";
 import { createLogger } from "../core/logger.js";
 import { existsSync, readdirSync, mkdirSync } from "node:fs";
 import { join, basename } from "node:path";
+import { chatIdToFileName, fileNameToChatId } from "../core/chat-id.js";
 import type { MemoryStoreV2 } from "../memory-v2/index.js";
 
 const log = createLogger("subagent-manager");
@@ -62,7 +63,8 @@ export class SubagentManager {
     getSessionFilePath(chatId: string): string {
         const sessionsDir = this.config.sessionsDir ?? "workspace/sessions";
         const platformName = this.config.platformName ?? "telegram";
-        return join(sessionsDir, platformName, `${chatId}.json`);
+        const fileName = chatIdToFileName(chatId);
+        return join(sessionsDir, platformName, `${fileName}.json`);
     }
 
     /**
@@ -132,7 +134,15 @@ export class SubagentManager {
             const files = readdirSync(dir).filter(f => f.endsWith(".json"));
 
             for (const file of files) {
-                const chatId = basename(file, ".json");
+                const rawName = basename(file, ".json");
+                // 支持旧格式（裸 chatId）和新格式（composite key 文件名）
+                let chatId: string;
+                try {
+                    chatId = fileNameToChatId(rawName);
+                } catch {
+                    // 旧格式文件名（无平台前缀），按默认平台处理
+                    chatId = `${platformName}:${rawName}`;
+                }
                 const filePath = join(dir, file);
 
                 try {

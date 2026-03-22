@@ -1,12 +1,12 @@
 /**
  * message-log-writer.ts — 消息实时落盘
  *
- * 在 NC push() 时同步将 telegram.message 事件写入 MemoryV2 的 message_log 表，
+ * 在 NC push() 时同步将消息事件写入 MemoryV2 的 message_log 表，
  * 使得主 Agent 可以按 snapshotTimestamp 读取时间一致的消息视图。
  *
  * 设计要点：
  * - 幂等写入：使用 INSERT OR IGNORE（message_log PK = chat_id + message_id）
- * - 只处理 telegram.message 类型事件，其他事件类型直接跳过
+ * - 只处理 nc.message 类型事件，其他事件类型直接跳过
  * - 线程安全：SQLite WAL 模式下单进程串行写入
  */
 
@@ -18,7 +18,7 @@ const log = createLogger("message-log-writer");
 
 /** 配置选项 */
 export interface MessageLogWriterConfig {
-    /** 要处理的事件类型前缀列表。默认 ["telegram.message"] */
+    /** 要处理的事件类型前缀列表。默认 ["nc.message"] */
     eventTypes?: string[];
     /** Agent 自己的 userId 标识（写入 message_log 时使用）。默认 "agent" */
     agentUserId?: string;
@@ -27,7 +27,7 @@ export interface MessageLogWriterConfig {
 }
 
 const DEFAULT_CONFIG: Required<MessageLogWriterConfig> = {
-    eventTypes: ["telegram.message"],
+    eventTypes: ["nc.message"],
     agentUserId: "agent",
     agentDisplayName: "赛博群友",
 };

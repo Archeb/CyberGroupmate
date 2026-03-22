@@ -90,7 +90,7 @@ describe("Subagent Architecture: 跨节点集成测试", () => {
         const dir = tempDir();
         const nc = new NotificationCenter(join(dir, "events.jsonl"), false);
         const memory = new MemoryStoreV2(join(dir, "memory.db"));
-        const writer = new MessageLogWriter(memory, { eventTypes: ["nc.message", "telegram.message"] });
+        const writer = new MessageLogWriter(memory, { eventTypes: ["nc.message"] });
         const mgr = new SubagentManager({
             observerConfig: {
                 engagementWindowMs: 60000,
@@ -475,7 +475,7 @@ describe("Subagent Architecture: 跨节点集成测试", () => {
         const dir = tempDir();
         const nc = new NotificationCenter(join(dir, "events.jsonl"), false);
         const memory = new MemoryStoreV2(join(dir, "memory.db"));
-        const writer = new MessageLogWriter(memory, { eventTypes: ["nc.message", "telegram.message"] });
+        const writer = new MessageLogWriter(memory, { eventTypes: ["nc.message"] });
         const globalState = new GlobalState({
             filePath: join(dir, "global-state.json"),
             autoSaveInterval: 0,

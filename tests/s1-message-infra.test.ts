@@ -51,12 +51,12 @@ describe("S1: 消息基础设施改造", () => {
     // ─── S1.1: MessageLogWriter ───
 
     describe("S1.1: MessageLogWriter", () => {
-        it("#1 写入 telegram.message 事件到 message_log", () => {
+        it("#1 写入 nc.message 事件到 message_log", () => {
             const { nc, memory } = makeTestEnv();
             const writer = new MessageLogWriter(memory);
 
             const event = nc.push({
-                type: "telegram.message",
+                type: "nc.message",
                 chatId: "chat1",
                 userId: "user1",
                 messageId: "msg1",
@@ -84,7 +84,7 @@ describe("S1: 消息基础设施改造", () => {
             const writer = new MessageLogWriter(memory);
 
             const event = nc.push({
-                type: "telegram.message",
+                type: "nc.message",
                 chatId: "chat1",
                 userId: "user1",
                 messageId: "msg_dup",
@@ -102,7 +102,7 @@ describe("S1: 消息基础设施改造", () => {
             memory.close();
         });
 
-        it("#3 忽略非 telegram.message 事件", () => {
+        it("#3 忽略非 nc.message 事件", () => {
             const { nc, memory } = makeTestEnv();
             const writer = new MessageLogWriter(memory);
 
@@ -114,7 +114,7 @@ describe("S1: 消息基础设施改造", () => {
             });
 
             const result = writer.write(event);
-            assert.equal(result, false, "应该跳过非 telegram.message 事件");
+            assert.equal(result, false, "应该跳过非 nc.message 事件");
             assert.equal(writer.getWrittenCount(), 0);
 
             memory.close();
@@ -133,7 +133,7 @@ describe("S1: 消息基础设施改造", () => {
 
             // push 一条消息
             nc.push({
-                type: "telegram.message",
+                type: "nc.message",
                 chatId: "chat_rt",
                 userId: "user_rt",
                 messageId: "msg_rt_1",
@@ -213,7 +213,7 @@ describe("S1: 消息基础设施改造", () => {
 
             // 通过 NC push（触发实时写入）
             nc.push({
-                type: "telegram.message",
+                type: "nc.message",
                 chatId: "compat1",
                 userId: "u1",
                 messageId: "compat_msg_1",

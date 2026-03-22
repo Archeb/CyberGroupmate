@@ -53,7 +53,7 @@ export class EventBridge {
         // NC 消息事件
         this.deps.nc.onPush(event => {
             const type = String(event.type ?? "");
-            if (type !== "nc.message" && type !== "telegram.message") return;
+            if (type !== "nc.message") return;
             this.broadcast({
                 type: "nc:message",
                 timestamp: new Date().toISOString(),

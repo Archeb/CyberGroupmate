@@ -388,7 +388,7 @@ async function main(): Promise<void> {
         }
 
         // 接收所有消息类型事件（TelegramAdapter 使用 "nc.message"）
-        if (eventType !== "nc.message" && eventType !== "telegram.message") return;
+        if (eventType !== "nc.message") return;
 
         // ─── 即时落盘：确保 message_log 实时可查 ───
         // RecordingPipeline 的 flush 是延迟触发的（50 条消息 OR 2 分钟静默），
