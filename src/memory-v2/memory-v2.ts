@@ -1294,7 +1294,35 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
         const facts = [...factMap.values()];
 
         // ─── 关联 persons（通过 topic.participants 匹配） ───
-        const persons = this.resolvePersonsFromTopics(topics);
+        let persons = this.resolvePersonsFromTopics(topics);
+
+        // 直接按 userId 查询（memory.md §4.4 Step 4）
+        if (options?.userId) {
+            const hasUser = persons.some(p => p.userId === options.userId);
+            if (!hasUser) {
+                if (options.chatId) {
+                    const directProfile = this.getProfilesForChat(options.chatId)
+                        .find(p => p.userId === options.userId);
+                    if (directProfile) persons = [directProfile, ...persons];
+                } else {
+                    // 无 chatId 限定时查全部群的 profile
+                    try {
+                        const chatIds = this.db.prepare(
+                            "SELECT DISTINCT chat_id FROM person_group_profiles WHERE user_id = ? LIMIT 5"
+                        ).all(options.userId) as { chat_id: string }[];
+                        for (const { chat_id } of chatIds) {
+                            const profile = this.getProfilesForChat(chat_id)
+                                .find(p => p.userId === options!.userId);
+                            if (profile && !persons.some(e => e.userId === profile.userId && e.chatId === profile.chatId)) {
+                                persons.push(profile);
+                            }
+                        }
+                    } catch (err) {
+                        log.debug("recall: userId 全局查询失败", { userId: options.userId, error: String(err) });
+                    }
+                }
+            }
+        }
 
         // ─── deep summary（如结果超阈值且有 cheapLlmConfig） ───
         let deepSummary: string | undefined;

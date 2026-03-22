@@ -264,6 +264,46 @@ export async function runReflection(
         }
     }
 
+    // 4a″. 将本次 interactions 转为 recentEpisodes 写入对应 profile（memory.md §3.2 情感记忆渐进合并）
+    if (interactions.length > 0) {
+        const interactionsByUser = new Map<string, typeof interactions>();
+        for (const intr of interactions) {
+            const uid = intr.userId;
+            if (!uid || uid === "agent") continue;
+            const arr = interactionsByUser.get(uid) ?? [];
+            arr.push(intr);
+            interactionsByUser.set(uid, arr);
+        }
+        for (const [userId, userInteractions] of interactionsByUser) {
+            const profile = profiles.find(p => p.userId === userId);
+            if (!profile) continue;
+            const existing = profile.recentEpisodes ?? [];
+            // 去重：跳过已存在的 episode id
+            const existingIds = new Set(existing.map(e => e.id));
+            const newEpisodes = userInteractions
+                .filter(intr => !existingIds.has(intr.id))
+                .map(intr => ({
+                    id: intr.id,
+                    date: intr.date,
+                    chatId: intr.chatId,
+                    userId: intr.userId,
+                    topicId: intr.topicId ?? null,
+                    type: intr.type,
+                    summary: intr.summary,
+                    sentiment: intr.sentiment ?? "neutral" as const,
+                    significance: intr.significance ?? 0.5,
+                }));
+            if (newEpisodes.length > 0) {
+                memory.upsertPersonGroupProfile(userId, chatId, {
+                    recentEpisodes: [...existing, ...newEpisodes],
+                });
+                log.debug("Reflection 4a″: 写入 recentEpisodes", {
+                    userId, count: newEpisodes.length, total: existing.length + newEpisodes.length,
+                });
+            }
+        }
+    }
+
     // 4b. 写入新事实（含 embedding — 使向量检索可达）
     let factEmbeddings: Float32Array[] = [];
     const embCfg = memory.getEmbeddingConfig();

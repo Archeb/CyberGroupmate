@@ -364,6 +364,7 @@ export class CodeActExecutor {
                         const identity = this.memory.getPersonIdentity(profile.userId);
                         relevantProfiles.push({
                             displayName: identity?.displayName ?? name,
+                            aliases: identity?.aliases ?? [],
                             userId: profile.userId,
                             dunbarTier: profile.dunbarTier,
                             traits: profile.traits,
@@ -588,6 +589,13 @@ export class CodeActExecutor {
             durationMs,
         });
 
+        // Post-session fact extraction — 与 callback 同步，fire-and-forget（memory.md §3.5）
+        if (this.memory && sessionResult.endReason !== "error") {
+            this.extractSessionFacts(task, sessionResult).catch(err =>
+                log.warn("post-session fact extraction failed", { chatId: this.chatId, error: String(err) })
+            );
+        }
+
         return callback;
     }
 
@@ -622,6 +630,68 @@ export class CodeActExecutor {
 
         log.info("execute: 完成 (skeleton)", { chatId: this.chatId, taskId: task.taskId, durationMs });
         return callback;
+    }
+
+    /**
+     * Post-session 事实提炼（memory.md §3.5）
+     *
+     * 从 session 对话记录中提取值得长期记忆的具体事实，
+     * 使用 cheap model 分析后写入 core_facts 表。
+     * fire-and-forget 调用，不阻塞 callback 返回。
+     */
+    private async extractSessionFacts(
+        task: CodeActReplyTask,
+        sessionResult: SessionResult,
+    ): Promise<void> {
+        // 提取非 system 消息作为对话记录
+        const dialogText = sessionResult.messages
+            .filter(m => m.role !== "system")
+            .map(m => `[${m.role}] ${m.content}`)
+            .join("\n")
+            .slice(0, 4000);
+        if (dialogText.length < 100) return;
+
+        const { callLLM } = await import("../core/llm.js");
+        const { loadTemplate } = await import("../main-agent/prompt-renderer.js");
+
+        const systemPrompt = loadTemplate("POST_SESSION_EXTRACT");
+        if (!systemPrompt) return;
+
+        // 使用最后一个 LLM config（通常是 cheap model）
+        const cheapConfig = this.llmConfigs[this.llmConfigs.length - 1];
+
+        const response = await callLLM(
+            [
+                { role: "system", content: systemPrompt },
+                { role: "user", content: `chatId: ${this.chatId}\n\n${dialogText}` },
+            ],
+            cheapConfig,
+            { caller: "post-session-extract" },
+        );
+
+        // 解析 JSON（容忍 markdown 围栏）
+        const cleaned = response.content
+            .replace(/```json?\s*/g, "")
+            .replace(/```/g, "")
+            .trim();
+        const parsed = JSON.parse(cleaned);
+        if (!Array.isArray(parsed.facts) || parsed.facts.length === 0) return;
+
+        for (const f of parsed.facts) {
+            if (!f.subject || !f.content || !f.category) continue;
+            this.memory!.storeFact(
+                f.subject,
+                f.content,
+                f.category,
+                `session:${task.taskId}`,
+                f.expiresAt ?? undefined,
+            );
+        }
+        log.info("post-session facts extracted", {
+            chatId: this.chatId,
+            taskId: task.taskId,
+            count: parsed.facts.length,
+        });
     }
 
     /**

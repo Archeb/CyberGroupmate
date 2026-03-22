@@ -45,6 +45,7 @@ const PROMPT_FILE_MAP: Record<string, string> = {
     FAST_PATH: "subagent-fast-path.md",
     CALLBACK: "subagent-callback.md",
     MAIN_SYSTEM: "subagent-main-system.md",
+    POST_SESSION_EXTRACT: "post-session-extract.md",
 };
 
 export type PromptType = keyof typeof PROMPT_FILE_MAP;
@@ -222,6 +223,16 @@ export function buildAttentionVariables(
         // Dispatched topics (防重复分派)
         hasDispatchedTopics: !!opts.dispatchedTopicIds?.length,
         dispatchedTopicIds: opts.dispatchedTopicIds?.join(", ") ?? "",
+
+        // Active persons (Issue 3: PersonGroupProfile + aliases 注入)
+        activePersons: pkg.activePersons?.length
+            ? pkg.activePersons.map((p: any) => {
+                const tier = p.dunbarTier ? `Tier ${p.dunbarTier}` : "新用户";
+                const rel = p.relationToAgent ? `, ${p.relationToAgent}` : "";
+                const aka = p.aliases?.length ? ` (又名: ${p.aliases.join(", ")})` : "";
+                return `${p.displayName}${aka} (${tier}${rel})`;
+            }).join(", ")
+            : "",
     };
 }
 

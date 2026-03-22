@@ -89,6 +89,32 @@ export function createAttendHandler(
             }))
             : undefined;
 
+        // 收集活跃参与者画像（含 aliases），用于 Attend 决策上下文
+        const activePersons: Array<{ userId: string; displayName: string; recentMessageCount: number }> = [];
+        if (recentMessages?.length) {
+            const senderCounts = new Map<string, { name: string; count: number }>();
+            for (const m of recentMessages) {
+                const uid = String((m as any).userId ?? (m as any).user_id ?? "");
+                if (!uid) continue;
+                const prev = senderCounts.get(uid) ?? { name: String((m as any).displayName ?? (m as any).display_name ?? uid), count: 0 };
+                senderCounts.set(uid, { name: prev.name, count: prev.count + 1 });
+            }
+            for (const [uid, { name, count }] of senderCounts) {
+                try {
+                    const profiles = memory.getProfilesForChat(entry.chatId);
+                    const profile = profiles.find(p => p.userId === uid);
+                    const identity = memory.getPersonIdentity(uid);
+                    activePersons.push({
+                        userId: uid,
+                        displayName: name,
+                        recentMessageCount: count,
+                        ...(profile ? { dunbarTier: profile.dunbarTier, relationToAgent: profile.relationToAgent } : {}),
+                        ...(identity?.aliases?.length ? { aliases: identity.aliases } : {}),
+                    } as any);
+                } catch { /* 非关键路径 */ }
+            }
+        }
+
         const contextPkg = buildGroupContext({
             chatId: entry.chatId,
             depth,
@@ -103,6 +129,7 @@ export function createAttendHandler(
             stickiness: subagent.stickiness,
             fastPathEnabled: !!(subagent.fastPathHandler as any)?.isAuthorized?.(),
             pendingCodeActTasks: (subagent.codeActExecutor as any)?.getQueueSize?.() ?? 0,
+            activePersons,
         });
 
         // ─── Phase 5: LLM 决策 ───

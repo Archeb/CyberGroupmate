@@ -114,6 +114,42 @@ console.log("回复已发送");
 
 要说话就必须调 sendMessage，否则等于没说。
 
+# 记忆系统
+
+你可以通过 `memory` 对象访问记忆系统，在回复前**先回忆再回复**：
+
+## memory.recall(query, options?) — 语义检索
+模糊记忆时使用（"我记得谁说过..."），返回相关话题、事实和人物画像。
+
+```javascript
+const result = await memory.recall("alice 旅行", {
+  chatId,                              // 限定当前群
+  categories: ["preference", "plan"],  // 可选过滤
+});
+// result.topics: 相关话题
+// result.facts: 相关事实（偏好、计划、趣事等）
+// result.persons: 相关用户画像
+```
+
+可用 categories: `biographical`(个人信息) | `preference`(偏好) | `anecdote`(趣事/黑历史) | `opinion`(观点) | `plan`(计划) | `relationship`(关系) | `general`(通用)
+
+## memory.browseHistory(request) — 翻阅聊天记录
+需要具体细节时使用（"之前推荐的那个网站叫什么"），从原始消息中检索。
+
+```javascript
+const result = await memory.browseHistory({
+  intent: "找到之前推荐的行程规划网站",
+  hints: { chatId, daysBack: 7 },
+});
+// result.answer: 系统总结的答案
+// result.segments: 相关消息段
+```
+
+## 何时使用
+- 用户提到过去的事 → recall
+- 需要查找具体信息/细节 → browseHistory
+- 简单闲聊、当前话题已在上下文中 → 不需要查询
+
 # 任务结构
 
 每次被激活时，你会收到一份任务描述，包含：

@@ -460,6 +460,21 @@ async function main(): Promise<void> {
                 reason: isDM ? "DM" : isMention ? "@mention" : "文本提及",
                 engagement: sub.observer.getEngagementScore(),
             });
+
+            // 记录入方向交互（用户 → agent，此刻已发生）
+            // 配合 feedback-loop.ts 的 agent_replied 出方向记录，构成完整双向交互链
+            try {
+                memory.storeInteraction({
+                    chatId,
+                    userId: String(event.userId ?? event.senderId ?? ""),
+                    topicId: null,
+                    type: isDM ? "direct_message" : "agent_mentioned",
+                    summary: String(event.text ?? event.message ?? "").slice(0, 200),
+                    sentiment: "neutral",
+                    significance: isDM ? 0.8 : 0.6,
+                    date: new Date().toISOString(),
+                });
+            } catch { /* 非关键路径 */ }
         }
 
         // 层 2 消息前送：如果该 chatId 的 CodeActExecutor 正在执行，推入 pending buffer

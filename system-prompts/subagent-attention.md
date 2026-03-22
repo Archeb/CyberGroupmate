@@ -33,6 +33,11 @@
 - 语气预设: {{tonePreset}}
 {{/groupModel}}
 
+{{#activePersons}}
+## 活跃参与者
+{{activePersons}}
+{{/activePersons}}
+
 {{#hasDispatchedTopics}}
 ## ⚠️ 已分派回复任务的话题
 以下话题已有进行中或已完成的回复任务，请勿重复分派: {{dispatchedTopicIds}}
