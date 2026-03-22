@@ -43,7 +43,7 @@
                 <td class="max-w-32 truncate" title={g.agentRole || ''}>{g.agentRole || '-'}</td>
                 <td class="max-w-32 truncate" title={(g.hotTopics || []).join(', ')}>{(g.hotTopics || []).join(', ') || '-'}</td>
                 <td class="max-w-32 truncate" title={(g.tabooTopics || []).join(', ')}>{(g.tabooTopics || []).join(', ') || '-'}</td>
-                <td><button class="btn btn-xs btn-ghost" onclick={() => editGroup(g.chatId)}>✏️</button></td>
+                <td><button class="btn btn-xs btn-ghost" onclick={() => editGroup(g.chatId)}><i class="fa-solid fa-pen-to-square"></i></button></td>
               </tr>
             {/each}
           {/if}

@@ -86,7 +86,7 @@
     </div>
     <div class="card bg-base-100">
       <div class="card-body p-4">
-        <h3 class="card-title text-sm">🔍 记忆搜索 (Recall)</h3>
+        <h3 class="card-title text-sm"><i class="fa-solid fa-magnifying-glass opacity-50 mr-1"></i> 记忆搜索 (Recall)</h3>
         <input type="text" placeholder="关键词 / 语义检索" class="input input-sm input-bordered w-full mb-2" bind:value={recallQuery} />
         <input type="text" placeholder="chatId (可选，限定群组)" class="input input-sm input-bordered w-full mb-2" bind:value={recallChatId} />
         <button class="btn btn-sm btn-accent w-full" onclick={recallMemory}>搜索记忆</button>
@@ -103,7 +103,7 @@
     </div>
     <div class="card bg-base-100">
       <div class="card-body p-4 overflow-hidden">
-        <h3 class="card-title text-sm mb-2">🔍 搜索结果</h3>
+        <h3 class="card-title text-sm mb-2"><i class="fa-solid fa-magnifying-glass opacity-50 mr-1"></i> 搜索结果</h3>
         <div class="overflow-auto max-h-[40vh] text-xs">
           {#if !recallResults}
             <span class="opacity-60">输入关键词后点击搜索</span>
@@ -114,7 +114,7 @@
               <div class="mb-3 p-2 bg-base-200 rounded text-xs"><strong>摘要：</strong>{recallResults.deepSummary}</div>
             {/if}
             {#if recallResults.topics?.length}
-              <h4 class="text-sm font-bold mb-1">🗂 话题 ({recallResults.topics.length})</h4>
+              <h4 class="text-sm font-bold mb-1"><i class="fa-solid fa-folder-open mr-1"></i>话题 ({recallResults.topics.length})</h4>
               {#each recallResults.topics as t}
                 <div class="topic-card mb-1 cursor-pointer" onclick={() => viewTopicDetail(t.id)}>
                   <div class="font-semibold text-xs">{t.label}</div>
@@ -124,7 +124,7 @@
               {/each}
             {/if}
             {#if recallResults.facts?.length}
-              <h4 class="text-sm font-bold mt-2 mb-1">💡 事实 ({recallResults.facts.length})</h4>
+              <h4 class="text-sm font-bold mt-2 mb-1"><i class="fa-solid fa-lightbulb mr-1"></i>事实 ({recallResults.facts.length})</h4>
               <div class="space-y-1">
                 {#each recallResults.facts as f}
                   <div class="text-xs p-1 bg-base-200 rounded">
@@ -136,7 +136,7 @@
               </div>
             {/if}
             {#if recallResults.persons?.length}
-              <h4 class="text-sm font-bold mt-2 mb-1">👤 关联人物 ({recallResults.persons.length})</h4>
+              <h4 class="text-sm font-bold mt-2 mb-1"><i class="fa-solid fa-user mr-1"></i>关联人物 ({recallResults.persons.length})</h4>
               {#each recallResults.persons as p}
                 <div class="text-xs p-1 bg-base-200 rounded">
                   <button class="clickable-link" onclick={() => quickQueryUser(p.userId, p.chatId)}>{p.userId}</button>

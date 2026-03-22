@@ -59,8 +59,8 @@
                 <td class="text-xs opacity-60">{p.lastSeenAt ? new Date(p.lastSeenAt).toLocaleString() : '-'}</td>
                 <td>
                   <div class="flex gap-1">
-                    <button class="btn btn-xs btn-ghost" onclick={() => editPerson(p.userId)}>✏️</button>
-                    <button class="btn btn-xs btn-ghost text-error" onclick={() => deletePerson(p.userId)}>🗑</button>
+                    <button class="btn btn-xs btn-ghost" onclick={() => editPerson(p.userId)}><i class="fa-solid fa-pen-to-square"></i></button>
+                    <button class="btn btn-xs btn-ghost text-error" onclick={() => deletePerson(p.userId)}><i class="fa-solid fa-trash-can"></i></button>
                   </div>
                 </td>
               </tr>

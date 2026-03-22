@@ -62,7 +62,7 @@
                 <td class="max-w-64 truncate" title={i.summary}>{i.summary}</td>
                 <td>{i.sentiment}</td>
                 <td>{(i.significance * 100).toFixed(0)}%</td>
-                <td><button class="btn btn-xs btn-ghost text-error" onclick={() => deleteInteraction(i.id)}>🗑</button></td>
+                <td><button class="btn btn-xs btn-ghost text-error" onclick={() => deleteInteraction(i.id)}><i class="fa-solid fa-trash-can"></i></button></td>
               </tr>
             {/each}
           {/if}

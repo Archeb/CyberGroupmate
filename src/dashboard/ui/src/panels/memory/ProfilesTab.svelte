@@ -56,8 +56,8 @@
                 <td>{p.messageCount}</td>
                 <td>
                   <div class="flex gap-1">
-                    <button class="btn btn-xs btn-ghost" onclick={() => editProfile(p.userId, p.chatId)}>✏️</button>
-                    <button class="btn btn-xs btn-ghost text-error" onclick={() => deleteProfile(p.userId, p.chatId)}>🗑</button>
+                    <button class="btn btn-xs btn-ghost" onclick={() => editProfile(p.userId, p.chatId)}><i class="fa-solid fa-pen-to-square"></i></button>
+                    <button class="btn btn-xs btn-ghost text-error" onclick={() => deleteProfile(p.userId, p.chatId)}><i class="fa-solid fa-trash-can"></i></button>
                   </div>
                 </td>
               </tr>

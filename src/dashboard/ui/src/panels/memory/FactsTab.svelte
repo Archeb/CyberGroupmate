@@ -71,8 +71,8 @@
                 <td class="text-xs opacity-60">{f.updatedAt ? new Date(f.updatedAt).toLocaleString() : '-'}</td>
                 <td>
                   <div class="flex gap-1">
-                    <button class="btn btn-xs btn-ghost" onclick={() => editFact(f.id)}>✏️</button>
-                    <button class="btn btn-xs btn-ghost text-error" onclick={() => deleteFact(f.id)}>🗑</button>
+                    <button class="btn btn-xs btn-ghost" onclick={() => editFact(f.id)}><i class="fa-solid fa-pen-to-square"></i></button>
+                    <button class="btn btn-xs btn-ghost text-error" onclick={() => deleteFact(f.id)}><i class="fa-solid fa-trash-can"></i></button>
                   </div>
                 </td>
               </tr>
