@@ -320,15 +320,10 @@ export async function runReflection(
             log.warn("Reflection 4b: 事实 embedding 生成失败，写入无 embedding 的事实", { error: String(err) });
         }
     }
-    const platform = getPlatform(chatId);
     for (let i = 0; i < llmOutput.newFacts.length; i++) {
         const fact = llmOutput.newFacts[i];
-        // 如果 subject 是纯数字（userId），确保加上平台前缀
-        const subject = /^-?\d+$/.test(fact.subject)
-            ? ensureCompositeId(platform, fact.subject)
-            : fact.subject;
         memory.storeFact(
-            subject, fact.content, fact.category, "reflection",
+            fact.subject, fact.content, fact.category, "reflection",
             undefined,
             factEmbeddings[i] ?? undefined,
         );

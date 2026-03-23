@@ -686,10 +686,8 @@ export class CodeActExecutor {
 
         for (const f of parsed.facts) {
             if (!f.subject || !f.content || !f.category) continue;
-            // LLM 看到的是裸 ID（getRawId 剥离），存储时需要还原 composite key
-            const subject = /^-?\d+$/.test(f.subject) ? ensureCompositeId(getPlatform(this.chatId), f.subject) : f.subject;
             this.memory!.storeFact(
-                subject,
+                f.subject,
                 f.content,
                 f.category,
                 `session:${task.taskId}`,

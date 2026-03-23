@@ -30,7 +30,7 @@
 | **userId 格式** | **同 chatId，`{platform}:{rawId}`。所有数字型 userId 必须加平台前缀，非数字（如 `agent`）保持原样** |
 | Discord chatId 粒度 | channelId。每个 Channel/Thread 独立 sandbox 和 session |
 | Guild ↔ Group | Guild = Group（共享 GroupModel/PersonProfile），Channel = 独立上下文 |
-| core_facts.subject | **已迁移** — 数字型 subject（代表 userId）加 `telegram:` 前缀 |
+| core_facts.subject | 不迁移（模糊查询，无需精确匹配 chatId 格式） |
 | 测试策略 | 修改现有测试以适应多平台架构，不单独写 Discord 专用测试 |
 | Session 路径 | `{platform}/{groupId}/{channelId}.json`（Telegram 无 channel 层） |
 | Sandbox API | 保留 `ctx.tg.*` + 新增 `ctx.discord.*`，按平台注入 |
@@ -255,7 +255,7 @@ interface Message {
 | chat_id → `telegram:` | `message_log`, `topics`, `group_models`, `person_group_profiles`, `interactions` | 13,844 |
 | user_id → `telegram:` | `person_identities`, `person_group_profiles`, `message_log`, `interactions` | 9,725 |
 | session 文件 | `workspace/sessions/telegram/` | 10 文件 |
-| core_facts.subject | 数字型 subject 加 `telegram:` | 补充迁移 |
+| core_facts.subject | 不强制迁移，自由文本字段，模糊查询用。LLM 写入纯数字或带前缀均可 | 补充迁移 |
 | person_profiles.user_id | 遗留表全量迁移 | 10+ |
 
 #### 关键决策与 Bugfix
