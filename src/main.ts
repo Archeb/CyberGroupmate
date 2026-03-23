@@ -11,7 +11,7 @@
  */
 
 import { NotificationCenter, type NotificationEvent } from "./event/notification-center.js";
-import { ensureCompositeId, getRawId } from "./core/chat-id.js";
+import { ensureCompositeId, getRawId, getPlatform } from "./core/chat-id.js";
 import { SandboxPool } from "./sandbox/sandbox-pool.js";
 import { createTaskListSkill, buildTaskListHostCalls } from "./sandbox/skills/task-list.js";
 import { MemoryStoreV2 } from "./memory-v2/index.js";
@@ -152,7 +152,7 @@ async function main(): Promise<void> {
                 // ── telegram.sendSticker: 通过 uniqueFileId 发送贴纸 ──
                 if (method === "telegram.sendSticker") {
                     const rawTarget = String(args[0] ?? "");
-                    const targetChatId = ensureCompositeId("telegram", rawTarget);
+                    const targetChatId = ensureCompositeId(getPlatform(chatId), rawTarget);
                     if (targetChatId !== chatId) {
                         throw new Error(`[Sandbox 安全限制] sendSticker 被拦截：sandbox 绑定 chat=${chatId}，不允许向 chat=${targetChatId} 发送。`);
                     }
@@ -178,7 +178,7 @@ async function main(): Promise<void> {
                     const writeMethods = telegramAdapter.getWriteMethods();
                     if (writeMethods.includes(method)) {
                         const rawTarget = String(args[0] ?? "");
-                        const targetChatId = ensureCompositeId("telegram", rawTarget);
+                        const targetChatId = ensureCompositeId(getPlatform(chatId), rawTarget);
                         if (targetChatId !== chatId) {
                             throw new Error(
                                 `[Sandbox 安全限制] ${method} 被拦截：当前 sandbox 绑定 chat=${chatId}，` +
@@ -293,7 +293,7 @@ async function main(): Promise<void> {
         },
         memory,  // 用于启动时恢复 TopicRegistry
         sessionsDir: SESSIONS_DIR,
-        platformName: "telegram",
+
         // Stickiness 恢复：从 GroupModel 查询 avgMessagesPerDay 推断级别（architecture_v2.md §2.2）
         stickinessProvider: (chatId: string) => {
             const gm = memory.getGroupModel(chatId);
@@ -521,9 +521,11 @@ async function main(): Promise<void> {
     nc.onPush(event => {
         if ((event as any).type === "system.agent_message_sent" && feedbackLoop) {
             const sentEvent = event as Record<string, unknown>;
+            const fbPlatform = String(sentEvent.scene ?? "") as import("./core/chat-id.js").PlatformName;
+            const fbCompositeChatId = ensureCompositeId(fbPlatform, String(sentEvent.chatId ?? ""));
             feedbackLoop.recordAgentMessage({
-                scene: String(sentEvent.scene ?? "telegram"),
-                chatId: String(sentEvent.chatId ?? ""),
+                scene: String(sentEvent.scene ?? ""),
+                chatId: fbCompositeChatId,
                 messageId: sentEvent.messageId ? String(sentEvent.messageId) : undefined,
                 text: String(sentEvent.text ?? ""),
                 timestamp: String(sentEvent.timestamp ?? new Date().toISOString()),
@@ -538,7 +540,7 @@ async function main(): Promise<void> {
         const chatId = String(event.chatId ?? "");
         if (!chatId) return;
         const eventType = String(event.type ?? "");
-        if (eventType !== "nc.message" && eventType !== "telegram.message") return;
+        if (eventType !== "nc.message") return;
         const userId = String(event.userId ?? event.user_id ?? event.senderId ?? "");
         const text = String(event.text ?? event.message ?? "");
         feedbackLoop.checkFollowUp(chatId, userId, text);

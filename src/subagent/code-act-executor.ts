@@ -464,11 +464,17 @@ export class CodeActExecutor {
         const sentCollector = new SentMessageCollector();
         const sandbox = await this.sandboxPool!.acquire(this.chatId);
 
+        // 设置 sandbox worker 中的 ctx._platform，供 scene.current 动态读取
+        const platform = getPlatform(this.chatId);
+        await sandbox.execute(`ctx._platform = ${JSON.stringify(platform)}`, 5000);
         // 注册 notify 监听器收集已发消息
+        const rawChatId = getRawId(this.chatId);
         const notifyListener = (event: Record<string, unknown>) => {
             // 按 chatId 过滤，只收集本群组的消息
+            // sandbox 发出的事件中 chatId 是 raw ID（因为 LLM 代码使用 getRawId 注入的 chatId），
+            // 需要同时匹配 raw 和 composite 格式
             const eventChatId = String(event.chatId ?? "");
-            if (eventChatId === this.chatId || eventChatId === "") {
+            if (eventChatId === this.chatId || eventChatId === rawChatId || eventChatId === "") {
                 sentCollector.collect(event);
             }
         };

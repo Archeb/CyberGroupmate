@@ -27,12 +27,14 @@ export interface CodeActProgressEvent {
     chatId: string;
     sessionId: string;
     turn: number;
-    phase: "thinking" | "executing" | "observation" | "end";
+    phase: "thinking" | "executing" | "observation" | "new_messages" | "task" | "end";
     thinking?: string;
     codeBlocks?: CodeBlock[];
     executionOutput?: string;
     isProcessing: boolean;
     endReason?: string;
+    /** 注入的用户消息文本（phase=new_messages 时） */
+    userMessage?: string;
     timestamp: string;
 }
 
@@ -300,7 +302,19 @@ export async function runCodeActSession(
         codeActEvents.emit("codeact:progress", payload);
     };
 
-
+    // ─── 发射初始任务 prompt 进度事件 ───
+    // 取 messages 中最后一条 user 消息作为任务 prompt 展示
+    const lastUserMsg = [...messages].reverse().find(m => m.role === "user");
+    if (lastUserMsg) {
+        emitProgress({
+            turn: -1,
+            phase: "task",
+            userMessage: typeof lastUserMsg.content === "string"
+                ? lastUserMsg.content
+                : JSON.stringify(lastUserMsg.content),
+            isProcessing: true,
+        });
+    }
 
     for (let turnNum = 0; turnNum < maxTurns; turnNum++) {
         // ─── 层 2: turn 间消息注入 ───
@@ -309,6 +323,14 @@ export async function runCodeActSession(
             if (newMessages) {
                 log.info(`Turn ${turnNum}: 注入前送消息`, { length: newMessages.length });
                 messages.push({ role: "user", content: newMessages });
+
+                // 发射进度事件：新消息到达
+                emitProgress({
+                    turn: turnNum,
+                    phase: "new_messages",
+                    userMessage: newMessages,
+                    isProcessing: true,
+                });
             }
         }
 

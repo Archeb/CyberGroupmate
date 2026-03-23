@@ -55,6 +55,8 @@
       case 'thinking': return { label: '💭 思考', cls: 'phase-thinking' };
       case 'executing': return { label: '⚙️ 执行', cls: 'phase-executing' };
       case 'observation': return { label: '📋 输出', cls: 'phase-observation' };
+      case 'new_messages': return { label: '📩 新消息', cls: 'phase-new-messages' };
+      case 'task': return { label: '📝 任务', cls: 'phase-task' };
       case 'end': return { label: '✅ 结束', cls: 'phase-end' };
       default: return { label: phase, cls: '' };
     }
@@ -167,6 +169,11 @@
                     <pre class="output-block">{evt.executionOutput.slice(0, 3000)}</pre>
                   </div>
                 {/if}
+                {#if evt.userMessage}
+                  <div class="progress-content user-message-content">
+                    <pre class="output-block">{evt.userMessage.slice(0, 2000)}</pre>
+                  </div>
+                {/if}
                 {#if evt.endReason}
                   <div class="end-reason">结束原因: {evt.endReason}</div>
                 {/if}
@@ -237,6 +244,8 @@
 .progress-event.phase-thinking { border-left-color: var(--color-primary); background: color-mix(in srgb, var(--color-primary) 5%, transparent); }
 .progress-event.phase-executing { border-left-color: var(--color-warning); background: color-mix(in srgb, var(--color-warning) 5%, transparent); }
 .progress-event.phase-observation { border-left-color: var(--color-success); background: color-mix(in srgb, var(--color-success) 5%, transparent); }
+.progress-event.phase-new-messages { border-left-color: var(--color-warning); background: color-mix(in srgb, var(--color-warning) 8%, transparent); }
+.progress-event.phase-task { border-left-color: var(--color-info); background: color-mix(in srgb, var(--color-info) 8%, transparent); }
 .progress-event.phase-end { border-left-color: var(--color-info); background: color-mix(in srgb, var(--color-info) 5%, transparent); }
 
 .progress-header {

@@ -20,7 +20,7 @@ import { DEFAULT_SUBAGENT_CONFIG } from "./types.js";
 import { createLogger } from "../core/logger.js";
 import { existsSync, readdirSync, mkdirSync } from "node:fs";
 import { join, basename } from "node:path";
-import { chatIdToFileName, fileNameToChatId } from "../core/chat-id.js";
+import { chatIdToFileName, fileNameToChatId, getPlatform, type PlatformName } from "../core/chat-id.js";
 import type { MemoryStoreV2 } from "../memory-v2/index.js";
 
 const log = createLogger("subagent-manager");
@@ -37,8 +37,7 @@ export interface SubagentManagerConfig {
     memory?: MemoryStoreV2;
     /** Session 持久化根目录（默认 workspace/sessions） */
     sessionsDir?: string;
-    /** 平台名称（用于持久化路径，如 "telegram"） */
-    platformName?: string;
+
 }
 
 const DEFAULT_MANAGER_CONFIG: SubagentManagerConfig = {};
@@ -62,9 +61,9 @@ export class SubagentManager {
      */
     getSessionFilePath(chatId: string): string {
         const sessionsDir = this.config.sessionsDir ?? "workspace/sessions";
-        const platformName = this.config.platformName ?? "telegram";
+        const platform = getPlatform(chatId);
         const fileName = chatIdToFileName(chatId);
-        return join(sessionsDir, platformName, `${fileName}.json`);
+        return join(sessionsDir, platform, `${fileName}.json`);
     }
 
     /**
@@ -120,69 +119,82 @@ export class SubagentManager {
      */
     restoreAll(): string[] {
         const sessionsDir = this.config.sessionsDir ?? "workspace/sessions";
-        const platformName = this.config.platformName ?? "telegram";
-        const dir = join(sessionsDir, platformName);
 
-        if (!existsSync(dir)) {
-            log.info("restoreAll: session 目录不存在，跳过", { dir });
+        if (!existsSync(sessionsDir)) {
+            log.info("restoreAll: sessions 根目录不存在，跳过", { sessionsDir });
             return [];
         }
 
         const restored: string[] = [];
 
+        // 扫描所有平台子目录（如 telegram/, discord/），而非硬编码单个平台
+        let platformDirs: string[];
         try {
-            const files = readdirSync(dir).filter(f => f.endsWith(".json"));
-
-            for (const file of files) {
-                const rawName = basename(file, ".json");
-                // 支持旧格式（裸 chatId）和新格式（composite key 文件名）
-                let chatId: string;
-                try {
-                    chatId = fileNameToChatId(rawName);
-                } catch {
-                    // 旧格式文件名（无平台前缀），按默认平台处理
-                    chatId = `${platformName}:${rawName}`;
-                }
-                const filePath = join(dir, file);
-
-                try {
-                    // 创建 SubagentManager 实例（如果不存在）
-                    const subagent = this.getOrCreate(chatId);
-
-                    // 创建 CodeActExecutor 并恢复 session
-                    if (!subagent.codeActExecutor) {
-                        const executor = new CodeActExecutor(chatId);
-                        const loaded = executor.loadSession(filePath);
-
-                        if (loaded) {
-                            subagent.codeActExecutor = executor;
-                            subagent.restoreLastAgentReplyAt();
-
-                            // 从 MemoryV2 恢复最近话题到 TopicRegistry
-                            if (this.config.memory) {
-                                const topicCount = subagent.loadRecentTopics(this.config.memory);
-                                log.info("restoreAll: 恢复话题", { chatId, topicCount });
-                            }
-
-                            restored.push(chatId);
-                            log.info("restoreAll: 恢复 session", {
-                                chatId,
-                                sessionSize: executor.getSessionSize(),
-                                executionCount: executor.getExecutionCount(),
-                                registrySize: subagent.topicRegistry.size,
-                            });
-                        }
-                    }
-                } catch (err) {
-                    log.warn("restoreAll: 恢复单个 session 失败", {
-                        chatId,
-                        file,
-                        error: String(err),
-                    });
-                }
-            }
+            platformDirs = readdirSync(sessionsDir, { withFileTypes: true })
+                .filter(d => d.isDirectory())
+                .map(d => d.name);
         } catch (err) {
-            log.error("restoreAll: 扫描目录失败", { dir, error: String(err) });
+            log.error("restoreAll: 扫描 sessions 根目录失败", { sessionsDir, error: String(err) });
+            return [];
+        }
+
+        for (const platformDir of platformDirs) {
+            const dir = join(sessionsDir, platformDir);
+
+            try {
+                const files = readdirSync(dir).filter(f => f.endsWith(".json"));
+
+                for (const file of files) {
+                    const rawName = basename(file, ".json");
+                    // 支持旧格式（裸 chatId）和新格式（composite key 文件名）
+                    let chatId: string;
+                    try {
+                        chatId = fileNameToChatId(rawName);
+                    } catch {
+                        // 旧格式文件名（无平台前缀），用目录名作为平台
+                        chatId = `${platformDir}:${rawName}`;
+                    }
+                    const filePath = join(dir, file);
+
+                    try {
+                        // 创建 SubagentManager 实例（如果不存在）
+                        const subagent = this.getOrCreate(chatId);
+
+                        // 创建 CodeActExecutor 并恢复 session
+                        if (!subagent.codeActExecutor) {
+                            const executor = new CodeActExecutor(chatId);
+                            const loaded = executor.loadSession(filePath);
+
+                            if (loaded) {
+                                subagent.codeActExecutor = executor;
+                                subagent.restoreLastAgentReplyAt();
+
+                                // 从 MemoryV2 恢复最近话题到 TopicRegistry
+                                if (this.config.memory) {
+                                    const topicCount = subagent.loadRecentTopics(this.config.memory);
+                                    log.info("restoreAll: 恢复话题", { chatId, topicCount });
+                                }
+
+                                restored.push(chatId);
+                                log.info("restoreAll: 恢复 session", {
+                                    chatId,
+                                    sessionSize: executor.getSessionSize(),
+                                    executionCount: executor.getExecutionCount(),
+                                    registrySize: subagent.topicRegistry.size,
+                                });
+                            }
+                        }
+                    } catch (err) {
+                        log.warn("restoreAll: 恢复单个 session 失败", {
+                            chatId,
+                            file,
+                            error: String(err),
+                        });
+                    }
+                }
+            } catch (err) {
+                log.error("restoreAll: 扫描平台目录失败", { dir, error: String(err) });
+            }
         }
 
         log.info("restoreAll: 完成", {
