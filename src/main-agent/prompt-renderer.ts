@@ -175,7 +175,7 @@ export function buildAttentionVariables(
     const opts = options ?? {};
 
     return {
-        chatId: getRawId(pkg.chatId),
+        chatId: pkg.chatId,
         chatType: deriveChatType(pkg.isDirectMessage),
         depth: pkg.depth,
         snapshotTimestamp: pkg.snapshotTimestamp,
