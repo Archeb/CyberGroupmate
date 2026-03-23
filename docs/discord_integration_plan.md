@@ -352,6 +352,10 @@ Sandbox 安全检查 → 把 LLM 传来的 args 自动 compose 后比较
   └─ ensureCompositeId(platform, String(args[0]))
 ```
 
+#### 9. Main Agent 跨平台 ID 展示
+
+Main agent（attend-handler）是跨平台注意力，不跑在 sandbox 里，LLM 输出是结构化决策 JSON（不含 chatId）。当前单平台下 `getRawId()` 安全。但多平台并行后，`recentDecisions` 和 `activeTasks` 会汇总来自不同平台的 chatId——此时裸 ID 会丢失平台信息。建议在跨 chat 汇总视图（recentDecisions / activeTasks）中保留平台标识，单 chat 上下文（ATTENTION chatId、personContext userId）继续用裸 ID。
+
 ---
 
 ## Phase 1: Discord Adapter 基础
