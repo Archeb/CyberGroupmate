@@ -8,6 +8,7 @@
   let pollTimer = null;
   let sessionEl;
   let wasBottom = true;
+  let showSidebar = false;
 
   $: groups = $appState.groups;
   $: if ($activeTab === 'codeact' && $selectedCodeActChatId) refreshSession($selectedCodeActChatId);
@@ -23,6 +24,7 @@
 
   async function selectChat(chatId) {
     selectedCodeActChatId.set(chatId);
+    showSidebar = false;
     if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
     await refreshSession(chatId);
   }
@@ -65,9 +67,19 @@
   onDestroy(() => { if (pollTimer) clearInterval(pollTimer); });
 </script>
 
-<div class="flex gap-4 h-[calc(100vh-280px)] overflow-hidden">
+<div class="ca-panel-layout">
+  <!-- Mobile sidebar toggle -->
+  <button class="mobile-sidebar-toggle ca-mobile-toggle" onclick={() => showSidebar = true}>
+    ☰ 群组
+  </button>
+
+  <!-- Sidebar overlay -->
+  {#if showSidebar}
+    <div class="mobile-sidebar-overlay ca-sidebar-overlay" onclick={() => showSidebar = false}></div>
+  {/if}
+
   <!-- Chat list -->
-  <div class="w-64 shrink-0 min-h-0">
+  <div class="ca-sidebar" class:ca-sidebar-open={showSidebar}>
     <div class="card bg-base-100 h-full">
       <div class="card-body p-3 min-h-0">
         <h3 class="card-title text-sm">群组选择</h3>
@@ -95,10 +107,10 @@
   </div>
 
   <!-- Session stream -->
-  <div class="flex-1 min-w-0 min-h-0">
+  <div class="ca-content">
     <div class="card bg-base-100 h-full">
       <div class="card-body p-3 min-h-0 flex flex-col">
-        <div class="flex justify-between items-center shrink-0 mb-2">
+        <div class="flex justify-between items-center shrink-0 mb-2 ca-header">
           <h3 class="card-title text-sm">
             CodeAct Session
             {#if $selectedCodeActChatId}
@@ -187,7 +199,30 @@
 </div>
 
 <style>
-/* ── Sidebar chat items (matching MessagesPanel) ── */
+/* ── Layout ── */
+.ca-panel-layout {
+  display: flex;
+  gap: 1rem;
+  height: calc(100vh - 280px);
+  overflow: hidden;
+}
+
+.ca-mobile-toggle { display: none; }
+.ca-sidebar-overlay { display: none; }
+
+.ca-sidebar {
+  width: 16rem;
+  flex-shrink: 0;
+  min-height: 0;
+}
+
+.ca-content {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* ── Sidebar chat items ── */
 .chat-item {
   padding: 0.35rem 0.5rem;
   border-radius: 0.375rem;
@@ -304,5 +339,37 @@
   opacity: 0.7;
   margin-top: 0.25rem;
   font-style: italic;
+}
+
+/* ── Mobile ── */
+@media (max-width: 768px) {
+  .ca-panel-layout {
+    flex-direction: column;
+    height: calc(100vh - 200px);
+  }
+  .ca-mobile-toggle { display: flex !important; }
+  .ca-sidebar {
+    display: none;
+    width: 100%;
+  }
+  .ca-sidebar.ca-sidebar-open {
+    display: block;
+    position: fixed;
+    top: 0; left: 0; bottom: 0;
+    width: 75vw;
+    max-width: 300px;
+    z-index: 100;
+    background: var(--color-base-100);
+    box-shadow: 4px 0 20px rgba(0,0,0,0.3);
+    padding: 0.5rem;
+    overflow-y: auto;
+    animation: slideInLeft 0.2s ease-out;
+  }
+  @keyframes slideInLeft {
+    from { transform: translateX(-100%); }
+    to { transform: translateX(0); }
+  }
+  .ca-content { flex: 1; min-height: 0; }
+  .ca-header { flex-wrap: wrap; gap: 0.5rem; }
 }
 </style>

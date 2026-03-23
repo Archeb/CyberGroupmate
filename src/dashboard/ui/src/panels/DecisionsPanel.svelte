@@ -20,7 +20,7 @@
   }
 </script>
 
-<div class="flex gap-4">
+<div class="flex gap-4 decisions-layout">
   <div class="w-50 flex-1 card bg-base-100">
     <div class="card-body p-4 overflow-hidden">
       <h3 class="card-title text-sm mb-2">最近决策</h3>
@@ -57,4 +57,10 @@
 <style>
 .decision-item { padding: 0.25rem 0.5rem; border-radius: 0.25rem; }
 .decision-item:nth-child(odd) { background: var(--color-base-200); }
+
+@media (max-width: 768px) {
+  .decisions-layout { flex-direction: column !important; }
+  .decisions-layout > div { max-height: 40vh; }
+  .decisions-layout .space-y-1 { max-height: 35vh !important; }
+}
 </style>

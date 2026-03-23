@@ -186,9 +186,9 @@
 {#if loading || !config}
   <div class="flex justify-center items-center h-64"><span class="loading loading-spinner loading-lg"></span></div>
 {:else}
-  <div class="flex gap-4">
+  <div class="flex gap-4 config-layout">
     <!-- Left Nav -->
-    <div class="w-52 shrink-0">
+    <div class="w-52 shrink-0 config-sidebar">
       <div class="card bg-base-100">
         <div class="card-body p-3">
           <h3 class="card-title text-sm mb-1">配置项</h3>
@@ -694,4 +694,33 @@
   /* col-span utilities for grid */
   :global(.col-span-2) { grid-column: span 2; }
   :global(.col-span-3) { grid-column: span 3; }
+
+  /* ── Mobile ── */
+  @media (max-width: 768px) {
+    .config-layout { flex-direction: column !important; gap: 0.5rem; }
+    .config-sidebar {
+      width: 100% !important;
+      flex-shrink: 0;
+    }
+    .config-sidebar .card-body { padding: 0.4rem !important; }
+    .config-sidebar .card-title { display: none; }
+    .config-sidebar .space-y-0\.5 {
+      display: flex;
+      gap: 0.25rem;
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+      scrollbar-width: none;
+    }
+    .config-sidebar .space-y-0\.5::-webkit-scrollbar { display: none; }
+    .nav-item {
+      white-space: nowrap;
+      flex-shrink: 0;
+      padding: 0.3rem 0.5rem;
+      font-size: 0.7rem;
+    }
+    .nav-item i.fa-fw { display: none; }
+    .nav-restart-icon { display: none; }
+    .config-action-bar { flex-wrap: wrap; }
+    .profile-card .cfg-grid-2 { grid-template-columns: 1fr !important; }
+  }
 </style>

@@ -78,7 +78,7 @@
 
 <div class="card bg-base-100">
   <div class="card-body p-4">
-    <div class="flex justify-between items-center mb-2">
+    <div class="flex justify-between items-center mb-2 topics-header">
       <h3 class="card-title text-sm">话题注册表 (TopicRegistry)</h3>
       <div class="flex gap-2 items-center">
         <input type="text" placeholder="搜索关键词..." class="input input-sm input-bordered w-48"
@@ -196,4 +196,11 @@
 .topic-card.state-active { border-color: var(--color-success); }
 .topic-card.state-stale { border-color: var(--color-warning); }
 .topic-card.state-archived { border-color: color-mix(in srgb, var(--color-base-content) 30%, transparent); }
+
+@media (max-width: 768px) {
+  .topics-header { flex-wrap: wrap; gap: 0.5rem; }
+  .topics-header .flex.gap-2 { width: 100%; }
+  .topics-header input { width: 100% !important; flex: 1; }
+  .topic-card .text-xs.mt-1:last-child { display: none; }
+}
 </style>

@@ -23,7 +23,7 @@
 <div role="tablist" class="tabs tabs-box tab-nav mb-4">
   {#each tabs as tab}
     <button role="tab" tabindex="0" class="tab" class:tab-active={$activeTab === tab.id}
-       onclick={() => switchTab(tab.id)}>
+       onclick={() => switchTab(tab.id)} title={tab.label}>
       <span class="tab-icon">
         {#if tab.memoryIcon}
           <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 576 512">

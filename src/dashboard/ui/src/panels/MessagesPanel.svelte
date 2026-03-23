@@ -5,6 +5,7 @@
   import { escapeHtml, shortId, getGroupLabel, isAtBottom, scrollToBottom, getPlatform, platformLabel } from '../lib/utils.js';
 
   let streamEl;
+  let showSidebar = false;
 
   $: allChatIds = [...new Set([...$appState.groups.map(g => g.chatId), ...$messages.map(m => m.chatId)])];
   $: filtered = $selectedChatId ? $messages.filter(m => m.chatId === $selectedChatId) : $messages;
@@ -12,6 +13,7 @@
 
   async function selectChat(chatId) {
     selectedChatId.set(chatId);
+    showSidebar = false;
     if (chatId) {
       try {
         const history = await api(`/messages/${chatId}?limit=100`);
@@ -52,9 +54,19 @@
   }
 </script>
 
-<div class="flex gap-4 h-[calc(100vh-280px)] overflow-hidden">
+<div class="msg-panel-layout">
+  <!-- Mobile sidebar toggle -->
+  <button class="mobile-sidebar-toggle msg-mobile-toggle" onclick={() => showSidebar = true}>
+    ☰ 群组
+  </button>
+
+  <!-- Sidebar overlay -->
+  {#if showSidebar}
+    <div class="mobile-sidebar-overlay msg-sidebar-overlay" onclick={() => showSidebar = false}></div>
+  {/if}
+
   <!-- Chat list -->
-  <div class="w-64 shrink-0 min-h-0">
+  <div class="msg-sidebar" class:msg-sidebar-open={showSidebar}>
     <div class="card bg-base-100 h-full">
       <div class="card-body p-3 min-h-0">
         <h3 class="card-title text-sm">群组列表</h3>
@@ -79,7 +91,7 @@
   </div>
 
   <!-- Message stream -->
-  <div class="flex-1 min-w-0 min-h-0">
+  <div class="msg-content">
     <div class="card bg-base-100 h-full">
       <div class="card-body p-3 min-h-0 flex flex-col">
         <h3 class="card-title text-sm shrink-0">
@@ -121,6 +133,28 @@
 </div>
 
 <style>
+.msg-panel-layout {
+  display: flex;
+  gap: 1rem;
+  height: calc(100vh - 280px);
+  overflow: hidden;
+}
+
+.msg-mobile-toggle { display: none; }
+.msg-sidebar-overlay { display: none; }
+
+.msg-sidebar {
+  width: 16rem;
+  flex-shrink: 0;
+  min-height: 0;
+}
+
+.msg-content {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
 .msg-time {
   color: var(--color-secondary);
   font-size: 0.7rem;
@@ -188,4 +222,36 @@
 
 .chat-item:hover { background: var(--color-base-200); }
 .chat-item.active { background: color-mix(in srgb, var(--color-primary) 15%, transparent); color: var(--color-primary); }
+
+@media (max-width: 768px) {
+  .msg-panel-layout {
+    flex-direction: column;
+    height: calc(100vh - 200px);
+  }
+  .msg-mobile-toggle { display: flex !important; }
+  .msg-sidebar {
+    display: none;
+    width: 100%;
+  }
+  .msg-sidebar.msg-sidebar-open {
+    display: block;
+    position: fixed;
+    top: 0; left: 0; bottom: 0;
+    width: 75vw;
+    max-width: 300px;
+    z-index: 100;
+    background: var(--color-base-100);
+    box-shadow: 4px 0 20px rgba(0,0,0,0.3);
+    padding: 0.5rem;
+    overflow-y: auto;
+    animation: slideInLeft 0.2s ease-out;
+  }
+  .msg-sidebar-overlay { display: none; }
+  .msg-sidebar.msg-sidebar-open ~ .msg-content .msg-sidebar-overlay,
+  :global(.msg-sidebar-open) ~ :global(.msg-sidebar-overlay) { display: block; }
+  .msg-content { flex: 1; min-height: 0; }
+  .msg-group-tag { width: 4rem; font-size: 0.55rem; }
+  .msg-item { gap: 0.25rem; padding: 0.2rem 0.3rem; }
+  .msg-time { min-width: auto; font-size: 0.6rem; }
+}
 </style>

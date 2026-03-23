@@ -33,7 +33,7 @@
 
 <div class="card bg-base-100 mb-4">
   <div class="card-body p-4">
-    <div class="flex justify-between items-center mb-2">
+    <div class="flex justify-between items-center mb-2 queue-header">
       <h3 class="card-title text-sm">注意力队列 (Q3) — 活跃</h3>
       <button class="btn btn-xs btn-primary" onclick={showEnqueueModal}
         >手动入队</button
@@ -43,8 +43,8 @@
       <table class="table table-xs">
         <thead
           ><tr>
-            <th>ChatId</th><th>优先级</th><th>来源</th><th>Stickiness</th>
-            <th>新消息</th><th>话题数</th><th>状态</th><th>操作</th>
+            <th>ChatId</th><th>优先级</th><th>来源</th><th class="hide-mobile">Stickiness</th>
+            <th>新消息</th><th class="hide-mobile">话题数</th><th class="hide-mobile">状态</th><th>操作</th>
           </tr></thead
         >
         <tbody>
@@ -72,12 +72,12 @@
                       : "priority-low"}>{e.priority.toFixed(1)}</td
                 >
                 <td><span class="badge badge-xs">{e.source}</span></td>
-                <td class="stickiness-{e.stickinessLevel}"
+                <td class="stickiness-{e.stickinessLevel} hide-mobile"
                   >{e.stickinessLevel}</td
                 >
                 <td>{e.newMessageCount}</td>
-                <td>{(e.topicDigests || []).length}</td>
-                <td
+                <td class="hide-mobile">{(e.topicDigests || []).length}</td>
+                <td class="hide-mobile"
                   >{#if e.blocked}<span class="badge badge-xs badge-error"
                       >阻塞</span
                     >{:else}<span class="badge badge-xs badge-success"
@@ -118,7 +118,7 @@
       <table class="table table-xs">
         <thead
           ><tr>
-            <th>ChatId</th><th>优先级</th><th>来源</th><th>Stickiness</th><th
+            <th>ChatId</th><th>优先级</th><th>来源</th><th class="hide-mobile">Stickiness</th><th
               >出队时间</th
             >
           </tr></thead
@@ -143,7 +143,7 @@
                 </td>
                 <td>{d.entry.priority.toFixed(1)}</td>
                 <td><span class="badge badge-xs">{d.entry.source}</span></td>
-                <td class="stickiness-{d.entry.stickinessLevel}"
+                <td class="stickiness-{d.entry.stickinessLevel} hide-mobile"
                   >{d.entry.stickinessLevel}</td
                 >
                 <td class="opacity-60"
@@ -193,5 +193,9 @@
 
   .dequeued-row :global(td) {
     opacity: 0.7;
+  }
+
+  @media (max-width: 768px) {
+    .queue-header { flex-wrap: wrap; gap: 0.5rem; }
   }
 </style>

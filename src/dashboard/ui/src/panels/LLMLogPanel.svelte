@@ -657,4 +657,27 @@
     border-radius: 0.375rem;
     border-left: 3px solid var(--color-secondary);
   }
+
+  /* ── Mobile ── */
+  @media (max-width: 768px) {
+    .llm-log-layout {
+      grid-template-columns: 1fr;
+      grid-template-rows: auto 1fr;
+      height: calc(100vh - 200px);
+    }
+    .llm-log-left {
+      border-right: none;
+      border-bottom: 1px solid color-mix(in srgb, var(--color-base-content) 10%, transparent);
+      max-height: 35vh;
+      min-height: 0;
+    }
+    .llm-log-right { min-height: 0; }
+    .llm-log-row { gap: 0.2rem; padding: 0.3rem 0.5rem; font-size: 0.65rem; }
+    .llm-row-model { max-width: 80px; }
+    .llm-row-duration { font-size: 0.6rem; }
+    .llm-detail-header-top { font-size: 0.65rem; }
+    .llm-detail-nav-bar { flex-wrap: wrap; }
+    .llm-detail-msg-content { font-size: 0.7rem; }
+    .llm-detail-response-body { font-size: 0.7rem; padding: 0.4rem 0.5rem; }
+  }
 </style>

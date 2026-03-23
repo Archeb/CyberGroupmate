@@ -22,7 +22,7 @@
   }
 </script>
 
-<div class="grid grid-cols-2 gap-4">
+<div class="grid grid-cols-2 gap-4 system-grid">
   <!-- Global State -->
   <div class="card bg-base-100">
     <div class="card-body p-4">
@@ -141,3 +141,10 @@
     </div>
   </div>
 </div>
+
+<style>
+  @media (max-width: 768px) {
+    .system-grid { grid-template-columns: 1fr !important; }
+    .system-grid .col-span-2 { grid-column: span 1 !important; }
+  }
+</style>

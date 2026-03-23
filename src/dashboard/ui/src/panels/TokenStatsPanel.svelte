@@ -103,8 +103,8 @@
             <th class="num">调用</th>
             <th class="num">输入</th>
             <th class="num">输出</th>
-            <th class="num">缓存命中</th>
-            <th class="num">缓存创建</th>
+            <th class="num hide-mobile">缓存命中</th>
+            <th class="num hide-mobile">缓存创建</th>
             <th class="num">费用</th>
             <th>最近使用</th>
           </tr>
@@ -116,8 +116,8 @@
               <td class="num">{formatTokens(s.callCount)}</td>
               <td class="num">{formatTokens(s.promptTokens)}</td>
               <td class="num">{formatTokens(s.completionTokens)}</td>
-              <td class="num">{s.cachedTokens ? formatTokens(s.cachedTokens) : '-'}</td>
-              <td class="num">{s.cacheCreationTokens ? formatTokens(s.cacheCreationTokens) : '-'}</td>
+              <td class="num hide-mobile">{s.cachedTokens ? formatTokens(s.cachedTokens) : '-'}</td>
+              <td class="num hide-mobile">{s.cacheCreationTokens ? formatTokens(s.cacheCreationTokens) : '-'}</td>
               <td class="num cost">{formatCost(s.totalCost)}</td>
               <td class="time">{timeAgo(s.lastSeenAt)}</td>
             </tr>
@@ -129,8 +129,8 @@
             <td class="num"><b>{formatTokens(totals.callCount)}</b></td>
             <td class="num"><b>{formatTokens(totals.promptTokens)}</b></td>
             <td class="num"><b>{formatTokens(totals.completionTokens)}</b></td>
-            <td class="num"><b>{totals.cachedTokens ? formatTokens(totals.cachedTokens) : '-'}</b></td>
-            <td class="num"><b>{totals.cacheCreationTokens ? formatTokens(totals.cacheCreationTokens) : '-'}</b></td>
+            <td class="num hide-mobile"><b>{totals.cachedTokens ? formatTokens(totals.cachedTokens) : '-'}</b></td>
+            <td class="num hide-mobile"><b>{totals.cacheCreationTokens ? formatTokens(totals.cacheCreationTokens) : '-'}</b></td>
             <td class="num cost"><b>{formatCost(totals.totalCost)}</b></td>
             <td></td>
           </tr>
@@ -260,5 +260,13 @@
 
   .token-stats-table tbody tr:hover {
     background: color-mix(in srgb, var(--color-base-content) 4%, transparent);
+  }
+
+  @media (max-width: 768px) {
+    .token-stats-header { flex-wrap: wrap; gap: 0.5rem; }
+    .token-stats-header h3 { font-size: 0.85rem; }
+    .stat-card { min-width: 0; padding: 0.5rem 0.6rem; }
+    .stat-value { font-size: 0.95rem; }
+    .token-stats-table .model-name { max-width: 120px; }
   }
 </style>

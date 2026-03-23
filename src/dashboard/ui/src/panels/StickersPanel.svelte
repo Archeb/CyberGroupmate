@@ -46,7 +46,7 @@
 
 <div class="card bg-base-100">
   <div class="card-body p-4">
-    <div class="flex justify-between items-center mb-3">
+    <div class="flex justify-between items-center mb-3 sticker-header">
       <h3 class="card-title text-sm">🎭 贴纸描述缓存</h3>
       <div class="flex gap-2 items-center">
         <span class="badge badge-sm badge-ghost">{stickers.length}</span>
@@ -56,7 +56,7 @@
     <div class="overflow-x-auto">
       <table class="table table-xs">
         <thead><tr>
-          <th>预览</th><th>Emoji</th><th>描述</th><th>UniqueFileId</th><th>创建时间</th><th>操作</th>
+          <th>预览</th><th>Emoji</th><th>描述</th><th class="hide-mobile">UniqueFileId</th><th class="hide-mobile">创建时间</th><th>操作</th>
         </tr></thead>
         <tbody>
           {#if !stickers.length}
@@ -78,8 +78,8 @@
                 </td>
                 <td class="text-xl">{s.emoji || '-'}</td>
                 <td class="max-w-xs truncate" title={s.description}>{s.description}</td>
-                <td class="font-mono text-xs max-w-32 truncate" title={s.uniqueFileId}>{s.uniqueFileId.slice(-16)}</td>
-                <td class="text-xs opacity-60">{s.createdAt ? new Date(s.createdAt).toLocaleString() : ''}</td>
+                <td class="font-mono text-xs max-w-32 truncate hide-mobile" title={s.uniqueFileId}>{s.uniqueFileId.slice(-16)}</td>
+                <td class="text-xs opacity-60 hide-mobile">{s.createdAt ? new Date(s.createdAt).toLocaleString() : ''}</td>
                 <td>
                   <div class="flex gap-1">
                     <button class="btn btn-xs btn-ghost" onclick={() => editSticker(s.uniqueFileId)}>✏️</button>
@@ -118,5 +118,10 @@
     object-fit: contain;
     border-radius: 4px;
     background: transparent;
+  }
+
+  @media (max-width: 768px) {
+    .sticker-header { flex-wrap: wrap; gap: 0.5rem; }
+    .sticker-thumb { width: 36px; height: 36px; }
   }
 </style>
