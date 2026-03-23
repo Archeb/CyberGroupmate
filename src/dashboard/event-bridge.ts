@@ -25,6 +25,7 @@ export class EventBridge {
         this.hookNC();
         this.hookLLMEvents();
         this.hookCodeActEvents();
+        this.hookRecordingPipelineEvents();
     }
 
     addClient(ws: WebSocket): void {
@@ -109,6 +110,82 @@ export class EventBridge {
                 data,
             });
         });
+    }
+
+    /** 订阅 Recording Pipeline 事件并广播到 WebSocket */
+    private hookRecordingPipelineEvents(): void {
+        // 已挂载的 chatId 集合，避免重复 hook
+        const hooked = new Set<string>();
+
+        const hookSubagent = (sub: any) => {
+            if (hooked.has(sub.chatId)) return;
+            const pipeline = sub.recordingPipeline;
+            if (!pipeline) return;
+            hooked.add(sub.chatId);
+
+            pipeline.on("flush:start", (messageCount: number) => {
+                this.broadcast({
+                    type: "recording:flush-start",
+                    timestamp: new Date().toISOString(),
+                    data: { chatId: sub.chatId, messageCount },
+                });
+            });
+
+            pipeline.on("flush:complete", (topics: any[]) => {
+                this.broadcast({
+                    type: "recording:flush-complete",
+                    timestamp: new Date().toISOString(),
+                    data: {
+                        chatId: sub.chatId,
+                        topicCount: topics.length,
+                        topics: topics.map(t => ({
+                            id: t.id,
+                            label: t.label,
+                            state: t.state,
+                            messageCount: t.messageCount,
+                        })),
+                    },
+                });
+            });
+
+            pipeline.on("flush:error", (error: Error) => {
+                this.broadcast({
+                    type: "recording:flush-error",
+                    timestamp: new Date().toISOString(),
+                    data: { chatId: sub.chatId, error: error instanceof Error ? error.message : String(error) },
+                });
+            });
+
+            pipeline.on("topic:triage-passed", (topic: any, decision: any) => {
+                this.broadcast({
+                    type: "recording:triage-passed",
+                    timestamp: new Date().toISOString(),
+                    data: {
+                        chatId: sub.chatId,
+                        topicId: topic.id,
+                        topicLabel: topic.label,
+                        decision: {
+                            should_intervene: decision.should_intervene,
+                            intervention_type: decision.intervention_type,
+                            confidence: decision.confidence,
+                            reason: decision.reason,
+                        },
+                    },
+                });
+            });
+        };
+
+        // Hook 已有全部 subagent
+        for (const sub of this.deps.subagentManager.getAllSubagents()) {
+            hookSubagent(sub);
+        }
+
+        // 定期检查新加入的 subagent
+        setInterval(() => {
+            for (const sub of this.deps.subagentManager.getAllSubagents()) {
+                hookSubagent(sub);
+            }
+        }, 10000);
     }
 
     /** 发送当前系统全状态快照 */

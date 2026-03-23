@@ -731,6 +731,18 @@ export class RecordingPipeline extends EventEmitter {
     }
 
     /**
+     * 获取 Pipeline 当前状态（供 Dashboard 调用）
+     */
+    getStatus(): { bufferSize: number; isEagerMode: boolean; isFlushing: boolean; disposed: boolean } {
+        return {
+            bufferSize: this.buffer.length,
+            isEagerMode: this.isEagerMode,
+            isFlushing: this.isFlushing,
+            disposed: this.disposed,
+        };
+    }
+
+    /**
      * 停止 Pipeline
      */
     dispose(): void {

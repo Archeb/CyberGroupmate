@@ -45,6 +45,7 @@ export function addMessage(data, timestamp) {
 export const activeTab = writable('messages');
 export const selectedChatId = writable(null);
 export const selectedCodeActChatId = writable(null);
+export const selectedRecordingChatId = writable(null);
 
 // ─── LLM Logs ───
 export const llmLogs = writable([]);
@@ -166,6 +167,24 @@ export function clearCodeActProgress(chatId) {
       delete map[chatId];
     } else {
       return {};
+    }
+    return map;
+  });
+}
+
+// ─── Recording Pipeline Progress ───
+/** Map<chatId, Array<recordingEvent>> — 每个 chat 的 recording pipeline 实时事件 */
+export const recordingProgress = writable({});
+
+const MAX_RECORDING_EVENTS = 200;
+
+export function handleRecordingEvent(data) {
+  recordingProgress.update(map => {
+    const chatId = data.chatId;
+    if (!map[chatId]) map[chatId] = [];
+    map[chatId].push(data);
+    if (map[chatId].length > MAX_RECORDING_EVENTS) {
+      map[chatId] = map[chatId].slice(-MAX_RECORDING_EVENTS);
     }
     return map;
   });

@@ -8,7 +8,7 @@ import { getToken } from './api.js';
 import {
   wsStatus, appState, messages, llmLogs, llmStats,
   addMessage, handleLLMCall, handleLLMResponse, setTokenPricing,
-  handleCodeActProgress,
+  handleCodeActProgress, handleRecordingEvent,
 } from './stores.js';
 import { get } from 'svelte/store';
 
@@ -77,6 +77,12 @@ function handleEvent(event) {
       break;
     case 'codeact:progress':
       handleCodeActProgress(event.data);
+      break;
+    case 'recording:flush-start':
+    case 'recording:flush-complete':
+    case 'recording:flush-error':
+    case 'recording:triage-passed':
+      handleRecordingEvent({ ...event.data, _type: event.type, _timestamp: event.timestamp });
       break;
   }
 }

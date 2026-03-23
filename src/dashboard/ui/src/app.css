@@ -1,7 +1,9 @@
 @import "tailwindcss";
+
 @plugin "daisyui" {
   themes: light --default, dark --prefersdark;
 }
+
 @import "highlight.js/styles/github-dark.css" layer(base);
 
 /* ── Tab Navigation (global — Svelte scoped CSS doesn't support nested :global() chains) ── */
@@ -70,9 +72,19 @@
 }
 
 @keyframes tab-pop {
-  0% { transform: scale(0.95); opacity: 0.7; }
-  50% { transform: scale(1.02); }
-  100% { transform: scale(1); opacity: 1; }
+  0% {
+    transform: scale(0.95);
+    opacity: 0.7;
+  }
+
+  50% {
+    transform: scale(1.02);
+  }
+
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
 }
 
 .tab-icon {
@@ -111,17 +123,50 @@
   letter-spacing: 0.03em;
 }
 
-.codeact-msg.role-system { background: #1e3a5f; border-left: 4px solid #4a9eff; }
-[data-theme="light"] .codeact-msg.role-system { background: #dbeafe; border-left: 4px solid #3b82f6; }
-.codeact-msg.role-system .role-label { background: #2563eb; color: #dbeafe; }
+.codeact-msg.role-system {
+  background: #1e3a5f;
+  border-left: 4px solid #4a9eff;
+}
 
-.codeact-msg.role-user { background: #3b3a1a; border-left: 4px solid #eab308; }
-[data-theme="light"] .codeact-msg.role-user { background: #fef9c3; border-left: 4px solid #ca8a04; }
-.codeact-msg.role-user .role-label { background: #ca8a04; color: #fef9c3; }
+[data-theme="light"] .codeact-msg.role-system {
+  background: #dbeafe;
+  border-left: 4px solid #3b82f6;
+}
 
-.codeact-msg.role-assistant { background: #4a1a2e; border-left: 4px solid #f472b6; }
-[data-theme="light"] .codeact-msg.role-assistant { background: #fce7f3; border-left: 4px solid #db2777; }
-.codeact-msg.role-assistant .role-label { background: #db2777; color: #fce7f3; }
+.codeact-msg.role-system .role-label {
+  background: #2563eb;
+  color: #dbeafe;
+}
+
+.codeact-msg.role-user {
+  background: #3b3a1a;
+  border-left: 4px solid #eab308;
+}
+
+[data-theme="light"] .codeact-msg.role-user {
+  background: #fef9c3;
+  border-left: 4px solid #ca8a04;
+}
+
+.codeact-msg.role-user .role-label {
+  background: #ca8a04;
+  color: #fef9c3;
+}
+
+.codeact-msg.role-assistant {
+  background: #4a1a2e;
+  border-left: 4px solid #f472b6;
+}
+
+[data-theme="light"] .codeact-msg.role-assistant {
+  background: #fce7f3;
+  border-left: 4px solid #db2777;
+}
+
+.codeact-msg.role-assistant .role-label {
+  background: #db2777;
+  color: #fce7f3;
+}
 
 .codeact-msg pre.code-block {
   background: var(--color-base-300);
@@ -136,13 +181,29 @@
   line-height: 1.4;
 }
 
-.codeact-msg pre.code-block code { background: transparent; padding: 0; }
+.codeact-msg pre.code-block code {
+  background: transparent;
+  padding: 0;
+}
 
 /* ── Scrollbar ── */
-::-webkit-scrollbar { width: 6px; height: 6px; }
-::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--color-base-content) 20%, transparent); border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: color-mix(in srgb, var(--color-base-content) 40%, transparent); }
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--color-base-content) 20%, transparent);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--color-base-content) 40%, transparent);
+}
 
 /* ── JSON display ── */
 .json-display {
@@ -150,7 +211,10 @@
   tab-size: 2;
 }
 
-.json-display code.hljs { background: transparent; padding: 0; }
+.json-display code.hljs {
+  background: transparent;
+  padding: 0;
+}
 
 /* ── Clickable utilities (used across multiple components) ── */
 .clickable-link {
@@ -160,7 +224,9 @@
   transition: text-decoration-color 0.15s, color 0.15s;
 }
 
-.clickable-link:hover { text-decoration-color: var(--color-primary); }
+.clickable-link:hover {
+  text-decoration-color: var(--color-primary);
+}
 
 .clickable-id {
   color: var(--color-primary);
@@ -171,7 +237,9 @@
   transition: color 0.15s;
 }
 
-.clickable-id:hover { text-decoration-style: solid; }
+.clickable-id:hover {
+  text-decoration-style: solid;
+}
 
 /* ── Platform badge ── */
 .platform-badge {
@@ -223,8 +291,12 @@
    Mobile Responsive (≤768px)
    ══════════════════════════════════════════ */
 @media (max-width: 768px) {
+
   /* ── Container padding reduction ── */
-  .container { padding-left: 0.5rem !important; padding-right: 0.5rem !important; }
+  .container {
+    padding-left: 0.5rem !important;
+    padding-right: 0.5rem !important;
+  }
 
   /* ── Tab Nav: horizontally scrollable, icon-only ── */
   .tab-nav {
@@ -236,31 +308,64 @@
     padding: 0.15rem;
     gap: 0.15rem;
   }
-  .tab-nav::-webkit-scrollbar { display: none; }
+
+  .tab-nav::-webkit-scrollbar {
+    display: none;
+  }
+
   .tab-nav .tab {
     padding: 0.4rem 0.55rem;
-    font-size: 0;        /* hide text */
     white-space: nowrap;
     flex-shrink: 0;
   }
-  .tab-nav .tab .tab-icon { font-size: 1rem; }
-  .tab-nav .tab .tab-icon svg { width: 18px; height: 18px; }
+
+  .tab-nav .tab .tab-label {
+    display: none
+  }
+
+  .tab-nav .tab .tab-icon {
+    font-size: 1rem;
+  }
+
+  .tab-nav .tab .tab-icon svg {
+    width: 18px;
+    height: 18px;
+  }
 
   /* ── Stats Bar: 2×2 grid ── */
   .stats {
     display: grid !important;
     grid-template-columns: 1fr 1fr !important;
   }
-  .stats .stat { padding: 0.4rem 0.6rem; }
-  .stats .stat .stat-title { font-size: 0.65rem; }
-  .stats .stat .stat-value { font-size: 1rem; }
+
+  .stats .stat {
+    padding: 0.4rem 0.6rem;
+  }
+
+  .stats .stat .stat-title {
+    font-size: 0.65rem;
+  }
+
+  .stats .stat .stat-value {
+    font-size: 1rem;
+  }
 
   /* ── CodeAct messages: tighter ── */
-  .codeact-msg { padding: 0.5rem 0.6rem; margin-bottom: 0.5rem; }
+  .codeact-msg {
+    padding: 0.5rem 0.6rem;
+    margin-bottom: 0.5rem;
+  }
 
   /* ── Config grids collapse to single column ── */
-  .cfg-grid-2, .cfg-grid-3 { grid-template-columns: 1fr !important; }
-  .col-span-2, .col-span-3 { grid-column: span 1 !important; }
+  .cfg-grid-2,
+  .cfg-grid-3 {
+    grid-template-columns: 1fr !important;
+  }
+
+  .col-span-2,
+  .col-span-3 {
+    grid-column: span 1 !important;
+  }
 
   /* ── Mobile sidebar drawer (shared pattern for MessagesPanel, CodeActPanel, LLMLogPanel) ── */
   .mobile-sidebar-toggle {
@@ -277,30 +382,42 @@
     cursor: pointer;
     flex-shrink: 0;
   }
+
   .mobile-sidebar-overlay {
     display: block !important;
     position: fixed;
     inset: 0;
-    background: rgba(0,0,0,0.4);
+    background: rgba(0, 0, 0, 0.4);
     z-index: 90;
   }
+
   .mobile-sidebar-drawer {
     position: fixed !important;
-    top: 0; left: 0; bottom: 0;
+    top: 0;
+    left: 0;
+    bottom: 0;
     width: 75vw !important;
     max-width: 300px;
     z-index: 100;
     background: var(--color-base-100);
-    box-shadow: 4px 0 20px rgba(0,0,0,0.3);
+    box-shadow: 4px 0 20px rgba(0, 0, 0, 0.3);
     padding: 0.75rem;
     overflow-y: auto;
     animation: slideInLeft 0.2s ease-out;
   }
+
   @keyframes slideInLeft {
-    from { transform: translateX(-100%); }
-    to { transform: translateX(0); }
+    from {
+      transform: translateX(-100%);
+    }
+
+    to {
+      transform: translateX(0);
+    }
   }
 
   /* ── Table mobile helpers ── */
-  .hide-mobile { display: none !important; }
+  .hide-mobile {
+    display: none !important;
+  }
 }

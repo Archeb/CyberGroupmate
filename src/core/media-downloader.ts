@@ -8,11 +8,11 @@
  *
  * 目录结构：
  *   workspace/Downloads/
- *     photos/      chatId_msgId_uniqueFileId.jpg
- *     videos/      chatId_msgId_uniqueFileId.mp4
- *     stickers/    chatId_msgId_uniqueFileId.webp
- *     documents/   chatId_msgId_uniqueFileId.pdf
- *     other/       chatId_msgId_uniqueFileId.bin
+ *     photos/      platform_chatId_msgId_uniqueFileId.jpg
+ *     videos/      platform_chatId_msgId_uniqueFileId.mp4
+ *     stickers/    platform_chatId_msgId_uniqueFileId.webp
+ *     documents/   platform_chatId_msgId_uniqueFileId.pdf
+ *     other/       platform_chatId_msgId_uniqueFileId.bin
  */
 
 import * as fs from "node:fs";
@@ -254,14 +254,13 @@ export class MediaDownloader {
             try {
                 const files = fs.readdirSync(dir);
                 for (const file of files) {
-                    // 文件名格式: chatId_msgId_uniqueFileId.ext
-                    // uniqueFileId 部分从第二个 _ 之后到 .ext 之前
+                    // 文件名格式: platform_chatId_msgId_uniqueFileId.ext
                     const dotIndex = file.lastIndexOf(".");
                     const base = dotIndex > 0 ? file.slice(0, dotIndex) : file;
                     const parts = base.split("_");
-                    if (parts.length >= 3) {
-                        // uniqueFileId 可能本身含下划线，取第三段及之后
-                        const uniqueFileId = parts.slice(2).join("_");
+                    // platform(0) + chatId(1) + msgId(2) + uniqueFileId(3+)
+                    if (parts.length >= 4) {
+                        const uniqueFileId = parts.slice(3).join("_");
                         this.pathIndex.set(uniqueFileId, path.join(dir, file));
                     }
                 }

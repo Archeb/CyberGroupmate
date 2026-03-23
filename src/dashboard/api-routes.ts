@@ -415,6 +415,15 @@ export function createApiRouter(deps: DashboardDeps, bridge: EventBridge): Route
         }
     });
 
+    // ─── Recording Pipeline ───
+    router.get("/recording/:chatId", (req, res) => {
+        const sub = deps.subagentManager.get(req.params.chatId);
+        if (!sub) { res.status(404).json({ error: "chat not found" }); return; }
+        const pipeline = (sub as any).recordingPipeline;
+        if (!pipeline) { res.json({ bufferSize: 0, isEagerMode: false, isFlushing: false, disposed: true }); return; }
+        res.json(pipeline.getStatus());
+    });
+
     // ─── Sandbox Pool ───
     router.get("/sandbox/pool", (_req, res) => {
         res.json(deps.sandboxPool.getStats());
