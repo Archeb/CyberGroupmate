@@ -29,6 +29,8 @@ import { loadConfig, resolveComponentProfiles } from "../core/config.js";
 import { resolveReplyText } from "../core/message-enricher.js";
 import { MediaDownloader } from "../core/media-downloader.js";
 import type { AppConfig } from "../core/config.js";
+import type { PlatformAdapter } from "../adapter/platform-adapter.js";
+import { getPlatform } from "../core/chat-id.js";
 
 const log = createLogger("dispatch-handler");
 
@@ -51,6 +53,8 @@ export interface DispatchHandlerDeps {
     appConfig: AppConfig;
     /** Telegram Adapter 引用（用于下载媒体，传给 Executor） */
     telegramAdapter?: { handleCall(method: string, args: unknown[]): Promise<unknown> };
+    /** 所有平台 adapter（用于平台无关的媒体下载） */
+    adapters?: PlatformAdapter[];
     /** 平台无关的 typing 状态发送（sandbox 执行期间展示 typing） */
     sendTyping?: (chatId: string) => Promise<void>;
     /** 共享的媒体下载管理器 */
@@ -65,12 +69,32 @@ export interface DispatchHandlerDeps {
 export function createDispatchHandler(
     deps: DispatchHandlerDeps,
 ): (result: AttendResult) => Promise<void> {
-    const { memory, globalState, subagentManager, sandboxPool, nc, q3, q5, llmConfigs, fastPathConfig, appConfig: _appConfig, telegramAdapter: tgAdapter, sendTyping, mediaDownloader } = deps;
-    // 构建下载函数（传给 Executor 用于懒加载 Vision 处理）
-    const downloadFn = tgAdapter ? async (fileId: string, chatId?: string, messageId?: string, uniqueFileId?: string): Promise<Buffer> => {
-        const result = await tgAdapter.handleCall("telegram.downloadMedia", [fileId, chatId, messageId, uniqueFileId]) as { buffer: string; size: number };
-        return Buffer.from(result.buffer, "base64");
-    } : undefined;
+    const { memory, globalState, subagentManager, sandboxPool, nc, q3, q5, llmConfigs, fastPathConfig, appConfig: _appConfig, telegramAdapter: tgAdapter, adapters: adapterList, sendTyping, mediaDownloader } = deps;
+    // 构建下载函数（根据 chatId 平台路由到对应 adapter）
+    const buildDownloadFn = (chatId: string) => {
+        if (adapterList?.length) {
+            try {
+                const platform = getPlatform(chatId);
+                const adapter = adapterList.find(a => a.platform === platform);
+                if (adapter?.downloadMedia) {
+                    return async (fileId: string, _chatId?: string, _messageId?: string, _uniqueFileId?: string): Promise<Buffer> => {
+                        if (adapter.platform === "telegram") {
+                            const result = await adapter.handleCall("telegram.downloadMedia", [fileId, _chatId, _messageId, _uniqueFileId]) as { buffer: string; size: number };
+                            return Buffer.from(result.buffer, "base64");
+                        }
+                        return adapter.downloadMedia!(null, fileId);
+                    };
+                }
+            } catch { /* fallthrough */ }
+        }
+        if (tgAdapter) {
+            return async (fileId: string, _chatId?: string, _messageId?: string, _uniqueFileId?: string): Promise<Buffer> => {
+                const result = await tgAdapter.handleCall("telegram.downloadMedia", [fileId, _chatId, _messageId, _uniqueFileId]) as { buffer: string; size: number };
+                return Buffer.from(result.buffer, "base64");
+            };
+        }
+        return undefined;
+    };
 
     return async (result: AttendResult): Promise<void> => {
         // 动态读取 persona 和 vision 配置（支持热重载）
@@ -150,7 +174,7 @@ export function createDispatchHandler(
                                     visionConfig,
                                     llmConfig: llmConfigs[0],
                                     visionLlmConfig,
-                                    downloadFn,
+                                    downloadFn: buildDownloadFn(result.chatId),
                                     chatId: result.chatId,
                                 });
                             }
@@ -275,6 +299,7 @@ export function createDispatchHandler(
                         globalState.recordDecision(cb.chatId, `CALLBACK: ${cb.executionType} ${cb.status} (${cb.summary})`);
                     });
                     // Fix 9: 注入 Sandbox + NC + LLM 依赖 + Memory + Vision
+                    const downloadFn = buildDownloadFn(result.chatId);
                     executor.setDependencies(sandboxPool, nc, llmConfigs, persona, memory, visionConfig, downloadFn, sendTyping, visionLlmConfig, mediaDownloader);
                 }
 

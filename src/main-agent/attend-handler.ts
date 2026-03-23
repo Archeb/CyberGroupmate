@@ -21,11 +21,12 @@ import { calculateDepth } from "./cosine-decay.js";
 import { buildGroupContext } from "./context-builder.js";
 import { renderPrompt, buildAttentionVariables, buildMainSystemVariables } from "./prompt-renderer.js";
 import { callLLMWithFallback } from "../core/llm.js";
-import { getRawId } from "../core/chat-id.js";
+import { getRawId, getPlatform } from "../core/chat-id.js";
 import { createLogger } from "../core/logger.js";
 import { formatTsForDisplay } from "../core/timezone.js";
 import { enrichMessages, formatMessageLine, resolveReplyText, type RawMessage } from "../core/message-enricher.js";
 import { loadConfig, resolveComponentProfiles } from "../core/config.js";
+import type { PlatformAdapter } from "../adapter/platform-adapter.js";
 
 const log = createLogger("attend-handler");
 
@@ -50,6 +51,8 @@ export interface AttendHandlerDeps {
     persona: { name: string; description: string };
     /** Telegram Adapter 引用（用于下载媒体进行 sticker 识别） */
     telegramAdapter?: { handleCall(method: string, args: unknown[]): Promise<unknown> };
+    /** 所有平台 adapter（用于平台无关的媒体下载） */
+    adapters?: PlatformAdapter[];
     /** 共享的媒体下载管理器 */
     mediaDownloader?: MediaDownloader;
 }
@@ -62,13 +65,39 @@ export interface AttendHandlerDeps {
 export function createAttendHandler(
     deps: AttendHandlerDeps,
 ): (entry: AttentionQueueEntry) => Promise<AttendResult | null> {
-    const { memory, globalState, subagentManager, mainLoop, sotaConfigs, telegramAdapter: tgAdapter, mediaDownloader } = deps;
+    const { memory, globalState, subagentManager, mainLoop, sotaConfigs, telegramAdapter: tgAdapter, adapters: adapterList, mediaDownloader } = deps;
 
     // 构建下载函数（用于 vision 处理 sticker/photo）
-    const downloadFn = tgAdapter ? async (fileId: string, chatId?: string, messageId?: string, uniqueFileId?: string): Promise<Buffer> => {
-        const result = await tgAdapter.handleCall("telegram.downloadMedia", [fileId, chatId, messageId, uniqueFileId]) as { buffer: string; size: number };
-        return Buffer.from(result.buffer, "base64");
-    } : undefined;
+    // 优先使用 adapters 数组中按 chatId 平台路由的 downloadMedia，
+    // 兼容旧的 telegramAdapter 引用
+    const buildDownloadFn = (chatId: string) => {
+        // 尝试从 adapters 数组找到对应平台的 adapter
+        if (adapterList?.length) {
+            try {
+                const platform = getPlatform(chatId);
+                const adapter = adapterList.find(a => a.platform === platform);
+                if (adapter?.downloadMedia) {
+                    return async (fileId: string, _chatId?: string, _messageId?: string, _uniqueFileId?: string): Promise<Buffer> => {
+                        if (adapter.platform === "telegram") {
+                            // Telegram: use handleCall for downloadMedia (supports file reference refetch)
+                            const result = await adapter.handleCall("telegram.downloadMedia", [fileId, _chatId, _messageId, _uniqueFileId]) as { buffer: string; size: number };
+                            return Buffer.from(result.buffer, "base64");
+                        }
+                        // Other platforms: use downloadMedia directly
+                        return adapter.downloadMedia!(null, fileId);
+                    };
+                }
+            } catch { /* fallthrough to tgAdapter */ }
+        }
+        // Fallback: use legacy telegramAdapter
+        if (tgAdapter) {
+            return async (fileId: string, _chatId?: string, _messageId?: string, _uniqueFileId?: string): Promise<Buffer> => {
+                const result = await tgAdapter.handleCall("telegram.downloadMedia", [fileId, _chatId, _messageId, _uniqueFileId]) as { buffer: string; size: number };
+                return Buffer.from(result.buffer, "base64");
+            };
+        }
+        return undefined;
+    };
 
     return async (entry: AttentionQueueEntry): Promise<AttendResult | null> => {
         // 动态读取 persona（支持热重载）
@@ -202,6 +231,8 @@ export function createAttendHandler(
                         : undefined;
                     // 选择 attend LLM 配置作为主模型（检查 vision:true）
                     const primaryLlmConfig = sotaConfigs[0];
+
+                    const downloadFn = buildDownloadFn(entry.chatId);
 
                     const { formattedText } = await enrichMessages(rawMessages, {
                         visionConfig,

@@ -10,8 +10,9 @@
 import type { NotificationCenter } from "../event/notification-center.js";
 import type { TelegramConfig } from "../core/config.js";
 import type { PlatformAdapter } from "./platform-adapter.js";
-import { composeChatId, parseChatId, isTelegram, isValidCompositeChatId } from "../core/chat-id.js";
+import { composeChatId, parseChatId, isTelegram, isValidCompositeChatId, ensureCompositeId, getPlatform } from "../core/chat-id.js";
 import { createLogger } from "../core/logger.js";
+import type { MediaDownloader } from "../core/media-downloader.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
@@ -178,6 +179,7 @@ export class TelegramAdapter implements PlatformAdapter {
         private promptUser: PromptHandler,
         private print: PrintHandler = console.log,
         private createClient: TelegramClientFactory = defaultTelegramClientFactory,
+        private mediaDownloader?: MediaDownloader,
     ) {}
 
     async start(): Promise<void> {
@@ -567,6 +569,26 @@ export class TelegramAdapter implements PlatformAdapter {
                         throw err; // 抛出原始错误
                     }
                 }
+            }
+            case "telegram.sendSticker": {
+                // args: [chatId, uniqueFileId, opts?]
+                // Sticker file lookup + buffer read + sendMedia
+                if (!this.mediaDownloader) {
+                    throw new Error("sendSticker: mediaDownloader not injected into TelegramAdapter");
+                }
+                const stickerTarget = String(args[0] ?? "");
+                const uniqueFileId = String(args[1] ?? "");
+                if (!uniqueFileId) throw new Error("sendSticker: uniqueFileId 为空");
+                const stickerPath = this.mediaDownloader.getExistingPath(uniqueFileId);
+                if (!stickerPath) throw new Error(`sendSticker: 未找到贴纸文件 uniqueFileId=${uniqueFileId}`);
+                if (!fs.existsSync(stickerPath)) throw new Error(`sendSticker: 文件不存在 ${stickerPath}`);
+                const stickerBuffer = fs.readFileSync(stickerPath);
+                const stickerOpts = args[2] ?? undefined;
+                return this.handleCall("telegram.sendMedia", [
+                    stickerTarget,
+                    { type: "sticker", file: stickerBuffer },
+                    stickerOpts,
+                ]);
             }
             default:
                 throw new Error(`Unsupported TelegramAdapter call: ${method}`);

@@ -19,6 +19,7 @@
     "@mtcute/node": "latest",
     "@tavily/core": "^0.7.2",
     "better-sqlite3": "^11.0.0",
+    "discord.js": "^14.25.1",
     "express": "^5.2.1",
     "js-tiktoken": "^1.0.21",
     "mime-to-extensions": "^1.0.2",

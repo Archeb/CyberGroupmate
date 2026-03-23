@@ -245,11 +245,12 @@ export function buildMainSystemVariables(
     globalState: GlobalState,
     decisionPrompt: string,
 ): Record<string, unknown> {
+    // 备注 #9: recentDecisions 和 activeTasks 保留完整 composite chatId，让主 Agent 能区分平台来源
     const recentDecisions = globalState.getRecentDecisions().slice(-5)
-        .map(d => `- [${getRawId(d.chatId)}] ${d.decision}`).join("\n") || "（无）";
+        .map(d => `- [${d.chatId}] ${d.decision}`).join("\n") || "（无）";
     const activeTasks = globalState.getTaskList()
         .filter(t => t.status !== "DONE" && t.status !== "CANCELLED")
-        .map(t => `- [${t.priority}][${t.status}] ${t.description}${t.chatId ? ` (群:${getRawId(t.chatId)})` : ""}`)
+        .map(t => `- [${t.priority}][${t.status}] ${t.description}${t.chatId ? ` (群:${t.chatId})` : ""}`)
         .join("\n") || "（无待办任务）";
 
     return {

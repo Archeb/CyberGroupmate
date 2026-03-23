@@ -29,6 +29,8 @@ import { join } from "node:path";
 import { createLogger } from "./core/logger.js";
 import { setGlobalTimezone, getGlobalTimezone } from "./core/timezone.js";
 import { TelegramAdapter } from "./adapter/telegram-adapter.js";
+import { DiscordAdapter } from "./adapter/discord-adapter.js";
+import type { PlatformAdapter } from "./adapter/platform-adapter.js";
 
 import { SubagentManager } from "./subagent/subagent-manager.js";
 import { DynamicAttentionQueue } from "./subagent/attention-queue.js";
@@ -125,12 +127,20 @@ async function main(): Promise<void> {
             .map(([k, v]) => `${k}→${Array.isArray(v) ? `[${v.join(",")}]` : v}`)
             .join(", "),
     });
-    log.info("Telegram 配置", {
-        mode: appConfig.telegram.mode,
-        apiId: appConfig.telegram.apiId ? "✓" : "✗",
-        apiHash: appConfig.telegram.apiHash ? "✓" : "✗",
-        botToken: appConfig.telegram.botToken ? "✓" : "✗",
-    });
+    if (appConfig.telegram) {
+        log.info("Telegram 配置", {
+            mode: appConfig.telegram.mode,
+            apiId: appConfig.telegram.apiId ? "✓" : "✗",
+            apiHash: appConfig.telegram.apiHash ? "✓" : "✗",
+            botToken: appConfig.telegram.botToken ? "✓" : "✗",
+        });
+    }
+    if (appConfig.discord) {
+        log.info("Discord 配置", {
+            botToken: appConfig.discord.botToken ? "✓" : "✗",
+            applicationId: appConfig.discord.applicationId ? "✓" : "✗",
+        });
+    }
 
     // 共享 MediaDownloader 实例（用于 sendSticker、Dashboard 等）
     const { MediaDownloader } = await import("./core/media-downloader.js");
@@ -149,33 +159,11 @@ async function main(): Promise<void> {
                 nc.push(event as { type: string;[key: string]: unknown });
             });
             sandbox.setHostCallHandler(async (method, args) => {
-                // ── telegram.sendSticker: 通过 uniqueFileId 发送贴纸 ──
-                if (method === "telegram.sendSticker") {
-                    const rawTarget = String(args[0] ?? "");
-                    const targetChatId = ensureCompositeId(getPlatform(chatId), rawTarget);
-                    if (targetChatId !== chatId) {
-                        throw new Error(`[Sandbox 安全限制] sendSticker 被拦截：sandbox 绑定 chat=${chatId}，不允许向 chat=${targetChatId} 发送。`);
-                    }
-                    const uniqueFileId = String(args[1] ?? "");
-                    if (!uniqueFileId) throw new Error("sendSticker: uniqueFileId 为空");
-                    const stickerPath = sharedMediaDownloader.getExistingPath(uniqueFileId);
-                    if (!stickerPath) throw new Error(`sendSticker: 未找到贴纸文件 uniqueFileId=${uniqueFileId}`);
-                    const { readFileSync, existsSync } = await import("node:fs");
-                    if (!existsSync(stickerPath)) throw new Error(`sendSticker: 文件不存在 ${stickerPath}`);
-                    const buffer = readFileSync(stickerPath);
-                    const opts = args[2] ?? undefined;
-                    // 直接调用底层 client.sendMedia，绕过 adapter 的本地路径处理
-                    // mtcute 需要 type: 'sticker' 来正确发送贴纸
-                    return telegramAdapter.handleCall("telegram.sendMedia", [
-                        targetChatId,
-                        { type: "sticker", file: buffer },
-                        opts,
-                    ]);
-                }
-
-                if (telegramAdapter.canHandle(method)) {
-                    // ── ChatId 发送限制：write 操作只允许绑定的 chatId ──
-                    const writeMethods = telegramAdapter.getWriteMethods();
+                // ── Platform adapter routing: 按 method 前缀路由到对应 adapter ──
+                const adapter = adapters.find(a => a.canHandle(method));
+                if (adapter) {
+                    // Write 操作安全检查：只允许向绑定的 chatId 发送
+                    const writeMethods = adapter.getWriteMethods();
                     if (writeMethods.includes(method)) {
                         const rawTarget = String(args[0] ?? "");
                         const targetChatId = ensureCompositeId(getPlatform(chatId), rawTarget);
@@ -186,7 +174,7 @@ async function main(): Promise<void> {
                             );
                         }
                     }
-                    return telegramAdapter.handleCall(method, args);
+                    return adapter.handleCall(method, args);
                 }
                 switch (method) {
                     case "memory.recall":
@@ -270,12 +258,39 @@ async function main(): Promise<void> {
             });
         });
 
-    const telegramAdapter = new TelegramAdapter(
-        appConfig.telegram,
-        nc,
-        promptUser,
-        (message) => console.log(`🤖 ${message}`),
-    );
+    // ─── Adapter 初始化（条件性创建） ───
+    const adapters: PlatformAdapter[] = [];
+
+    if (appConfig.telegram) {
+        const telegramAdapter = new TelegramAdapter(
+            appConfig.telegram,
+            nc,
+            promptUser,
+            (message) => console.log(`🤖 ${message}`),
+            undefined, // use default client factory
+            sharedMediaDownloader,
+        );
+        adapters.push(telegramAdapter);
+    }
+
+    if (appConfig.discord) {
+        const discordAdapter = new DiscordAdapter(appConfig.discord, nc);
+        adapters.push(discordAdapter);
+    }
+
+    if (adapters.length === 0) {
+        throw new Error("至少需要配置一个平台 adapter（telegram 或 discord）");
+    }
+
+    // 通用路由函数
+    function getAdapterForChat(chatId: string): PlatformAdapter | undefined {
+        try {
+            const platform = getPlatform(chatId);
+            return adapters.find(a => a.platform === platform);
+        } catch {
+            return undefined;
+        }
+    }
 
     // ─── Subagent 架构组件初始化 ───
     // 注意: message_log 落盘由 RecordingPipeline Step 4 负责，不再需要独立的 MessageLogWriter hook
@@ -669,7 +684,7 @@ async function main(): Promise<void> {
         mainLoop,
         sotaConfigs: attendConfigs,
         persona: appConfig.persona,
-        telegramAdapter,
+        adapters,
         mediaDownloader: sharedMediaDownloader,
     }));
 
@@ -686,9 +701,13 @@ async function main(): Promise<void> {
         fastPathConfig,
         persona: appConfig.persona,
         appConfig,
-        telegramAdapter,
+        adapters,
         sendTyping: async (chatId: string) => {
-            await telegramAdapter.handleCall("telegram.sendTyping", [chatId]);
+            const adapter = getAdapterForChat(chatId);
+            if (adapter) {
+                const typingMethod = `${adapter.platform}.sendTyping`;
+                await adapter.handleCall(typingMethod, [chatId]);
+            }
         },
         mediaDownloader: sharedMediaDownloader,
     }));
@@ -727,9 +746,11 @@ async function main(): Promise<void> {
     });
 
     // ─── 启动 ───
-    log.info("启动 TelegramAdapter...");
-    await telegramAdapter.start();
-    log.info("TelegramAdapter 就绪");
+    for (const adapter of adapters) {
+        log.info(`启动 ${adapter.platform} adapter...`);
+        await adapter.start();
+        log.info(`${adapter.platform} adapter 就绪`);
+    }
 
     // ─── 启动主 Agent 注意力循环 ───
     log.info("启动 MainAgentLoop...");

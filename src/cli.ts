@@ -359,13 +359,24 @@ async function cmdConfig(): Promise<void> {
     console.log(`  Name:        ${config.persona.name}`);
     console.log(`  Description: ${config.persona.description ? config.persona.description.slice(0, 60) + "..." : "(未设置)"}`);
 
-    console.log("\n\x1b[1mTelegram 配置：\x1b[0m");
-    console.log(`  Mode:        ${config.telegram.mode}`);
-    console.log(`  API ID:      ${config.telegram.apiId || "(未设置)"}`);
-    console.log(`  API Hash:    ${config.telegram.apiHash ? "***" + config.telegram.apiHash.slice(-4) : "(未设置)"}`);
-    console.log(`  Bot Token:   ${config.telegram.botToken ? "***" + config.telegram.botToken.slice(-4) : "(未设置)"}`);
-    console.log(`  Phone:       ${config.telegram.phone || "(未设置)"}`);
+    if (config.telegram) {
+        console.log("\n\x1b[1mTelegram 配置：\x1b[0m");
+        console.log(`  Mode:        ${config.telegram.mode}`);
+        console.log(`  API ID:      ${config.telegram.apiId || "(未设置)"}`);
+        console.log(`  API Hash:    ${config.telegram.apiHash ? "***" + config.telegram.apiHash.slice(-4) : "(未设置)"}`);
+        console.log(`  Bot Token:   ${config.telegram.botToken ? "***" + config.telegram.botToken.slice(-4) : "(未设置)"}`);
+        console.log(`  Phone:       ${config.telegram.phone || "(未设置)"}`);
+    } else {
+        console.log("\n\x1b[1mTelegram 配置：\x1b[0m (未配置)");
+    }
 
+    if (config.discord) {
+        console.log("\n\x1b[1mDiscord 配置：\x1b[0m");
+        console.log(`  Bot Token:      ${config.discord.botToken ? "***" + config.discord.botToken.slice(-4) : "(未设置)"}`);
+        console.log(`  Application ID: ${config.discord.applicationId || "(未设置)"}`);
+    } else {
+        console.log("\n\x1b[1mDiscord 配置：\x1b[0m (未配置)");
+    }
     // 检查文件
     console.log("\n\x1b[1m文件检查：\x1b[0m");
     const files = [

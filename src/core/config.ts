@@ -130,6 +130,11 @@ export interface TelegramConfig {
     };
 }
 
+export interface DiscordConfig {
+    botToken: string;
+    applicationId?: string;
+}
+
 export interface ReflectionExternalConfig {
     /** LLM profile name (references llm_profiles). When set, uses that profile's full config. Falls back to caller-provided llmConfig if unset. */
     profile?: string;
@@ -263,7 +268,8 @@ export interface AppConfig {
     persona: PersonaConfig;
     /** Agent 所处时区 (IANA 标识符，如 "Asia/Shanghai")。影响 LLM prompt 中的时间展示和作息判断。 */
     timezone?: string;
-    telegram: TelegramConfig;
+    telegram?: TelegramConfig;
+    discord?: DiscordConfig;
     notification: NotificationConfig;
     reflection: ReflectionExternalConfig;
     contextBudget?: ContextBudgetConfig;
@@ -342,6 +348,7 @@ export function loadConfig(configPath?: string, forceReload?: boolean): AppConfi
     // ─── 其他配置 ───
     const filePersona = (fileConfig.persona ?? {}) as Record<string, unknown>;
     const fileTG = (fileConfig.telegram ?? {}) as Record<string, unknown>;
+    const fileDC = (fileConfig.discord ?? {}) as Record<string, unknown>;
     const fileNotification = (fileConfig.notification ?? {}) as Record<string, unknown>;
     const fileReflection = (fileConfig.reflection ?? {}) as Record<string, unknown>;
     const fileMerge = (fileReflection.merge_thresholds ?? {}) as Record<string, unknown>;
@@ -381,14 +388,18 @@ export function loadConfig(configPath?: string, forceReload?: boolean): AppConfi
             description: str(filePersona.description) ?? "",
         },
         timezone: str(fileConfig.timezone),
-        telegram: {
+        telegram: Object.keys(fileTG).length > 0 ? {
             mode: (str(fileTG.mode) as "bot" | "userbot") ?? "bot",
             botToken: str(fileTG.bot_token) ?? "",
             apiId: str(fileTG.api_id) ?? "",
             apiHash: str(fileTG.api_hash) ?? "",
             phone: str(fileTG.phone) ?? "",
             humanizedDelay: parseHumanizedDelay(fileTG),
-        },
+        } : undefined,
+        discord: Object.keys(fileDC).length > 0 ? {
+            botToken: str(fileDC.bot_token) ?? "",
+            applicationId: str(fileDC.application_id),
+        } : undefined,
         notification: {
             mentionKeywords: Array.isArray(fileNotification.mention_keywords)
                 ? (fileNotification.mention_keywords as string[])
@@ -745,22 +756,33 @@ export function serializeConfigToObject(config: AppConfig): Record<string, unkno
     obj.notification = { mention_keywords: config.notification.mentionKeywords };
 
     // telegram
-    const tg: Record<string, unknown> = {
-        mode: config.telegram.mode,
-        bot_token: config.telegram.botToken,
-        api_id: config.telegram.apiId,
-        api_hash: config.telegram.apiHash,
-        phone: config.telegram.phone,
-    };
-    if (config.telegram.humanizedDelay) {
-        tg.humanized_delay = {
-            enabled: config.telegram.humanizedDelay.enabled,
-            ms_per_char: config.telegram.humanizedDelay.msPerChar,
-            min_delay: config.telegram.humanizedDelay.minDelay,
-            max_delay: config.telegram.humanizedDelay.maxDelay,
+    if (config.telegram) {
+        const tg: Record<string, unknown> = {
+            mode: config.telegram.mode,
+            bot_token: config.telegram.botToken,
+            api_id: config.telegram.apiId,
+            api_hash: config.telegram.apiHash,
+            phone: config.telegram.phone,
         };
+        if (config.telegram.humanizedDelay) {
+            tg.humanized_delay = {
+                enabled: config.telegram.humanizedDelay.enabled,
+                ms_per_char: config.telegram.humanizedDelay.msPerChar,
+                min_delay: config.telegram.humanizedDelay.minDelay,
+                max_delay: config.telegram.humanizedDelay.maxDelay,
+            };
+        }
+        obj.telegram = tg;
     }
-    obj.telegram = tg;
+
+    // discord
+    if (config.discord) {
+        const dc: Record<string, unknown> = {
+            bot_token: config.discord.botToken,
+        };
+        if (config.discord.applicationId) dc.application_id = config.discord.applicationId;
+        obj.discord = dc;
+    }
 
     // reflection
     const refl: Record<string, unknown> = {};
@@ -988,12 +1010,18 @@ export function validateConfig(config: unknown): { valid: boolean; errors: strin
     const persona = c.persona as Record<string, unknown> | undefined;
     if (!persona?.name) errors.push("persona.name 不能为空");
 
-    // telegram
+    // telegram (optional)
     const tg = c.telegram as Record<string, unknown> | undefined;
     if (tg) {
         if (!tg.mode || (tg.mode !== "bot" && tg.mode !== "userbot")) {
             errors.push("telegram.mode 必须是 \"bot\" 或 \"userbot\"");
         }
+    }
+
+    // discord (optional)
+    const dc = c.discord as Record<string, unknown> | undefined;
+    if (dc) {
+        if (!dc.botToken) errors.push("discord.botToken 不能为空");
     }
 
     // contextBudget
