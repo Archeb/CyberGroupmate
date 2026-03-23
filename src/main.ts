@@ -356,10 +356,17 @@ async function main(): Promise<void> {
         // 不写入 message_log，导致 getRecentMessages() 缺少 agent 消息。
         const eventType = String(event.type ?? "");
         if (eventType === "system.agent_message_sent") {
+            // Fix: sandbox 发出的 agent_message_sent 事件中 chatId 是 raw ID（因为
+            // code-act-executor 用 getRawId 注入 prompt），但 message_log 需要
+            // composite key 才能被 getRecentMessages(compositeId) 查询到。
+            // 从 event.scene 动态获取平台名（sandbox 模块设置：telegram.ts → "telegram"，
+            // 未来 discord.ts → "discord"），用 ensureCompositeId 补全前缀。
+            const platform = String(event.scene ?? "") as import("./core/chat-id.js").PlatformName;
+            const compositeChatId = ensureCompositeId(platform, chatId);
             try {
                 memory.storeMessageBatch([{
                     messageId: String(event.messageId ?? `agent-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`),
-                    chatId,
+                    chatId: compositeChatId,
                     userId: appConfig.persona?.name ?? "agent",
                     displayName: appConfig.persona?.name ?? "赛博群友",
                     text: String(event.text ?? ""),
@@ -367,16 +374,16 @@ async function main(): Promise<void> {
                     timestamp: String(event.timestamp ?? new Date().toISOString()),
                 }]);
             } catch (err) {
-                log.warn("Agent 消息落盘失败", { chatId, error: String(err) });
+                log.warn("Agent 消息落盘失败", { chatId: compositeChatId, error: String(err) });
             }
 
             // 同步喂给 RecordingPipeline buffer，使 flush 时 LLM prompt 能看到 agent 消息
             // （与普通消息双路写入一致：即时落盘 DB + 喂给 buffer）
-            const agentSub = subagentManager.get(chatId);
+            const agentSub = subagentManager.get(compositeChatId);
             if (agentSub?.recordingPipeline) {
                 const agentMsg: import("./pipeline/types.js").Message = {
                     id: String(event.messageId ?? `agent-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`),
-                    chatId,
+                    chatId: compositeChatId,
                     senderId: appConfig.persona?.name ?? "agent",
                     senderName: appConfig.persona?.name ?? "赛博群友",
                     text: String(event.text ?? ""),
