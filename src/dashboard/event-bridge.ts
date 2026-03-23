@@ -10,6 +10,7 @@ import type { DashboardDeps, WsEvent } from "./types.js";
 import { createLogger } from "../core/logger.js";
 import { llmEvents, type LLMCallEvent, type LLMResponseEvent } from "../core/llm.js";
 import { codeActEvents, type CodeActProgressEvent } from "../sandbox/session-runner.js";
+import { getGroupModelKey } from "../core/chat-id.js";
 
 const log = createLogger("dashboard-bridge");
 
@@ -209,7 +210,7 @@ export class EventBridge {
         const groups: Record<string, unknown>[] = [];
         for (const sub of subagentManager.getAllSubagents()) {
             const fp = sub.fastPathHandler as any;
-            const gm = this.deps.memory.getGroupModel(sub.chatId);
+            const gm = this.deps.memory.getGroupModel(getGroupModelKey(sub.chatId));
             groups.push({
                 chatId: sub.chatId,
                 chatTitle: gm?.chatTitle || "",

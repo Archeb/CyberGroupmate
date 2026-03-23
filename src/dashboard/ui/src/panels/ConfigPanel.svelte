@@ -22,6 +22,7 @@
     { id: "persona", label: "人格 & 唤醒", icon: "fa-user-astronaut" },
     { id: "timezone", label: "时区", icon: "fa-clock" },
     { id: "telegram", label: "Telegram", icon: "fa-paper-plane" },
+    { id: "discord", label: "Discord", icon: "fa-gamepad" },
     { id: "reflection", label: "反思引擎", icon: "fa-brain" },
     { id: "contextBudget", label: "上下文预算", icon: "fa-sliders" },
     { id: "embedding", label: "Embedding", icon: "fa-vector-square" },
@@ -34,6 +35,7 @@
   const RESTART_SECTIONS = new Set(["embedding", "dashboard"]);
   const RESTART_FIELDS = {
     telegram: ["mode", "botToken", "apiId", "apiHash", "phone"],
+    discord: ["botToken"],
     subagent: ["maxSandboxInstances"],
   };
 
@@ -61,7 +63,8 @@
       if (!config.vision) config.vision = {};
       if (!config.dashboard) config.dashboard = {};
       if (!config.subagent) config.subagent = {};
-      if (!config.telegram.humanizedDelay) {
+      if (!config.discord) config.discord = { botToken: "", applicationId: "" };
+      if (config.telegram && !config.telegram.humanizedDelay) {
         config.telegram.humanizedDelay = {
           enabled: false,
           msPerChar: 50,
@@ -676,6 +679,36 @@
                 >
               </div>
             {/if}
+          {/if}
+
+          <!-- ══ Discord ══ -->
+          {#if currentSection === "discord"}
+            <h3 class="card-title text-sm">
+              <i class="fa-solid fa-gamepad opacity-50 mr-1"></i> Discord 设置
+            </h3>
+            <p class="text-xs opacity-50 mb-3">Bot 连接参数。修改后需重启服务。</p>
+            <div class="cfg-grid-2">
+              <label class="cfg-field col-span-2"
+                ><span class="cfg-label"
+                  ><i class="fa-solid fa-rotate-right restart-icon"></i> Bot Token</span
+                >
+                <input
+                  type="password"
+                  class="input input-xs input-bordered w-full"
+                  bind:value={config.discord.botToken}
+                  placeholder="Discord Bot Token"
+                /></label
+              >
+              <label class="cfg-field col-span-2"
+                ><span class="cfg-label">Application ID</span>
+                <input
+                  type="text"
+                  class="input input-xs input-bordered w-full"
+                  bind:value={config.discord.applicationId}
+                  placeholder="(可选)"
+                /></label
+              >
+            </div>
           {/if}
 
           <!-- ══ Reflection ══ -->
