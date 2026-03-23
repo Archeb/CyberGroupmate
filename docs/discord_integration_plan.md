@@ -27,9 +27,10 @@
 | 决策 | 结论 |
 |:---|:---|
 | chatId 格式 | `{platform}:{rawId}`，先迁移 Telegram 再接 Discord。文件名中 `:` 用 `_` 替代 |
+| **userId 格式** | **同 chatId，`{platform}:{rawId}`。所有数字型 userId 必须加平台前缀，非数字（如 `agent`）保持原样** |
 | Discord chatId 粒度 | channelId。每个 Channel/Thread 独立 sandbox 和 session |
 | Guild ↔ Group | Guild = Group（共享 GroupModel/PersonProfile），Channel = 独立上下文 |
-| core_facts.subject | 不迁移（模糊查询，无需精确匹配 chatId 格式） |
+| core_facts.subject | **已迁移** — 数字型 subject（代表 userId）加 `telegram:` 前缀 |
 | 测试策略 | 修改现有测试以适应多平台架构，不单独写 Discord 专用测试 |
 | Session 路径 | `{platform}/{groupId}/{channelId}.json`（Telegram 无 channel 层） |
 | Sandbox API | 保留 `ctx.tg.*` + 新增 `ctx.discord.*`，按平台注入 |
@@ -38,6 +39,8 @@
 | 安全限制 | adapter 动态注册写操作白名单 |
 | chatType | 只需 `private` / `group` / `channel` |
 | events.jsonl | 不迁移，只写消息队列，历史数据不被使用 |
+| **存储 vs 展示** | **存储层用 composite key，面向 LLM/Sandbox 展示时用 `getRawId()` 剥离前缀** |
+| **Sandbox 安全检查** | **用 `ensureCompositeId(platform, rawId)` 自动补全，LLM 代码可用裸 ID** |
 
 ---
 
@@ -210,6 +213,138 @@ interface Message {
 **验证**:
 - TypeScript 编译通过
 - 现有消息处理逻辑不受影响（新字段均为 optional）
+
+---
+
+### Phase 0 实施记录（2026-03-22 ~ 2026-03-23）
+
+> **分支**: `feature/discord-integration`
+> **状态**: ✅ 完成
+
+#### 新建文件
+
+| 文件 | 说明 |
+|:---|:---|
+| `src/core/chat-id.ts` | Composite key 工具函数（`composeChatId`, `parseChatId`, `getRawId`, `ensureCompositeId` 等） |
+| `scripts/migrate-chat-id.ts` | SQLite chat_id 迁移脚本（13,844 行，5 表） |
+| `scripts/migrate-sessions.ts` | Session 文件迁移（10 文件重命名 + JSON 内 chatId 更新） |
+| `scripts/migrate-user-id.ts` | SQLite user_id 迁移脚本（9,725 行，4 表） |
+| `tests/chat-id.test.ts` | chat-id.ts 单元测试（28 用例） |
+
+#### 修改文件摘要
+
+| 文件 | 关键改动 |
+|:---|:---|
+| `telegram-adapter.ts` | `composeChatId("telegram", ...)` 输出 chatId 和 userId；`normalizePeerArg` 剥离前缀给 mtcute；`getWriteMethods()` 实现 |
+| `platform-adapter.ts` | +`getWriteMethods()`, +`downloadMedia?()` |
+| `subagent-manager.ts` | `chatIdToFileName` / `fileNameToChatId` 转换 |
+| `message-log-writer.ts` | 默认 eventType → `nc.message` |
+| `event-bridge.ts` | 过滤 `nc.message` |
+| `main.ts` | 安全检查用 `ensureCompositeId`；动态 `getWriteMethods()`；导入 chat-id 工具 |
+| `media-downloader.ts` | chatId colon 消毒（macOS HFS+ 兼容） |
+| `pipeline/types.ts` | +`rawMessage` 字段 |
+| `reflection.ts` | 所有 LLM 返回的 userId 写入前 `ensureCompositeId(getPlatform(chatId), userId)`；prompt 中 `getRawId()` |
+| `code-act-executor.ts` | 执行任务 prompt 用 `getRawId(chatId)`；personContext userId 用 `getRawId()`；storeFact subject `ensureCompositeId` |
+| `attend-handler.ts` | activePersons userId 用 `getRawId()` |
+| `prompt-renderer.ts` | 所有 LLM-facing chatId 用 `getRawId()` |
+
+#### 数据迁移统计
+
+| 迁移项 | 范围 | 行数 |
+|:---|:---|:---|
+| chat_id → `telegram:` | `message_log`, `topics`, `group_models`, `person_group_profiles`, `interactions` | 13,844 |
+| user_id → `telegram:` | `person_identities`, `person_group_profiles`, `message_log`, `interactions` | 9,725 |
+| session 文件 | `workspace/sessions/telegram/` | 10 文件 |
+| core_facts.subject | 数字型 subject 加 `telegram:` | 补充迁移 |
+| person_profiles.user_id | 遗留表全量迁移 | 10+ |
+
+#### 关键决策与 Bugfix
+
+**BF-1: userId 也必须 composite key**
+
+原计划只迁移 chatId。但 Telegram userId（纯数字）与 Discord userId（纯数字 snowflake）存在碰撞风险，因此 userId 也必须加平台前缀。非数字值（`agent`、角色名）不加前缀。
+
+**BF-2: Sandbox 安全检查自动补全**
+
+LLM 生成的代码用 `ctx.tg.sendText(682932098, text)`（裸数字），但 sandbox 绑定的 chatId 是 `telegram:682932098`。解决方案：安全检查前用 `ensureCompositeId("telegram", rawTarget)` 自动补全，而不是要求 LLM 知道 composite key 格式。
+
+**BF-3: 存储 composite / 展示 raw 的双向转换**
+
+核心原则：**存储层一律用 composite key**，**面向 LLM 的所有上下文一律用 `getRawId()`**。这包括：
+- 执行任务 prompt 中的 `{{chatId}}`
+- personContext 中的 `userId`
+- 主 Agent 决策/任务列表中的 chatId
+- reflection prompt 中的参与者统计
+
+**BF-4: reflection 写回路径的 userId 归一化**
+
+reflection LLM 看到的 userId 是裸 ID（因 prompt 中用了 `getRawId`），返回结果中的 userId 也是裸 ID。写入 `upsertPersonIdentity` / `upsertPersonGroupProfile` / `storeFact` 之前必须 `ensureCompositeId(getPlatform(chatId), userId)` — 平台信息从 reflection 的 `chatId` 参数获取，**不靠推断 ID 格式**。
+
+**BF-5: `person_profiles` 遗留表**
+
+`person_profiles` 是旧表，当前代码已无引用，但仍有数据。已迁移其 `user_id` 列。
+
+#### chat-id.ts 工具函数清单
+
+| 函数 | 用途 |
+|:---|:---|
+| `composeChatId(platform, ...parts)` | 创建 composite key |
+| `parseChatId(compositeId)` | 解析为 `{ platform, rawId, groupId?, channelId? }` |
+| `getPlatform(compositeId)` | 提取平台名 |
+| `isTelegram(id)` / `isDiscord(id)` | 平台判断 |
+| `chatIdToFileName(id)` / `fileNameToChatId(name)` | 文件名转换 |
+| `getGroupChatId(id)` | 获取 group 级 key（Discord → guild 级） |
+| `isValidCompositeChatId(id)` | 校验格式 |
+| `getRawId(compositeOrRawId)` | 剥离平台前缀（用于 LLM 展示） |
+| `ensureCompositeId(platform, id)` | 如无前缀则自动补全（用于安全检查/写入） |
+
+---
+
+### Phase 1 实施备注
+
+> [!IMPORTANT]
+> 以下是 Phase 0 实施过程中发现的、对 Phase 1 有影响的重要细节。
+
+#### 1. Host Call 路由需要泛化
+
+当前 `main.ts` 的 `setHostCallHandler` 中硬编码了 `telegramAdapter.canHandle(method)` 和 `ensureCompositeId("telegram", rawTarget)`。Phase 1 需要改为**按 method 前缀路由到对应 adapter**，安全检查中的平台名从 `chatId` 的 composite key 提取（`getPlatform(chatId)`）而非硬编码。
+
+#### 2. sendSticker 特殊处理
+
+`main.ts` 中 `telegram.sendSticker` 有一段独立的 host call 处理逻辑（读取本地文件 → 构造 buffer → 调用 `sendMedia`）。这段逻辑是 Telegram 特有的，Discord 不需要。Phase 1 routing 时需要确保 Discord 的 host call 不经过这段代码。
+
+#### 3. `scene.ts` 硬编码 `"telegram"`
+
+`src/sandbox/modules/scene.ts` 中 `current: "telegram"` 是硬编码的。Phase 2 Step 2.1 需要改为从 chatId 的 platform 动态传入。
+
+#### 4. `nc-event.ts` 遗留分支
+
+`nc-event.ts` L109-145 有一个处理旧 `telegram.message` 事件的遗留分支。这个分支只在读取旧 `events.jsonl` 数据时触发。Phase 1 不需要修改它，但如果未来清理 events.jsonl 时可以移除。
+
+#### 5. `normalizePeerArg` 前缀剥离
+
+`telegram-adapter.ts` 的 `normalizePeerArg` 对传入的 composite chatId 做 `parseChatId().rawId` 提取裸 ID 给 mtcute。Discord adapter 的对应函数需要类似逻辑，但 Discord 的 API 直接接受 string ID，不需要 `Number()` 转换。
+
+#### 6. 媒体文件名中的 chatId 消毒
+
+`media-downloader.ts` 中用 `chatId.replace(/:/g, "_")` 消毒 composite key 中的冒号。Discord 的三段式 key `discord:guild:chan` 会变成 `discord_guild_chan`，这是预期行为。
+
+#### 7. `isDirectMessage` 判断
+
+Telegram 的 `isDirectMessage` 在 `normalizeIncomingMessage` 中由 `chat.type === "private"` 或 `numericChatId > 0` 推断。Discord 需要独立的判断逻辑（DM channel 检测）。`nc-event.ts` 的新代码路径已经从事件字段读取 `isDirectMessage`，不再依赖 chatId 符号推断。
+
+#### 8. 存储/展示双向转换总结
+
+```
+写入 DB（任何路径）→ 必须是 composite key
+  └─ 如不确定来源是否已 composite → ensureCompositeId(getPlatform(chatId), value)
+
+展示给 LLM（任何 prompt）→ 必须是 raw ID
+  └─ getRawId(compositeValue)
+
+Sandbox 安全检查 → 把 LLM 传来的 args 自动 compose 后比较
+  └─ ensureCompositeId(platform, String(args[0]))
+```
 
 ---
 
