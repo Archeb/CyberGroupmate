@@ -11,7 +11,7 @@
  */
 
 import { NotificationCenter, type NotificationEvent } from "./event/notification-center.js";
-import { ensureCompositeId, getRawId, getPlatform } from "./core/chat-id.js";
+import { ensureCompositeId, getRawId, getPlatform, getGroupModelKey } from "./core/chat-id.js";
 import { SandboxPool } from "./sandbox/sandbox-pool.js";
 import { createTaskListSkill, buildTaskListHostCalls } from "./sandbox/skills/task-list.js";
 import { MemoryStoreV2 } from "./memory-v2/index.js";
@@ -311,7 +311,7 @@ async function main(): Promise<void> {
 
         // Stickiness 恢复：从 GroupModel 查询 avgMessagesPerDay 推断级别（architecture_v2.md §2.2）
         stickinessProvider: (chatId: string) => {
-            const gm = memory.getGroupModel(chatId);
+            const gm = memory.getGroupModel(getGroupModelKey(chatId));
             if (!gm) return undefined;
             const level = evaluateStickiness(gm, 0, "STRANGER");
             if (level !== "STRANGER") {
@@ -446,9 +446,9 @@ async function main(): Promise<void> {
             : String(event.chatTitle ?? "");
         if (incomingTitle) {
             try {
-                const existing = memory.getGroupModel(chatId);
+                const existing = memory.getGroupModel(getGroupModelKey(chatId));
                 if (!existing || existing.chatTitle !== incomingTitle) {
-                    memory.upsertGroupModel(chatId, { chatTitle: incomingTitle, isDirectMessage: isDMChat });
+                    memory.upsertGroupModel(getGroupModelKey(chatId), { chatTitle: incomingTitle, isDirectMessage: isDMChat });
                     log.debug("chatTitle 已更新", { chatId, chatTitle: incomingTitle, isDM: isDMChat });
                 }
             } catch (err) {
@@ -635,7 +635,7 @@ async function main(): Promise<void> {
                     // Stickiness 重评估（architecture_v2.md §2.2）
                     const sub = subagentManager.get(chatId);
                     if (sub) {
-                        const gm = memory.getGroupModel(chatId);
+                        const gm = memory.getGroupModel(getGroupModelKey(chatId));
                         if (gm) {
                             const daysSinceLastInteraction = gm.lastReflectedAt
                                 ? (Date.now() - new Date(gm.lastReflectedAt).getTime()) / 86400_000

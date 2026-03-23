@@ -36,23 +36,38 @@ import { formatTsForDisplay } from "../core/timezone.js";
 const log = createLogger("code-act-executor");
 
 // ─── API 类型定义缓存 ───
-let _apiTypeDefsCache: string | null = null;
+const _apiTypeDefsCache = new Map<string, string>();
+
+/** 平台专属 .d.ts 文件名映射 */
+const PLATFORM_DTS: Record<string, string> = {
+    telegram: "telegram.d.ts",
+    discord: "discord.d.ts",
+};
 
 /**
- * 加载 API 类型定义文件，拼接为单个字符串注入到执行 prompt
+ * 加载 API 类型定义文件，按平台过滤，拼接为单个字符串注入到执行 prompt
  */
-function loadApiTypeDefs(): string {
-    if (_apiTypeDefsCache) return _apiTypeDefsCache;
+function loadApiTypeDefs(platform: string = "telegram"): string {
+    const cached = _apiTypeDefsCache.get(platform);
+    if (cached) return cached;
 
     try {
         const thisFile = fileURLToPath(import.meta.url);
         const modulesDir = join(dirname(thisFile), "..", "sandbox", "modules");
 
-        // 自动发现所有 .d.ts 文件，新增模块只需放一个 .d.ts 即可
-        // tavily.d.ts 仅在配置了 TAVILY_API_KEY 时包含
+        // 确定需要排除的其他平台 .d.ts
+        const excludedDts = new Set<string>();
+        for (const [plat, dtsFile] of Object.entries(PLATFORM_DTS)) {
+            if (plat !== platform) {
+                excludedDts.add(dtsFile);
+            }
+        }
+
+        // 自动发现所有 .d.ts 文件，过滤掉其他平台的和可选的
         const hasTavily = !!process.env.TAVILY_API_KEY;
         const dtsFiles = readdirSync(modulesDir)
             .filter(f => f.endsWith(".d.ts"))
+            .filter(f => !excludedDts.has(f))
             .filter(f => hasTavily || f !== "tavily.d.ts")
             .sort();
 
@@ -60,11 +75,14 @@ function loadApiTypeDefs(): string {
         for (const f of dtsFiles) {
             parts.push(`// --- ${f} ---\n${readFileSync(join(modulesDir, f), "utf-8")}`);
         }
-        _apiTypeDefsCache = parts.join("\n\n");
+        const result = parts.join("\n\n");
+        _apiTypeDefsCache.set(platform, result);
+        return result;
     } catch {
-        _apiTypeDefsCache = "// API type definitions not available";
+        const fallback = "// API type definitions not available";
+        _apiTypeDefsCache.set(platform, fallback);
+        return fallback;
     }
-    return _apiTypeDefsCache;
 }
 
 /** CodeActExecutor 配置 */
@@ -410,7 +428,7 @@ export class CodeActExecutor {
         const systemVars = {
             personaName: this.personaName,
             personaDescription: this.personaDescription,
-            apiTypeDefs: loadApiTypeDefs(),
+            apiTypeDefs: loadApiTypeDefs(getPlatform(this.chatId)),
         };
         const systemPrompt = renderPrompt("EXECUTION", systemVars);
 

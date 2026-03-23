@@ -30,7 +30,7 @@ import { resolveReplyText } from "../core/message-enricher.js";
 import { MediaDownloader } from "../core/media-downloader.js";
 import type { AppConfig } from "../core/config.js";
 import type { PlatformAdapter } from "../adapter/platform-adapter.js";
-import { getPlatform } from "../core/chat-id.js";
+import { getPlatform, getGroupModelKey } from "../core/chat-id.js";
 
 const log = createLogger("dispatch-handler");
 
@@ -202,7 +202,7 @@ export function createDispatchHandler(
                 let personContext = "";
 
                 // 获取群组画像
-                const groupModel = memory.getGroupModel(result.chatId) ?? undefined;
+                const groupModel = memory.getGroupModel(getGroupModelKey(result.chatId)) ?? undefined;
 
                 const contextSnapshot = buildGroupContext({
                     chatId: result.chatId,
@@ -338,7 +338,7 @@ export function createDispatchHandler(
                 if (!fp) {
                     fp = new FastPathHandler(result.chatId);
                     fp.setCallbackHandler((cb: SubagentCallback) => q5.enqueue(cb));
-                    const fpGroupModel = memory.getGroupModel(result.chatId);
+                    const fpGroupModel = memory.getGroupModel(getGroupModelKey(result.chatId));
                     fp.setLLMConfig(fastPathConfig, persona, fpGroupModel?.chatTitle ?? result.chatId);
                     subagent.fastPathHandler = fp;
                 }

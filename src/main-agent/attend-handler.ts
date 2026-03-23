@@ -21,7 +21,7 @@ import { calculateDepth } from "./cosine-decay.js";
 import { buildGroupContext } from "./context-builder.js";
 import { renderPrompt, buildAttentionVariables, buildMainSystemVariables } from "./prompt-renderer.js";
 import { callLLMWithFallback } from "../core/llm.js";
-import { getRawId, getPlatform } from "../core/chat-id.js";
+import { getRawId, getPlatform, getGroupModelKey } from "../core/chat-id.js";
 import { createLogger } from "../core/logger.js";
 import { formatTsForDisplay } from "../core/timezone.js";
 import { enrichMessages, formatMessageLine, resolveReplyText, type RawMessage } from "../core/message-enricher.js";
@@ -114,7 +114,7 @@ export function createAttendHandler(
         );
 
         // 获取群组画像和最近 callbacks（L1+ 深度可见）
-        const groupModel = memory.getGroupModel(entry.chatId) ?? undefined;
+        const groupModel = memory.getGroupModel(getGroupModelKey(entry.chatId)) ?? undefined;
 
         // 自动深度提升：当 topicDigests 和 groupModel 都为空时，
         // L0/L1 深度下 LLM 几乎没有可用信息来做决策，自动升级到 L2 以获取消息原文

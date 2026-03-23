@@ -11,6 +11,7 @@ import { installActions } from "./modules/actions.js";
 import { installSkills } from "./modules/skills.js";
 import { installScene } from "./modules/scene.js";
 import { createTelegramClientProxy } from "./modules/telegram.js";
+import { createDiscordClientProxy } from "./modules/discord.js";
 
 // ─── 环境接口 ───
 
@@ -39,9 +40,16 @@ export function installCapabilityRegistry(env: CapabilityRegistryEnv): Record<st
     }
     const sentHistory = env.ctx._sentHistory as Map<string, Set<string>>;
 
-    // 每次 executeCode 都重建 ctx.tg，确保使用当前 turn 的 env 闭包
+    // 每次 executeCode 都重建平台 proxy，确保使用当前 turn 的 env 闭包
     // （emitOutput、notifyHost 等是 per-executeCode 的局部变量）
-    env.ctx.tg = createTelegramClientProxy(env, sentHistory);
+    // 根据 ctx._platform 条件性注入对应平台的 API proxy
+    const platform = String(env.ctx._platform ?? "telegram");
+    if (platform === "discord") {
+        env.ctx.discord = createDiscordClientProxy(env, sentHistory);
+    } else {
+        // 默认 telegram（向后兼容）
+        env.ctx.tg = createTelegramClientProxy(env, sentHistory);
+    }
 
     return {
         runtime: installRuntime(env),

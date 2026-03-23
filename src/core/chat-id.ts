@@ -148,6 +148,27 @@ export function isTelegram(compositeId: string): boolean {
 }
 
 /**
+ * 获取 GroupModel 的存储 key。
+ *
+ * Discord guild == group：同一 Guild 下的不同 Channel 共享 GroupModel。
+ * - `discord:guildId:channelId` → `discord:guildId`
+ * - `discord:userId` (DM)       → `discord:userId`（不变）
+ * - `telegram:chatId`           → `telegram:chatId`（不变）
+ *
+ * @example
+ * getGroupModelKey("discord:guild123:chan456") → "discord:guild123"
+ * getGroupModelKey("discord:user789")         → "discord:user789"
+ * getGroupModelKey("telegram:-1001234567")    → "telegram:-1001234567"
+ */
+export function getGroupModelKey(compositeId: string): string {
+    if (!compositeId.startsWith("discord:")) return compositeId;
+    const parsed = parseChatId(compositeId);
+    if (parsed.groupId) {
+        return composeChatId("discord", parsed.groupId);
+    }
+    return compositeId;
+}
+/**
  * 将 composite chatId 转换为文件系统安全的文件名。
  * `:` → `_`
  *
