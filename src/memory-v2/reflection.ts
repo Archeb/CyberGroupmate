@@ -14,6 +14,7 @@
  */
 
 import { createLogger } from "../core/logger.js";
+import { getPlatform, ensureCompositeId, getRawId } from "../core/chat-id.js";
 import { callLLM, type LLMConfig, type ChatMessage } from "../core/llm.js";
 import { resolveLLMProfile } from "../core/config.js";
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
@@ -235,8 +236,9 @@ export async function runReflection(
             if (iu.displayName) idData.displayName = iu.displayName;
             if (iu.aliases?.length) idData.aliases = iu.aliases;
             if (Object.keys(idData).length > 0) {
-                memory.upsertPersonIdentity(iu.userId, idData);
-                log.debug("Reflection 4a′: 更新身份信息", { userId: iu.userId, ...idData });
+                const compositeUid = ensureCompositeId(getPlatform(chatId), iu.userId);
+                memory.upsertPersonIdentity(compositeUid, idData);
+                log.debug("Reflection 4a′: 更新身份信息", { userId: compositeUid, ...idData });
             }
         }
     }
@@ -254,8 +256,9 @@ export async function runReflection(
         if (pu.dunbarReason) { updateData.dunbarReason = pu.dunbarReason; }
 
         if (changes.length > 0) {
-            memory.upsertPersonGroupProfile(pu.userId, chatId, updateData);
-            log.debug("Reflection 4a: 写入画像增量", { userId: pu.userId, changes: changes.join("; ") });
+            const compositeUid = ensureCompositeId(getPlatform(chatId), pu.userId);
+            memory.upsertPersonGroupProfile(compositeUid, chatId, updateData);
+            log.debug("Reflection 4a: 写入画像增量", { userId: compositeUid, changes: changes.join("; ") });
             personUpdates.push({
                 userId: pu.userId,
                 chatId,
@@ -317,10 +320,15 @@ export async function runReflection(
             log.warn("Reflection 4b: 事实 embedding 生成失败，写入无 embedding 的事实", { error: String(err) });
         }
     }
+    const platform = getPlatform(chatId);
     for (let i = 0; i < llmOutput.newFacts.length; i++) {
         const fact = llmOutput.newFacts[i];
+        // 如果 subject 是纯数字（userId），确保加上平台前缀
+        const subject = /^-?\d+$/.test(fact.subject)
+            ? ensureCompositeId(platform, fact.subject)
+            : fact.subject;
         memory.storeFact(
-            fact.subject, fact.content, fact.category, "reflection",
+            subject, fact.content, fact.category, "reflection",
             undefined,
             factEmbeddings[i] ?? undefined,
         );
@@ -656,7 +664,7 @@ function buildReflectionPrompt(
     // 参与者量化数据
     if (stats.size > 0) {
         const statLines = Array.from(stats.values()).map(s =>
-            `- ${s.userId}: ${s.messageCount} 条消息, ${s.topicsParticipated} 个话题, ${s.activeDays.size} 天活跃`
+            `- ${getRawId(s.userId)}: ${s.messageCount} 条消息, ${s.topicsParticipated} 个话题, ${s.activeDays.size} 天活跃`
         ).join("\n");
         sections.push(`## 参与者统计\n\n${statLines}`);
     }
@@ -664,7 +672,7 @@ function buildReflectionPrompt(
     // 现有画像
     if (profiles.length > 0) {
         const profileLines = profiles.map(p =>
-            `- **${p.userId}** (Tier ${p.dunbarTier}): ` +
+            `- **${getRawId(p.userId)}** (Tier ${p.dunbarTier}): ` +
             `traits=[${p.traits.join(", ")}], interests=[${p.interests.join(", ")}], ` +
             `style="${p.communicationStyle}", relation="${p.relationToAgent}"`
         ).join("\n");
