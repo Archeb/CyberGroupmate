@@ -12,10 +12,11 @@ import type { AttentionQueueEntry, AttendResult } from "../subagent/types.js";
 import type { SubagentManager } from "../subagent/subagent-manager.js";
 import type { FastPathHandler } from "../subagent/fast-path-handler.js";
 import type { MemoryStoreV2 } from "../memory-v2/index.js";
-import type { LLMConfig } from "../core/config.js";
+import type { LLMConfig, AppConfig } from "../core/config.js";
 import type { ChatMessage } from "../core/llm.js";
 import type { GlobalState } from "./global-state.js";
 import type { MainAgentLoop } from "./main-agent-loop.js";
+import type { MediaDownloader } from "../core/media-downloader.js";
 import { calculateDepth } from "./cosine-decay.js";
 import { buildGroupContext } from "./context-builder.js";
 import { renderPrompt, buildAttentionVariables, buildMainSystemVariables } from "./prompt-renderer.js";
@@ -23,8 +24,8 @@ import { callLLMWithFallback } from "../core/llm.js";
 import { getRawId } from "../core/chat-id.js";
 import { createLogger } from "../core/logger.js";
 import { formatTsForDisplay } from "../core/timezone.js";
-import { formatMessageLine, resolveReplyText, type RawMessage } from "../core/message-enricher.js";
-import { loadConfig } from "../core/config.js";
+import { enrichMessages, formatMessageLine, resolveReplyText, type RawMessage } from "../core/message-enricher.js";
+import { loadConfig, resolveComponentProfiles } from "../core/config.js";
 
 const log = createLogger("attend-handler");
 
@@ -47,6 +48,10 @@ export interface AttendHandlerDeps {
     /** SOTA tier 的 LLM 配置列表（按 fallback 顺序） */
     sotaConfigs: LLMConfig[];
     persona: { name: string; description: string };
+    /** Telegram Adapter 引用（用于下载媒体进行 sticker 识别） */
+    telegramAdapter?: { handleCall(method: string, args: unknown[]): Promise<unknown> };
+    /** 共享的媒体下载管理器 */
+    mediaDownloader?: MediaDownloader;
 }
 
 /**
@@ -57,7 +62,13 @@ export interface AttendHandlerDeps {
 export function createAttendHandler(
     deps: AttendHandlerDeps,
 ): (entry: AttentionQueueEntry) => Promise<AttendResult | null> {
-    const { memory, globalState, subagentManager, mainLoop, sotaConfigs } = deps;
+    const { memory, globalState, subagentManager, mainLoop, sotaConfigs, telegramAdapter: tgAdapter, mediaDownloader } = deps;
+
+    // 构建下载函数（用于 vision 处理 sticker/photo）
+    const downloadFn = tgAdapter ? async (fileId: string, chatId?: string, messageId?: string, uniqueFileId?: string): Promise<Buffer> => {
+        const result = await tgAdapter.handleCall("telegram.downloadMedia", [fileId, chatId, messageId, uniqueFileId]) as { buffer: string; size: number };
+        return Buffer.from(result.buffer, "base64");
+    } : undefined;
 
     return async (entry: AttentionQueueEntry): Promise<AttendResult | null> => {
         // 动态读取 persona（支持热重载）
@@ -141,7 +152,7 @@ export function createAttendHandler(
 
         // ═══ Phase 5: LLM 决策路径 (subagent.md §12.2 ➋➌➍) ═══
         try {
-            // 构建消息原文（所有深度均获取）
+            // 构建消息原文（所有深度均获取）+ Vision 富化 sticker/photo
             let messagesText = "";
             {
                 const recentMsgs = memory.getRecentMessages(entry.chatId, messageLimit);
@@ -152,11 +163,11 @@ export function createAttendHandler(
                     for (const m of recentMsgs) {
                         msgIdToName.set(m.messageId, m.displayName || `(uid:${m.userId})`);
                     }
-                    const lines = await Promise.all(recentMsgs.map(
+
+                    // 构建 RawMessage 列表
+                    const rawMessages: RawMessage[] = await Promise.all(recentMsgs.map(
                         async (m: any) => {
-                            // 转换为 RawMessage 格式，复用 formatMessageLine
                             const isInContext = m.replyToMessageId ? msgIdToName.has(m.replyToMessageId) : false;
-                            // 不在上下文中时，从 DB 查询原消息并解析文本/媒体描述
                             let replyToText: string | undefined;
                             if (m.replyToMessageId && !isInContext) {
                                 try {
@@ -166,7 +177,7 @@ export function createAttendHandler(
                                     }
                                 } catch { /* 非关键路径 */ }
                             }
-                            const raw: RawMessage = {
+                            return {
                                 id: m.messageId,
                                 sender: m.displayName ?? `(uid:${m.userId})`,
                                 text: m.text ?? "",
@@ -178,11 +189,30 @@ export function createAttendHandler(
                                 replyToText,
                                 mediaType: m.mediaType,
                                 mediaInfo: m.mediaInfo,
-                            };
-                            return formatMessageLine(raw, { includeMediaTags: true });
+                                chatId: entry.chatId,
+                            } as RawMessage;
                         }
                     ));
-                    messagesText = lines.join("\n");
+
+                    // 使用 enrichMessages 进行 Vision 富化（下载并分析 sticker/photo）
+                    const currentConfig = loadConfig();
+                    const visionConfig = currentConfig.vision;
+                    const visionLlmConfig = currentConfig.llmRouting.vision
+                        ? resolveComponentProfiles("vision", currentConfig)[0]
+                        : undefined;
+                    // 选择 attend LLM 配置作为主模型（检查 vision:true）
+                    const primaryLlmConfig = sotaConfigs[0];
+
+                    const { formattedText } = await enrichMessages(rawMessages, {
+                        visionConfig,
+                        llmConfig: primaryLlmConfig,
+                        visionLlmConfig,
+                        downloadFn,
+                        stickerCache: memory,
+                        chatId: entry.chatId,
+                        mediaDownloader,
+                    });
+                    messagesText = formattedText;
                 }
             }
 

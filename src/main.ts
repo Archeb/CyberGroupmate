@@ -669,6 +669,8 @@ async function main(): Promise<void> {
         mainLoop,
         sotaConfigs: attendConfigs,
         persona: appConfig.persona,
+        telegramAdapter,
+        mediaDownloader: sharedMediaDownloader,
     }));
 
     // Dispatch handler: 分派任务到 CodeActExecutor / FastPath / Deferred Re-entry
