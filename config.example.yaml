@@ -159,6 +159,7 @@ notification:
     - "@赛博群友"
 
 # ─── Telegram 设置 ───
+# 可选。telegram 和 discord 至少配置一个。
 telegram:
   # 连接模式: "bot" | "userbot"
   mode: bot
@@ -176,6 +177,16 @@ telegram:
   #   ms_per_char: 50       # 每字符延迟（ms），默认 50
   #   min_delay: 500        # 最短延迟（ms），默认 500
   #   max_delay: 5000       # 最长延迟（ms），默认 5000
+
+# ─── Discord 设置 ───
+# 可选。telegram 和 discord 至少配置一个。
+# 在 https://discord.com/developers/applications 创建应用，
+# 获取 Bot Token 并开启 MESSAGE CONTENT Intent。
+# discord:
+#   # Bot Token（在 Bot 页面点击 Reset Token 获取）
+#   bot_token: ""
+#   # Application ID（在 General Information 页面，可选，用于 slash commands 注册等）
+#   application_id: ""
 
 # ─── Reflection 设置 ───
 # 控制反思引擎的行为参数
