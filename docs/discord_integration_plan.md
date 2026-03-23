@@ -305,13 +305,19 @@ reflection LLM 看到的 userId 是裸 ID（因 prompt 中用了 `getRawId`）�
 > [!IMPORTANT]
 > 以下是 Phase 0 实施过程中发现的、对 Phase 1 有影响的重要细节。
 
-#### 1. Host Call 路由需要泛化
+#### 1. Host Call 路由泛化 + platform-specific 逻辑下沉 adapter
 
-当前 `main.ts` 的 `setHostCallHandler` 中硬编码了 `telegramAdapter.canHandle(method)` 和 `ensureCompositeId("telegram", rawTarget)`。Phase 1 需要改为**按 method 前缀路由到对应 adapter**，安全检查中的平台名从 `chatId` 的 composite key 提取（`getPlatform(chatId)`）而非硬编码。
+当前 `main.ts` 的 `setHostCallHandler` 中有两个问题：
+- 硬编码了 `telegramAdapter.canHandle(method)` 和 `ensureCompositeId("telegram", rawTarget)`
+- `telegram.sendSticker` 的完整处理逻辑（查找贴纸文件 → 读取 buffer → 调用 sendMedia）直接写在 main.ts
 
-#### 2. sendSticker 特殊处理
+**原则：所有 platform-specific 逻辑必须在 adapter 层实现，main.ts 只做通用安全检查 + `adapter.handleCall()` 路由。**
 
-`main.ts` 中 `telegram.sendSticker` 有一段独立的 host call 处理逻辑（读取本地文件 → 构造 buffer → 调用 `sendMedia`）。这段逻辑是 Telegram 特有的，Discord 不需要。Phase 1 routing 时需要确保 Discord 的 host call 不经过这段代码。
+Phase 1 需要：
+- `sendSticker` 逻辑移入 `TelegramAdapter.handleCall`（adapter 初始化时注入 mediaDownloader）
+- 其他所有 telegram 特有的 host call 处理也一并移入 adapter
+- main.ts 改为按 method 前缀路由到对应 adapter，安全检查中的平台名从 `chatId` 提取（`getPlatform(chatId)`）
+- main.ts 中不应出现任何 `if telegram` / `if discord` 的分支
 
 #### 3. `scene.ts` 硬编码 `"telegram"`
 
