@@ -60,6 +60,8 @@ export interface LLMConfig {
     };
     /** 多 key 负载均衡池。设置后 apiKey 字段将被忽略，由 pool 调度器选择实际 key */
     pool?: PoolConfig;
+    /** 单次 LLM 请求超时（毫秒）。默认 60000（60 秒） */
+    requestTimeoutMs?: number;
 }
 
 /** 相似度度量方法 */
@@ -661,6 +663,7 @@ function parseLLMProfile(raw: Record<string, unknown>): LLMConfig {
         supportsPrefill: raw.supports_prefill === false ? false : undefined,
         pricing,
         pool,
+        requestTimeoutMs: raw.request_timeout_ms != null ? num(raw.request_timeout_ms, 60000) : undefined,
     };
 }
 

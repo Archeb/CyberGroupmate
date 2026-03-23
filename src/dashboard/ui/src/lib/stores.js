@@ -95,7 +95,7 @@ export function calculateCallCost(usage, model) {
 export function handleLLMCall(data) {
   llmStats.update(s => ({ ...s, total: s.total + 1 }));
   llmLogs.update(logs => {
-    logs.unshift({ ...data, response: null });
+    logs.unshift({ ...data, response: null, retries: [] });
     if (logs.length > MAX_LLM_LOGS) logs.pop();
     return logs;
   });
@@ -126,6 +126,17 @@ export function handleLLMResponse(data) {
     }
     s.totalCost += cost;
     return s;
+  });
+}
+
+export function handleLLMRetry(data) {
+  llmLogs.update(logs => {
+    const e = logs.find(e => e.callId === data.callId);
+    if (e) {
+      if (!e.retries) e.retries = [];
+      e.retries.push(data);
+    }
+    return logs;
   });
 }
 

@@ -7,7 +7,7 @@
 import { getToken } from './api.js';
 import {
   wsStatus, appState, messages, llmLogs, llmStats,
-  addMessage, handleLLMCall, handleLLMResponse, setTokenPricing,
+  addMessage, handleLLMCall, handleLLMResponse, handleLLMRetry, setTokenPricing,
   handleCodeActProgress, handleRecordingEvent,
 } from './stores.js';
 import { get } from 'svelte/store';
@@ -38,6 +38,13 @@ export function connectWS() {
       handleEvent(event);
     } catch { /* ignore */ }
   };
+}
+
+/** 发送命令到服务端（如 llm:cancel） */
+export function sendCommand(msg) {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify(msg));
+  }
 }
 
 function handleEvent(event) {
@@ -74,6 +81,9 @@ function handleEvent(event) {
       break;
     case 'llm:response':
       handleLLMResponse(event.data);
+      break;
+    case 'llm:retry':
+      handleLLMRetry(event.data);
       break;
     case 'codeact:progress':
       handleCodeActProgress(event.data);

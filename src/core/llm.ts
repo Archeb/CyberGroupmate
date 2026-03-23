@@ -69,9 +69,53 @@ export interface LLMResponseEvent {
     timestamp: string;
 }
 
+/** LLM 重试事件数据 */
+export interface LLMRetryEvent {
+    /** 对应的调用 ID */
+    callId: string;
+    /** 调用方模块标识 */
+    caller: string;
+    /** 当前重试次数（1-based） */
+    attempt: number;
+    /** 最大重试次数 */
+    maxRetries: number;
+    /** 错误信息 */
+    error: string;
+    /** 错误原因分类 */
+    reason: string;
+    /** 重试延迟 ms（0 表示立即重试） */
+    retryDelayMs: number;
+    /** 时间戳 */
+    timestamp: string;
+}
+
 let _callIdCounter = 0;
 function nextCallId(): string {
     return `llm_${Date.now()}_${++_callIdCounter}`;
+}
+
+// ─── 活跃 LLM 调用追踪（用于 Dashboard 取消/立即重试） ───
+
+const _activeControllers = new Map<string, AbortController>();
+
+/**
+ * 取消指定 callId 的活跃 LLM 请求并立即重试。
+ * 由 Dashboard 通过 WebSocket 命令调用。
+ * 取消后 retry 循环会跳过退避延迟立即重试。
+ */
+export function cancelLLMCall(callId: string): boolean {
+    const controller = _activeControllers.get(callId);
+    if (controller) {
+        log.info("LLM call cancelled by user for immediate retry", { callId });
+        controller.abort("user_retry");
+        return true;
+    }
+    return false;
+}
+
+/** 获取当前活跃的 LLM 调用 ID 列表 */
+export function getActiveLLMCalls(): string[] {
+    return [..._activeControllers.keys()];
 }
 
 function summarizeMessages(messages: ChatMessage[]): LLMCallEvent["messageSummaries"] {
@@ -306,7 +350,18 @@ async function callLLMSingleKey(
         llmEvents.emit("llm:call", callEvent);
     }
 
+    const timeoutMs = config.requestTimeoutMs ?? 60_000;
+
+    // 创建主 AbortController 用于 Dashboard 取消
+    let currentController = new AbortController();
+    _activeControllers.set(callId, currentController);
+
+    try {
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+        // 检查是否已被用户取消（上一次循环中可能被 abort）
+        // 如果被取消，重置 controller 以便下一次 fetch 正常使用
+        let wasUserRetry = false;
+
         try {
             // ── 解析 prefill（仅当 config 支持时应用） ──
             const prefill = (options?.prefill && config.supportsPrefill !== false)
@@ -314,11 +369,15 @@ async function callLLMSingleKey(
                 : undefined;
             const stop = options?.stop;
 
+            // 创建本次 fetch 的 AbortSignal：合并超时 + 用户取消
+            const timeoutSignal = AbortSignal.timeout(timeoutMs);
+            const combinedSignal = AbortSignal.any([timeoutSignal, currentController.signal]);
+
             let result: LLMResponse;
             if (config.provider === "anthropic") {
-                result = await callAnthropic(messages, config, model, temperature, maxTokens, prefill, stop);
+                result = await callAnthropic(messages, config, model, temperature, maxTokens, prefill, stop, combinedSignal);
             } else {
-                result = await callOpenAI(messages, config, model, temperature, maxTokens, thinkingLevel, prefill, stop);
+                result = await callOpenAI(messages, config, model, temperature, maxTokens, thinkingLevel, prefill, stop, combinedSignal);
             }
 
             // ── 自动拼接 prefill 前缀到返回内容 ──
@@ -342,6 +401,17 @@ async function callLLMSingleKey(
 
             return result;
         } catch (err: unknown) {
+            // 检测是否是用户通过 Dashboard 触发的取消（立即重试）
+            const isUserAbort = err instanceof Error && err.name === "AbortError" &&
+                currentController.signal.aborted && currentController.signal.reason === "user_retry";
+
+            if (isUserAbort) {
+                wasUserRetry = true;
+                // 重建 controller 以便下次 fetch 可用
+                currentController = new AbortController();
+                _activeControllers.set(callId, currentController);
+            }
+
             const isRateLimit =
                 err instanceof Error &&
                 (err.message.includes("429") ||
@@ -362,23 +432,44 @@ async function callLLMSingleKey(
                     err.message.includes("ETIMEDOUT") ||
                     err.message.includes("socket hang up") ||
                     err.message.includes("UND_ERR") ||
-                    err.message.includes("network"));
+                    err.message.includes("network") ||
+                    err.message.includes("TimeoutError"));
 
             const isEmptyResponse =
                 err instanceof Error &&
                 err.message.includes("empty response");
 
-            const isRetryable = isRateLimit || isServerError || isNetworkError || isEmptyResponse;
+            const isRetryable = isUserAbort || isRateLimit || isServerError || isNetworkError || isEmptyResponse;
+
+            const reason = isUserAbort ? "user_retry" : isRateLimit ? "rate_limit" : isServerError ? "server_error" : isNetworkError ? "network_error" : "empty_response";
 
             // Pool 模式下，429/quota 不在此层重试（由 pool 层切换 key 处理）
             if (isRetryable && attempt < MAX_RETRIES && !(skipRetryOnQuota && isRateLimit)) {
-                const delay = RETRY_DELAYS[attempt] ?? 4000;
+                const delay = wasUserRetry ? 0 : (RETRY_DELAYS[attempt] ?? 4000);
                 log.warn(`LLM call failed (attempt ${attempt + 1}/${MAX_RETRIES}), retrying in ${delay}ms`, {
                     caller,
                     error: err instanceof Error ? err.message : String(err),
-                    reason: isRateLimit ? "rate_limit" : isServerError ? "server_error" : isNetworkError ? "network_error" : "empty_response",
+                    reason,
                 });
-                await new Promise((r) => setTimeout(r, delay));
+
+                // ── 发射 llm:retry 事件 ──
+                if (llmEvents.listenerCount("llm:retry") > 0) {
+                    const retryEvent: LLMRetryEvent = {
+                        callId,
+                        caller,
+                        attempt: attempt + 1,
+                        maxRetries: MAX_RETRIES,
+                        error: err instanceof Error ? err.message : String(err),
+                        reason,
+                        retryDelayMs: delay,
+                        timestamp: new Date().toISOString(),
+                    };
+                    llmEvents.emit("llm:retry", retryEvent);
+                }
+
+                if (delay > 0) {
+                    await new Promise((r) => setTimeout(r, delay));
+                }
                 continue;
             }
 
@@ -401,6 +492,9 @@ async function callLLMSingleKey(
     }
 
     throw new Error("LLM call failed after all retries");
+    } finally {
+        _activeControllers.delete(callId);
+    }
 }
 
 /**
@@ -482,6 +576,7 @@ async function callOpenAI(
     thinkingLevel?: string,
     prefill?: string,
     stop?: string[],
+    signal?: AbortSignal,
 ): Promise<LLMResponse> {
     const url = `${config.baseUrl.replace(/\/$/, "")}/chat/completions`;
 
@@ -533,6 +628,7 @@ async function callOpenAI(
             // Stop sequences
             ...(stop && stop.length > 0 ? { stop } : {}),
         }),
+        signal,
     });
 
     if (!response.ok) {
@@ -583,6 +679,7 @@ async function callAnthropic(
     maxTokens: number,
     prefill?: string,
     stop?: string[],
+    signal?: AbortSignal,
 ): Promise<LLMResponse> {
     const url = `${config.baseUrl.replace(/\/$/, "")}/messages`;
 
@@ -652,6 +749,7 @@ async function callAnthropic(
         method: "POST",
         headers,
         body: JSON.stringify(body),
+        signal,
     });
 
     if (!response.ok) {

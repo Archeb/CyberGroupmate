@@ -8,7 +8,7 @@
 import type { WebSocket } from "ws";
 import type { DashboardDeps, WsEvent } from "./types.js";
 import { createLogger } from "../core/logger.js";
-import { llmEvents, type LLMCallEvent, type LLMResponseEvent } from "../core/llm.js";
+import { llmEvents, type LLMCallEvent, type LLMResponseEvent, type LLMRetryEvent, cancelLLMCall } from "../core/llm.js";
 import { codeActEvents, type CodeActProgressEvent } from "../sandbox/session-runner.js";
 import { getGroupModelKey } from "../core/chat-id.js";
 
@@ -100,6 +100,31 @@ export class EventBridge {
                 this.deps.tokenStats.record(model, data.usage);
             }
         });
+
+        llmEvents.on("llm:retry", (data: LLMRetryEvent) => {
+            this.broadcast({
+                type: "llm:retry",
+                timestamp: data.timestamp,
+                data,
+            });
+        });
+    }
+
+    /** 处理来自 Dashboard 前端的 WebSocket 命令 */
+    handleCommand(msg: Record<string, unknown>): void {
+        const type = String(msg.type ?? "");
+        switch (type) {
+            case "llm:cancel": {
+                const callId = String(msg.callId ?? "");
+                if (callId) {
+                    const ok = cancelLLMCall(callId);
+                    log.info("llm:cancel command", { callId, success: ok });
+                }
+                break;
+            }
+            default:
+                break;
+        }
     }
 
     /** 订阅 CodeAct 进度事件并广播到 WebSocket */

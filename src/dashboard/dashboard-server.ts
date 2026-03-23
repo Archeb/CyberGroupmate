@@ -79,6 +79,16 @@ export class DashboardServer {
         this.wss.on("connection", (ws) => {
             log.info("WebSocket 客户端已连接");
             this.bridge.addClient(ws);
+
+            // 处理来自前端的命令（如 llm:cancel）
+            ws.on("message", (raw) => {
+                try {
+                    const msg = JSON.parse(String(raw));
+                    if (msg && typeof msg.type === "string") {
+                        this.bridge.handleCommand(msg);
+                    }
+                } catch { /* ignore non-JSON */ }
+            });
         });
     }
 

@@ -7,6 +7,7 @@
     clearLLMLogs,
     calculateCallCost,
   } from "../lib/stores.js";
+  import { sendCommand } from "../lib/ws.js";
   import { escapeHtml } from "../lib/utils.js";
 
   function formatCost(cost) {
@@ -152,6 +153,18 @@
     a.click();
     URL.revokeObjectURL(url);
   }
+
+  function cancelAndRetry(callId) {
+    sendCommand({ type: "llm:cancel", callId });
+  }
+
+  const REASON_LABELS = {
+    rate_limit: "限流",
+    server_error: "服务器错误",
+    network_error: "网络错误",
+    empty_response: "空响应",
+    user_retry: "手动重试",
+  };
 </script>
 
 <div class="llm-log-layout">
@@ -215,6 +228,9 @@
                   ? ` (${r.usage.totalTokens}tok)`
                   : ""}{@const cost = calculateCallCost(r.usage, entry.model)}{cost > 0 ? ` ${formatCost(cost)}` : ""}{:else}...{/if}
             </span>
+            {#if entry.retries?.length > 0}
+              <span class="llm-row-retry-badge" title="重试 {entry.retries.length} 次">⟳{entry.retries.length}</span>
+            {/if}
           </button>
         {/each}
       {/if}
@@ -256,7 +272,11 @@
                 {/if}
               {/if}
             {:else}
-              <span class="text-warning">进行中...</span>
+              <span class="text-warning">进行中...
+                <button class="btn btn-xs btn-warning btn-outline llm-retry-btn" onclick={() => cancelAndRetry(selectedEntry.callId)} title="取消当前请求并立即重试">
+                  ⟳ 立即重试
+                </button>
+              </span>
             {/if}
           </div>
           <div class="llm-detail-nav-bar">
@@ -337,6 +357,28 @@
             </div>
           {/each}
         </div>
+
+        <!-- Retries -->
+        {#if selectedEntry.retries?.length > 0}
+          <div class="llm-detail-section">
+            <div class="llm-detail-section-title">
+              Retries ({selectedEntry.retries.length})
+            </div>
+            {#each selectedEntry.retries as retry, ri}
+              <div class="llm-retry-entry">
+                <span class="llm-retry-attempt">#{retry.attempt}/{retry.maxRetries}</span>
+                <span class="badge badge-xs" class:badge-warning={retry.reason === 'rate_limit'} class:badge-error={retry.reason === 'server_error' || retry.reason === 'network_error'} class:badge-info={retry.reason === 'user_retry'} class:badge-ghost={!['rate_limit','server_error','network_error','user_retry'].includes(retry.reason)}>
+                  {REASON_LABELS[retry.reason] || retry.reason}
+                </span>
+                <span class="llm-retry-delay">
+                  {retry.retryDelayMs > 0 ? `${retry.retryDelayMs}ms 后重试` : '立即重试'}
+                </span>
+                <span class="llm-retry-error">{retry.error.slice(0, 120)}</span>
+                <span class="llm-retry-time">{new Date(retry.timestamp).toLocaleTimeString()}</span>
+              </div>
+            {/each}
+          </div>
+        {/if}
 
         <!-- Response -->
         {#if r}
@@ -656,6 +698,58 @@
     background: color-mix(in srgb, var(--color-base-content) 4%, transparent);
     border-radius: 0.375rem;
     border-left: 3px solid var(--color-secondary);
+  }
+
+  /* ── Retry styles ── */
+  .llm-row-retry-badge {
+    font-size: 0.6rem;
+    color: var(--color-warning);
+    flex-shrink: 0;
+    font-weight: 700;
+  }
+
+  .llm-retry-btn {
+    margin-left: 0.5rem;
+    font-size: 0.65rem;
+  }
+
+  .llm-retry-entry {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.35rem 0.75rem;
+    margin-bottom: 0.2rem;
+    background: color-mix(in srgb, var(--color-warning) 6%, transparent);
+    border-radius: 0.375rem;
+    border-left: 3px solid var(--color-warning);
+    font-size: 0.7rem;
+    flex-wrap: wrap;
+  }
+
+  .llm-retry-attempt {
+    font-weight: 700;
+    color: var(--color-warning);
+    flex-shrink: 0;
+  }
+
+  .llm-retry-delay {
+    opacity: 0.7;
+    flex-shrink: 0;
+  }
+
+  .llm-retry-error {
+    opacity: 0.5;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 400px;
+  }
+
+  .llm-retry-time {
+    opacity: 0.4;
+    font-size: 0.6rem;
+    margin-left: auto;
+    flex-shrink: 0;
   }
 
   /* ── Mobile ── */
