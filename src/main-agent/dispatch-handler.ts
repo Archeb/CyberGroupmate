@@ -335,15 +335,56 @@ export function createDispatchHandler(
             } else if (decision.action === "FAST_PATH_AUTH" && result.fastPathAuth) {
                 // 授权 FastPath
                 let fp = subagent.fastPathHandler as FastPathHandler | null;
+                const fpGroupModel = memory.getGroupModel(getGroupModelKey(result.chatId));
                 if (!fp) {
                     fp = new FastPathHandler(result.chatId);
                     fp.setCallbackHandler((cb: SubagentCallback) => q5.enqueue(cb));
-                    const fpGroupModel = memory.getGroupModel(getGroupModelKey(result.chatId));
-                    fp.setLLMConfig(fastPathConfig, persona, fpGroupModel?.chatTitle ?? result.chatId);
+                    fp.setLLMConfig(fastPathConfig, persona, fpGroupModel?.chatTitle ?? result.chatId, fpGroupModel?.isDirectMessage);
+                    // 注入发送函数：通过 TelegramAdapter 发送消息
+                    if (tgAdapter) {
+                        fp.setSendFunction(async (chatId: string, text: string): Promise<string | undefined> => {
+                            const sendResult = await tgAdapter!.handleCall("telegram.sendText", [chatId, text]) as any;
+                            const messageId = sendResult?.messageId ? String(sendResult.messageId) : undefined;
+                            // 发出 agent_message_sent 事件：触发 FeedbackLoop 追踪 + 消息落盘
+                            nc.push({
+                                type: "system.agent_message_sent",
+                                scene: "fastpath",
+                                chatId,
+                                text,
+                                messageId,
+                                timestamp: new Date().toISOString(),
+                            });
+                            return messageId;
+                        });
+                    }
                     subagent.fastPathHandler = fp;
                 }
+
+                // 构建任务上下文（话题摘要、人物背景），类似 CODEACT_REPLY
+                let fpTopicSummary = "";
+                const fpTopics = subagent.topicRegistry.getActive(result.chatId);
+                if (fpTopics.length > 0) {
+                    fpTopicSummary = formatTopicList(fpTopics.map(t => ({
+                        label: t.label,
+                        summary: t.lastSummary,
+                        createdAt: t.createdAt,
+                    })));
+                }
+
+                fp.setTaskContext({
+                    topicSummary: fpTopicSummary || undefined,
+                    toneGuidance: subagent.stickiness.level === "CORE" ? "随意友好" : "礼貌得体",
+                });
+
                 fp.authorize(result.fastPathAuth);
-                log.info("授权 FastPath", { chatId: result.chatId });
+                log.info("授权 FastPath", {
+                    chatId: result.chatId,
+                    taskDescription: result.fastPathAuth.taskDescription ?? "(无)",
+                    maxReplies: result.fastPathAuth.maxRepliesBeforeReauth,
+                    expiresAt: result.fastPathAuth.expiresAt,
+                    actions: result.fastPathAuth.preauthorizedActions,
+                    topicCount: fpTopics.length,
+                });
             } else if (decision.action === "DEFER") {
                 // Fix 2: DEFERRED_RE_ENTRY — 延迟重新入队 (subagent.md §13.1 D1)
                 q3.enqueueOrUpdate({

@@ -39,14 +39,14 @@ export function deriveChatType(isDirectMessage?: boolean): string {
 
 /** Prompt 类型 → 文件名映射 */
 const PROMPT_FILE_MAP: Record<string, string> = {
-    ATTENTION: "subagent-attention.md",
-    DECISION: "subagent-decision.md",
-    EXECUTION: "subagent-execution.md",
-    EXECUTION_TASK: "subagent-execution-task.md",
-    FAST_PATH: "subagent-fast-path.md",
-    CALLBACK: "subagent-callback.md",
-    MAIN_SYSTEM: "subagent-main-system.md",
-    POST_SESSION_EXTRACT: "post-session-extract.md",
+    ATTENTION: "main-agent/mainagent-attention.md",
+    DECISION: "main-agent/mainagent-decision.md",
+    EXECUTION: "executor/subagent-execution.md",
+    EXECUTION_TASK: "executor/subagent-execution-task.md",
+    FAST_PATH_TASK: "fast-path/subagent-fast-path-task.md",
+    CALLBACK: "main-agent/mainagent-callback.md",
+    MAIN_SYSTEM: "main-agent/mainagent-main-system.md",
+    POST_SESSION_EXTRACT: "executor/post-session-extract.md",
 };
 
 export type PromptType = keyof typeof PROMPT_FILE_MAP;
@@ -296,15 +296,11 @@ export function buildCallbackVariables(
 }
 
 /**
- * 从 FastPath 上下文构建 FAST_PATH prompt 的变量
+ * 构建 FastPath system prompt 变量（静态，authorize 时设置一次）
  */
-export function buildFastPathVariables(
+export function buildFastPathSystemVariables(
     persona: { name: string; description: string },
-    chatId: string,
     chatTitle: string,
-    auth: FastPathConfig,
-    event: { userId: string; text: string },
-    repliesSent: number,
     isDirectMessage?: boolean,
 ): Record<string, unknown> {
     return {
@@ -312,15 +308,80 @@ export function buildFastPathVariables(
         personaDescription: persona.description,
         chatTitle,
         chatType: deriveChatType(isDirectMessage),
-        preauthorizedActions: auth.preauthorizedActions.map(a => `- ${a}`).join("\n"),
-        blockedActions: auth.blockedActions.map(a => `- ❌ ${a}`).join("\n"),
-        maxReplyLength: auth.maxReplyLength ?? 150,
-        tonePreset: auth.tonePreset,
-        repliesSent,
-        maxReplies: auth.maxRepliesBeforeReauth,
-        senderName: event.userId,
-        messageText: event.text,
     };
+}
+
+/**
+ * 构建 FastPath task prompt 变量（per-authorization，authorize 时设置一次）
+ * 类似 executor 的 task context，包含群组信息、话题摘要、人物背景等
+ */
+export function buildFastPathTaskVariables(
+    auth: FastPathConfig,
+    chatId: string,
+    chatTitle: string,
+    isDirectMessage?: boolean,
+    context?: {
+        topicSummary?: string;
+        personContext?: string;
+        toneGuidance?: string;
+    },
+): Record<string, unknown> {
+    return {
+        chatId: getRawId(chatId),
+        chatTitle,
+        chatType: deriveChatType(isDirectMessage),
+        preauthorizedActions: auth.preauthorizedActions.map(a => `- ${a}`).join("\n"),
+        blockedActions: auth.blockedActions.length > 0
+            ? auth.blockedActions.map(a => `- ❌ ${a}`).join("\n")
+            : "(无)",
+        maxReplyLength: auth.maxReplyLength ?? 150,
+        tonePreset: context?.toneGuidance ?? auth.tonePreset,
+        maxReplies: auth.maxRepliesBeforeReauth,
+        hasTaskDescription: !!auth.taskDescription,
+        taskDescription: auth.taskDescription ?? "",
+        hasTopicSummary: !!context?.topicSummary,
+        topicSummary: context?.topicSummary ?? "",
+        hasPersonContext: !!context?.personContext,
+        personContext: context?.personContext ?? "",
+    };
+}
+
+/**
+ * 构建 FastPath per-turn 用户消息（每次 handle 时动态生成）
+ */
+export function buildFastPathTurnContent(
+    event: { userId: string; text: string },
+    repliesSent: number,
+    maxReplies: number,
+    sentMessages?: ReadonlyArray<{ text: string; timestamp: string }>,
+): string {
+    const parts: string[] = [];
+
+    // 已发送消息确认（如果有历史）
+    if (sentMessages && sentMessages.length > 0) {
+        parts.push(`[📤 已发送消息确认]`);
+        for (const m of sentMessages) {
+            parts.push(`- "${m.text.length > 100 ? m.text.slice(0, 100) + '...' : m.text}"`);
+        }
+        parts.push("");
+    }
+
+    // 剩余额度状态
+    const remaining = maxReplies - repliesSent;
+    parts.push(`[📊 额度状态: 已用 ${repliesSent}/${maxReplies}，剩余 ${remaining} 次回复机会]`);
+    if (remaining <= 1) {
+        parts.push(`[⚠ 这是最后的回复机会，请谨慎使用]`);
+    }
+    parts.push("");
+
+    // 触发消息
+    parts.push(`## 触发消息`);
+    parts.push(`发送者: ${event.userId}`);
+    parts.push(`内容: ${event.text}`);
+    parts.push("");
+    parts.push(`请直接输出回复内容（纯文本，不含其他格式）。如果不应回复，输出 "__SKIP__"。`);
+
+    return parts.join("\n");
 }
 
 /** 话题渲染输入（统一接口，各调用方筛选/排序后传入） */

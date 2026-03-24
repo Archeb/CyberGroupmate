@@ -338,7 +338,7 @@ export function identifyProtectedMessages(
 
 // ─── Compaction Prompt ───
 
-const PROMPTS_DIR = join(process.cwd(), "system-prompts");
+const PROMPTS_DIR = join(process.cwd(), "system-prompts", "memory");
 let _compactionContextPrompt: string | null = null;
 
 function getContextCompactionPrompt(): string {

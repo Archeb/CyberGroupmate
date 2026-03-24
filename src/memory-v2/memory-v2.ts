@@ -68,7 +68,7 @@ function now(): string {
 
 // ─── System Prompt 加载（外部模版 + 内联 fallback）───
 
-const PROMPTS_DIR = join(process.cwd(), "system-prompts");
+const PROMPTS_DIR = join(process.cwd(), "system-prompts", "memory");
 
 let _recallDeepSummaryPrompt: string | null = null;
 function getRecallDeepSummaryPrompt(): string {

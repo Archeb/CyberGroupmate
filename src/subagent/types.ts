@@ -206,6 +206,8 @@ export interface FastPathConfig {
     maxReplyLength?: number;
     /** 授权时间 */
     authorizedAt: string;
+    /** 主 Agent 的任务描述/内容方向（来自 decision.contentDirection） */
+    taskDescription?: string;
 }
 
 // ─── GroupStickiness ───

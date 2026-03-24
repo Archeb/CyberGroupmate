@@ -17,7 +17,7 @@ import type {
 } from "./types.js";
 import { DEFAULT_SUBAGENT_CONFIG } from "./types.js";
 import { callLLM, type ChatMessage } from "../core/llm.js";
-import { renderPrompt, buildFastPathVariables } from "../main-agent/prompt-renderer.js";
+import { renderPrompt, buildFastPathTaskVariables, buildFastPathTurnContent } from "../main-agent/prompt-renderer.js";
 import type { LLMConfig } from "../core/config.js";
 import { createLogger } from "../core/logger.js";
 
@@ -54,6 +54,17 @@ export class FastPathHandler {
     private personaName: string = "赛博群友";
     private personaDescription: string = "";
     private chatTitle: string = "";
+    private isDirectMessage: boolean = false;
+
+    /** 授权时注入的丰富上下文（类似 executor task context） */
+    private taskContext: {
+        topicSummary?: string;
+        personContext?: string;
+        toneGuidance?: string;
+    } = {};
+
+    /** 缓存的 task prompt（authorize 后渲染一次） */
+    private cachedTaskPrompt: string = "";
 
     /** 发送回调（由外部注入，实际发送消息到 Telegram） */
     private sendFn: ((chatId: string, text: string) => Promise<string | undefined>) | null = null;
@@ -82,11 +93,12 @@ export class FastPathHandler {
     /**
      * 注入 LLM 配置和 persona
      */
-    setLLMConfig(llmConfig: LLMConfig, persona: { name: string; description: string }, chatTitle?: string): void {
+    setLLMConfig(llmConfig: LLMConfig, persona: { name: string; description: string }, chatTitle?: string, isDirectMessage?: boolean): void {
         this.llmConfig = llmConfig;
         this.personaName = persona.name;
         this.personaDescription = persona.description;
         if (chatTitle) this.chatTitle = chatTitle;
+        if (isDirectMessage !== undefined) this.isDirectMessage = isDirectMessage;
     }
 
     /**
@@ -97,12 +109,33 @@ export class FastPathHandler {
     }
 
     /**
+     * 注入任务上下文（话题摘要、人物背景等，授权前调用）
+     */
+    setTaskContext(ctx: {
+        topicSummary?: string;
+        personContext?: string;
+        toneGuidance?: string;
+    }): void {
+        this.taskContext = ctx;
+    }
+
+    /**
      * 授权 FastPath
      */
     authorize(config: FastPathConfig): void {
         this.authorization = config;
         this.repliesSent = 0;
         this.sentMessages = [];
+
+        // 渲染并缓存 task prompt（整个授权周期不变）
+        this.cachedTaskPrompt = renderPrompt("FAST_PATH_TASK", buildFastPathTaskVariables(
+            config,
+            this.chatId,
+            this.chatTitle || this.chatId,
+            this.isDirectMessage,
+            this.taskContext,
+        ));
+
         log.info("authorize", {
             chatId: this.chatId,
             actions: config.preauthorizedActions,
@@ -243,19 +276,35 @@ export class FastPathHandler {
 
     private async generateReply(event: FastPathEvent, auth: FastPathConfig): Promise<string> {
         // 尝试使用 LLM 生成回复 (subagent.md §12.2 ➆)
+        // 3-layer prompt: system (静态 persona) → task (授权范围) → per-turn (触发消息 + 剩余额度)
         if (this.llmConfig) {
             try {
-                const prompt = renderPrompt("FAST_PATH", buildFastPathVariables(
-                    { name: this.personaName, description: this.personaDescription },
-                    this.chatId,
-                    this.chatTitle || this.chatId,
-                    auth,
+                // Layer 1: System prompt — 复用 sandbox 的 EXECUTION 模板
+                const systemPrompt = renderPrompt("EXECUTION", {
+                    personaName: this.personaName,
+                    personaDescription: this.personaDescription,
+                    apiTypeDefs: "",  // FastPath 不使用 sandbox API
+                });
+
+                // Layer 2: Task prompt — 在 authorize() 时已缓存（含群组信息、话题摘要、人物背景）
+                const taskPrompt = this.cachedTaskPrompt;
+
+                // Layer 3: Per-turn (触发消息 + 剩余额度 + 已发送消息确认)
+                const turnContent = buildFastPathTurnContent(
                     event,
                     this.repliesSent,
-                ));
+                    auth.maxRepliesBeforeReauth,
+                    this.sentMessages.length > 0 ? this.sentMessages : undefined,
+                );
+
+                const messages: ChatMessage[] = [
+                    { role: "system", content: systemPrompt },
+                    { role: "user", content: taskPrompt },
+                    { role: "user", content: turnContent },
+                ];
 
                 const response = await callLLM(
-                    [{ role: "user", content: prompt }],
+                    messages,
                     this.llmConfig,
                     { caller: "fast-path" },
                 );

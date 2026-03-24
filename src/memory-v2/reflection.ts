@@ -520,7 +520,7 @@ function computeParticipantStats(
 
 // ─── Prompt 加载 ───
 
-const PROMPTS_DIR = join(process.cwd(), "system-prompts");
+const PROMPTS_DIR = join(process.cwd(), "system-prompts", "memory");
 
 let _reflectionSystemPrompt: string | null = null;
 

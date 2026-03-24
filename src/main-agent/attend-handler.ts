@@ -313,6 +313,21 @@ export function createAttendHandler(
             const llmResult: AttendResult = {
                 chatId: entry.chatId,
                 replyMode: parsed.replyMode ?? "NONE",
+                fastPathAuth: parsed.fastPathAuth ? {
+                    preauthorizedActions: parsed.fastPathAuth.preauthorizedActions ?? [],
+                    blockedActions: parsed.fastPathAuth.blockedActions ?? [],
+                    tonePreset: parsed.fastPathAuth.tonePreset ?? "礼貌得体",
+                    maxRepliesBeforeReauth: parsed.fastPathAuth.maxRepliesBeforeReauth ?? 3,
+                    expiresAt: parsed.fastPathAuth.expiresInMinutes
+                        ? new Date(Date.now() + parsed.fastPathAuth.expiresInMinutes * 60_000).toISOString()
+                        : new Date(Date.now() + 5 * 60_000).toISOString(),
+                    maxReplyLength: parsed.fastPathAuth.maxReplyLength,
+                    authorizedAt: new Date().toISOString(),
+                    // 从 FAST_PATH_AUTH 决策的 contentDirection 提取任务描述
+                    taskDescription: Array.isArray(parsed.decisions)
+                        ? parsed.decisions.find((d: any) => d.action === "FAST_PATH_AUTH")?.contentDirection
+                        : undefined,
+                } : undefined,
                 decisions: Array.isArray(parsed.decisions) ? parsed.decisions.map((d: any) => ({
                     action: d.action ?? "REPLY",
                     topicId: d.topicId || undefined,
