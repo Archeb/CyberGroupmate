@@ -76,13 +76,10 @@ export function createDispatchHandler(
             try {
                 const platform = getPlatform(chatId);
                 const adapter = adapterList.find(a => a.platform === platform);
-                if (adapter?.downloadMedia) {
+                if (adapter) {
                     return async (fileId: string, _chatId?: string, _messageId?: string, _uniqueFileId?: string): Promise<Buffer> => {
-                        if (adapter.platform === "telegram") {
-                            const result = await adapter.handleCall("telegram.downloadMedia", [fileId, _chatId, _messageId, _uniqueFileId]) as { buffer: string; size: number };
-                            return Buffer.from(result.buffer, "base64");
-                        }
-                        return adapter.downloadMedia!(null, fileId);
+                        const result = await adapter.handleCall(`${platform}.downloadMedia`, [fileId, _chatId, _messageId, _uniqueFileId]) as { buffer: string; size: number };
+                        return Buffer.from(result.buffer, "base64");
                     };
                 }
             } catch { /* fallthrough */ }

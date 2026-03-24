@@ -71,23 +71,18 @@ export function createAttendHandler(
     // 优先使用 adapters 数组中按 chatId 平台路由的 downloadMedia，
     // 兼容旧的 telegramAdapter 引用
     const buildDownloadFn = (chatId: string) => {
-        // 尝试从 adapters 数组找到对应平台的 adapter
+        // 从 adapters 数组找到对应平台的 adapter，通过 handleCall 路由下载
         if (adapterList?.length) {
             try {
                 const platform = getPlatform(chatId);
                 const adapter = adapterList.find(a => a.platform === platform);
-                if (adapter?.downloadMedia) {
+                if (adapter) {
                     return async (fileId: string, _chatId?: string, _messageId?: string, _uniqueFileId?: string): Promise<Buffer> => {
-                        if (adapter.platform === "telegram") {
-                            // Telegram: use handleCall for downloadMedia (supports file reference refetch)
-                            const result = await adapter.handleCall("telegram.downloadMedia", [fileId, _chatId, _messageId, _uniqueFileId]) as { buffer: string; size: number };
-                            return Buffer.from(result.buffer, "base64");
-                        }
-                        // Other platforms: use downloadMedia directly
-                        return adapter.downloadMedia!(null, fileId);
+                        const result = await adapter.handleCall(`${platform}.downloadMedia`, [fileId, _chatId, _messageId, _uniqueFileId]) as { buffer: string; size: number };
+                        return Buffer.from(result.buffer, "base64");
                     };
                 }
-            } catch { /* fallthrough to tgAdapter */ }
+            } catch { /* fallthrough */ }
         }
         // Fallback: use legacy telegramAdapter
         if (tgAdapter) {
