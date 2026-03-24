@@ -18,6 +18,10 @@ const log = createLogger("discord-adapter");
 export interface DiscordMediaInfo {
     type: "photo" | "video" | "document" | "other";
     url: string;
+    /** 用于 vision pipeline 下载（Discord 使用 CDN URL） */
+    fileId: string;
+    /** 用于缓存去重（Discord 使用 attachment ID） */
+    uniqueFileId: string;
     fileName?: string;
     mimeType?: string;
     fileSize?: number;
@@ -250,6 +254,13 @@ export class DiscordAdapter implements PlatformAdapter {
                 }
                 return null;
             }
+            case "discord.downloadMedia": {
+                // args: [fileId (=URL for Discord), chatId?, messageId?, uniqueFileId?]
+                const url = String(args[0] ?? "");
+                if (!url) throw new Error("discord.downloadMedia: URL is required");
+                const buf = await this.downloadMedia(null, url);
+                return { buffer: buf.toString("base64"), size: buf.length };
+            }
             default:
                 throw new Error(`Unsupported DiscordAdapter call: ${method}`);
         }
@@ -377,6 +388,8 @@ export class DiscordAdapter implements PlatformAdapter {
                 mediaInfo = {
                     type,
                     url: att.url,
+                    fileId: att.url,
+                    uniqueFileId: att.id ?? att.url,
                     fileName: att.name ?? undefined,
                     mimeType: contentType || undefined,
                     fileSize: att.size ?? undefined,
