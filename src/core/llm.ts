@@ -424,16 +424,22 @@ async function callLLMSingleKey(
                     err.message.includes("502") ||
                     err.message.includes("503"));
 
+            const isTimeoutAbort =
+                err instanceof Error && (
+                    err.name === "TimeoutError" ||
+                    err.message.includes("operation was aborted due to timeout")
+                );
+
             const isNetworkError =
                 err instanceof Error &&
-                (err.message.includes("fetch failed") ||
+                (isTimeoutAbort ||
+                    err.message.includes("fetch failed") ||
                     err.message.includes("ECONNRESET") ||
                     err.message.includes("ECONNREFUSED") ||
                     err.message.includes("ETIMEDOUT") ||
                     err.message.includes("socket hang up") ||
                     err.message.includes("UND_ERR") ||
-                    err.message.includes("network") ||
-                    err.message.includes("TimeoutError"));
+                    err.message.includes("network"));
 
             const isEmptyResponse =
                 err instanceof Error &&
@@ -532,7 +538,9 @@ export async function callLLMWithFallback(
                 msg.includes("rate limit") ||
                 msg.includes("overloaded");
 
-            const isTransient = msg.includes("fetch failed") ||
+            const isTransient = lastError.name === "TimeoutError" ||
+                msg.includes("operation was aborted due to timeout") ||
+                msg.includes("fetch failed") ||
                 msg.includes("ECONNRESET") ||
                 msg.includes("ECONNREFUSED") ||
                 msg.includes("ETIMEDOUT") ||
