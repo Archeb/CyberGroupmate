@@ -237,6 +237,7 @@ export function createAttendHandler(
                         stickerCache: memory,
                         chatId: entry.chatId,
                         mediaDownloader,
+                        mediaTypes: ["sticker"], // 仅处理 sticker
                     });
                     messagesText = formattedText;
                 }

@@ -57,6 +57,8 @@ export interface EnrichOptions {
     chatId?: string;
     /** 媒体下载管理器（可选，启用后保存文件到磁盘） */
     mediaDownloader?: MediaDownloader;
+    /** 仅处理指定类型的媒体（如 ["sticker"]），未指定时处理所有类型 */
+    mediaTypes?: Array<"photo" | "sticker" | "video" | "document" | "animation" | "other">;
 }
 
 /** 富化结果 */
@@ -81,7 +83,13 @@ export async function enrichMessages(
     options: EnrichOptions,
 ): Promise<EnrichedResult> {
     // ─── 1. 从 mediaInfo 解析 MediaAttachment[] ───
-    const attachments = parseMediaAttachments(messages, options.chatId);
+    let attachments = parseMediaAttachments(messages, options.chatId);
+
+    // mediaTypes 过滤：仅保留指定类型的媒体，其余走占位符标签
+    if (options.mediaTypes) {
+        const allowed = new Set(options.mediaTypes);
+        attachments = attachments.filter(a => allowed.has(a.type));
+    }
 
     // ─── 2. Vision 批量处理 ───
     if (attachments.length > 0) {
