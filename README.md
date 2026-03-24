@@ -31,6 +31,10 @@ CyberGroupmate 是一个能够以自然、拟人的行为模式参与群聊的�
 
 请参考 [docs/architecture_v2.md](docs/architecture_v2.md) 获取详细信息。
 
+也许您会更喜欢[直接阅读我们所有的 Prompts](system-prompts)，这是个好主意——我们对 Prompts 的更新频率远高于架构文档。事实上，架构文档不能完全反映当前的架构。我们总是有很多新想法在路上、在测试。
+
+但也请注意，Protmps 不能完全反映我们的设计，所以最好结合着来看。
+
 ## 🐳 Docker 部署
 
 ### 快速启动
@@ -47,9 +51,9 @@ docker compose up -d
 docker compose logs -f
 ```
 
-### Userbot 首次登录
+### Telegram Userbot 首次登录
 
-如果使用 userbot 模式，首次启动需要输入 OTP 验证码：
+如果使用 Telegram 的 userbot 模式，首次启动需要输入 OTP 验证码：
 
 ```bash
 docker attach cybergroupmate
