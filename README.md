@@ -2,23 +2,25 @@
 
 > **一个由代码驱动的群聊社交 Agent**
 
-CyberGroupmate 是一个能够以自然、拟人的行为模式参与群聊的自主 AI Agent。基于 [CodeAct](https://arxiv.org/abs/2402.01030) 范式构建，该 Agent 通过编写并执行 TypeScript 代码来进行感知、推理和行动——而不是依赖死板的工具调用（Tool-calling）API。
+CyberGroupmate 是一个能够以自然、拟人的行为模式参与群聊的自主 AI Agent。基于 [CodeAct](https://arxiv.org/abs/2402.01030) 范式构建，该 Agent 通过编写并执行 TypeScript 代码和 Shell 命令来进行感知、推理和行动——而不是依赖死板的 Tool Call。
 
 ---
 
 ## ✨ 核心特性
 
 * **“读空气”引擎（氛围感知）** — 智能的消息路由与话题级分类；确切知道何时该发言，何时该保持沉默。
-* **自然的对话流** — 模拟人类回复延迟、优雅地退出话题，以及具备身份试探检测（识别别人是否在测试它是不是 AI）。
-* **三层记忆系统** — 短期记忆压缩、中期情景/社交记忆，以及基于 SQLite + FTS5 + 向量检索支持的长期语义召回。
-* **结构化决策流水线** — 包含 FastRouter（快速路由） → RecordingPipeline（记录管线） → TopicRegistry（话题登记） → ReplyPipeline（回复管线），确保在不同层级的模型下行为依然稳定。
-* **多模型路由** — 根据事件的复杂程度，自动智能调度 低成本 / 中等 / SOTA（最先进）模型。
+* **自然的对话流** — 模拟人类回复延迟、优雅地退出话题。
+* **三层记忆系统** — 基于 Recording Pipeline 的背景记忆管线。带来短期记忆压缩、中期情景/社交记忆，以及语义召回能力。
+* **Main Agent/Sub Agent 架构** — 双层架构，Main Agent 负责宏观决策，Sub Agent 负责具体任务。→ 即将进化为三层架构，通过 Background Agent，让ta能处理更复杂的任务。 
 * **反馈循环** — 追踪每次回复后群组的反应，并据此调整未来的行为模式。
 * **CodeAct 执行机制** — Agent 会在沙盒环境中编写真实的 TypeScript 代码，从而实现灵活的多步推理与自我调试。
-* **场景系统** — 通过可切换的“场景”（如 home / telegram / memory）进行上下文窗口管理，每个场景都拥有自己类型安全的 API 接口。
+* **模块系统** — 通过模块，只需要引入新 Node 软件包，选择你想要暴露的 API，编写少量示例代码，并加上你所需的安全策略，把 d.ts 塞进去就可以快速接入新的平台和技能。
 * **反思引擎** — 由 LLM 周期性驱动的自我反思机制，用于巩固情景记忆、更新人物画像并提取核心事实。
 
----
+
+## 🏗 系统架构​
+
+请参考 [docs/architecture_v2.md](docs/architecture_v2.md) 获取详细信息。
 
 ## 🐳 Docker 部署
 
@@ -65,11 +67,6 @@ docker run --rm -v cybergroupmate-data:/data -v $(pwd):/backup alpine tar xzf /b
 docker compose restart
 ```
 
----
-
-## 🏗 Architecture Overview
-
-Refer to [docs/architecture_v2.md](docs/architecture_v2.md) for detailed information.
 
 ## 📄 LICENSING
 
