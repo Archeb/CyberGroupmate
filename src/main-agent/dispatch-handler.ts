@@ -294,6 +294,20 @@ export function createDispatchHandler(
                         // Unblock in Q3 when callback arrives
                         q3.unblock(cb.chatId);
                         globalState.recordDecision(cb.chatId, `CALLBACK: ${cb.executionType} ${cb.status} (${cb.summary})`);
+
+                        // Post-session: 1 分钟后触发 RecordingPipeline flush
+                        // 追踪话题变化 + triage 判断是否需要再次介入
+                        setTimeout(() => {
+                            try {
+                                const sub = subagentManager.get(cb.chatId);
+                                if (sub?.recordingPipeline) {
+                                    log.info("post-session → RecordingPipeline flush", { chatId: cb.chatId, taskId: cb.taskId });
+                                    sub.recordingPipeline.flush();
+                                }
+                            } catch (err) {
+                                log.debug("post-session flush failed", { chatId: cb.chatId, error: String(err) });
+                            }
+                        }, 60_000);
                     });
                     // Fix 9: 注入 Sandbox + NC + LLM 依赖 + Memory + Vision
                     const downloadFn = buildDownloadFn(result.chatId);

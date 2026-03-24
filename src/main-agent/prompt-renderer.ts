@@ -46,7 +46,6 @@ const PROMPT_FILE_MAP: Record<string, string> = {
     FAST_PATH_TASK: "fast-path/subagent-fast-path-task.md",
     CALLBACK: "main-agent/mainagent-callback.md",
     MAIN_SYSTEM: "main-agent/mainagent-main-system.md",
-    POST_SESSION_EXTRACT: "executor/post-session-extract.md",
 };
 
 export type PromptType = keyof typeof PROMPT_FILE_MAP;

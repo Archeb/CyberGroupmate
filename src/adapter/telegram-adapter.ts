@@ -180,7 +180,7 @@ export class TelegramAdapter implements PlatformAdapter {
         private print: PrintHandler = console.log,
         private createClient: TelegramClientFactory = defaultTelegramClientFactory,
         private mediaDownloader?: MediaDownloader,
-    ) {}
+    ) { }
 
     async start(): Promise<void> {
         if (this.client) return;
@@ -342,7 +342,7 @@ export class TelegramAdapter implements PlatformAdapter {
             const chatId = String(args[0] ?? "");
             if (this.isChatMuted(chatId)) {
                 const remaining = this.getMuteRemainingHours(chatId);
-                const msg = `[禁言中] Bot 在该聊天已被 /mute，剩余 ${remaining}。所有发送操作已被抑制。`;
+                const msg = `[禁言中] 你在该聊天已被 /mute，剩余 ${remaining}。所有发送操作已被抑制。`;
                 log.info("mute 拦截写操作", { method, chatId, remaining });
                 throw new Error(msg);
             }
