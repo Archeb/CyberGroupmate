@@ -305,6 +305,7 @@ async function main(): Promise<void> {
             llmConfig: recordingConfig,
             personaDescription: appConfig.persona?.description ?? "赛博群友",
             memory,
+            pipelineConfig: appConfig.recordingPipeline,
         },
         memory,  // 用于启动时恢复 TopicRegistry
         sessionsDir: SESSIONS_DIR,

@@ -313,6 +313,22 @@ dashboard:
 #     # session 最大消息数，超过后自动 compact (100)
 #     max_session_messages: 100
 
+# ─── Recording Pipeline 缓冲/触发 ───
+# 话题聚类 Pipeline 的消息缓冲和 flush 触发参数
+# 控制消息积攒到什么程度才进行一次 LLM 话题分析
+# 所有字段可选，缺省使用括号内默认值
+# recording_pipeline:
+#   # 静默到期时 buffer 至少需要多少条消息才 flush (10)
+#   min_flush_size: 10
+#   # 正常缓冲阈值：消息积攒到此数立即 flush，不等静默 (50)
+#   normal_threshold: 50
+#   # 加速缓冲阈值：检测到强信号（问句/长消息等）后降低的阈值 (15)
+#   eager_threshold: 15
+#   # 正常静默触发时间（ms）：最后一条消息后多久无新消息触发 flush (120000 = 2min)
+#   normal_silence_ms: 120000
+#   # 加速静默触发时间（ms）：强信号模式下的静默触发 (30000 = 30s)
+#   eager_silence_ms: 30000
+
 # ─── Tavily 网络搜索 ───
 # Tavily Search API key，用于 subagent 的联网搜索能力 (web.search / web.extract)
 # 在 https://app.tavily.com 注册获取。可选，未配置时 web 模块不可用。

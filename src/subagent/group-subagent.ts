@@ -29,7 +29,7 @@ import { RecordingPipeline } from "../pipeline/recording-pipeline.js";
 import type { NotificationEvent } from "../event/notification-center.js";
 import type { LLMConfig } from "../core/config.js";
 import type { MemoryStoreV2 } from "../memory-v2/index.js";
-import type { EmbeddingConfig } from "../core/config.js";
+import type { EmbeddingConfig, RecordingPipelineConfig } from "../core/config.js";
 import type { Message } from "../pipeline/types.js";
 import { createLogger } from "../core/logger.js";
 
@@ -41,6 +41,7 @@ export interface RecordingPipelineDeps {
     personaDescription: string;
     memory?: MemoryStoreV2;
     embeddingConfig?: EmbeddingConfig;
+    pipelineConfig?: RecordingPipelineConfig;
 }
 
 /** GroupSubagent 构造参数 */
@@ -117,6 +118,7 @@ export class GroupSubagent extends EventEmitter {
                 deps.personaDescription,
                 deps.memory,
                 deps.embeddingConfig,
+                deps.pipelineConfig,
             );
 
             // 自动桥接：RecordingPipeline triage → Observer topicDigests

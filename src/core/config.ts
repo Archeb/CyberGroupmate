@@ -251,6 +251,20 @@ export interface VisionConfig {
     mediaRetentionDays?: number;
 }
 
+/** Recording Pipeline 缓冲/触发配置 */
+export interface RecordingPipelineConfig {
+    /** 缓冲区最少消息数才触发 flush（静默到期时检查）。默认 10 */
+    minFlushSize?: number;
+    /** 正常缓冲阈值（条数）。默认 50 */
+    normalThreshold?: number;
+    /** 加速缓冲阈值（条数）。默认 15 */
+    eagerThreshold?: number;
+    /** 正常静默触发时间（毫秒）。默认 120000 (2 min) */
+    normalSilenceMs?: number;
+    /** 加速静默触发时间（毫秒）。默认 30000 (30 sec) */
+    eagerSilenceMs?: number;
+}
+
 /** Dashboard 外部配置 */
 export interface DashboardExternalConfig {
     /** 是否启用。默认 true */
@@ -279,6 +293,8 @@ export interface AppConfig {
     subagent?: SubagentExternalConfig;
     dashboard?: DashboardExternalConfig;
     vision?: VisionConfig;
+    /** Recording Pipeline 缓冲/触发配置 */
+    recordingPipeline?: RecordingPipelineConfig;
     /** Tavily Search API key */
     tavilyApiKey?: string;
 }
@@ -427,6 +443,7 @@ export function loadConfig(configPath?: string, forceReload?: boolean): AppConfi
         subagent: parseSubagentConfig(fileConfig),
         dashboard: parseDashboardConfig(fileConfig),
         vision: parseVisionConfig(fileConfig),
+        recordingPipeline: parseRecordingPipelineConfig(fileConfig),
         tavilyApiKey: str(fileConfig.tavily_api_key),
     };
 
@@ -605,6 +622,20 @@ function parseVisionConfig(fileConfig: Record<string, unknown>): VisionConfig | 
         stickerMode: (str(raw.sticker_mode) as VisionConfig["stickerMode"]) ?? undefined,
         maxMediaDownloadSize: raw.max_media_download_size != null ? num(raw.max_media_download_size, 20) : undefined,
         mediaRetentionDays: raw.media_retention_days != null ? num(raw.media_retention_days, 3) : undefined,
+    };
+}
+
+// ─── Recording Pipeline 配置解析 ───
+
+function parseRecordingPipelineConfig(fileConfig: Record<string, unknown>): RecordingPipelineConfig | undefined {
+    const raw = fileConfig.recording_pipeline as Record<string, unknown> | undefined;
+    if (!raw || typeof raw !== "object") return undefined;
+    return {
+        minFlushSize: raw.min_flush_size != null ? num(raw.min_flush_size, 10) : undefined,
+        normalThreshold: raw.normal_threshold != null ? num(raw.normal_threshold, 50) : undefined,
+        eagerThreshold: raw.eager_threshold != null ? num(raw.eager_threshold, 15) : undefined,
+        normalSilenceMs: raw.normal_silence_ms != null ? num(raw.normal_silence_ms, 120000) : undefined,
+        eagerSilenceMs: raw.eager_silence_ms != null ? num(raw.eager_silence_ms, 30000) : undefined,
     };
 }
 
@@ -850,6 +881,18 @@ export function serializeConfigToObject(config: AppConfig): Record<string, unkno
         if (config.vision.maxMediaDownloadSize != null) v.max_media_download_size = config.vision.maxMediaDownloadSize;
         if (config.vision.mediaRetentionDays != null) v.media_retention_days = config.vision.mediaRetentionDays;
         obj.vision = v;
+    }
+
+    // recording_pipeline
+    if (config.recordingPipeline) {
+        const rp: Record<string, unknown> = {};
+        const p = config.recordingPipeline;
+        if (p.minFlushSize != null) rp.min_flush_size = p.minFlushSize;
+        if (p.normalThreshold != null) rp.normal_threshold = p.normalThreshold;
+        if (p.eagerThreshold != null) rp.eager_threshold = p.eagerThreshold;
+        if (p.normalSilenceMs != null) rp.normal_silence_ms = p.normalSilenceMs;
+        if (p.eagerSilenceMs != null) rp.eager_silence_ms = p.eagerSilenceMs;
+        obj.recording_pipeline = rp;
     }
 
     // dashboard

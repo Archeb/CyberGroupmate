@@ -28,22 +28,22 @@ import type {
     Topic,
     TriageDecision,
 } from "./types.js";
+import type { RecordingPipelineConfig } from "../core/config.js";
 
 const log = createLogger("recording-pipeline");
 
-// ─── 常量 ───
+// ─── 默认值 ───
 
+/** 静默触发时缓冲区最少消息数（不足则跳过 flush） */
+const DEFAULT_MIN_FLUSH_SIZE = 10;
 /** 正常缓冲阈值（条数） */
-const NORMAL_THRESHOLD = 50;
-
+const DEFAULT_NORMAL_THRESHOLD = 50;
 /** 加速缓冲阈值（条数） */
-const EAGER_THRESHOLD = 15;
-
+const DEFAULT_EAGER_THRESHOLD = 15;
 /** 正常静默触发（毫秒） */
-const NORMAL_SILENCE = 2 * 60 * 1000;  // 2 min
-
+const DEFAULT_NORMAL_SILENCE = 2 * 60 * 1000;  // 2 min
 /** 加速静默触发（毫秒） */
-const EAGER_SILENCE = 30 * 1000;       // 30 sec
+const DEFAULT_EAGER_SILENCE = 30 * 1000;       // 30 sec
 
 // ─── Prompt 模板 ───
 
@@ -124,14 +124,26 @@ export class RecordingPipeline extends EventEmitter {
     /** Agent 最后回复时间戳（由 GroupSubagent 同步写入），用于 triage 防重复 */
     lastAgentReplyAt: number = 0;
 
+    private readonly minFlushSize: number;
+    private readonly normalThreshold: number;
+    private readonly eagerThreshold: number;
+    private readonly normalSilence: number;
+    private readonly eagerSilence: number;
+
     constructor(
         private registry: TopicRegistry,
         private llmConfig: LLMConfig,
         private personaDescription: string = "赛博群友",
         private memory?: MemoryStoreV2,
         private embeddingConfig?: EmbeddingConfig,
+        pipelineConfig?: RecordingPipelineConfig,
     ) {
         super();
+        this.minFlushSize = pipelineConfig?.minFlushSize ?? DEFAULT_MIN_FLUSH_SIZE;
+        this.normalThreshold = pipelineConfig?.normalThreshold ?? DEFAULT_NORMAL_THRESHOLD;
+        this.eagerThreshold = pipelineConfig?.eagerThreshold ?? DEFAULT_EAGER_THRESHOLD;
+        this.normalSilence = pipelineConfig?.normalSilenceMs ?? DEFAULT_NORMAL_SILENCE;
+        this.eagerSilence = pipelineConfig?.eagerSilenceMs ?? DEFAULT_EAGER_SILENCE;
     }
 
     /**
@@ -146,7 +158,7 @@ export class RecordingPipeline extends EventEmitter {
         this.resetSilenceTimer();
 
         // 检查是否达到 flush 阈值
-        const threshold = this.isEagerMode ? EAGER_THRESHOLD : NORMAL_THRESHOLD;
+        const threshold = this.isEagerMode ? this.eagerThreshold : this.normalThreshold;
         if (this.buffer.length >= threshold) {
             this.triggerFlush();
             return;
@@ -195,7 +207,7 @@ export class RecordingPipeline extends EventEmitter {
         if (this.silenceTimer) {
             clearTimeout(this.silenceTimer);
         }
-        const silence = this.isEagerMode ? EAGER_SILENCE : NORMAL_SILENCE;
+        const silence = this.isEagerMode ? this.eagerSilence : this.normalSilence;
         this.silenceTimer = setTimeout(() => {
             this.triggerFlush();
         }, silence);
@@ -206,6 +218,16 @@ export class RecordingPipeline extends EventEmitter {
      */
     private triggerFlush(): void {
         if (this.isFlushing || this.buffer.length === 0) return;
+        // 静默触发时检查最低消息数（条数阈值触发的已在 onMessage 中保证）
+        if (this.buffer.length < this.minFlushSize) {
+            log.debug("静默触发跳过：buffer 消息数不足", {
+                bufferSize: this.buffer.length,
+                minFlushSize: this.minFlushSize,
+            });
+            // 重置计时器，等待更多消息
+            this.resetSilenceTimer();
+            return;
+        }
         // 使用 void 忽略 Promise 返回值
         void this.flush();
     }
