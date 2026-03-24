@@ -107,7 +107,11 @@ export function cancelLLMCall(callId: string): boolean {
     const controller = _activeControllers.get(callId);
     if (controller) {
         log.info("LLM call cancelled by user for immediate retry", { callId });
-        controller.abort("user_retry");
+        // 必须传入 DOMException 而非裸字符串，否则 Node.js undici 的 fetch
+        // 会直接 reject(signal.reason)，导致 catch 收到的是字符串而非 Error，
+        // 使得 err instanceof Error 判断失败，跳过重试逻辑。
+        const abortError = new DOMException("user_retry", "AbortError");
+        controller.abort(abortError);
         return true;
     }
     return false;
@@ -402,8 +406,17 @@ async function callLLMSingleKey(
             return result;
         } catch (err: unknown) {
             // 检测是否是用户通过 Dashboard 触发的取消（立即重试）
-            const isUserAbort = err instanceof Error && err.name === "AbortError" &&
-                currentController.signal.aborted && currentController.signal.reason === "user_retry";
+            // err 可能是 DOMException（abort 传入 Error 时）或裸字符串（兼容旧行为）
+            const abortReason = currentController.signal.reason;
+            const isUserAbort = currentController.signal.aborted && (
+                // Case 1: abort(DOMException) → fetch reject DOMException, reason 是 DOMException
+                (err instanceof Error && err.name === "AbortError" &&
+                    abortReason instanceof DOMException && abortReason.message === "user_retry") ||
+                // Case 2: abort(string) 兼容 → fetch reject 裸字符串
+                err === "user_retry" ||
+                // Case 3: reason 是字符串 "user_retry"（旧版兼容）
+                abortReason === "user_retry"
+            );
 
             if (isUserAbort) {
                 wasUserRetry = true;
