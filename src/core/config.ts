@@ -1038,10 +1038,13 @@ export function validateConfig(config: unknown): { valid: boolean; errors: strin
         for (const [name, raw] of Object.entries(profiles)) {
             const p = raw as Record<string, unknown>;
             if (!p.provider) errors.push(`Profile "${name}": provider 不能为空`);
-            if (!p.baseUrl) errors.push(`Profile "${name}": baseUrl 不能为空`);
-            // apiKey 在有 pool 时可选
+            const isGoogle = p.provider === "google";
+            const hasVertexProject = !!p.vertexProject;
+            // google provider 不需要 baseUrl（SDK 自动处理）
+            if (!isGoogle && !p.baseUrl) errors.push(`Profile "${name}": baseUrl 不能为空`);
+            // apiKey 在有 pool 或 google+vertexProject 时可选
             const pool = p.pool as PoolConfig | undefined;
-            if (!p.apiKey && !pool) errors.push(`Profile "${name}": apiKey 不能为空（除非配置了 pool）`);
+            if (!p.apiKey && !pool && !(isGoogle && hasVertexProject)) errors.push(`Profile "${name}": apiKey 不能为空（除非配置了 pool 或 Vertex AI）`);
             if (!p.model) errors.push(`Profile "${name}": model 不能为空`);
             if (typeof p.temperature === "number" && (p.temperature < 0 || p.temperature > 2)) {
                 errors.push(`Profile "${name}": temperature 应在 0-2 之间`);

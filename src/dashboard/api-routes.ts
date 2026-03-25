@@ -632,11 +632,51 @@ export function createApiRouter(deps: DashboardDeps, bridge: EventBridge): Route
     router.post("/config/test-profile", async (req, res) => {
         try {
             const profile = req.body;
-            if (!profile.provider || !profile.baseUrl || !profile.apiKey || !profile.model) {
-                res.status(400).json({ ok: false, error: "provider, baseUrl, apiKey, model 为必填" });
+            const isGoogle = profile.provider === "google";
+            const hasVertexProject = !!profile.vertexProject;
+
+            // 基本验证：provider + model 始终必填；baseUrl/apiKey 对 google 可选
+            if (!profile.provider || !profile.model) {
+                res.status(400).json({ ok: false, error: "provider, model 为必填" });
                 return;
             }
+            if (!isGoogle && (!profile.baseUrl || !profile.apiKey)) {
+                res.status(400).json({ ok: false, error: "baseUrl, apiKey 为必填" });
+                return;
+            }
+            if (isGoogle && !hasVertexProject && !profile.apiKey) {
+                res.status(400).json({ ok: false, error: "AI Studio 模式需要 apiKey，或配置 Vertex AI Project" });
+                return;
+            }
+
             const start = Date.now();
+
+            // ── Google provider: 使用 @google/genai SDK ──
+            if (isGoogle) {
+                const { GoogleGenAI } = await import("@google/genai");
+                const options: Record<string, unknown> = {};
+                if (hasVertexProject) {
+                    options.vertexai = true;
+                    options.project = profile.vertexProject;
+                    options.location = profile.vertexRegion ?? "us-central1";
+                    if (profile.vertexCredentials) {
+                        options.googleAuthOptions = { credentials: profile.vertexCredentials };
+                    }
+                } else {
+                    options.apiKey = profile.apiKey;
+                }
+                const client = new GoogleGenAI(options);
+                const response = await client.models.generateContent({
+                    model: profile.model,
+                    contents: "ping",
+                    config: { maxOutputTokens: 10 },
+                });
+                const latency = Date.now() - start;
+                res.json({ ok: true, latency, model: profile.model, status: 200 });
+                return;
+            }
+
+            // ── Anthropic / OpenAI: REST 测试 ──
             const isAnthropic = profile.provider === "anthropic";
             const url = isAnthropic
                 ? `${profile.baseUrl.replace(/\/$/, "")}/messages`
