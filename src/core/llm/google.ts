@@ -15,9 +15,12 @@ import type { ChatMessage, LLMResponse } from "./types.js";
 const _clientCache = new Map<string, GoogleGenAI>();
 
 function getClient(config: LLMConfig): GoogleGenAI {
-    const isVertexAI = !!config.vertexProject;
+    // vertexProject 优先；未设置时从 credentials.project_id 自动提取
+    const project = config.vertexProject
+        ?? (config.vertexCredentials?.project_id as string | undefined);
+    const isVertexAI = !!project;
     const cacheKey = isVertexAI
-        ? `vertex:${config.vertexProject}:${config.vertexRegion ?? "us-central1"}`
+        ? `vertex:${project}:${config.vertexRegion ?? "global"}`
         : `studio:${config.apiKey}`;
 
     let client = _clientCache.get(cacheKey);
@@ -26,8 +29,8 @@ function getClient(config: LLMConfig): GoogleGenAI {
     if (isVertexAI) {
         client = new GoogleGenAI({
             vertexai: true,
-            project: config.vertexProject!,
-            location: config.vertexRegion ?? "us-central1",
+            project: project!,
+            location: config.vertexRegion ?? "global",
             ...(config.vertexCredentials
                 ? { googleAuthOptions: { credentials: config.vertexCredentials as any } }
                 : {}),

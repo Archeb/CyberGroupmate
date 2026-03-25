@@ -633,7 +633,9 @@ export function createApiRouter(deps: DashboardDeps, bridge: EventBridge): Route
         try {
             const profile = req.body;
             const isGoogle = profile.provider === "google";
-            const hasVertexProject = !!profile.vertexProject;
+            const resolvedProject = profile.vertexProject
+                ?? (profile.vertexCredentials?.project_id as string | undefined);
+            const hasVertexProject = !!resolvedProject;
 
             // 基本验证：provider + model 始终必填；baseUrl/apiKey 对 google 可选
             if (!profile.provider || !profile.model) {
@@ -645,7 +647,7 @@ export function createApiRouter(deps: DashboardDeps, bridge: EventBridge): Route
                 return;
             }
             if (isGoogle && !hasVertexProject && !profile.apiKey) {
-                res.status(400).json({ ok: false, error: "AI Studio 模式需要 apiKey，或配置 Vertex AI Project" });
+                res.status(400).json({ ok: false, error: "AI Studio 模式需要 apiKey，或配置 Vertex AI 凭据" });
                 return;
             }
 
@@ -657,8 +659,8 @@ export function createApiRouter(deps: DashboardDeps, bridge: EventBridge): Route
                 const options: Record<string, unknown> = {};
                 if (hasVertexProject) {
                     options.vertexai = true;
-                    options.project = profile.vertexProject;
-                    options.location = profile.vertexRegion ?? "us-central1";
+                    options.project = resolvedProject;
+                    options.location = profile.vertexRegion ?? "global";
                     if (profile.vertexCredentials) {
                         options.googleAuthOptions = { credentials: profile.vertexCredentials };
                     }

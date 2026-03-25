@@ -1039,7 +1039,8 @@ export function validateConfig(config: unknown): { valid: boolean; errors: strin
             const p = raw as Record<string, unknown>;
             if (!p.provider) errors.push(`Profile "${name}": provider 不能为空`);
             const isGoogle = p.provider === "google";
-            const hasVertexProject = !!p.vertexProject;
+            const creds = p.vertexCredentials as Record<string, unknown> | undefined;
+            const hasVertexProject = !!p.vertexProject || !!(creds?.project_id);
             // google provider 不需要 baseUrl（SDK 自动处理）
             if (!isGoogle && !p.baseUrl) errors.push(`Profile "${name}": baseUrl 不能为空`);
             // apiKey 在有 pool 或 google+vertexProject 时可选

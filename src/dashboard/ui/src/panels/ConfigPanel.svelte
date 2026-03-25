@@ -420,29 +420,9 @@
                     <i class="fa-brands fa-google mr-1"></i>Vertex AI 设置（可选）
                   </div>
                   <p class="text-xs opacity-40 mb-2">
-                    设置 Project 后启用 Vertex AI 模式。留空则使用 AI Studio（需填 API Key）。
+                    粘贴服务账号 JSON 密钥后自动启用 Vertex AI 模式。留空则使用 AI Studio（需填 API Key）。
                   </p>
-                  <div class="cfg-grid-2">
-                    <label class="cfg-field"
-                      ><span class="cfg-label">Vertex Project</span>
-                      <input
-                        type="text"
-                        class="input input-xs input-bordered w-full"
-                        bind:value={p.vertexProject}
-                        placeholder="my-gcp-project"
-                      /></label
-                    >
-                    <label class="cfg-field"
-                      ><span class="cfg-label">Vertex Region</span>
-                      <input
-                        type="text"
-                        class="input input-xs input-bordered w-full"
-                        bind:value={p.vertexRegion}
-                        placeholder="us-central1"
-                      /></label
-                    >
-                  </div>
-                  <label class="cfg-field mt-1"
+                  <label class="cfg-field"
                     ><span class="cfg-label">服务账号 JSON 密钥</span>
                     <textarea
                       class="textarea textarea-bordered w-full font-mono text-xs"
@@ -464,6 +444,26 @@
                       }}
                     ></textarea>
                   </label>
+                  <div class="cfg-grid-2 mt-1">
+                    <label class="cfg-field"
+                      ><span class="cfg-label">Project 覆盖 <span class="opacity-40">(可选)</span></span>
+                      <input
+                        type="text"
+                        class="input input-xs input-bordered w-full"
+                        bind:value={p.vertexProject}
+                        placeholder={p.vertexCredentials?.project_id || "自动从 JSON 提取"}
+                      /></label
+                    >
+                    <label class="cfg-field"
+                      ><span class="cfg-label">Region</span>
+                      <input
+                        type="text"
+                        class="input input-xs input-bordered w-full"
+                        bind:value={p.vertexRegion}
+                        placeholder="global"
+                      /></label
+                    >
+                  </div>
                 {/if}
               </div>
             {/each}
