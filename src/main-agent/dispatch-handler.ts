@@ -212,7 +212,7 @@ export function createDispatchHandler(
                         participants: [...(t.participantIds ?? [])].map(String),
                         keywords: Array.isArray(t.keywords) ? t.keywords : [],
                         messageCount: t.messageIds?.length ?? 0,
-                        lastActivityAt: String(t.lastActivityAt ?? t.createdAt ?? new Date().toISOString()),
+                        lastActivityAt: new Date(t.createdAt ?? Date.now()).toISOString(),
                     })),
                     engagementScore: subagent.observer.getEngagementScore(),
                     groupModel,

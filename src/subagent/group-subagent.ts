@@ -200,7 +200,7 @@ export class GroupSubagent extends EventEmitter {
             participants: [...(t.participantIds ?? [])].map(String),
             keywords: Array.isArray(t.keywords) ? t.keywords : [],
             messageCount: t.messageIds?.length ?? 0,
-            lastActivityAt: String(t.lastActivityAt ?? t.createdAt ?? new Date().toISOString()),
+            lastActivityAt: new Date(t.createdAt ?? Date.now()).toISOString(),
         }));
 
         // 来源标记：优先使用调用方传入的 sourceOverride（如 DIRECT_ADDRESS）
