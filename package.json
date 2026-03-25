@@ -16,6 +16,7 @@
     "postinstall": "patch-package && chmod +x node_modules/node-pty/prebuilds/darwin-arm64/spawn-helper 2>/dev/null || true"
   },
   "dependencies": {
+    "@google/genai": "^1.46.0",
     "@mtcute/node": "latest",
     "@tavily/core": "^0.7.2",
     "better-sqlite3": "^11.0.0",

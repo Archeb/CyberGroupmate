@@ -323,7 +323,7 @@
                     >
                       <option value="openai">openai (兼容)</option><option
                         value="anthropic">anthropic</option
-                      >
+                      ><option value="google">google (Gemini)</option>
                     </select></label
                   >
                   <label class="cfg-field"
@@ -415,6 +415,56 @@
                     /><span>Prefill</span></label
                   >
                 </div>
+                {#if p.provider === "google"}
+                  <div class="divider text-xs opacity-50 my-2">
+                    <i class="fa-brands fa-google mr-1"></i>Vertex AI 设置（可选）
+                  </div>
+                  <p class="text-xs opacity-40 mb-2">
+                    设置 Project 后启用 Vertex AI 模式。留空则使用 AI Studio（需填 API Key）。
+                  </p>
+                  <div class="cfg-grid-2">
+                    <label class="cfg-field"
+                      ><span class="cfg-label">Vertex Project</span>
+                      <input
+                        type="text"
+                        class="input input-xs input-bordered w-full"
+                        bind:value={p.vertexProject}
+                        placeholder="my-gcp-project"
+                      /></label
+                    >
+                    <label class="cfg-field"
+                      ><span class="cfg-label">Vertex Region</span>
+                      <input
+                        type="text"
+                        class="input input-xs input-bordered w-full"
+                        bind:value={p.vertexRegion}
+                        placeholder="us-central1"
+                      /></label
+                    >
+                  </div>
+                  <label class="cfg-field mt-1"
+                    ><span class="cfg-label">服务账号 JSON 密钥</span>
+                    <textarea
+                      class="textarea textarea-bordered w-full font-mono text-xs"
+                      rows="4"
+                      placeholder='粘贴 Google 服务账号 JSON 密钥原文...'
+                      value={p.vertexCredentials ? JSON.stringify(p.vertexCredentials, null, 2) : ""}
+                      on:blur={(e) => {
+                        const val = e.target.value.trim();
+                        if (!val) {
+                          p.vertexCredentials = undefined;
+                        } else {
+                          try {
+                            p.vertexCredentials = JSON.parse(val);
+                          } catch {
+                            // 保持原值不变，用户可继续编辑
+                          }
+                        }
+                        config = config;
+                      }}
+                    ></textarea>
+                  </label>
+                {/if}
               </div>
             {/each}
             <div class="flex items-center gap-2 mt-2">

@@ -33,7 +33,7 @@ export interface PoolConfig {
 }
 
 export interface LLMConfig {
-    provider: "anthropic" | "openai";
+    provider: "anthropic" | "openai" | "google";
     baseUrl: string;
     apiKey: string;
     model: string;
@@ -62,6 +62,12 @@ export interface LLMConfig {
     pool?: PoolConfig;
     /** 单次 LLM 请求超时（毫秒）。默认 60000（60 秒） */
     requestTimeoutMs?: number;
+    /** Vertex AI 项目 ID（设置后启用 Vertex AI 模式，仅 provider=google 时生效） */
+    vertexProject?: string;
+    /** Vertex AI 区域（默认 us-central1，仅 provider=google 时生效） */
+    vertexRegion?: string;
+    /** Vertex AI 服务账号 JSON 密钥（原文保存在 config.yaml，仅 provider=google 时生效） */
+    vertexCredentials?: Record<string, unknown>;
 }
 
 /** 相似度度量方法 */
@@ -681,8 +687,14 @@ function parseLLMProfile(raw: Record<string, unknown>): LLMConfig {
         }
     }
 
+    // 解析 vertex_credentials（JSON 对象，直接保存在 config.yaml 原文中）
+    let vertexCredentials: Record<string, unknown> | undefined;
+    if (raw.vertex_credentials && typeof raw.vertex_credentials === "object") {
+        vertexCredentials = raw.vertex_credentials as Record<string, unknown>;
+    }
+
     return {
-        provider: (str(raw.provider) as "anthropic" | "openai") ?? DEFAULT_LLM.provider,
+        provider: (str(raw.provider) as "anthropic" | "openai" | "google") ?? DEFAULT_LLM.provider,
         baseUrl: str(raw.base_url) ?? DEFAULT_LLM.baseUrl,
         apiKey: str(raw.api_key) ?? DEFAULT_LLM.apiKey,
         model: str(raw.model) ?? DEFAULT_LLM.model,
@@ -695,6 +707,9 @@ function parseLLMProfile(raw: Record<string, unknown>): LLMConfig {
         pricing,
         pool,
         requestTimeoutMs: raw.request_timeout_ms != null ? num(raw.request_timeout_ms, 60000) : undefined,
+        vertexProject: str(raw.vertex_project),
+        vertexRegion: str(raw.vertex_region),
+        vertexCredentials,
     };
 }
 
@@ -748,6 +763,9 @@ export function serializeConfigToObject(config: AppConfig): Record<string, unkno
         if (p.maxContextTokens != null) entry.max_context_tokens = p.maxContextTokens;
         if (p.thinkingLevel != null) entry.thinking_level = p.thinkingLevel;
         if (p.vision === true) entry.vision = true;
+        if (p.vertexProject) entry.vertex_project = p.vertexProject;
+        if (p.vertexRegion) entry.vertex_region = p.vertexRegion;
+        if (p.vertexCredentials) entry.vertex_credentials = p.vertexCredentials;
         if (p.supportsPrefill === false) entry.supports_prefill = false;
         if (p.pricing) {
             const pricing: Record<string, unknown> = {
