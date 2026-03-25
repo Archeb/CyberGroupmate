@@ -11,6 +11,18 @@
 | `system-prompts/memory/reflection-dm-user-instruction.md` | **[NEW]** 私聊专用反思 user instruction — 聚焦亲密度、情感依赖、互动质量（friendly/dependent/instrumental/hostile）分析 |
 | `src/memory-v2/reflection.ts` | `buildReflectionPrompt()` 新增 `isDirectMessage` 参数；私聊时使用"私聊信息"section（对话对象/活跃度/聊天类型）代替"群组信息"；`runReflection()` 从 `GroupModel.isDirectMessage` 读取聊天类型；新增 `getReflectionDmUserInstruction()` prompt 加载器 |
 
+## 2026-03-25: Reflection 身份追踪/事实可更新/Insights消费 (Issues 5, 6, 7)
+
+反思引擎三项增强：(1) 已有身份信息注入 prompt 使 LLM 可判断变化；(2) 已有事实带 id 展示，支持更新/删除；(3) insights 自动写入 recentFeedback 被 attend 消费。
+
+### 改动
+
+| 文件 | 改动 |
+|------|------|
+| `src/memory-v2/reflection.ts` | `ReflectionLLMOutput.newFacts` → `factUpdates`（支持 `id`/`action` 字段）；新增 `interactionQuality` 字段；`buildReflectionPrompt()` 注入已知身份信息（displayName/username/aliases）和已有事实（带 id）；Step 4b 重写支持 fact 新增/更新/删除；Step 4c 将 insights 追加到 `recentFeedback`；`parseReflectionJSON` 向后兼容 `newFacts` 字段名 |
+| `system-prompts/memory/reflection-user-instruction.md` | `newFacts` → `factUpdates`（含 id/action 说明）；`dunbarTier` → `interactionQuality`（friendly/dependent/instrumental/hostile）；更新 identityUpdates 说明引用已知身份信息 |
+
+
 
 ## 2026-03-22: LLM API Key 负载均衡池
 

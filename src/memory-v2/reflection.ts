@@ -44,6 +44,7 @@ interface ReflectionLLMOutput {
         relationToAgent?: string;
         dunbarTier?: 1 | 2 | 3 | 4;
         dunbarReason?: string;
+        interactionQuality?: "friendly" | "dependent" | "instrumental" | "hostile";
     }>;
     groupUpdates: {
         agentRole?: string;
@@ -54,10 +55,15 @@ interface ReflectionLLMOutput {
         communicationNorms?: string[];
         recentFeedback?: string;
     };
-    newFacts: Array<{
+    /** 事实更新（支持新增/修改/删除） */
+    factUpdates: Array<{
+        /** 已有 fact 的 id（更新/删除时提供，新增时不提供） */
+        id?: string;
         subject: string;
         content: string;
         category: FactCategory;
+        /** 操作类型：不提供或 "upsert" 为新增/更新，"delete" 为删除 */
+        action?: "upsert" | "delete";
     }>;
     topicsSummary: Array<{
         label: string;
@@ -175,7 +181,7 @@ export async function runReflection(
 
     // ── Step 3: LLM 调用 ──
     const isDirectMessage = groupModel?.isDirectMessage ?? false;
-    const prompt = buildReflectionPrompt(topics, interactions, profiles, stats, groupModel, isDirectMessage);
+    const prompt = buildReflectionPrompt(topics, interactions, profiles, stats, groupModel, isDirectMessage, memory);
     const messages: ChatMessage[] = [
         { role: "system", content: getReflectionSystemPrompt() },
         { role: "user", content: prompt },
@@ -184,7 +190,7 @@ export async function runReflection(
     let llmOutput: ReflectionLLMOutput = {
         personUpdates: [],
         groupUpdates: {},
-        newFacts: [],
+        factUpdates: [],
         topicsSummary: [],
         insights: "",
     };
@@ -197,7 +203,7 @@ export async function runReflection(
             llmOutput = parsed;
             log.info("Reflection LLM 返回解析成功", {
                 personUpdates: llmOutput.personUpdates.length,
-                newFacts: llmOutput.newFacts.length,
+                factUpdates: llmOutput.factUpdates.length,
             });
         } else {
             log.warn("Reflection LLM 返回无法解析，使用空默认值");
@@ -224,7 +230,7 @@ export async function runReflection(
     // ── Step 4: 解析 + 写入 ──
     log.debug("Reflection Step 4: 开始写入", {
         personUpdates: llmOutput.personUpdates.length,
-        newFacts: llmOutput.newFacts.length,
+        factUpdates: llmOutput.factUpdates.length,
         hasGroupUpdates: Object.keys(llmOutput.groupUpdates).length > 0,
     });
     const personUpdates: ReflectionResult["personUpdates"] = [];
@@ -308,30 +314,52 @@ export async function runReflection(
         }
     }
 
-    // 4b. 写入新事实（含 embedding — 使向量检索可达）
-    let factEmbeddings: Float32Array[] = [];
-    const embCfg = memory.getEmbeddingConfig();
-    if (embCfg && llmOutput.newFacts.length > 0) {
-        try {
-            const { embed } = await import("./embedding.js");
-            const texts = llmOutput.newFacts.map(f => `${f.subject}: ${f.content}`);
-            factEmbeddings = await embed(texts, embCfg);
-            log.debug("Reflection 4b: 事实 embedding 生成完成", { count: factEmbeddings.length });
-        } catch (err) {
-            log.warn("Reflection 4b: 事实 embedding 生成失败，写入无 embedding 的事实", { error: String(err) });
+    // 4b. 事实更新（支持新增/修改/删除）
+    const newFactsForEmbedding: Array<{ index: number; text: string }> = [];
+    for (let i = 0; i < llmOutput.factUpdates.length; i++) {
+        const fact = llmOutput.factUpdates[i];
+        if (fact.action === "delete" && fact.id) {
+            // 删除已有 fact
+            const deleted = memory.deleteFact(fact.id);
+            log.debug("Reflection 4b: 删除事实", { id: fact.id, deleted });
+            continue;
+        }
+        if (fact.id) {
+            // 更新已有 fact
+            memory.updateFact(fact.id, {
+                content: fact.content,
+                category: fact.category,
+            });
+            newCoreFacts.push(`[updated] ${fact.content}`);
+            log.debug("Reflection 4b: 更新事实", { id: fact.id, subject: fact.subject });
+        } else {
+            // 新增 fact（稍后生成 embedding）
+            newFactsForEmbedding.push({ index: i, text: `${fact.subject}: ${fact.content}` });
         }
     }
-    for (let i = 0; i < llmOutput.newFacts.length; i++) {
-        const fact = llmOutput.newFacts[i];
+    // 为新增 facts 生成 embedding
+    let factEmbeddings: Float32Array[] = [];
+    const embCfg = memory.getEmbeddingConfig();
+    if (embCfg && newFactsForEmbedding.length > 0) {
+        try {
+            const { embed } = await import("./embedding.js");
+            factEmbeddings = await embed(newFactsForEmbedding.map(f => f.text), embCfg);
+            log.debug("Reflection 4b: 事实 embedding 生成完成", { count: factEmbeddings.length });
+        } catch (err) {
+            log.warn("Reflection 4b: 事实 embedding 生成失败", { error: String(err) });
+        }
+    }
+    for (let ei = 0; ei < newFactsForEmbedding.length; ei++) {
+        const fact = llmOutput.factUpdates[newFactsForEmbedding[ei].index];
         memory.storeFact(
             fact.subject, fact.content, fact.category, "reflection",
             undefined,
-            factEmbeddings[i] ?? undefined,
+            factEmbeddings[ei] ?? undefined,
         );
         newCoreFacts.push(fact.content);
-        log.debug("Reflection 4b: 写入事实", {
+        log.debug("Reflection 4b: 新增事实", {
             subject: fact.subject, category: fact.category,
-            hasEmbedding: !!factEmbeddings[i],
+            hasEmbedding: !!factEmbeddings[ei],
         });
     }
 
@@ -368,8 +396,17 @@ export async function runReflection(
     if (gu.communicationNorms) groupUpdateData.communicationNorms = gu.communicationNorms;
     if (gu.recentFeedback) groupUpdateData.recentFeedback = gu.recentFeedback;
 
+    // Issue 5: 将 insights 追加到 recentFeedback，使其被 attend 上下文自动消费
+    if (llmOutput.insights) {
+        const existingFeedback = groupUpdateData.recentFeedback || groupModel?.recentFeedback || "";
+        const insightsPrefix = "[反思洞察] ";
+        groupUpdateData.recentFeedback = existingFeedback
+            ? `${existingFeedback}\n${insightsPrefix}${llmOutput.insights}`
+            : `${insightsPrefix}${llmOutput.insights}`;
+    }
+
     memory.upsertGroupModel(chatId, groupUpdateData);
-    log.debug("Reflection 4c: 更新群组画像", { chatId, lastReflectedAt: startTime });
+    log.debug("Reflection 4c: 更新群组画像", { chatId, lastReflectedAt: startTime, insightsWritten: !!llmOutput.insights });
 
     // 4d. 情感记忆合并（LLM 辅助分析）
     let totalMerged = 0;
@@ -640,6 +677,7 @@ function buildReflectionPrompt(
     stats: Map<string, ParticipantStats>,
     groupModel: GroupModel | null,
     isDirectMessage: boolean = false,
+    memory?: MemoryStoreV2,
 ): string {
     const sections: string[] = [];
 
@@ -693,12 +731,35 @@ function buildReflectionPrompt(
 
     // 现有画像
     if (profiles.length > 0) {
-        const profileLines = profiles.map(p =>
-            `- **${getRawId(p.userId)}** (Tier ${p.dunbarTier}): ` +
-            `traits=[${p.traits.join(", ")}], interests=[${p.interests.join(", ")}], ` +
-            `style="${p.communicationStyle}", relation="${p.relationToAgent}"`
-        ).join("\n");
+        const profileLines = profiles.map(p => {
+            // Issue 6: 查询 PersonIdentity 获取 displayName/aliases
+            const identity = memory?.getPersonIdentity(p.userId);
+            const namePart = identity?.displayName ? ` (显示名: ${identity.displayName}` +
+                (identity.username ? `, @${identity.username}` : "") +
+                (identity.aliases?.length ? `, 别名: [${identity.aliases.join(", ")}]` : "") +
+                `)` : "";
+            return `- **${getRawId(p.userId)}**${namePart} (Tier ${p.dunbarTier}): ` +
+                `traits=[${p.traits.join(", ")}], interests=[${p.interests.join(", ")}], ` +
+                `style="${p.communicationStyle}", relation="${p.relationToAgent}"`;
+        }).join("\n");
         sections.push(`## 现有画像 (${profiles.length} 人)\n\n${profileLines}`);
+    }
+
+    // Issue 7: 已有事实（让 LLM 看到已有 facts 以便更新/删除）
+    if (memory && profiles.length > 0) {
+        const factLines: string[] = [];
+        for (const p of profiles) {
+            const result = memory.listCoreFacts({ subject: p.userId, limit: 10 });
+            const facts = result.items;
+            if (facts.length > 0) {
+                for (const f of facts) {
+                    factLines.push(`- [id:${f.id}] (${f.category}) ${getRawId(f.subject)}: ${f.content}`);
+                }
+            }
+        }
+        if (factLines.length > 0) {
+            sections.push(`## 已有事实 (${factLines.length} 条)\n\n${factLines.join("\n")}`);
+        }
     }
 
     // 请求（私聊用专用 instruction，群聊用通用 instruction）
@@ -724,11 +785,11 @@ export function parseReflectionJSON(raw: string): ReflectionLLMOutput | null {
     try {
         const parsed = JSON.parse(jsonStr) as Partial<ReflectionLLMOutput>;
 
-        // 验证并填充默认值
         return {
             personUpdates: Array.isArray(parsed.personUpdates) ? parsed.personUpdates : [],
             groupUpdates: parsed.groupUpdates ?? {},
-            newFacts: Array.isArray(parsed.newFacts) ? parsed.newFacts : [],
+            factUpdates: Array.isArray((parsed as any).factUpdates) ? (parsed as any).factUpdates
+                : Array.isArray((parsed as any).newFacts) ? (parsed as any).newFacts : [],
             topicsSummary: Array.isArray(parsed.topicsSummary) ? parsed.topicsSummary : [],
             identityUpdates: Array.isArray(parsed.identityUpdates) ? parsed.identityUpdates : undefined,
             insights: typeof parsed.insights === "string" ? parsed.insights : "",
@@ -746,7 +807,8 @@ export function parseReflectionJSON(raw: string): ReflectionLLMOutput | null {
                 return {
                     personUpdates: Array.isArray(parsed.personUpdates) ? parsed.personUpdates : [],
                     groupUpdates: parsed.groupUpdates ?? {},
-                    newFacts: Array.isArray(parsed.newFacts) ? parsed.newFacts : [],
+                    factUpdates: Array.isArray((parsed as any).factUpdates) ? (parsed as any).factUpdates
+                        : Array.isArray((parsed as any).newFacts) ? (parsed as any).newFacts : [],
                     topicsSummary: Array.isArray(parsed.topicsSummary) ? parsed.topicsSummary : [],
                     identityUpdates: Array.isArray(parsed.identityUpdates) ? parsed.identityUpdates : undefined,
                     insights: typeof parsed.insights === "string" ? parsed.insights : "",
