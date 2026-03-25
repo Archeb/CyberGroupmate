@@ -33,6 +33,17 @@
 | `src/main.ts` | storeInteraction 的 summary 改为 `[displayName] text` 格式；新增 `upsertPersonIdentity(compositeUid, { displayName })` 在消息入口处同步身份信息 |
 | `src/pipeline/feedback-loop.ts` | agent 回复的 interaction summary 添加 `[agent]` 前缀 |
 
+### Issue 4 重新设计
+
+> 原实现仅在 interaction summary 添加 `[displayName]` 前缀。重新设计为：合并"近期话题"和"近期交互"section，改为按话题分组展示实际对话消息，格式与 attend-handler 一致（`[时间] [msgId:xxx] 发送者: 文本`，含时间间隔标记）。
+
+| 文件 | 改动 |
+|------|------|
+| `src/memory-v2/memory-v2.ts` | **[NEW]** `getMessagesByIds(chatId, messageIds[])` — 批量按 messageId 获取消息（chunked IN query，保持顺序） |
+| `src/memory-v2/types.ts` | `IMemoryStoreV2` 新增 `getMessagesByIds` 声明 |
+| `src/core/message-enricher.ts` | `formatMessages()` 从 private 改为 `export`（含时间间隔感知格式化） |
+| `src/memory-v2/reflection.ts` | `buildReflectionPrompt()` 合并"近期话题"+"近期交互"为"近期话题与对话"section；按 topic 获取 `messageIds` → `getMessagesByIds` → `RecentMessageEntry→RawMessage` → `formatMessages()` |
+
 ## 2026-03-25: Dunbar Tier 分数化 — Percentile Ranking + Quality Delta (Issue 2)
 
 Dunbar 分层从 LLM 直接指定改为分数驱动。新增 `affinityScore` 字段 (0-100)，由四维度百分位排名（messageCount 40%、topicsParticipated 30%、activeDays 20%、relationshipDepth 10%）计算基础分，LLM 仅输出 `interactionQuality` (friendly/dependent/instrumental/hostile) 作为偏移量。私聊和小群组有特殊处理避免 percentile 失效。

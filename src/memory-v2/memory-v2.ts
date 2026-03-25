@@ -1735,6 +1735,50 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
         };
     }
 
+    /** 批量按 messageId 获取消息（保持 messageIds 顺序） */
+    getMessagesByIds(chatId: string, messageIds: string[]): RecentMessageEntry[] {
+        if (messageIds.length === 0) return [];
+
+        const result: RecentMessageEntry[] = [];
+        // 分批避免 SQLite IN 参数过多
+        const CHUNK = 200;
+        const byId = new Map<string, RecentMessageEntry>();
+
+        for (let i = 0; i < messageIds.length; i += CHUNK) {
+            const chunk = messageIds.slice(i, i + CHUNK);
+            const placeholders = chunk.map(() => "?").join(", ");
+            const rows = this.db.prepare(
+                `SELECT message_id, chat_id, user_id, display_name, text, reply_to_message_id, timestamp, media_type, media_info
+                 FROM message_log
+                 WHERE chat_id = ? AND message_id IN (${placeholders})`
+            ).all(chatId, ...chunk) as Record<string, unknown>[];
+
+            for (const row of rows) {
+                const entry: RecentMessageEntry = {
+                    messageId: row.message_id as string,
+                    chatId: row.chat_id as string,
+                    userId: row.user_id as string,
+                    displayName: (row.display_name as string) ?? "",
+                    text: (row.text as string) ?? "",
+                    replyToMessageId: (row.reply_to_message_id as string) ?? undefined,
+                    timestamp: row.timestamp as string,
+                    mediaType: (row.media_type as string) ?? undefined,
+                    mediaInfo: (row.media_info as string) ?? undefined,
+                };
+                byId.set(entry.messageId, entry);
+            }
+        }
+
+        // 按原始顺序返回
+        for (const id of messageIds) {
+            const entry = byId.get(id);
+            if (entry) result.push(entry);
+        }
+
+        log.debug("getMessagesByIds", { chatId, requested: messageIds.length, found: result.length });
+        return result;
+    }
+
     // ── Sticker 描述缓存 ──
 
     getStickerDescription(uniqueFileId: string): { description: string; emoji?: string } | null {

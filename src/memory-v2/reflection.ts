@@ -16,6 +16,7 @@
 import { createLogger } from "../core/logger.js";
 import { getPlatform, ensureCompositeId, getRawId } from "../core/chat-id.js";
 import { callLLM, type LLMConfig, type ChatMessage } from "../core/llm.js";
+import { formatMessages, type RawMessage } from "../core/message-enricher.js";
 import { resolveLLMProfile } from "../core/config.js";
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
@@ -861,8 +862,47 @@ function buildReflectionPrompt(
         }
     }
 
-    // 近期话题
-    if (topics.length > 0) {
+    // 近期话题与对话（合并）—— 获取每个话题的实际消息并格式化
+    if (topics.length > 0 && memory) {
+        const chatId = topics[0].chatId;
+        const topicBlocks: string[] = [];
+
+        for (let i = 0; i < topics.length; i++) {
+            const t = topics[i];
+            const header = `### 话题 ${i + 1}: ${t.label} (${t.startedAt?.substring(0, 10) ?? "?"})\n` +
+                `参与者: ${t.participants.join(", ")} | 情感: ${t.sentiment} | 消息数: ${t.messageRange.count}\n` +
+                `摘要: ${t.summary || "(无)"}\n` +
+                `关键词: ${t.keywords.join(", ")}`;
+
+            // 获取话题关联的实际消息
+            let conversationText = "";
+            if (t.messageRange.messageIds.length > 0) {
+                const msgs = memory.getMessagesByIds(chatId, t.messageRange.messageIds);
+                if (msgs.length > 0) {
+                    // RecentMessageEntry → RawMessage
+                    const rawMsgs: RawMessage[] = msgs.map(m => ({
+                        id: m.messageId,
+                        sender: m.displayName || getRawId(m.userId),
+                        text: m.text,
+                        timestamp: m.timestamp,
+                        replyToMsgId: m.replyToMessageId,
+                        mediaType: m.mediaType,
+                        mediaInfo: m.mediaInfo,
+                    }));
+                    conversationText = formatMessages(rawMsgs, []);
+                }
+            }
+
+            if (conversationText) {
+                topicBlocks.push(`${header}\n\n对话内容:\n${conversationText}`);
+            } else {
+                topicBlocks.push(header);
+            }
+        }
+
+        sections.push(`## 近期话题与对话 (${topics.length} 个)\n\n${topicBlocks.join("\n\n---\n\n")}`);
+    } else if (topics.length > 0) {
+        // fallback: 无 memory 时仅显示话题摘要
         const topicLines = topics.map((t, i) =>
             `${i + 1}. **${t.label}** (${t.startedAt?.substring(0, 10) ?? "?"})\n` +
             `   摘要: ${t.summary || "(无)"}\n` +
@@ -872,14 +912,6 @@ function buildReflectionPrompt(
             `   消息数: ${t.messageRange.count}`
         ).join("\n\n");
         sections.push(`## 近期话题 (${topics.length} 个)\n\n${topicLines}`);
-    }
-
-    // 近期交互
-    if (interactions.length > 0) {
-        const interLines = interactions.map(ep =>
-            `- [${ep.date?.substring(0, 10) ?? "?"}] ${ep.type}: ${ep.summary} (情感:${ep.sentiment}, 重要度:${ep.significance})`
-        ).join("\n");
-        sections.push(`## 近期交互 (${interactions.length} 条)\n\n${interLines}`);
     }
 
     // 参与者量化数据

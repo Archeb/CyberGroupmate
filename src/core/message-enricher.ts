@@ -324,7 +324,7 @@ function parseMediaAttachments(messages: RawMessage[], fallbackChatId?: string):
  *
  * 每条消息格式：[时间] [msgId:xxx] 发送者 (↩ reply to xxx): 消息文本 + 媒体描述
  */
-function formatMessages(
+export function formatMessages(
     messages: RawMessage[],
     imageParts: Array<{ url: string }>,
 ): string {

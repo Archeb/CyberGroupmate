@@ -462,6 +462,7 @@ export interface IMemoryStoreV2 {
 
     /** 按 messageId 查询单条消息（用于获取不在上下文窗口中的被回复消息） */
     getMessageById(chatId: string, messageId: string): RecentMessageEntry | null;
+    getMessagesByIds(chatId: string, messageIds: string[]): RecentMessageEntry[];
 
     /**
      * 对指定群组进行反思总结
