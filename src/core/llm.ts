@@ -120,6 +120,8 @@ export interface LLMCallOptions {
     prefill?: string;
     /** Stop sequences — LLM 遇到这些字符串时停止生成 */
     stop?: string[];
+    /** 请求超时（毫秒）。来自 llmRouting.timeouts[component]，未设置则使用默认 60000 */
+    timeoutMs?: number;
 }
 
 let _callIdCounter = 0;
@@ -329,7 +331,7 @@ async function callLLMSingleKey(
         llmEvents.emit("llm:call", callEvent);
     }
 
-    const timeoutMs = config.requestTimeoutMs ?? 60_000;
+    const timeoutMs = options?.timeoutMs ?? 60_000;
 
     // 创建主 AbortController 用于 Dashboard 取消
     let currentController = new AbortController();

@@ -60,8 +60,6 @@ export interface LLMConfig {
     };
     /** 多 key 负载均衡池。设置后 apiKey 字段将被忽略，由 pool 调度器选择实际 key */
     pool?: PoolConfig;
-    /** 单次 LLM 请求超时（毫秒）。默认 60000（60 秒） */
-    requestTimeoutMs?: number;
     /** Vertex AI 项目 ID（设置后启用 Vertex AI 模式，仅 provider=google 时生效） */
     vertexProject?: string;
     /** Vertex AI 区域（默认 us-central1，仅 provider=google 时生效） */
@@ -89,6 +87,9 @@ export interface EmbeddingConfig {
     similarityMetric: SimilarityMetric;
 }
 
+/** 组件路由中可配置超时的组件名 */
+export type RoutingComponentKey = 'attend' | 'session' | 'fast_path' | 'recording' | 'reflection' | 'compact' | 'memory' | 'vision';
+
 /** 组件级 LLM 路由 — 每个组件可指定一个或多个 profile（fallback chain） */
 export interface LLMRoutingConfig {
     /** 注意力决策（attend-handler） */
@@ -107,6 +108,8 @@ export interface LLMRoutingConfig {
     memory?: string | string[];
     /** Vision 描述（vision-processor，独立配置） */
     vision?: string | string[];
+    /** 每组件 LLM 请求超时（毫秒）。未设置的组件使用默认 60000 */
+    timeouts?: Partial<Record<RoutingComponentKey, number>>;
 }
 
 export interface PersonaConfig {
@@ -358,6 +361,15 @@ export function loadConfig(configPath?: string, forceReload?: boolean): AppConfi
 
     // ─── LLM Routing（组件级路由） ───
     const fileRouting = (fileConfig.llm_routing ?? {}) as Record<string, unknown>;
+    // 解析 per-component timeouts
+    const rawTimeouts = (fileRouting.timeouts ?? {}) as Record<string, unknown>;
+    const parsedTimeouts: LLMRoutingConfig['timeouts'] = {};
+    for (const key of ['attend', 'session', 'fast_path', 'recording', 'reflection', 'compact', 'memory', 'vision'] as const) {
+        if (rawTimeouts[key] != null) {
+            parsedTimeouts[key] = num(rawTimeouts[key], 60000);
+        }
+    }
+
     const llmRouting: LLMRoutingConfig = {
         attend: parseRoutingValue(fileRouting.attend),
         session: parseRoutingValue(fileRouting.session),
@@ -367,6 +379,7 @@ export function loadConfig(configPath?: string, forceReload?: boolean): AppConfi
         compact: parseRoutingValue(fileRouting.compact),
         memory: parseRoutingValue(fileRouting.memory),
         vision: parseRoutingValue(fileRouting.vision),
+        timeouts: Object.keys(parsedTimeouts).length > 0 ? parsedTimeouts : undefined,
     };
 
     // ─── 其他配置 ───
@@ -474,7 +487,7 @@ export function resolveLLMProfile(profileName: string, config?: AppConfig): LLMC
  * 查找顺序：llm_routing[component] → 第一个 llmProfile（兜底）
  * 当 llm_routing 中配置为数组时，返回多个 profile 供 callLLMWithFallback 使用。
  */
-export function resolveComponentProfiles(component: keyof LLMRoutingConfig, config?: AppConfig): LLMConfig[] {
+export function resolveComponentProfiles(component: RoutingComponentKey, config?: AppConfig): LLMConfig[] {
     const cfg = config ?? loadConfig();
     const routingValue = cfg.llmRouting[component];
     if (!routingValue) {
@@ -485,6 +498,15 @@ export function resolveComponentProfiles(component: keyof LLMRoutingConfig, conf
     }
     const names = Array.isArray(routingValue) ? routingValue : [routingValue];
     return names.map(n => resolveLLMProfile(n, cfg));
+}
+
+/**
+ * 获取组件的 LLM 请求超时（毫秒）。
+ * 优先返回 llmRouting.timeouts[component]，未设置则返回 undefined（由调用方使用默认值）。
+ */
+export function resolveComponentTimeout(component: RoutingComponentKey, config?: AppConfig): number | undefined {
+    const cfg = config ?? loadConfig();
+    return cfg.llmRouting.timeouts?.[component];
 }
 
 /** 获取 embedding 配置 */
@@ -706,7 +728,6 @@ function parseLLMProfile(raw: Record<string, unknown>): LLMConfig {
         supportsPrefill: raw.supports_prefill === false ? false : undefined,
         pricing,
         pool,
-        requestTimeoutMs: raw.request_timeout_ms != null ? num(raw.request_timeout_ms, 60000) : undefined,
         vertexProject: str(raw.vertex_project),
         vertexRegion: str(raw.vertex_region),
         vertexCredentials,
@@ -794,7 +815,11 @@ export function serializeConfigToObject(config: AppConfig): Record<string, unkno
     // llm_routing
     const routing: Record<string, unknown> = {};
     for (const [key, val] of Object.entries(config.llmRouting)) {
+        if (key === 'timeouts') continue; // timeouts 单独处理
         if (val != null) routing[key] = val;
+    }
+    if (config.llmRouting.timeouts && Object.keys(config.llmRouting.timeouts).length > 0) {
+        routing.timeouts = { ...config.llmRouting.timeouts };
     }
     obj.llm_routing = routing;
 
@@ -1064,7 +1089,7 @@ export function validateConfig(config: unknown): { valid: boolean; errors: strin
     const profileNames = profiles ? new Set(Object.keys(profiles)) : new Set<string>();
     if (routing && typeof routing === "object") {
         for (const [comp, val] of Object.entries(routing)) {
-            if (val == null) continue;
+            if (comp === 'timeouts' || val == null) continue;
             const names = Array.isArray(val) ? val : [val];
             for (const n of names) {
                 if (typeof n === "string" && !profileNames.has(n)) {
