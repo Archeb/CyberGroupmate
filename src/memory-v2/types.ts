@@ -57,10 +57,6 @@ export interface TopicNode {
     relatedTopicIds: string[];
     /** 关键词（与 Pipeline Topic.keywords 共享） */
     keywords: string[];
-    /** 该话题是否曾被 Agent 介入 */
-    wasEngaged: boolean;
-    /** Agent 介入次数 */
-    interventionCount: number;
     /** 向量表示（语义检索用，Phase M4） */
     embedding?: Float32Array;
     /** 创建时间 (ISO 8601) */

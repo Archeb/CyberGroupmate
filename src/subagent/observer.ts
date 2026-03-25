@@ -7,14 +7,13 @@
  * - 计算 Engagement Score（纯算法）
  * - 检测告警条件（engagement 超阈值）
  * - 检测 FastPath 请求条件
- * - 产出 TopicDigest 供 Q3 消费
+ * - 检测 FastPath 请求条件
  *
  * 参考设计：subagent.md §3.2
  */
 
 import type { NotificationEvent } from "../event/notification-center.js";
 import type {
-    TopicDigest,
     ObserverAlert,
     SubagentConfig,
 } from "./types.js";
@@ -56,7 +55,6 @@ interface BufferedMessage {
  * 1. 消息缓冲 (Q2)
  * 2. Engagement 计算
  * 3. Alert/FastPath 检测
- * 4. TopicDigest 产出（从 TopicRegistry 提取）
  */
 export class Observer {
     readonly chatId: string;
@@ -76,9 +74,6 @@ export class Observer {
 
     /** 当前 engagement score 缓存 */
     private cachedEngagement: number = 0;
-
-    /** 话题摘要（外部设置） */
-    private topicDigests: TopicDigest[] = [];
 
     /** 总消息数（自创建以来） */
     private totalMessageCount = 0;
@@ -140,20 +135,6 @@ export class Observer {
     }
 
     /**
-     * 获取话题摘要列表
-     */
-    getDigest(): TopicDigest[] {
-        return [...this.topicDigests];
-    }
-
-    /**
-     * 外部注入话题摘要（由 GroupSubagent 在 RecordingPipeline flush 后调用）
-     */
-    setTopicDigests(digests: TopicDigest[]): void {
-        this.topicDigests = digests;
-    }
-
-    /**
      * 检查是否需要发出 OBSERVER_ALERT
      * @returns ObserverAlert 或 null
      */
@@ -162,18 +143,12 @@ export class Observer {
             return null;
         }
 
-        const hotTopic = this.topicDigests.length > 0
-            ? this.topicDigests.reduce((a, b) =>
-                (b.messageCount > a.messageCount) ? b : a
-            )
-            : undefined;
-
         return {
             type: "OBSERVER_ALERT",
             chatId: this.chatId,
             engagementScore: this.cachedEngagement,
-            topicCount: this.topicDigests.length,
-            hotTopic,
+            topicCount: 0,
+            hotTopic: undefined,
             hasMention: this.mentionCount > 0,
             reason: this.mentionCount > 0
                 ? `High engagement (${this.cachedEngagement}) with @mentions`
@@ -281,7 +256,6 @@ export class Observer {
         this.recentSenders.clear();
         this.messageTimestamps = [];
         this.cachedEngagement = 0;
-        this.topicDigests = [];
         this.totalMessageCount = 0;
         this.mentionCount = 0;
         this.lastMessageAt = 0;

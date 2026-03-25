@@ -78,8 +78,6 @@ describe("upsertTopic", () => {
             participants: ["u1", "u2"],
             messageRange: { firstMessageId: 10, lastMessageId: 20, count: 11 },
             startedAt: "2026-01-01T00:00:00Z",
-            wasEngaged: false,
-            interventionCount: 0,
         });
 
         const db = (mem as any).db;
@@ -91,8 +89,6 @@ describe("upsertTopic", () => {
         assert.deepEqual(JSON.parse(row.key_points), ["要点1", "要点2"]);
         assert.deepEqual(JSON.parse(row.keywords), ["测试", "话题"]);
         assert.deepEqual(JSON.parse(row.participants), ["u1", "u2"]);
-        assert.equal(row.was_engaged, 0);
-        assert.equal(row.intervention_count, 0);
     });
 
     it("should UPDATE existing topic (partial update)", () => {
@@ -100,16 +96,12 @@ describe("upsertTopic", () => {
         mem.upsertTopic("pipeline_001", {
             summary: "更新后的摘要",
             keyPoints: ["新要点"],
-            wasEngaged: true,
-            interventionCount: 2,
         });
 
         const db = (mem as any).db;
         const row = db.prepare("SELECT * FROM topics WHERE pipeline_topic_id = ?").get("pipeline_001");
         assert.equal(row.summary, "更新后的摘要");
         assert.deepEqual(JSON.parse(row.key_points), ["新要点"]);
-        assert.equal(row.was_engaged, 1);
-        assert.equal(row.intervention_count, 2);
         // 未更新的字段应保持不变
         assert.equal(row.label, "测试话题");
         assert.equal(row.chat_id, "-100");
@@ -134,8 +126,6 @@ describe("upsertTopic", () => {
             participants: ["u1"],
             messageRange: { firstMessageId: 30, lastMessageId: 35, count: 6 },
             startedAt: "2026-01-02T00:00:00Z",
-            wasEngaged: false,
-            interventionCount: 0,
         });
 
         const db = (mem as any).db;
@@ -162,8 +152,6 @@ describe("finalizeTopic", () => {
             participants: [],
             messageRange: { firstMessageId: 1, lastMessageId: 5, count: 5 },
             startedAt: "2026-01-01T00:00:00Z",
-            wasEngaged: false,
-            interventionCount: 0,
         });
     });
     after(() => { cleanupTestMemory(mem, "finalize"); });
@@ -427,8 +415,6 @@ describe("recall", () => {
             participants: ["u1", "u2"],
             messageRange: { firstMessageId: 1, lastMessageId: 10, count: 10 },
             startedAt: "2026-01-01T00:00:00Z",
-            wasEngaged: true,
-            interventionCount: 2,
         });
         mem.upsertTopic("topic_recall_2", {
             chatId: "-200",
@@ -439,8 +425,6 @@ describe("recall", () => {
             participants: ["u2"],
             messageRange: { firstMessageId: 11, lastMessageId: 20, count: 10 },
             startedAt: "2026-01-02T00:00:00Z",
-            wasEngaged: false,
-            interventionCount: 0,
         });
         mem.storeFact("u1", "alice 喜欢京都的抹茶", "preference");
         mem.storeFact("u2", "bob 擅长 Python", "biographical");
@@ -524,8 +508,6 @@ describe("browseHistory", () => {
             participants: ["u1", "u3"],
             messageRange: { firstMessageId: 50, lastMessageId: 55, count: 6 },
             startedAt: "2026-01-01T12:00:00Z",
-            wasEngaged: false,
-            interventionCount: 0,
         });
         mem.storeMessageBatch([
             { messageId: "50", chatId: "-100", userId: "u3", displayName: "carol", text: "这季新番大家看了吗", timestamp: "2026-01-01T12:00:00Z" },

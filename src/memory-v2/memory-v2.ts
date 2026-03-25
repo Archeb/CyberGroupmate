@@ -433,8 +433,6 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
             if (data.endedAt !== undefined) builder.set("ended_at", data.endedAt);
             if (data.sentiment !== undefined) builder.set("sentiment", data.sentiment);
             if (data.relatedTopicIds !== undefined) builder.set("related_topic_ids", toJSON(data.relatedTopicIds));
-            if (data.wasEngaged !== undefined) builder.set("was_engaged", data.wasEngaged ? 1 : 0);
-            if (data.interventionCount !== undefined) builder.set("intervention_count", data.interventionCount);
             if (data.embedding !== undefined) builder.set("embedding", Buffer.from(data.embedding.buffer));
             builder.set("updated_at", ts);
             builder.where("id", existing.id);
@@ -466,9 +464,9 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
                     id, pipeline_topic_id, chat_id, label, summary, key_points, participants,
                     keywords, message_ids, message_count,
                     started_at, ended_at, sentiment, related_topic_ids,
-                    was_engaged, intervention_count, embedding,
+                    embedding,
                     created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `).run(
                 id,
                 pipelineTopicId,
@@ -484,8 +482,6 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
                 data.endedAt ?? null,
                 data.sentiment ?? "neutral",
                 toJSON(data.relatedTopicIds),
-                data.wasEngaged ? 1 : 0,
-                data.interventionCount ?? 0,
                 data.embedding ? Buffer.from(data.embedding.buffer) : null,
                 ts,
                 ts,
@@ -526,8 +522,6 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
         if (data.endedAt !== undefined) builder.set("ended_at", data.endedAt);
         if (data.sentiment !== undefined) builder.set("sentiment", data.sentiment);
         if (data.relatedTopicIds !== undefined) builder.set("related_topic_ids", toJSON(data.relatedTopicIds));
-        if (data.wasEngaged !== undefined) builder.set("was_engaged", data.wasEngaged ? 1 : 0);
-        if (data.interventionCount !== undefined) builder.set("intervention_count", data.interventionCount);
         if (data.embedding !== undefined) builder.set("embedding", Buffer.from(data.embedding.buffer));
         builder.set("updated_at", ts);
         builder.where("id", id);
@@ -2032,8 +2026,6 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
             sentiment: (row.sentiment as TopicNode["sentiment"]) ?? "neutral",
             relatedTopicIds: fromJSON(row.related_topic_ids as string, []),
             keywords: fromJSON(row.keywords as string, []),
-            wasEngaged: !!(row.was_engaged as number),
-            interventionCount: (row.intervention_count as number) ?? 0,
             embedding: row.embedding ? new Float32Array((row.embedding as Buffer).buffer) : undefined,
             createdAt: row.created_at as string,
             updatedAt: row.updated_at as string,

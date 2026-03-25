@@ -180,8 +180,6 @@ export interface Topic {
     // ─── 统计 ───
     /** 话题内总消息数 */
     messageCount: number;
-    /** agent 介入次数 */
-    interventionCount: number;
 
     // ─── 上下文 ───
     /** 最近几条消息的摘要（LLM 生成，给 Triage 用） */

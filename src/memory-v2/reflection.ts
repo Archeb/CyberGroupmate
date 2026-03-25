@@ -642,7 +642,6 @@ function buildReflectionPrompt(
             `   参与者: ${t.participants.join(", ")}\n` +
             `   关键词: ${t.keywords.join(", ")}\n` +
             `   情感: ${t.sentiment}\n` +
-            `   Agent 介入: ${t.wasEngaged ? `是 (${t.interventionCount}次)` : "否"}\n` +
             `   消息数: ${t.messageRange.count}`
         ).join("\n\n");
         sections.push(`## 近期话题 (${topics.length} 个)\n\n${topicLines}`);

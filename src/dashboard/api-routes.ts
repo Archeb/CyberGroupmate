@@ -103,8 +103,6 @@ export function createApiRouter(deps: DashboardDeps, bridge: EventBridge): Route
                         messageIds: fromJSONSafe(row.message_ids as string),
                         sentiment: row.sentiment, startedAt: row.started_at, endedAt: row.ended_at,
                         source: "history",
-                        wasEngaged: !!(row.was_engaged as number),
-                        interventionCount: row.intervention_count ?? 0,
                     });
                 }
             } catch { /* FTS5 not available, fall through */ }
@@ -130,9 +128,7 @@ export function createApiRouter(deps: DashboardDeps, bridge: EventBridge): Route
                             messageIds: fromJSONSafe(row.message_ids as string),
                             sentiment: row.sentiment, startedAt: row.started_at, endedAt: row.ended_at,
                             source: "history",
-                            wasEngaged: !!(row.was_engaged as number),
-                            interventionCount: row.intervention_count ?? 0,
-                        });
+                            });
                     }
                 } catch { /* LIKE fallback */ }
             }
@@ -169,8 +165,6 @@ export function createApiRouter(deps: DashboardDeps, bridge: EventBridge): Route
                     participants: fromJSONSafe(row.participants as string),
                     messageRange: { messageIds: fromJSONSafe(row.message_ids as string) },
                     sentiment: row.sentiment, startedAt: row.started_at, endedAt: row.ended_at,
-                    wasEngaged: !!(row.was_engaged as number),
-                    interventionCount: row.intervention_count ?? 0,
                 }));
             } catch {}
         } else {
@@ -185,8 +179,6 @@ export function createApiRouter(deps: DashboardDeps, bridge: EventBridge): Route
             return {
                 ...serializeTopic(t),
                 source: "pipeline",
-                wasEngaged: hist?.wasEngaged ?? false,
-                interventionCount: hist?.interventionCount ?? 0,
                 startedAt: t.startedAt ?? t.createdAt,
             };
         });
@@ -205,8 +197,6 @@ export function createApiRouter(deps: DashboardDeps, bridge: EventBridge): Route
                 startedAt: h.startedAt,
                 endedAt: h.endedAt,
                 source: "history",
-                wasEngaged: h.wasEngaged ?? false,
-                interventionCount: h.interventionCount ?? 0,
             });
         }
 
@@ -287,8 +277,6 @@ export function createApiRouter(deps: DashboardDeps, bridge: EventBridge): Route
                 keywords: parseJSON(topicRow.keywords),
                 participants: parseJSON(topicRow.participants),
                 keyPoints: parseJSON(topicRow.key_points),
-                wasEngaged: !!(topicRow.was_engaged as number),
-                interventionCount: topicRow.intervention_count ?? 0,
                 startedAt: topicRow.started_at,
                 endedAt: topicRow.ended_at,
                 messageCount: messageIds.length,

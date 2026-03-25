@@ -143,7 +143,6 @@ export function createDispatchHandler(
                                 label: t.label,
                                 summary: t.summary,
                                 createdAt: t.startedAt,
-                                wasEngaged: t.wasEngaged,
                             })));
                         }
                     } catch (err) {
@@ -205,7 +204,16 @@ export function createDispatchHandler(
                     chatId: result.chatId,
                     depth: 2, // 提供足够上下文
                     snapshotTimestamp: new Date().toISOString(),
-                    topicDigests: subagent.observer.getDigest(),
+                    topicDigests: subagent.topicRegistry.getByChat(result.chatId).map((t: any) => ({
+                        topicId: String(t.id),
+                        label: String(t.label ?? ""),
+                        summary: String(t.lastSummary ?? t.recentContext ?? ""),
+                        state: String(t.state ?? "ACTIVE"),
+                        participants: [...(t.participantIds ?? [])].map(String),
+                        keywords: Array.isArray(t.keywords) ? t.keywords : [],
+                        messageCount: t.messageIds?.length ?? 0,
+                        lastActivityAt: String(t.lastMessageAt ?? new Date().toISOString()),
+                    })),
                     engagementScore: subagent.observer.getEngagementScore(),
                     groupModel,
                     lastCallbacks: subagent.lastCallbacks,

@@ -284,8 +284,6 @@ export class RecordingPipeline extends EventEmitter {
                                 count: topic.messageCount,
                             },
                             startedAt: new Date(topic.createdAt).toISOString(),
-                            wasEngaged: topic.state === "ENGAGED" || topic.interventionCount > 0,
-                            interventionCount: topic.interventionCount,
                         });
                     }
 

@@ -121,7 +121,6 @@ export class GroupSubagent extends EventEmitter {
                 deps.pipelineConfig,
             );
 
-            // 自动桥接：RecordingPipeline triage → Observer topicDigests
             this.recordingPipeline.on("topic:triage-passed", (topic: any, decision: any) => {
                 log.info("话题通过 Triage", {
                     chatId: this.chatId,
@@ -130,20 +129,6 @@ export class GroupSubagent extends EventEmitter {
                     interventionType: decision?.intervention_type,
                     confidence: decision?.confidence,
                 });
-                const allNonArchived = this.topicRegistry.getByChat(this.chatId);
-                const digests: TopicDigest[] = allNonArchived.map((t: any) => ({
-                    topicId: String(t.id),
-                    label: String(t.label ?? ""),
-                    summary: String(t.summary ?? t.recentContext ?? ""),
-                    state: String(t.state ?? "ACTIVE"),
-                    participants: [...(t.participantIds ?? [])].map(String),
-                    keywords: Array.isArray(t.keywords) ? t.keywords : [],
-                    messageCount: t.messageIds?.length ?? 0,
-                    lastActivityAt: String(t.lastMessageAt ?? new Date().toISOString()),
-                    triageDecision: decision?.should_intervene ? "ENGAGE" as const : "IGNORE" as const,
-                    triageConfidence: decision?.confidence ?? 0,
-                }));
-                this.observer.setTopicDigests(digests);
 
                 // 标记有话题需要介入，触发 Q3 重新入队
                 this.hasTriageEngaged = true;
@@ -151,7 +136,6 @@ export class GroupSubagent extends EventEmitter {
                     chatId: this.chatId,
                     topicId: topic.id,
                     label: topic.label,
-                    digestCount: digests.length,
                 });
                 this.emit("triage-engage", this.chatId);
             });
@@ -206,28 +190,18 @@ export class GroupSubagent extends EventEmitter {
         const hasFastPathRequest = this.observer.checkFastPathRequest();
         const basePriority = engagement * this.stickiness.priorityMultiplier;
 
-        // topicDigests: 优先使用 Observer 的 digest（来自 RecordingPipeline triage），
-        // 若为空则 fallback 到 TopicRegistry 生成快照（路径 1 入队时 pipeline 可能尚未 flush）
-        let topicDigests = this.observer.getDigest();
-        if (topicDigests.length === 0) {
-            const allTopics = this.topicRegistry.getByChat(this.chatId);
-            if (allTopics.length > 0) {
-                topicDigests = allTopics.map((t: any) => ({
-                    topicId: String(t.id),
-                    label: String(t.label ?? ""),
-                    summary: String(t.lastSummary ?? t.recentContext ?? ""),
-                    state: String(t.state ?? "ACTIVE"),
-                    participants: [...(t.participantIds ?? [])].map(String),
-                    keywords: Array.isArray(t.keywords) ? t.keywords : [],
-                    messageCount: t.messageIds?.length ?? 0,
-                    lastActivityAt: String(t.lastMessageAt ?? new Date().toISOString()),
-                }));
-                log.debug("buildQueueEntry: Observer digest 为空, fallback 到 TopicRegistry", {
-                    chatId: this.chatId,
-                    topicCount: topicDigests.length,
-                });
-            }
-        }
+        // topicDigests: 直接从 TopicRegistry 取当前话题
+        const allTopics = this.topicRegistry.getByChat(this.chatId);
+        const topicDigests: TopicDigest[] = allTopics.map((t: any) => ({
+            topicId: String(t.id),
+            label: String(t.label ?? ""),
+            summary: String(t.lastSummary ?? t.recentContext ?? ""),
+            state: String(t.state ?? "ACTIVE"),
+            participants: [...(t.participantIds ?? [])].map(String),
+            keywords: Array.isArray(t.keywords) ? t.keywords : [],
+            messageCount: t.messageIds?.length ?? 0,
+            lastActivityAt: String(t.lastMessageAt ?? new Date().toISOString()),
+        }));
 
         // 来源标记：优先使用调用方传入的 sourceOverride（如 DIRECT_ADDRESS）
         const source: AttentionQueueEntry["source"] = sourceOverride
@@ -398,7 +372,6 @@ export class GroupSubagent extends EventEmitter {
      * 从 MemoryV2 恢复最近话题到 TopicRegistry（启动时调用）
      *
      * 查询最近 2 小时的话题，重建 registry 状态。
-     * 已回复的话题（wasEngaged）进入 COOLDOWN，避免重复回复。
      *
      * @param memory MemoryV2 实例
      * @returns 恢复的话题数量
@@ -423,8 +396,6 @@ export class GroupSubagent extends EventEmitter {
             participants: tn.participants,
             messageIds: tn.messageRange?.messageIds,
             startedAt: tn.startedAt,
-            wasEngaged: tn.wasEngaged,
-            interventionCount: tn.interventionCount,
             messageCount: tn.messageRange?.count ?? 0,
         }));
 

@@ -383,12 +383,11 @@ export function buildFastPathTurnContent(
 /** 话题渲染输入（统一接口，各调用方筛选/排序后传入） */
 export interface FormattableTopic {
     id?: string;
-    state?: string;
     label: string;
     summary?: string;
     recentContext?: string;
     createdAt?: number | string;
-    wasEngaged?: boolean;
+    participants?: string[];
     messageCount?: number;
 }
 
@@ -414,7 +413,7 @@ export function formatRelativeTime(timestamp: string | number | null | undefined
  * 格式化话题列表为可读字符串（统一渲染逻辑）
  *
  * 输出格式：
- *   [STATE] (3小时前) 话题标签 — 摘要文本 {topic_id}
+ *   (3小时前) 话题标签 [参与者1, 参与者2] — 摘要文本 {topic_id}
  *
  * 如无摘要则 fallback 到 recentContext 最后 2 行。
  * 调用方负责筛选（时间范围、状态）和排序，此函数只负责渲染。
@@ -423,16 +422,15 @@ export function formatTopicList(topics: FormattableTopic[], emptyText = "(无活
     if (topics.length === 0) return emptyText;
 
     return topics.map(t => {
-        const state = t.state ? `[${t.state}]` : "";
         const time = t.createdAt ? `(${formatRelativeTime(t.createdAt)})` : "";
         const id = t.id ? ` {${t.id}}` : "";
-        const engaged = t.wasEngaged ? " [已回复]" : "";
+        const people = t.participants?.length ? ` [${t.participants.join(", ")}]` : "";
         const detail = t.summary
             ? ` — ${t.summary}`
             : (t.recentContext
                 ? `: ${t.recentContext.split("\n").slice(-2).join("; ")}`
                 : "");
-        return `${state} ${time} ${t.label}${detail}${engaged}${id}`.trim();
+        return `${time} ${t.label}${people}${detail}${id}`.trim();
     }).join("\n");
 }
 

@@ -129,8 +129,6 @@ export function seedTestData(memory: MemoryStoreV2, chatId = "-100001"): void {
         messageRange: { firstMessageId: 100, lastMessageId: 115, count: 16 },
         startedAt: hourAgo.toISOString(),
         sentiment: "positive",
-        wasEngaged: true,
-        interventionCount: 2,
     });
 
     memory.upsertTopic("topic_code", {
@@ -143,8 +141,6 @@ export function seedTestData(memory: MemoryStoreV2, chatId = "-100001"): void {
         messageRange: { firstMessageId: 120, lastMessageId: 130, count: 11 },
         startedAt: new Date(hourAgo.getTime() + 1800_000).toISOString(),
         sentiment: "neutral",
-        wasEngaged: false,
-        interventionCount: 0,
     });
 
     memory.upsertTopic("topic_anime", {
@@ -158,8 +154,6 @@ export function seedTestData(memory: MemoryStoreV2, chatId = "-100001"): void {
         startedAt: dayAgo.toISOString(),
         endedAt: new Date(dayAgo.getTime() + 3600_000).toISOString(),
         sentiment: "positive",
-        wasEngaged: false,
-        interventionCount: 0,
     });
 
     // ─── 消息日志 ───

@@ -111,7 +111,6 @@ export class TopicRegistry extends EventEmitter {
             exitSignals: [],
             irrelevantStreak: 0,
             messageCount: messages.length,
-            interventionCount: 0,
             recentContext: messages.map(m => `${m.senderName}: ${m.text}`).slice(-5).join("\n"),
         };
 
@@ -380,7 +379,6 @@ export class TopicRegistry extends EventEmitter {
      * 从 MemoryV2 恢复最近话题到 registry（启动时调用）
      *
      * 从 MemoryV2 topics 表恢复最近的话题，重建内存状态。
-     * 已回复过的话题（wasEngaged）设为 COOLDOWN，未回复的设为 ACTIVE。
      *
      * @param topics 从 MemoryV2 getTopicsSince() 获取的话题列表
      * @returns 恢复的话题数量
@@ -398,12 +396,9 @@ export class TopicRegistry extends EventEmitter {
             if (age > 6 * 60 * 60 * 1000) continue; // 超过 6 小时的不恢复
 
             // 决定恢复后的状态
-            // 已回复话题总是 COOLDOWN（防止重复回复）
-            // 未回复话题：15分钟内的设 ACTIVE（可能还活跃），超过15分钟的设 STALE
+            // 15分钟内设 ACTIVE（可能还活跃），超过15分钟设 STALE
             let state: TopicState;
-            if (t.wasEngaged || t.interventionCount > 0) {
-                state = "COOLDOWN";
-            } else if (age < 15 * 60 * 1000) {
+            if (age < 15 * 60 * 1000) {
                 state = "ACTIVE";
             } else {
                 state = "STALE";  // 老话题但未回复，设 STALE 但不立即归档
@@ -427,7 +422,6 @@ export class TopicRegistry extends EventEmitter {
                 exitSignals: [],
                 irrelevantStreak: 0,
                 messageCount: t.messageCount ?? 0,
-                interventionCount: t.interventionCount ?? 0,
                 recentContext: "",
                 lastSummary: t.summary ?? undefined,
                 lastKeyPoints: t.keyPoints ?? undefined,
@@ -441,7 +435,6 @@ export class TopicRegistry extends EventEmitter {
                 label: topic.label,
                 state: topic.state,
                 chatId: topic.chatId,
-                wasEngaged: t.wasEngaged,
             });
         }
 
@@ -465,7 +458,5 @@ export interface RestorableTopic {
     participants?: string[];
     messageIds?: string[];
     startedAt: string;
-    wasEngaged: boolean;
-    interventionCount: number;
     messageCount?: number;
 }
