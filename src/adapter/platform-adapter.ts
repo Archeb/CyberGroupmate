@@ -17,4 +17,6 @@ export interface PlatformAdapter {
     getWriteMethods(): string[];
     /** 通过 adapter 下载媒体文件（各平台下载逻辑不同） */
     downloadMedia?(rawMessage: unknown, mediaRef: string): Promise<Buffer>;
+    /** 构造平台特定的 @ 提及格式（如 Telegram "@username", Discord "<@id>"） */
+    formatMention(rawUserId: string, username?: string): string | undefined;
 }

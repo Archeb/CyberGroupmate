@@ -77,6 +77,8 @@ export interface PersonIdentity {
     userId: string;
     /** 最常用的名字 */
     displayName: string;
+    /** 平台用户名（Telegram @username / Discord username） */
+    username?: string;
     /** 所有已知昵称/曾用名 */
     aliases: string[];
     /** 跨群总消息数 */

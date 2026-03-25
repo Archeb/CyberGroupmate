@@ -113,6 +113,7 @@ export class DiscordAdapter implements PlatformAdapter {
                 chatId: normalized.chatId,
                 userId: normalized.userId,
                 displayName: normalized.displayName,
+                username: normalized.username,
                 text: normalized.text,
                 timestamp: normalized.timestamp,
                 messageId: normalized.messageId,
@@ -127,6 +128,7 @@ export class DiscordAdapter implements PlatformAdapter {
                     chatId: normalized.chatId,
                     userId: normalized.userId,
                     displayName: normalized.displayName,
+                    username: normalized.username,
                     text: normalized.text,
                     timestamp: normalized.timestamp,
                     messageId: normalized.messageId,
@@ -178,6 +180,10 @@ export class DiscordAdapter implements PlatformAdapter {
             "discord.sendMedia",
             "discord.sendTyping",
         ];
+    }
+
+    formatMention(rawUserId: string, _username?: string): string | undefined {
+        return `<@${rawUserId}>`;
     }
 
     async handleCall(method: string, args: unknown[]): Promise<unknown> {
@@ -306,6 +312,7 @@ export class DiscordAdapter implements PlatformAdapter {
         chatId: string;
         userId: string;
         displayName: string;
+        username?: string;
         text: string;
         timestamp: string;
         replyToMessageId?: string;
@@ -341,6 +348,9 @@ export class DiscordAdapter implements PlatformAdapter {
             message.author?.displayName ??
             message.author?.username ??
             rawUserId;
+
+        // Username (Discord login name, without discriminator)
+        const username = message.author?.username ?? undefined;
 
         // Text: include message content. If empty, check for stickers/embeds
         let text = message.content ?? "";
@@ -404,6 +414,7 @@ export class DiscordAdapter implements PlatformAdapter {
             chatId,
             userId,
             displayName,
+            username,
             text,
             timestamp: message.createdAt?.toISOString?.() ?? new Date().toISOString(),
             replyToMessageId,

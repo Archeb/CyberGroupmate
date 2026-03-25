@@ -128,7 +128,8 @@ export function createAttendHandler(
             }))
             : undefined;
 
-        // 收集活跃参与者画像（含 aliases），用于 Attend 决策上下文
+        // 收集活跃参与者画像（含 aliases + mention），用于 Attend 决策上下文
+        const chatAdapter = adapterList?.find(a => a.platform === getPlatform(entry.chatId));
         const activePersons: Array<{ userId: string; displayName: string; recentMessageCount: number }> = [];
         if (recentMessages?.length) {
             const senderCounts = new Map<string, { name: string; count: number }>();
@@ -143,8 +144,13 @@ export function createAttendHandler(
                     const profiles = memory.getProfilesForChat(entry.chatId);
                     const profile = profiles.find(p => p.userId === uid);
                     const identity = memory.getPersonIdentity(uid);
+                    const rawId = getRawId(uid);
+                    const username = identity?.username ?? undefined;
+                    const mention = chatAdapter?.formatMention(rawId, username);
                     activePersons.push({
-                        userId: getRawId(uid),
+                        userId: rawId,
+                        username,
+                        mention,
                         displayName: name,
                         recentMessageCount: count,
                         ...(profile ? { dunbarTier: profile.dunbarTier, relationToAgent: profile.relationToAgent } : {}),
@@ -170,9 +176,6 @@ export function createAttendHandler(
             pendingCodeActTasks: (subagent.codeActExecutor as any)?.getQueueSize?.() ?? 0,
             activePersons,
         });
-
-        // ─── Phase 5: LLM 决策 ───
-        const suggestedReplyMode = "SINGLE"; // 简单提示，LLM 自行判断
 
         // ═══ Phase 5: LLM 决策路径 (subagent.md §12.2 ➋➌➍) ═══
         try {
@@ -269,7 +272,6 @@ export function createAttendHandler(
                 fastPathHistory: fpHistory,
                 alertReason: entry.alert?.reason,
                 messages: messagesText || undefined,
-                suggestedReplyMode,
                 dispatchedTopicIds: [...subagent.getDispatchedTopicIds()],
             });
 

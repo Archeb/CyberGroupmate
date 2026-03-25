@@ -311,6 +311,7 @@ export class RecordingPipeline extends EventEmitter {
                             seenUsers.add(m.senderId);
                             this.memory.upsertPersonIdentity(String(m.senderId), {
                                 displayName: m.senderName,
+                                ...(m.senderUsername ? { username: m.senderUsername } : {}),
                                 lastSeenAt: new Date(m.timestamp).toISOString(),
                             });
                         }

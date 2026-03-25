@@ -19,6 +19,8 @@ export interface Message {
     senderId: string;
     /** 发送者显示名称 */
     senderName: string;
+    /** 发送者平台用户名（如 Telegram @username） */
+    senderUsername?: string;
     /** 消息文本 */
     text: string;
     /** 回复目标消息 ID（如果有） */

@@ -243,6 +243,7 @@ export class TelegramAdapter implements PlatformAdapter {
                 chatId: normalized.chatId,
                 userId: normalized.userId,
                 displayName: normalized.displayName,
+                username: normalized.username,
                 text: normalized.text,
                 timestamp: normalized.timestamp,
                 messageId: normalized.messageId,
@@ -257,6 +258,7 @@ export class TelegramAdapter implements PlatformAdapter {
                     chatId: normalized.chatId,
                     userId: normalized.userId,
                     displayName: normalized.displayName,
+                    username: normalized.username,
                     text: normalized.text,
                     timestamp: normalized.timestamp,
                     messageId: normalized.messageId,
@@ -315,6 +317,10 @@ export class TelegramAdapter implements PlatformAdapter {
             "telegram.sendSticker",
             "telegram.sendTyping",
         ];
+    }
+
+    formatMention(_rawUserId: string, username?: string): string | undefined {
+        return username ? `@${username}` : undefined;
     }
 
     getSceneTypeDefs(scene: string, baseTypeDefs: string): string | undefined {
@@ -862,6 +868,7 @@ export class TelegramAdapter implements PlatformAdapter {
         chatId: string;
         userId: string;
         displayName: string;
+        username?: string;
         text: string;
         timestamp: string;
         messageId?: string;
@@ -912,6 +919,7 @@ export class TelegramAdapter implements PlatformAdapter {
             chatId: composeChatId("telegram", plain.chat.id),
             userId: /^-?\d+$/.test(senderId) ? composeChatId("telegram", senderId) : senderId,
             displayName: plain.sender?.displayName ?? plain.sender?.firstName ?? "Unknown",
+            username: plain.sender?.username ?? undefined,
             text,
             timestamp: plain.date,
             messageId: plain.id,

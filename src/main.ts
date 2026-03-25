@@ -438,6 +438,17 @@ async function main(): Promise<void> {
             log.warn("即时消息落盘失败", { chatId, error: String(err) });
         }
 
+        // ─── username 持久化到 PersonIdentity（供 attend-handler activePersons 使用） ───
+        const eventUsername = event.username as string | undefined;
+        if (eventUsername) {
+            const eventUserId = String(event.userId ?? event.user_id ?? event.senderId ?? "");
+            if (eventUserId) {
+                try {
+                    memory.upsertPersonIdentity(eventUserId, { username: eventUsername });
+                } catch { /* 非关键路径 */ }
+            }
+        }
+
         // ─── chatTitle 持久化：确保 group_models 表有群名/私聊对象名 ───
         // 群聊: event.chatTitle 来自 chat.title
         // 私聊: chatTitle 为对方 displayName（normalizeChat fallback），也可以用 event.displayName

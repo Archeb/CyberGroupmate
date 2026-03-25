@@ -33,7 +33,7 @@ export const COLUMN_WHITELIST = {
         "embedding", "created_at", "updated_at", "expires_at",
     ],
     person_identities: [
-        "display_name", "aliases", "total_message_count",
+        "display_name", "username", "aliases", "total_message_count",
         "last_seen_at", "first_seen_at", "updated_at",
     ],
     person_group_profiles: [

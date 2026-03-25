@@ -401,6 +401,9 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
 
         // group_models 新增 is_direct_message 列（兼容旧数据库）
         try { this.db.exec(`ALTER TABLE group_models ADD COLUMN is_direct_message INTEGER DEFAULT 0`); } catch { /* 列已存在 */ }
+
+        // person_identities 新增 username 列（兼容旧数据库）
+        try { this.db.exec(`ALTER TABLE person_identities ADD COLUMN username TEXT`); } catch { /* 列已存在 */ }
     }
 
     // ─── 写入方法 ───
@@ -719,6 +722,7 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
             const builder = new SafeUpdateBuilder("person_identities");
 
             if (data.displayName !== undefined) builder.set("display_name", data.displayName);
+            if (data.username !== undefined) builder.set("username", data.username);
             if (data.aliases !== undefined) builder.set("aliases", toJSON(data.aliases));
             if (data.totalMessageCount !== undefined) builder.set("total_message_count", data.totalMessageCount);
             if (data.lastSeenAt !== undefined) builder.set("last_seen_at", data.lastSeenAt);
@@ -948,6 +952,7 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
         return {
             userId: row.user_id as string,
             displayName: row.display_name as string,
+            username: (row.username as string) ?? undefined,
             aliases: fromJSON(row.aliases as string, []),
             totalMessageCount: row.total_message_count as number,
             lastSeenAt: row.last_seen_at as string,

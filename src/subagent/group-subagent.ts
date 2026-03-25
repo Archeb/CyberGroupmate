@@ -184,6 +184,7 @@ export class GroupSubagent extends EventEmitter {
                 chatId: this.chatId,
                 senderId: String(event.userId ?? event.user_id ?? event.senderId ?? ""),
                 senderName: String(event.displayName ?? event.senderName ?? event.userName ?? ""),
+                senderUsername: (event.username as string) ?? undefined,
                 text: String(event.text ?? event.message ?? ""),
                 timestamp: Date.now(),
                 replyToMessageId: event.replyToMessageId ? String(event.replyToMessageId) : undefined,

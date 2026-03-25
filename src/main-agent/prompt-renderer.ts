@@ -167,7 +167,6 @@ export function buildAttentionVariables(
         fastPathHistory?: string;
         alertReason?: string;
         messages?: string;
-        suggestedReplyMode?: string;
         dispatchedTopicIds?: string[];
     },
 ): Record<string, unknown> {
@@ -217,21 +216,19 @@ export function buildAttentionVariables(
         hasFastPathHistory: !!opts.fastPathHistory,
         fastPathHistory: opts.fastPathHistory ?? "",
 
-        // Decision hint
-        suggestedReplyMode: opts.suggestedReplyMode ?? "NONE",
-
         // Dispatched topics (防重复分派)
         hasDispatchedTopics: !!opts.dispatchedTopicIds?.length,
         dispatchedTopicIds: opts.dispatchedTopicIds?.join(", ") ?? "",
 
-        // Active persons (Issue 3: PersonGroupProfile + aliases 注入)
+        // Active persons (Issue 3: PersonGroupProfile + aliases + mention 注入)
         activePersons: pkg.activePersons?.length
             ? pkg.activePersons.map((p: any) => {
-                const tier = p.dunbarTier ? `Tier ${p.dunbarTier}` : "新用户";
-                const rel = p.relationToAgent ? `, ${p.relationToAgent}` : "";
+                const tier = p.dunbarTier ? `亲密程度: Tier${p.dunbarTier}` : "不熟";
+                const rel = p.relationToAgent ? `, 关系: ${p.relationToAgent}` : "";
+                const mentionStr = p.mention ? ` (提及方式: ${p.mention})` : "";
                 const aka = p.aliases?.length ? ` (又名: ${p.aliases.join(", ")})` : "";
-                return `${p.displayName}${aka} (${tier}${rel})`;
-            }).join(", ")
+                return `${p.displayName}${mentionStr}${aka} (${tier}${rel})`;
+            }).join("\n")
             : "",
     };
 }
