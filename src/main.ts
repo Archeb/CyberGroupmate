@@ -502,16 +502,26 @@ async function main(): Promise<void> {
             // 记录入方向交互（用户 → agent，此刻已发生）
             // 配合 feedback-loop.ts 的 agent_replied 出方向记录，构成完整双向交互链
             try {
+                const userId = String(event.userId ?? event.senderId ?? "");
+                const displayName = String(event.displayName ?? event.senderName ?? event.userName ?? "");
+                const messageText = String(event.text ?? event.message ?? "").slice(0, 200);
+                // Issue 4: 包含发言人信息的交互摘要
+                const summary = displayName ? `[${displayName}] ${messageText}` : messageText;
                 memory.storeInteraction({
                     chatId,
-                    userId: String(event.userId ?? event.senderId ?? ""),
+                    userId,
                     topicId: null,
                     type: isDM ? "direct_message" : "agent_mentioned",
-                    summary: String(event.text ?? event.message ?? "").slice(0, 200),
+                    summary,
                     sentiment: "neutral",
                     significance: isDM ? 0.8 : 0.6,
                     date: new Date().toISOString(),
                 });
+                // Issue 3: 同步 displayName 到 PersonIdentity
+                if (userId && displayName) {
+                    const compositeUid = ensureCompositeId(getPlatform(chatId), userId);
+                    memory.upsertPersonIdentity(compositeUid, { displayName });
+                }
             } catch { /* 非关键路径 */ }
         }
 

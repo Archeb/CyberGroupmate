@@ -83,7 +83,7 @@ export class FeedbackLoop {
             userId: "agent",
             topicId: null,
             type: "agent_replied",
-            summary: event.text.slice(0, 200),
+            summary: `[agent] ${event.text.slice(0, 200)}`,
             sentiment: "neutral",
             significance: 0.6,
             date: event.timestamp,

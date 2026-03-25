@@ -22,6 +22,18 @@
 | `src/memory-v2/reflection.ts` | `ReflectionLLMOutput.newFacts` → `factUpdates`（支持 `id`/`action` 字段）；新增 `interactionQuality` 字段；`buildReflectionPrompt()` 注入已知身份信息（displayName/username/aliases）和已有事实（带 id）；Step 4b 重写支持 fact 新增/更新/删除；Step 4c 将 insights 追加到 `recentFeedback`；`parseReflectionJSON` 向后兼容 `newFacts` 字段名 |
 | `system-prompts/memory/reflection-user-instruction.md` | `newFacts` → `factUpdates`（含 id/action 说明）；`dunbarTier` → `interactionQuality`（friendly/dependent/instrumental/hostile）；更新 identityUpdates 说明引用已知身份信息 |
 
+## 2026-03-25: Reflection UID 统一 + 交互富化 (Issues 3, 4)
+
+交互记录现在包含发言人信息，且在消息入口处同步 displayName 到 PersonIdentity 实现 UID 统一。
+
+### 改动
+
+| 文件 | 改动 |
+|------|------|
+| `src/main.ts` | storeInteraction 的 summary 改为 `[displayName] text` 格式；新增 `upsertPersonIdentity(compositeUid, { displayName })` 在消息入口处同步身份信息 |
+| `src/pipeline/feedback-loop.ts` | agent 回复的 interaction summary 添加 `[agent]` 前缀 |
+
+
 
 
 ## 2026-03-22: LLM API Key 负载均衡池
