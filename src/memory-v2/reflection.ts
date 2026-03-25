@@ -250,7 +250,7 @@ export async function runReflection(
         }
     }
 
-    // 4a. 写入画像增量
+    // 4a. 写入画像增量（不再直接使用 LLM 的 dunbarTier，改由 affinityScore 驱动）
     for (const pu of llmOutput.personUpdates) {
         const updateData: Partial<PersonGroupProfile> = {};
         const changes: string[] = [];
@@ -259,8 +259,8 @@ export async function runReflection(
         if (pu.interests?.length) { updateData.interests = pu.interests; changes.push(`interests=[${pu.interests.join(",")}]`); }
         if (pu.communicationStyle) { updateData.communicationStyle = pu.communicationStyle; changes.push(`style=${pu.communicationStyle}`); }
         if (pu.relationToAgent) { updateData.relationToAgent = pu.relationToAgent; changes.push(`relation=${pu.relationToAgent}`); }
-        if (pu.dunbarTier) { updateData.dunbarTier = pu.dunbarTier; changes.push(`tier=${pu.dunbarTier}`); }
         if (pu.dunbarReason) { updateData.dunbarReason = pu.dunbarReason; }
+        // 注意：不再写入 pu.dunbarTier，由 computeAffinityScores 统一计算
 
         if (changes.length > 0) {
             const compositeUid = ensureCompositeId(getPlatform(chatId), pu.userId);
@@ -271,6 +271,26 @@ export async function runReflection(
                 chatId,
                 changes: changes.join("; "),
             });
+        }
+    }
+
+    // 4a-score. 亲和度评分：计算 affinityScore 并派生 dunbarTier
+    {
+        const qualityMap = new Map<string, ReflectionLLMOutput["personUpdates"][0]["interactionQuality"]>();
+        for (const pu of llmOutput.personUpdates) {
+            if (pu.interactionQuality) {
+                const compositeUid = ensureCompositeId(getPlatform(chatId), pu.userId);
+                qualityMap.set(compositeUid, pu.interactionQuality);
+            }
+        }
+        const updatedProfiles = memory.getProfilesForChat(chatId);
+        const scores = computeAffinityScores(updatedProfiles, stats, qualityMap, isDirectMessage);
+        for (const [userId, { score, tier }] of scores) {
+            memory.upsertPersonGroupProfile(userId, chatId, {
+                affinityScore: score,
+                dunbarTier: tier,
+            });
+            log.debug("Reflection 4a-score: 亲和度评分", { userId, score, tier });
         }
     }
 
@@ -554,6 +574,147 @@ function computeParticipantStats(
     }
 
     return statsMap;
+}
+
+// ─── 亲和度评分（Percentile Ranking + Quality Delta） ───
+
+/** 计算百分位排名 (0-100) */
+function percentileRank(value: number, sortedValues: number[]): number {
+    if (sortedValues.length <= 1) return 50;
+    let below = 0;
+    for (const v of sortedValues) {
+        if (v < value) below++;
+    }
+    return (below / (sortedValues.length - 1)) * 100;
+}
+
+/** 线性映射（小群组 <5 人时用） */
+function linearMap(value: number, median: number): number {
+    if (median <= 0) return value > 0 ? 50 : 0;
+    return Math.min(100, (value / median) * 50);
+}
+
+type InteractionQuality = "friendly" | "dependent" | "instrumental" | "hostile";
+
+const QUALITY_DELTAS: Record<InteractionQuality, number> = {
+    friendly: 10,
+    dependent: 15,
+    instrumental: 0,
+    hostile: -20,
+};
+
+function scoreToTier(score: number): 1 | 2 | 3 | 4 {
+    if (score >= 70) return 1;
+    if (score >= 40) return 2;
+    if (score >= 15) return 3;
+    return 4;
+}
+
+/**
+ * 计算所有参与者的亲和度分数和 Dunbar Tier
+ *
+ * 算法：
+ * 1. 四维度百分位排名（messageCount 40%, topicsParticipated 30%, activeDays 20%, relationshipDepth 10%）
+ * 2. 私聊特殊处理（baseScore = min(80, messageCount/5)）
+ * 3. 小群组线性映射（<5人时）
+ * 4. Quality Delta 累加
+ * 5. finalScore = clamp(max(baseScore, existingScore) + qualityDelta, 0, 100)
+ */
+function computeAffinityScores(
+    profiles: PersonGroupProfile[],
+    stats: Map<string, ParticipantStats>,
+    qualityMap: Map<string, InteractionQuality | undefined>,
+    isDirectMessage: boolean,
+): Map<string, { score: number; tier: 1 | 2 | 3 | 4 }> {
+    const result = new Map<string, { score: number; tier: 1 | 2 | 3 | 4 }>();
+    if (profiles.length === 0) return result;
+
+    // 私聊特殊处理
+    if (isDirectMessage || profiles.length <= 2) {
+        for (const p of profiles) {
+            const baseScore = Math.min(80, p.messageCount / 5);
+            const quality = qualityMap.get(p.userId);
+            const delta = quality ? (QUALITY_DELTAS[quality] ?? 0) : 0;
+            const finalScore = Math.max(0, Math.min(100,
+                Math.max(baseScore, p.affinityScore ?? 0) + delta
+            ));
+            result.set(p.userId, { score: finalScore, tier: scoreToTier(finalScore) });
+        }
+        return result;
+    }
+
+    // 收集每个维度的值
+    const msgCounts: number[] = [];
+    const topicCounts: number[] = [];
+    const dayCounts: number[] = [];
+    const depthValues: number[] = [];
+
+    const profileDimensions = profiles.map(p => {
+        const s = stats.get(p.userId);
+        const messageCount = s?.messageCount ?? p.messageCount;
+        const topicsParticipated = s?.topicsParticipated ?? 0;
+        const activeDays = s?.activeDays?.size ?? 0;
+        const depth = p.traits.length + p.interests.length;
+
+        msgCounts.push(messageCount);
+        topicCounts.push(topicsParticipated);
+        dayCounts.push(activeDays);
+        depthValues.push(depth);
+
+        return { userId: p.userId, messageCount, topicsParticipated, activeDays, depth, existingScore: p.affinityScore ?? 0 };
+    });
+
+    // 排序用于百分位计算
+    msgCounts.sort((a, b) => a - b);
+    topicCounts.sort((a, b) => a - b);
+    dayCounts.sort((a, b) => a - b);
+    depthValues.sort((a, b) => a - b);
+
+    const usePercentile = profiles.length >= 5;
+    const medianMsg = msgCounts[Math.floor(msgCounts.length / 2)] || 1;
+    const medianTopics = topicCounts[Math.floor(topicCounts.length / 2)] || 1;
+    const medianDays = dayCounts[Math.floor(dayCounts.length / 2)] || 1;
+    const medianDepth = depthValues[Math.floor(depthValues.length / 2)] || 1;
+
+    for (const dim of profileDimensions) {
+        // 新人保底
+        if (dim.messageCount < 3) {
+            const quality = qualityMap.get(dim.userId);
+            const delta = quality ? (QUALITY_DELTAS[quality] ?? 0) : 0;
+            const finalScore = Math.max(0, Math.min(100, Math.max(5, dim.existingScore) + delta));
+            result.set(dim.userId, { score: finalScore, tier: scoreToTier(finalScore) });
+            continue;
+        }
+
+        // 四维度加权基础分
+        let baseScore: number;
+        if (usePercentile) {
+            const msgP = percentileRank(dim.messageCount, msgCounts);
+            const topicP = percentileRank(dim.topicsParticipated, topicCounts);
+            const dayP = percentileRank(dim.activeDays, dayCounts);
+            const depthP = percentileRank(dim.depth, depthValues);
+            baseScore = msgP * 0.4 + topicP * 0.3 + dayP * 0.2 + depthP * 0.1;
+        } else {
+            // 小群组线性映射
+            const msgL = linearMap(dim.messageCount, medianMsg);
+            const topicL = linearMap(dim.topicsParticipated, medianTopics);
+            const dayL = linearMap(dim.activeDays, medianDays);
+            const depthL = linearMap(dim.depth, medianDepth);
+            baseScore = msgL * 0.4 + topicL * 0.3 + dayL * 0.2 + depthL * 0.1;
+        }
+
+        // Quality delta
+        const quality = qualityMap.get(dim.userId);
+        const delta = quality ? (QUALITY_DELTAS[quality] ?? 0) : 0;
+
+        // 合并：max(baseScore, existingScore) + delta
+        const finalScore = Math.max(0, Math.min(100,
+            Math.max(baseScore, dim.existingScore) + delta
+        ));
+        result.set(dim.userId, { score: finalScore, tier: scoreToTier(finalScore) });
+    }
+
+    return result;
 }
 
 // ─── Prompt 加载 ───

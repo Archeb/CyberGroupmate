@@ -399,6 +399,9 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
         // 新增 emoji 列（兼容旧数据库）
         try { this.db.exec(`ALTER TABLE sticker_descriptions ADD COLUMN emoji TEXT`); } catch { /* 列已存在 */ }
 
+        // person_group_profiles 新增 affinity_score 列（兼容旧数据库）
+        try { this.db.exec(`ALTER TABLE person_group_profiles ADD COLUMN affinity_score REAL DEFAULT 0`); } catch { /* 列已存在 */ }
+
         // group_models 新增 is_direct_message 列（兼容旧数据库）
         try { this.db.exec(`ALTER TABLE group_models ADD COLUMN is_direct_message INTEGER DEFAULT 0`); } catch { /* 列已存在 */ }
 
@@ -754,6 +757,7 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
 
             if (data.dunbarTier !== undefined) builder.set("dunbar_tier", data.dunbarTier);
             if (data.dunbarReason !== undefined) builder.set("dunbar_reason", data.dunbarReason);
+            if (data.affinityScore !== undefined) builder.set("affinity_score", data.affinityScore);
             if (data.traits !== undefined) builder.set("traits", toJSON(data.traits));
             if (data.interests !== undefined) builder.set("interests", toJSON(data.interests));
             if (data.communicationStyle !== undefined) builder.set("communication_style", data.communicationStyle);
@@ -1361,11 +1365,12 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
                     "SELECT * FROM person_group_profiles WHERE user_id = ? LIMIT 1"
                 ).all(uid) as Record<string, unknown>[];
                 for (const r of rows) {
-                    result.push({
+                     result.push({
                         userId: r.user_id as string,
                         chatId: r.chat_id as string,
                         dunbarTier: (r.dunbar_tier as PersonGroupProfile["dunbarTier"]) ?? 4,
                         dunbarReason: (r.dunbar_reason as string) ?? "",
+                        affinityScore: (r.affinity_score as number) ?? 0,
                         traits: fromJSON<string[]>(r.traits as string, []),
                         interests: fromJSON<string[]>(r.interests as string, []),
                         communicationStyle: (r.communication_style as string) ?? "",
@@ -1666,6 +1671,7 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
             chatId: r.chat_id as string,
             dunbarTier: (r.dunbar_tier as PersonGroupProfile["dunbarTier"]) ?? 4,
             dunbarReason: (r.dunbar_reason as string) ?? "",
+            affinityScore: (r.affinity_score as number) ?? 0,
             traits: fromJSON<string[]>(r.traits as string, []),
             interests: fromJSON<string[]>(r.interests as string, []),
             communicationStyle: (r.communication_style as string) ?? "",

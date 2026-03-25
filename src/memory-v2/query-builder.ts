@@ -37,7 +37,7 @@ export const COLUMN_WHITELIST = {
         "last_seen_at", "first_seen_at", "updated_at",
     ],
     person_group_profiles: [
-        "dunbar_tier", "dunbar_reason", "traits", "interests",
+        "dunbar_tier", "dunbar_reason", "affinity_score", "traits", "interests",
         "communication_style", "relation_to_agent", "recent_episodes",
         "merged_memory", "message_count", "last_seen_at", "active_hours",
         "first_seen_at", "updated_at",

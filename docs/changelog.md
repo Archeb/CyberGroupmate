@@ -33,6 +33,29 @@
 | `src/main.ts` | storeInteraction 的 summary 改为 `[displayName] text` 格式；新增 `upsertPersonIdentity(compositeUid, { displayName })` 在消息入口处同步身份信息 |
 | `src/pipeline/feedback-loop.ts` | agent 回复的 interaction summary 添加 `[agent]` 前缀 |
 
+## 2026-03-25: Dunbar Tier 分数化 — Percentile Ranking + Quality Delta (Issue 2)
+
+Dunbar 分层从 LLM 直接指定改为分数驱动。新增 `affinityScore` 字段 (0-100)，由四维度百分位排名（messageCount 40%、topicsParticipated 30%、activeDays 20%、relationshipDepth 10%）计算基础分，LLM 仅输出 `interactionQuality` (friendly/dependent/instrumental/hostile) 作为偏移量。私聊和小群组有特殊处理避免 percentile 失效。
+
+### 分数 → Tier 映射
+
+| 分数范围 | Tier |
+|----------|------|
+| ≥70 | T1 核心 |
+| ≥40 | T2 熟悉 |
+| ≥15 | T3 认识 |
+| <15 | T4 陌生 |
+
+### 改动
+
+| 文件 | 改动 |
+|------|------|
+| `src/memory-v2/types.ts` | `PersonGroupProfile` 新增 `affinityScore: number` 字段 |
+| `src/memory-v2/query-builder.ts` | `person_group_profiles` 列白名单新增 `affinity_score` |
+| `src/memory-v2/memory-v2.ts` | `person_group_profiles` 表新增 `affinity_score REAL DEFAULT 0` 列（ALTER TABLE 兼容旧 DB）；`upsertPersonGroupProfile` 支持 `affinityScore` 读写；`getProfilesForChat` / `resolvePersonsFromTopics` 返回 `affinityScore` |
+| `src/memory-v2/reflection.ts` | **[NEW]** `computeAffinityScores()` 函数（percentile ranking + quality delta）；Step 4a 不再使用 LLM dunbarTier，新增 Step 4a-score 由 affinityScore 派生 tier |
+
+
 
 
 

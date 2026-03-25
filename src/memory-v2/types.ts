@@ -97,6 +97,8 @@ export interface PersonGroupProfile {
     dunbarTier: 1 | 2 | 3 | 4;
     /** LLM 给出的分层理由 */
     dunbarReason: string;
+    /** 好感度分数 (0-100)，由 percentile ranking + quality delta 计算 */
+    affinityScore: number;
     /** 在这个群的性格表现 */
     traits: string[];
     /** 在这个群的兴趣话题 */
