@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-03-25: Reflection 私聊适配
+
+反思引擎现在区分群聊和私聊，对私聊使用专用 prompt，聚焦一对一关系深度分析。
+
+### 改动
+
+| 文件 | 改动 |
+|------|------|
+| `system-prompts/memory/reflection-dm-user-instruction.md` | **[NEW]** 私聊专用反思 user instruction — 聚焦亲密度、情感依赖、互动质量（friendly/dependent/instrumental/hostile）分析 |
+| `src/memory-v2/reflection.ts` | `buildReflectionPrompt()` 新增 `isDirectMessage` 参数；私聊时使用"私聊信息"section（对话对象/活跃度/聊天类型）代替"群组信息"；`runReflection()` 从 `GroupModel.isDirectMessage` 读取聊天类型；新增 `getReflectionDmUserInstruction()` prompt 加载器 |
+
+
 ## 2026-03-22: LLM API Key 负载均衡池
 
 新增 Profile 级多 Key 负载均衡：同一 `llm_profiles` 下可配置多个 API key，系统自动在 key 之间分发请求，突破单 key 的 RPM/TPM 限制。

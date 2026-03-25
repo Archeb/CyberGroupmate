@@ -174,7 +174,8 @@ export async function runReflection(
     const stats = computeParticipantStats(topics, interactions);
 
     // ── Step 3: LLM 调用 ──
-    const prompt = buildReflectionPrompt(topics, interactions, profiles, stats, groupModel);
+    const isDirectMessage = groupModel?.isDirectMessage ?? false;
+    const prompt = buildReflectionPrompt(topics, interactions, profiles, stats, groupModel, isDirectMessage);
     const messages: ChatMessage[] = [
         { role: "system", content: getReflectionSystemPrompt() },
         { role: "user", content: prompt },
@@ -573,6 +574,23 @@ function getReflectionUserInstruction(): string {
     return _reflectionUserInstruction;
 }
 
+let _reflectionDmUserInstruction: string | null = null;
+
+function getReflectionDmUserInstruction(): string {
+    if (!_reflectionDmUserInstruction) {
+        try {
+            _reflectionDmUserInstruction = readFileSync(
+                join(PROMPTS_DIR, "reflection-dm-user-instruction.md"), "utf-8"
+            ).trim();
+            log.debug("Reflection DM user instruction 已加载", { length: _reflectionDmUserInstruction.length });
+        } catch {
+            log.warn("Reflection DM user instruction 文件未找到，回退到群聊版本");
+            _reflectionDmUserInstruction = getReflectionUserInstruction();
+        }
+    }
+    return _reflectionDmUserInstruction;
+}
+
 let _mergeEpisodesUserTpl: string | null = null;
 
 function getMergeEpisodesUserTpl(): string {
@@ -621,17 +639,27 @@ function buildReflectionPrompt(
     profiles: PersonGroupProfile[],
     stats: Map<string, ParticipantStats>,
     groupModel: GroupModel | null,
+    isDirectMessage: boolean = false,
 ): string {
     const sections: string[] = [];
 
-    // 群组基本信息
+    // 基本信息（私聊 vs 群聊）
     if (groupModel) {
-        sections.push(`## 群组信息
+        if (isDirectMessage) {
+            sections.push(`## 私聊信息
+- 对话对象: ${groupModel.chatTitle}
+- 当前 agent 角色: ${groupModel.agentRole || "(未定义)"}
+- 活跃度: ${groupModel.engagementLevel || "(未知)"}
+- 上次反思: ${groupModel.lastReflectedAt ?? "从未"}
+- 聊天类型: 一对一私聊`);
+        } else {
+            sections.push(`## 群组信息
 - 群名: ${groupModel.chatTitle}
 - 当前 agent 角色: ${groupModel.agentRole}
 - 活跃度: ${groupModel.engagementLevel}
 - 热点话题: ${groupModel.hotTopics?.join(", ") || "无"}
 - 上次反思: ${groupModel.lastReflectedAt ?? "从未"}`);
+        }
     }
 
     // 近期话题
@@ -673,7 +701,11 @@ function buildReflectionPrompt(
         sections.push(`## 现有画像 (${profiles.length} 人)\n\n${profileLines}`);
     }
 
-    sections.push(`## 请求\n\n${getReflectionUserInstruction()}`);
+    // 请求（私聊用专用 instruction，群聊用通用 instruction）
+    const userInstruction = isDirectMessage
+        ? getReflectionDmUserInstruction()
+        : getReflectionUserInstruction();
+    sections.push(`## 请求\n\n${userInstruction}`);
 
     return sections.join("\n\n---\n\n");
 }
