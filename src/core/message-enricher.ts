@@ -328,7 +328,28 @@ function formatMessages(
     messages: RawMessage[],
     imageParts: Array<{ url: string }>,
 ): string {
-    const lines = messages.map((m) => {
+    const lines: string[] = [];
+    let prevTimestamp: number | undefined;
+
+    for (const m of messages) {
+        // ─── 时间间隔感知：间隔超过 30 分钟时插入分隔行 ───
+        if (m.timestamp) {
+            const curTs = new Date(m.timestamp).getTime();
+            if (!isNaN(curTs)) {
+                if (prevTimestamp !== undefined) {
+                    const gapMs = curTs - prevTimestamp;
+                    const gapMin = Math.round(gapMs / 60_000);
+                    if (gapMin >= 30) {
+                        const label = gapMin >= 60
+                            ? `${Math.floor(gapMin / 60)} 小时${gapMin % 60 > 0 ? ` ${gapMin % 60} 分钟` : ""}后`
+                            : `${gapMin} 分钟后`;
+                        lines.push(`--- (${label}) ---`);
+                    }
+                }
+                prevTimestamp = curTs;
+            }
+        }
+
         let textPart = m.text ?? "";
 
         // 注入媒体描述（从 processedMedia）
@@ -358,7 +379,6 @@ function formatMessages(
             }
         }
 
-        // 使用共享的 formatMessageLine，但 textPart 已处理过，直接构建
         // 如果有 processedMedia 就不再追加 mediaTag（已处理），否则追加 mediaTag 作兜底
         const hasProcessedMedia = m.processedMedia && m.processedMedia.length > 0;
         if (!hasProcessedMedia && m.mediaType) {
@@ -369,8 +389,8 @@ function formatMessages(
         }
 
         const replyTag = buildReplyTag(m);
-        return `[${formatTsForDisplay(m.timestamp) ?? ""}] [msgId:${m.id ?? "?"}] ${m.sender ?? "?"}${replyTag}: ${textPart}`;
-    });
+        lines.push(`[${formatTsForDisplay(m.timestamp) ?? ""}] [msgId:${m.id ?? "?"}] ${m.sender ?? "?"}${replyTag}: ${textPart}`);
+    }
 
     return lines.join("\n") || "(无目标消息原文)";
 }
