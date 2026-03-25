@@ -224,14 +224,14 @@ export function createAttendHandler(
                     const visionLlmConfig = currentConfig.llmRouting.vision
                         ? resolveComponentProfiles("vision", currentConfig)[0]
                         : undefined;
-                    // 选择 attend LLM 配置作为主模型（检查 vision:true）
-                    const primaryLlmConfig = sotaConfigs[0];
+                    // 使用 vision tier LLM 进行媒体富化，而非 attend LLM
+                    const enrichLlmConfig = visionLlmConfig ?? sotaConfigs[0];
 
                     const downloadFn = buildDownloadFn(entry.chatId);
 
                     const { formattedText } = await enrichMessages(rawMessages, {
                         visionConfig,
-                        llmConfig: primaryLlmConfig,
+                        llmConfig: enrichLlmConfig,
                         visionLlmConfig,
                         downloadFn,
                         stickerCache: memory,
