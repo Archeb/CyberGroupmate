@@ -217,6 +217,8 @@ export class CodeActExecutor {
     private sendTypingFn: ((chatId: string) => Promise<void>) | undefined;
     /** 媒体下载管理器（保存文件到磁盘） */
     private mediaDownloader: MediaDownloader | undefined;
+    /** 平台特定的 @ 提及格式化函数（由 adapter 提供） */
+    private formatMentionFn: ((rawUserId: string, username?: string) => string | undefined) | undefined;
 
     setDependencies(
         sandboxPool: SandboxPool,
@@ -230,6 +232,7 @@ export class CodeActExecutor {
         sendTyping?: (chatId: string) => Promise<void>,
         visionLlmConfig?: LLMConfig,
         mediaDownloader?: MediaDownloader,
+        formatMention?: (rawUserId: string, username?: string) => string | undefined,
     ): void {
         this.sandboxPool = sandboxPool;
         this.nc = nc;
@@ -245,7 +248,8 @@ export class CodeActExecutor {
         this.downloadFn = downloadFn;
         this.sendTypingFn = sendTyping;
         this.mediaDownloader = mediaDownloader;
-        log.info("setDependencies", { chatId: this.chatId, hasSandboxPool: true, hasVision: !!visionConfig, hasVisionLlm: !!visionLlmConfig, hasDownload: !!downloadFn, hasTyping: !!sendTyping, hasMediaDownloader: !!mediaDownloader });
+        this.formatMentionFn = formatMention;
+        log.info("setDependencies", { chatId: this.chatId, hasSandboxPool: true, hasVision: !!visionConfig, hasVisionLlm: !!visionLlmConfig, hasDownload: !!downloadFn, hasTyping: !!sendTyping, hasMediaDownloader: !!mediaDownloader, hasMention: !!formatMention });
     }
 
     /**
@@ -381,10 +385,14 @@ export class CodeActExecutor {
                     );
                     if (profile) {
                         const identity = this.memory.getPersonIdentity(profile.userId);
+                        const rawId = getRawId(profile.userId);
+                        const username = identity?.username ?? undefined;
+                        const mention = this.formatMentionFn?.(rawId, username);
                         relevantProfiles.push({
                             displayName: identity?.displayName ?? name,
                             aliases: identity?.aliases ?? [],
-                            userId: getRawId(profile.userId),
+                            userId: rawId,
+                            ...(mention ? { mention } : {}),
                             dunbarTier: profile.dunbarTier,
                             traits: profile.traits,
                             interests: profile.interests,

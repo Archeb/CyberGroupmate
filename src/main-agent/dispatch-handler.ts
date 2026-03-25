@@ -319,7 +319,10 @@ export function createDispatchHandler(
                     });
                     // Fix 9: 注入 Sandbox + NC + LLM 依赖 + Memory + Vision
                     const downloadFn = buildDownloadFn(result.chatId);
-                    executor.setDependencies(sandboxPool, nc, llmConfigs, persona, memory, visionConfig, downloadFn, sendTyping, visionLlmConfig, mediaDownloader);
+                    // 获取平台对应的 formatMention 函数
+                    const chatAdapter = adapterList?.find(a => a.platform === getPlatform(result.chatId));
+                    const formatMention = chatAdapter ? (rawId: string, username?: string) => chatAdapter.formatMention(rawId, username) : undefined;
+                    executor.setDependencies(sandboxPool, nc, llmConfigs, persona, memory, visionConfig, downloadFn, sendTyping, visionLlmConfig, mediaDownloader, formatMention);
                 }
 
                 executor.enqueue(task);
