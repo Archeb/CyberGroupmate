@@ -24,18 +24,7 @@
 
 ## 2026-03-25: Reflection UID 统一 + 交互富化 (Issues 3, 4)
 
-交互记录现在包含发言人信息，且在消息入口处同步 displayName 到 PersonIdentity 实现 UID 统一。
-
-### 改动
-
-| 文件 | 改动 |
-|------|------|
-| `src/main.ts` | storeInteraction 的 summary 改为 `[displayName] text` 格式；新增 `upsertPersonIdentity(compositeUid, { displayName })` 在消息入口处同步身份信息 |
-| `src/pipeline/feedback-loop.ts` | agent 回复的 interaction summary 添加 `[agent]` 前缀 |
-
-### Issue 4 重新设计
-
-> 原实现仅在 interaction summary 添加 `[displayName]` 前缀。重新设计为：合并"近期话题"和"近期交互"section，改为按话题分组展示实际对话消息，格式与 attend-handler 一致（`[时间] [msgId:xxx] 发送者: 文本`，含时间间隔标记）。
+合并"近期话题"和"近期交互"section，改为按话题分组展示实际对话消息，格式与 attend-handler 一致（`[时间] [msgId:xxx] 发送者: 文本`，含时间间隔标记）。
 
 | 文件 | 改动 |
 |------|------|
