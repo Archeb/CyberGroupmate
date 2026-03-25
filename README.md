@@ -4,6 +4,8 @@
 
 CyberGroupmate 是一个能够以自然、拟人的行为模式参与群聊的自主 AI Agent。基于 [CodeAct](https://arxiv.org/abs/2402.01030) 范式构建，该 Agent 通过编写并执行 TypeScript 代码和 Shell 命令来进行感知、推理和行动——而不是依赖死板的 Tool Call。
 
+Join our discussion on Telegram! [https://t.me/cybergroupmate](https://t.me/cybergroupmate)
+
 ---
 
 ![CodeAct面板](docs/images/image1.png)
