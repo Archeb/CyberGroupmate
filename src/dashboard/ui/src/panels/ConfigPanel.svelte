@@ -15,6 +15,8 @@
   let showNewProfile = false;
   let newProfileName = "";
   let newKeyword = "";
+  /** 当前展开的 profile 名称集合 */
+  let expandedProfiles = new Set();
 
   const SECTIONS = [
     { id: "llmProfiles", label: "LLM Profiles", icon: "fa-microchip" },
@@ -191,7 +193,21 @@
   function deleteProfile(name) {
     if (!confirm(`删除 Profile "${name}"？`)) return;
     delete config.llmProfiles[name];
+    expandedProfiles.delete(name);
     config = config;
+  }
+
+  function cloneProfile(srcName) {
+    const newName = prompt(`复制 "${srcName}" 为新 Profile，请输入名称：`);
+    if (!newName || !newName.trim()) return;
+    if (config.llmProfiles[newName]) {
+      showToast(`名称 "${newName}" 已存在`, "error");
+      return;
+    }
+    config.llmProfiles[newName] = JSON.parse(JSON.stringify(config.llmProfiles[srcName]));
+    config = config;
+    expandedProfiles.add(newName);
+    expandedProfiles = expandedProfiles;
   }
   function addKeyword() {
     const kw = newKeyword.trim();
@@ -282,20 +298,40 @@
             </p>
             {#each Object.entries(config.llmProfiles) as [name, p]}
               <div class="profile-card">
-                <div class="flex justify-between items-center mb-2">
-                  <h4 class="font-mono font-bold text-sm">{name}</h4>
-                  <div class="flex gap-1">
+                <!-- svelte-ignore a11y-click-events-have-key-events -->
+                <div
+                  class="flex justify-between items-center cursor-pointer select-none"
+                  on:click={() => { expandedProfiles.has(name) ? expandedProfiles.delete(name) : expandedProfiles.add(name); expandedProfiles = expandedProfiles; }}
+                >
+                  <div class="flex items-center gap-2 min-w-0">
+                    <i class="fa-solid fa-chevron-right text-xs opacity-40 transition-transform" style:transform={expandedProfiles.has(name) ? "rotate(90deg)" : ""}></i>
+                    <h4 class="font-mono font-bold text-sm truncate">{name}</h4>
+                    <span class="text-xs opacity-40 truncate hidden sm:inline">
+                      {p.provider}{p.model ? ` · ${p.model}` : ""}{p.baseUrl ? ` · ${p.baseUrl.replace(/^https?:\/\//, "").slice(0, 30)}` : ""}
+                    </span>
+                  </div>
+                  <!-- svelte-ignore a11y-click-events-have-key-events -->
+                  <div class="flex gap-1 flex-shrink-0" on:click|stopPropagation>
                     <button
                       class="btn btn-xs btn-outline btn-info"
                       on:click={() => testProfile(name)}
                       disabled={profileTests[name]?.testing}
+                      title="测试连通性"
                     >
                       <i class="fa-solid fa-plug"></i>
                       {profileTests[name]?.testing ? "..." : "测试"}
                     </button>
                     <button
+                      class="btn btn-xs btn-outline"
+                      on:click={() => cloneProfile(name)}
+                      title="复制 Profile"
+                    >
+                      <i class="fa-solid fa-copy"></i>
+                    </button>
+                    <button
                       class="btn btn-xs btn-outline btn-error"
                       on:click={() => deleteProfile(name)}
+                      title="删除"
                     >
                       <i class="fa-solid fa-trash-can"></i>
                     </button>
@@ -303,7 +339,7 @@
                 </div>
                 {#if profileTests[name] && !profileTests[name].testing}
                   <div
-                    class="alert alert-sm mb-2 py-1"
+                    class="alert alert-sm mb-2 mt-2 py-1"
                     class:alert-success={profileTests[name].ok}
                     class:alert-error={!profileTests[name].ok}
                   >
@@ -314,6 +350,8 @@
                     </span>
                   </div>
                 {/if}
+                {#if expandedProfiles.has(name)}
+                <div class="mt-3">
                 <div class="cfg-grid-2">
                   <label class="cfg-field"
                     ><span class="cfg-label">Provider</span>
@@ -464,6 +502,8 @@
                       /></label
                     >
                   </div>
+                {/if}
+                </div>
                 {/if}
               </div>
             {/each}
