@@ -7,7 +7,7 @@
       "action": "REPLY | IGNORE | DEFER",
       "topicId": "",
       "targetMessageIds": ["12345", "12346"],
-      "contentDirection": "具体的内容方向指示（必填 for REPLY）",
+      "contentDirection": "具体的行动指示（先如何思考，要获取哪些信息，再回复谁）",
       "toneGuidance": "语气要求",
       "suggestedEmojis": ["😂", "🤔"],
       "confidence": 0.8,

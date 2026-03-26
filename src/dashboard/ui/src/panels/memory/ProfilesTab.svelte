@@ -53,10 +53,10 @@
       `邓巴层级 T${p.dunbarTier}（亲和度 ${score}）`,
       '',
       '分层阈值:',
-      '  T1 核心 ≥ 70  (最多15人)',
-      '  T2 熟悉 ≥ 40  (最多50人)',
-      '  T3 认识 ≥ 15  (最多150人)',
-      '  T4 陌生 < 15',
+      '  T1 核心 ≥ 90',
+      '  T2 熟悉 ≥ 70',
+      '  T3 认识 ≥ 50',
+      '  T4 陌生 < 50',
     ];
     if (p.dunbarReason) {
       lines.push('', `理由: ${p.dunbarReason}`);
@@ -126,7 +126,7 @@
                 </td>
                 <td>
                   {#if p.affinityScore != null}
-                    <span class="badge badge-xs cursor-help" class:badge-success={p.affinityScore >= 70} class:badge-warning={p.affinityScore >= 40 && p.affinityScore < 70} class:badge-ghost={p.affinityScore < 40}
+                    <span class="badge badge-xs cursor-help" class:badge-success={p.affinityScore >= 90} class:badge-warning={p.affinityScore >= 50 && p.affinityScore < 90} class:badge-ghost={p.affinityScore < 50}
                           title={scoreTooltip(p)}>
                       {Math.round(p.affinityScore)}
                     </span>

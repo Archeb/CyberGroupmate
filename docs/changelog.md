@@ -43,7 +43,7 @@ Memory Panel 各 Tab 补齐数据库中存在但前端未显示的字段：
 ### 邓巴层计算可视化
 
 ProfilesTab 中邓巴层 badge 和好感度分数 badge 新增悬停 tooltip，显示：
-- 分层阈值（T1≥70 / T2≥40 / T3≥15 / T4<15）
+- 分层阈值（T1≥90 / T2≥70 / T3≥50 / T4<50）
 - 四维度百分位排名公式（消息量40% + 话题30% + 活跃天20% + 画像深度10%）
 - 修正因子（friendly +10 / dependent +15 / instrumental ±0 / hostile -20）
 - `dunbarReason`（LLM 分层理由，如有）

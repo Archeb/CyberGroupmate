@@ -603,9 +603,9 @@ const QUALITY_DELTAS: Record<InteractionQuality, number> = {
 };
 
 function scoreToTier(score: number): 1 | 2 | 3 | 4 {
-    if (score >= 70) return 1;
-    if (score >= 40) return 2;
-    if (score >= 15) return 3;
+    if (score >= 90) return 1;
+    if (score >= 70) return 2;
+    if (score >= 50) return 3;
     return 4;
 }
 
