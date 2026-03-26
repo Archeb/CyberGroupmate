@@ -7,7 +7,10 @@
   let priority = 80;
 
   onMount(() => {
-    function onShow() { modal?.showModal(); }
+    function onShow(e) {
+      if (e.detail?.chatId) chatId = e.detail.chatId;
+      modal?.showModal();
+    }
     window.addEventListener('showEnqueueModal', onShow);
     return () => window.removeEventListener('showEnqueueModal', onShow);
   });

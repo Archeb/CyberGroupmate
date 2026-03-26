@@ -134,6 +134,10 @@
           </h3>
           {#if $selectedChatId}
             <div class="flex gap-1">
+              <button class="btn btn-xs btn-ghost" title="手动入队（触发 Agent 处理此群）" onclick={() => window.dispatchEvent(new CustomEvent('showEnqueueModal', { detail: { chatId: $selectedChatId } }))}>
+                <i class="fa-solid fa-paper-plane"></i>
+                入队
+              </button>
               <button class="btn btn-xs btn-ghost" title="触发 Recording Pipeline Flush（话题聚类）" disabled={flushing} onclick={triggerFlush}>
                 {#if flushing}<span class="loading loading-spinner loading-xs"></span>{:else}<i class="fa-solid fa-rotate"></i>{/if}
                 Flush
