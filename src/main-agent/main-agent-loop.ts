@@ -298,8 +298,11 @@ export class MainAgentLoop {
             if (!entry) break;
 
             // 同 tick 防重复：LLM 调用期间新消息可能导致同一群被重入队
+            // Fix: 放回队列而非丢弃——dequeue() 已从 Map 删除 entry，
+            // 如果直接 continue 会导致 entry 丢失（无 LLM 调用）
             if (attendedThisTick.has(entry.chatId)) {
-                log.debug("Phase 3: 跳过同 tick 重复 attend", { chatId: entry.chatId });
+                this.attentionQueue.enqueueOrUpdate(entry);
+                log.debug("Phase 3: 同 tick 重复 attend，放回队列", { chatId: entry.chatId, priority: entry.priority });
                 continue;
             }
             attendedThisTick.add(entry.chatId);
