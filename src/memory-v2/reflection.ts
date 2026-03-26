@@ -16,6 +16,7 @@
 import { createLogger } from "../core/logger.js";
 import { getPlatform, ensureCompositeId, getRawId } from "../core/chat-id.js";
 import { callLLM, type LLMConfig, type ChatMessage } from "../core/llm.js";
+import { resolveComponentTimeout } from "../core/config.js";
 import { formatMessages, type RawMessage } from "../core/message-enricher.js";
 
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
@@ -194,6 +195,7 @@ export async function runReflection(
     try {
         const response = await callLLM(messages, llmConfig, {
             caller: "reflection",
+            timeoutMs: resolveComponentTimeout("reflection"),
         });
         const parsed = parseReflectionJSON(response.content);
         if (parsed) {
@@ -1284,6 +1286,7 @@ async function analyzeMergeWithLLM(
         ];
         const response = await callLLM(messages, llmConfig, {
             caller: "reflection",
+            timeoutMs: resolveComponentTimeout("reflection"),
         });
 
         const parsed = JSON.parse(
@@ -1331,6 +1334,7 @@ async function analyzeCascadeMergeWithLLM(
         ];
         const response = await callLLM(messages, llmConfig, {
             caller: "reflection",
+            timeoutMs: resolveComponentTimeout("reflection"),
         });
 
         const parsed = JSON.parse(
