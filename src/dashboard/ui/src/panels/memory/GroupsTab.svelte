@@ -1,5 +1,5 @@
 <script>
-  import { activeTab, activeMemoryTab } from '../../lib/stores.js';
+  import { activeTab, activeMemoryTab, pendingMemoryLink } from '../../lib/stores.js';
   import { api } from '../../lib/api.js';
   import { shortId, escapeHtml, getPlatform, platformLabel } from '../../lib/utils.js';
 
@@ -16,13 +16,13 @@
   }
 
   function jumpToProfiles(chatId) {
+    pendingMemoryLink.set({ tab: 'm-profiles', chatId });
     activeMemoryTab.set('m-profiles');
-    window.dispatchEvent(new CustomEvent('memoryLinkQuery', { detail: { tab: 'm-profiles', chatId } }));
   }
 
   function jumpToChatLog(chatId) {
+    pendingMemoryLink.set({ tab: 'm-chatlog', chatId });
     activeMemoryTab.set('m-chatlog');
-    window.dispatchEvent(new CustomEvent('memoryLinkQuery', { detail: { tab: 'm-chatlog', chatId } }));
   }
 </script>
 

@@ -1,8 +1,9 @@
 <script>
-  import { activeMemoryTab, activeTab } from '../../lib/stores.js';
+  import { activeMemoryTab, activeTab, pendingMemoryLink } from '../../lib/stores.js';
   import { api } from '../../lib/api.js';
   import { shortId, getPlatform, platformLabel, stripPlatform } from '../../lib/utils.js';
   import { onMount } from 'svelte';
+  import { get } from 'svelte/store';
 
   let chatIdInput = '';
   let userIdInput = '';
@@ -15,14 +16,13 @@
   let loading = false;
 
   onMount(() => {
-    function onLink(e) {
-      if (e.detail?.tab !== 'm-chatlog') return;
-      if (e.detail.chatId) chatIdInput = e.detail.chatId;
-      if (e.detail.userId) userIdInput = e.detail.userId;
+    const pending = get(pendingMemoryLink);
+    if (pending?.tab === 'm-chatlog') {
+      if (pending.chatId) chatIdInput = pending.chatId;
+      if (pending.userId) userIdInput = pending.userId;
+      pendingMemoryLink.set(null);
       if (chatIdInput || userIdInput) load();
     }
-    window.addEventListener('memoryLinkQuery', onLink);
-    return () => window.removeEventListener('memoryLinkQuery', onLink);
   });
 
   async function load(p) {
@@ -91,8 +91,8 @@
   }
 
   function jumpToProfiles(userId, chatId) {
+    pendingMemoryLink.set({ tab: 'm-profiles', chatId });
     activeMemoryTab.set('m-profiles');
-    window.dispatchEvent(new CustomEvent('memoryLinkQuery', { detail: { tab: 'm-profiles', chatId } }));
   }
 
   export function refresh() { if (items.length > 0) load(); }

@@ -1,8 +1,9 @@
 <script>
-  import { activeTab, activeMemoryTab } from '../../lib/stores.js';
+  import { activeTab, activeMemoryTab, pendingMemoryLink } from '../../lib/stores.js';
   import { api } from '../../lib/api.js';
   import { escapeHtml } from '../../lib/utils.js';
   import { onMount } from 'svelte';
+  import { get } from 'svelte/store';
 
   let items = [];
   let total = 0;
@@ -13,15 +14,14 @@
   $: if ($activeTab === 'memory' && $activeMemoryTab === 'm-facts') load();
 
   onMount(() => {
-    function onLink(e) {
-      if (e.detail?.tab !== 'm-facts') return;
-      if (e.detail.subject) {
-        subject = e.detail.subject;
+    const pending = get(pendingMemoryLink);
+    if (pending?.tab === 'm-facts') {
+      if (pending.subject) {
+        subject = pending.subject;
+        pendingMemoryLink.set(null);
         load();
       }
     }
-    window.addEventListener('memoryLinkQuery', onLink);
-    return () => window.removeEventListener('memoryLinkQuery', onLink);
   });
 
   async function load(p) {

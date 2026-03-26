@@ -151,6 +151,8 @@ export const topicDetailId = writable(null);
 
 // ─── Memory sub-tab ───
 export const activeMemoryTab = writable('m-persons');
+/** Pending cross-tab navigation payload; consumed by target tab on mount */
+export const pendingMemoryLink = writable(null);
 
 // ─── CodeAct Progress (real-time streaming) ───
 /** Map<chatId, Array<progressEvent>> — 每个 chat 的实时进度事件列表 */
