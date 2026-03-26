@@ -1,5 +1,26 @@
 # Changelog
 
+## 2026-03-26: 消息富化 — URL OpenGraph 链接预览 + Vision 封面图描述
+
+消息富化管线新增 URL 链接预览功能：自动提取消息中的 HTTP/HTTPS URL，抓取 OpenGraph 元数据（标题、描述、站点名），并使用 Vision LLM 描述 OG 封面图内容，将富化信息注入上下文。
+
+### 功能
+
+- **URL 提取**：regex 从消息文本中提取 HTTP(S) URL，批量去重
+- **OG 元数据抓取**：使用 `open-graph-scraper` 库获取 `og:title`、`og:description`、`og:site_name`、`og:image`
+- **封面图 Vision 描述**：下载 OG 封面图 → 调用 Vision tier LLM 生成一句话描述
+- **Path A 内联**：主 LLM 支持 vision 时，OG 封面图 base64 也作为 imagePart 内联传递
+- **LRU 缓存**：200 条 URL 缓存，10 分钟 TTL，避免重复抓取
+- **格式化输出**：`[🔗 链接预览: SiteName: 标题 — 描述 — 封面: vision描述]`
+
+### 改动
+
+| 文件 | 改动 |
+|------|------|
+| `src/core/opengraph.ts` | **[NEW]** OG 抓取工具：`fetchOpenGraph`（带 LRU 缓存）、`fetchOpenGraphBatch`（并行批量）、`extractUrls`（URL 提取）、`downloadOgImage`（封面图下载） |
+| `src/core/message-enricher.ts` | `RawMessage` 新增 `ogPreviews` 字段；新增 `OGPreview` 接口；`EnrichOptions` 新增 `enableOgPreview`（默认 true）；`enrichMessages` 新增 step 2.5（OG 抓取 + Vision）；`formatMessages` 注入链接预览文本 + imageParts |
+| `package.json` | 新增 `open-graph-scraper` 依赖 |
+
 ## 2026-03-25: Reflection 私聊适配
 
 反思引擎现在区分群聊和私聊，对私聊使用专用 prompt，聚焦一对一关系深度分析。

@@ -5,7 +5,8 @@
  * 负责：
  * - 从 raw messages 中解析媒体附件
  * - 调用 Vision 管线处理图片/贴纸
- * - 格式化消息文本（含 reply-to、媒体描述）
+ * - 从消息 URL 抓取 OpenGraph 元数据 + Vision 描述封面图
+ * - 格式化消息文本（含 reply-to、媒体描述、链接预览）
  * - 收集 base64 图片用于多模态 LLM
  *
  * 后续扩展点：语音转写、视频帧提取、Poll 格式化等
@@ -16,6 +17,8 @@ import type { LLMConfig, VisionConfig } from "./config.js";
 import type { MediaDownloader } from "./media-downloader.js";
 import { formatTsForDisplay } from "./timezone.js";
 import { createLogger } from "./logger.js";
+import { extractUrls, fetchOpenGraphBatch, downloadOgImage, type OGResult } from "./opengraph.js";
+import { callLLM, type ChatMessage } from "./llm.js";
 
 const log = createLogger("message-enricher");
 
@@ -39,6 +42,21 @@ export interface RawMessage {
     chatId?: string;
     /** 任意已处理的媒体结果（由 enrichMessages 写入） */
     processedMedia?: ProcessedMedia[];
+    /** OpenGraph 链接预览结果（由 enrichMessages 写入） */
+    ogPreviews?: OGPreview[];
+}
+
+/** 单条 URL 的 OpenGraph 预览信息 */
+export interface OGPreview {
+    url: string;
+    title?: string;
+    description?: string;
+    siteName?: string;
+    /** Vision 描述的封面图内容 */
+    imageDescription?: string;
+    /** 封面图 base64 数据（path A 时内联给 LLM） */
+    imageBase64?: string;
+    imageMimeType?: string;
 }
 
 /** 富化选项 */
@@ -59,6 +77,8 @@ export interface EnrichOptions {
     mediaDownloader?: MediaDownloader;
     /** 仅处理指定类型的媒体（如 ["sticker"]），未指定时处理所有类型 */
     mediaTypes?: Array<"photo" | "sticker" | "video" | "document" | "animation" | "other">;
+    /** 是否启用 URL OpenGraph 预览（默认 true） */
+    enableOgPreview?: boolean;
 }
 
 /** 富化结果 */
@@ -115,6 +135,15 @@ export async function enrichMessages(
             log.info("媒体富化完成", { processed: processed.length, chatId: options.chatId });
         } catch (err) {
             log.warn("媒体富化失败，继续使用占位符", { chatId: options.chatId, error: String(err) });
+        }
+    }
+
+    // ─── 2.5 OpenGraph URL 预览 ───
+    if (options.enableOgPreview !== false) {
+        try {
+            await enrichWithOpenGraph(messages, options);
+        } catch (err) {
+            log.warn("OG 预览富化失败，继续", { chatId: options.chatId, error: String(err) });
         }
     }
 
@@ -388,9 +417,141 @@ export function formatMessages(
             }
         }
 
+        // ─── 注入 OpenGraph 链接预览 ───
+        if (m.ogPreviews && m.ogPreviews.length > 0) {
+            for (const og of m.ogPreviews) {
+                const parts: string[] = [];
+                if (og.title) parts.push(og.title);
+                if (og.description) {
+                    // 截断过长的描述
+                    const desc = og.description.length > 150
+                        ? og.description.slice(0, 150) + "…"
+                        : og.description;
+                    parts.push(desc);
+                }
+                if (og.imageDescription) {
+                    parts.push(`封面: ${og.imageDescription}`);
+                }
+                if (og.imageBase64 && og.imageMimeType) {
+                    imageParts.push({
+                        url: `data:${og.imageMimeType};base64,${og.imageBase64}`,
+                    });
+                    parts.push(`[🖼 封面图${imageParts.length}]`);
+                }
+                const sitePrefix = og.siteName ? `${og.siteName}: ` : "";
+                const previewText = `[🔗 链接预览: ${sitePrefix}${parts.join(" — ")}]`;
+                textPart = textPart ? `${textPart}\n  ${previewText}` : previewText;
+            }
+        }
+
         const replyTag = buildReplyTag(m);
         lines.push(`[${formatTsForDisplay(m.timestamp) ?? ""}] [msgId:${m.id ?? "?"}] ${m.sender ?? "?"}${replyTag}: ${textPart}`);
     }
 
     return lines.join("\n") || "(无目标消息原文)";
+}
+
+// ─── OpenGraph 富化内部函数 ───
+
+/**
+ * 对消息中的 URL 进行 OpenGraph 元数据抓取 + 封面图 Vision 描述
+ */
+async function enrichWithOpenGraph(
+    messages: RawMessage[],
+    options: EnrichOptions,
+): Promise<void> {
+    // 1. 收集所有 URL
+    const urlsByMsgIndex = new Map<number, string[]>();
+    const allUrls: string[] = [];
+    for (let i = 0; i < messages.length; i++) {
+        const text = messages[i].text;
+        if (!text) continue;
+        const urls = extractUrls(text);
+        if (urls.length > 0) {
+            urlsByMsgIndex.set(i, urls);
+            allUrls.push(...urls);
+        }
+    }
+    if (allUrls.length === 0) return;
+
+    log.info("OG 预览开始", { urlCount: allUrls.length, chatId: options.chatId });
+
+    // 2. 批量抓取 OG 元数据
+    const ogResults = await fetchOpenGraphBatch(allUrls);
+    if (ogResults.size === 0) {
+        log.debug("无有效 OG 结果");
+        return;
+    }
+
+    // 3. 确定 Vision 配置
+    const isPathA = options.llmConfig.vision === true;
+    const visionLlmConfig = options.visionLlmConfig ?? (isPathA ? options.llmConfig : undefined);
+
+    // 4. 对有封面图的 OG 结果进行 Vision 描述 + 下载
+    const imageDescriptions = new Map<string, { description?: string; base64?: string; mimeType?: string }>();
+    const imageUrls = [...ogResults.values()]
+        .filter(og => og.imageUrl)
+        .map(og => og.imageUrl!);
+    const uniqueImageUrls = [...new Set(imageUrls)];
+
+    if (uniqueImageUrls.length > 0 && visionLlmConfig) {
+        const imageTasks = uniqueImageUrls.map(async (imageUrl) => {
+            const downloaded = await downloadOgImage(imageUrl);
+            if (!downloaded) return;
+
+            try {
+                // Vision 描述封面图
+                const b64 = downloaded.buffer.toString("base64");
+                const dataUri = `data:${downloaded.mimeType};base64,${b64}`;
+                const visionMessages: ChatMessage[] = [
+                    {
+                        role: "user",
+                        content: "这是一个网页链接的 OpenGraph 封面图。请用一句话简短描述图片内容。",
+                        imageParts: [{ url: dataUri }],
+                    },
+                ];
+                const response = await callLLM(visionMessages, visionLlmConfig, { caller: "og-vision" });
+                const description = response.content.trim();
+
+                imageDescriptions.set(imageUrl, {
+                    description,
+                    // Path A: 同时保留 base64 数据给主 LLM 内联查看
+                    base64: isPathA ? b64 : undefined,
+                    mimeType: isPathA ? downloaded.mimeType : undefined,
+                });
+            } catch (err) {
+                log.debug("OG 封面图 Vision 描述失败", { imageUrl, error: String(err).slice(0, 200) });
+            }
+        });
+        await Promise.allSettled(imageTasks);
+    }
+
+    // 5. 将 OG 结果写回 messages
+    for (const [msgIdx, urls] of urlsByMsgIndex) {
+        const previews: OGPreview[] = [];
+        for (const url of urls) {
+            const og = ogResults.get(url);
+            if (!og) continue;
+
+            const imgInfo = og.imageUrl ? imageDescriptions.get(og.imageUrl) : undefined;
+            previews.push({
+                url: og.url,
+                title: og.title,
+                description: og.description,
+                siteName: og.siteName,
+                imageDescription: imgInfo?.description,
+                imageBase64: imgInfo?.base64,
+                imageMimeType: imgInfo?.mimeType,
+            });
+        }
+        if (previews.length > 0) {
+            messages[msgIdx].ogPreviews = previews;
+        }
+    }
+
+    log.info("OG 预览完成", {
+        fetched: ogResults.size,
+        imagesDescribed: imageDescriptions.size,
+        chatId: options.chatId,
+    });
 }

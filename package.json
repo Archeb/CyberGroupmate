@@ -25,6 +25,7 @@
     "js-tiktoken": "^1.0.21",
     "mime-to-extensions": "^1.0.2",
     "node-pty": "^1.1.0",
+    "open-graph-scraper": "^6.11.0",
     "sqlite-vec": "^0.1.7-alpha.2",
     "stream-json": "^1.9.1",
     "ulid": "^2.3.0",
