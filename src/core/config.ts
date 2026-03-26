@@ -147,8 +147,6 @@ export interface DiscordConfig {
 }
 
 export interface ReflectionExternalConfig {
-    /** LLM profile name (references llm_profiles). When set, uses that profile's full config. Falls back to caller-provided llmConfig if unset. */
-    profile?: string;
     /** Silence threshold in seconds before triggering reflection (default: 7200 = 2h) */
     silenceThreshold?: number;
     /** Max interval in seconds between reflections, even if group is active (default: 86400 = 24h) */
@@ -443,7 +441,6 @@ export function loadConfig(configPath?: string, forceReload?: boolean): AppConfi
                 : [],
         },
         reflection: {
-            profile: str(fileReflection.profile),
             silenceThreshold: fileReflection.silence_threshold != null ? num(fileReflection.silence_threshold, 7200) : undefined,
             maxInterval: fileReflection.max_interval != null ? num(fileReflection.max_interval, 86400) : undefined,
             checkInterval: fileReflection.check_interval != null ? num(fileReflection.check_interval, 300) : undefined,
@@ -864,7 +861,6 @@ export function serializeConfigToObject(config: AppConfig): Record<string, unkno
     // reflection
     const refl: Record<string, unknown> = {};
     const r = config.reflection;
-    if (r.profile) refl.profile = r.profile;
     if (r.silenceThreshold != null) refl.silence_threshold = r.silenceThreshold;
     if (r.maxInterval != null) refl.max_interval = r.maxInterval;
     if (r.checkInterval != null) refl.check_interval = r.checkInterval;

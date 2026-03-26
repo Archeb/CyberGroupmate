@@ -835,17 +835,6 @@
             </p>
             <div class="cfg-grid-2">
               <label class="cfg-field"
-                ><span class="cfg-label">Profile</span>
-                <select
-                  class="select select-xs select-bordered w-full"
-                  bind:value={config.reflection.profile}
-                >
-                  <option value={undefined}>（跟随 routing）</option>
-                  {#each getProfileNames() as pn}<option value={pn}>{pn}</option
-                    >{/each}
-                </select></label
-              >
-              <label class="cfg-field"
                 ><span class="cfg-label">冷场阈值 (秒)</span>
                 <input
                   type="number"
