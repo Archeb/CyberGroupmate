@@ -4,6 +4,34 @@
   import { api } from '../lib/api.js';
   import { escapeHtml, shortId, getGroupLabel, isAtBottom, scrollToBottom, getPlatform, platformLabel } from '../lib/utils.js';
 
+  let flushing = false;
+  let reflecting = false;
+
+  async function triggerFlush() {
+    if (!$selectedChatId || flushing) return;
+    flushing = true;
+    try {
+      await api(`/recording/flush/${encodeURIComponent($selectedChatId)}`, { method: 'POST' });
+    } catch (e) {
+      alert('Flush 失败: ' + e.message);
+    } finally {
+      flushing = false;
+    }
+  }
+
+  async function triggerReflection() {
+    if (!$selectedChatId || reflecting) return;
+    reflecting = true;
+    try {
+      const res = await api(`/reflection/${encodeURIComponent($selectedChatId)}`, { method: 'POST' });
+      alert(`Reflection 完成\n画像更新: ${res.personUpdates?.length ?? 0}\n新事实: ${res.newCoreFacts?.length ?? 0}`);
+    } catch (e) {
+      alert('Reflection 失败: ' + e.message);
+    } finally {
+      reflecting = false;
+    }
+  }
+
   let streamEl;
   let showSidebar = false;
 
@@ -94,15 +122,29 @@
   <div class="msg-content">
     <div class="card bg-base-100 h-full">
       <div class="card-body p-3 min-h-0 flex flex-col">
-        <h3 class="card-title text-sm shrink-0">
-          消息流
+        <div class="flex justify-between items-center shrink-0 mb-1">
+          <h3 class="card-title text-sm">
+            消息流
+            {#if $selectedChatId}
+              {#if getPlatform($selectedChatId)}<span class="platform-badge platform-{getPlatform($selectedChatId)}">{platformLabel(getPlatform($selectedChatId))}</span>{/if}
+              <span class="text-xs opacity-60">{getGroupLabel($selectedChatId)}</span>
+            {:else}
+              <span class="text-xs opacity-60">全部</span>
+            {/if}
+          </h3>
           {#if $selectedChatId}
-            {#if getPlatform($selectedChatId)}<span class="platform-badge platform-{getPlatform($selectedChatId)}">{platformLabel(getPlatform($selectedChatId))}</span>{/if}
-            <span class="text-xs opacity-60">{getGroupLabel($selectedChatId)}</span>
-          {:else}
-            <span class="text-xs opacity-60">全部</span>
+            <div class="flex gap-1">
+              <button class="btn btn-xs btn-ghost" title="触发 Recording Pipeline Flush（话题聚类）" disabled={flushing} onclick={triggerFlush}>
+                {#if flushing}<span class="loading loading-spinner loading-xs"></span>{:else}<i class="fa-solid fa-rotate"></i>{/if}
+                Flush
+              </button>
+              <button class="btn btn-xs btn-ghost" title="触发 Reflection（画像/亲和度/事实更新）" disabled={reflecting} onclick={triggerReflection}>
+                {#if reflecting}<span class="loading loading-spinner loading-xs"></span>{:else}<i class="fa-solid fa-brain"></i>{/if}
+                Reflect
+              </button>
+            </div>
           {/if}
-        </h3>
+        </div>
         <div bind:this={streamEl} class="overflow-y-auto flex-1 min-h-0 space-y-1 font-mono text-sm">
           {#each displayMessages as m}
             {@const time = new Date(m.timestamp).toLocaleTimeString()}

@@ -469,6 +469,35 @@ export function createApiRouter(deps: DashboardDeps, bridge: EventBridge): Route
         res.json({ ok: true });
     });
 
+    // ─── Manual Flush / Reflection ───
+    router.post("/recording/flush/:chatId", (req, res) => {
+        const sub = deps.subagentManager.get(req.params.chatId);
+        if (!sub) { res.status(404).json({ error: "chat not found" }); return; }
+        if (!sub.recordingPipeline) { res.status(400).json({ error: "no recording pipeline" }); return; }
+        sub.recordingPipeline.flush().then(() => {
+            log.info("手动 flush 完成", { chatId: req.params.chatId });
+            res.json({ ok: true });
+        }).catch(err => {
+            log.error("手动 flush 失败", { chatId: req.params.chatId, error: String(err) });
+            res.status(500).json({ error: String(err) });
+        });
+    });
+
+    router.post("/reflection/:chatId", async (req, res) => {
+        const chatId = req.params.chatId;
+        try {
+            const config = loadConfig();
+            const { resolveComponentProfiles } = await import("../core/config.js");
+            const reflectionLlmConfig = resolveComponentProfiles("reflection", config)[0];
+            const result = await deps.memory.reflect(chatId, reflectionLlmConfig, config.reflection);
+            log.info("手动 Reflection 完成", { chatId, personUpdates: result.personUpdates.length, newFacts: result.newCoreFacts.length });
+            res.json({ ok: true, ...result });
+        } catch (err) {
+            log.error("手动 Reflection 失败", { chatId, error: String(err) });
+            res.status(500).json({ error: String(err) });
+        }
+    });
+
     // ─── FeedbackLoop ───
     router.get("/feedbackloop", (_req, res) => {
         res.json({ activeWindows: deps.feedbackLoop.getActiveWindows() });
