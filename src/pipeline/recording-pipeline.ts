@@ -365,7 +365,7 @@ export class RecordingPipeline extends EventEmitter {
         });
 
         const llmMessages: ChatMessage[] = [
-            { role: "system", content: "你是一个精确的 JSON 输出助手。只输出合法 JSON，不要任何其他内容。" },
+            { role: "system", content: "你是一个话题聚类助手。只输出合法 JSON，不要任何其他内容。" },
             { role: "user", content: prompt },
         ];
 
@@ -416,13 +416,12 @@ export class RecordingPipeline extends EventEmitter {
         const topicMessagesStr = this.buildTopicContextStr(allTopicIds, topicGroups, clustering);
 
         const prompt = renderPrompt("TOPIC_TRIAGE", {
-            persona: this.personaDescription,
-            topicMessages: topicMessagesStr,
+            persona: this.personaDescription
         });
 
         const llmMessages: ChatMessage[] = [
-            { role: "system", content: "你是一个精确的 JSON 输出助手。只输出合法 JSON，不要任何其他内容。" },
-            { role: "user", content: prompt },
+            { role: "system", content: prompt },
+            { role: "user", content: topicMessagesStr },
         ];
 
         const response = await callLLM(llmMessages, this.llmConfig, { caller: "recording-pipeline" });
@@ -454,12 +453,11 @@ export class RecordingPipeline extends EventEmitter {
             const retryStr = this.buildTopicContextStr(missingIds, topicGroups, clustering);
             const retryPrompt = renderPrompt("TOPIC_TRIAGE", {
                 persona: this.personaDescription,
-                topicMessages: retryStr,
             });
 
             const retryMessages: ChatMessage[] = [
-                { role: "system", content: "你是一个精确的 JSON 输出助手。只输出合法 JSON，不要任何其他内容。" },
-                { role: "user", content: retryPrompt },
+                { role: "system", content: retryPrompt },
+                { role: "user", content: retryStr },
             ];
 
             try {

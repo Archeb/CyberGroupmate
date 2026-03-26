@@ -57,7 +57,7 @@
     {
       "userId": "string (用户ID)",
       "displayName": "string (当前显示名，如有变化)",
-      "aliases": ["string (已知的其他称呼/昵称)"]
+      "aliases": ["string (昵称，请参考原有别名，在有证据的情况下谨慎更新，原来没有的话可以根据观察推断)"]
     }
   ],
   "groupUpdates": {
