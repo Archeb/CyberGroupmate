@@ -192,8 +192,6 @@
                         <span class="badge badge-xs" class:badge-success={evt.decision.should_intervene} class:badge-ghost={!evt.decision.should_intervene}>
                           {evt.decision.should_intervene ? '介入' : '观望'}
                         </span>
-                        <span class="rp-decision-type">{evt.decision.intervention_type}</span>
-                        <span class="rp-decision-conf">置信度: {(evt.decision.confidence * 100).toFixed(0)}%</span>
                       </div>
                       {#if evt.decision.reason}
                         <div class="rp-decision-reason">{evt.decision.reason}</div>

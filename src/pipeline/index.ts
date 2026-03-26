@@ -9,7 +9,6 @@ export type {
     Message,
     TopicState,
     Topic,
-    InterventionType,
 
     TriageDecision,
     ExitSignalType,

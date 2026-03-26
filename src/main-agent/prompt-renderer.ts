@@ -391,6 +391,8 @@ export interface FormattableTopic {
     createdAt?: number | string;
     participants?: string[];
     messageCount?: number;
+    /** Triage 判断理由（仅 ENGAGED 状态话题） */
+    triageReason?: string;
 }
 
 /**
@@ -432,7 +434,8 @@ export function formatTopicList(topics: FormattableTopic[], emptyText = "(无活
             : (t.recentContext
                 ? `: ${t.recentContext.split("\n").slice(-2).join("; ")}`
                 : "");
-        return `${time} ${t.label}${people}${detail}${id}`.trim();
+        const reason = t.triageReason ? ` │ ✅ 建议介入，原因: ${t.triageReason}` : "";
+        return `${time} ${t.label}${people}${detail}${reason}${id}`.trim();
     }).join("\n");
 }
 
@@ -447,5 +450,6 @@ function formatTopicDigests(digests: TopicDigest[]): string {
         summary: d.summary,
         messageCount: d.messageCount,
         createdAt: d.lastActivityAt,
+        triageReason: (d as any).triageReason,
     })));
 }

@@ -34,16 +34,13 @@ describe("RecordingPipeline", () => {
             topics: [{
                 topicId: "NEW_1",
                 summary: "用户在私聊召唤 agent。",
-                keyPoints: ["需要快速响应"],
                 should_intervene: true,
-                intervention_type: "CASUAL_CHAT",
-                confidence: 0.95,
                 reason: "私聊直接消息",
             }],
         });
 
         let emitted = false;
-        pipeline.on("topic:triage-passed", () => {
+        pipeline.on("topics:triage-passed", () => {
             emitted = true;
         });
 

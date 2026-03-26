@@ -1,5 +1,33 @@
 # Changelog
 
+## 2026-03-26: Triage 简化 — 移除 confidence/keyPoints/intervention_type + Reason 传递到 Attend
+
+简化 Recording Pipeline 的 Triage 输出，移除冗余字段，使用纯布尔值控制入队，将判断理由传递到 attend-handler 供二次决策。
+
+### 变更要点
+
+- **Triage 输出简化**：从 6 个字段（topicId/summary/keyPoints/should_intervene/intervention_type/confidence/reason）精简为 4 个（topicId/summary/should_intervene/reason）
+- **入队逻辑简化**：从 `should_intervene && confidence >= threshold` 改为纯 `should_intervene` 布尔值
+- **批量事件**：一次 flush 的多个 triage 结果只触发一次 Q3 入队（`topic:triage-passed` → `topics:triage-passed` 批量事件）
+- **Reason 传递**：`triage.reason` → `Topic.decision.reason` → `TopicDigest.triageReason` → attend prompt `{{topicDigests}}` 中渲染为 `│ ✅ 建议介入，原因: <reason>`
+- **InterventionType 删除**：从 types、ModelRouteRule、Dashboard 全部移除
+
+### 改动
+
+| 文件 | 改动 |
+|------|------|
+| `src/pipeline/types.ts` | 移除 `InterventionType` 类型、`TriageDecision.intervention_type`/`confidence`、`Topic.lastKeyPoints`、`TopicSummaryTriageResult.keyPoints/intervention_type/confidence`、`ModelRouteRule.match.interventionType/confidenceRange` |
+| `src/pipeline/index.ts` | 移除 `InterventionType` 导出 |
+| `src/pipeline/recording-pipeline.ts` | 移除 confidence 阈值判断，纯 `should_intervene` 布尔值；移除 `lastKeyPoints` 缓存；`topic:triage-passed` → `topics:triage-passed` 批量事件 |
+| `src/pipeline/topic-registry.ts` | 移除 `lastKeyPoints`；`RestorableTopic` 移除 `keyPoints` |
+| `system-prompts/recording/recording-topic-triage.md` | 输出 JSON 精简为 4 字段 |
+| `src/subagent/types.ts` | `TopicDigest` 新增 `triageReason`，移除 `triageDecision`/`triageConfidence` |
+| `src/subagent/group-subagent.ts` | 监听批量事件 `topics:triage-passed`；`buildQueueEntry()` 映射 `decision.reason` → `triageReason`；移除 `keyPoints` 从 restore 路径 |
+| `src/main-agent/prompt-renderer.ts` | `FormattableTopic` 新增 `triageReason`；`formatTopicList` 渲染 `│ ✅ 建议介入，原因:` |
+| `src/dashboard/event-bridge.ts` | 监听 `topics:triage-passed` 批量事件，移除 `intervention_type`/`confidence` |
+| `src/dashboard/ui/src/panels/RecordingPanel.svelte` | 移除 intervention_type/confidence 显示 |
+| `tests/recording-pipeline.test.ts` | 更新 mock 数据 + 事件名 |
+
 ## 2026-03-26: Recording Pipeline Prompt 模板化
 
 将 `recording-pipeline.ts` 中硬编码的两个 prompt（话题聚类 + 话题 Triage）迁移到 `prompt-renderer.ts` 模板渲染系统，与 `attend-handler` 保持一致。

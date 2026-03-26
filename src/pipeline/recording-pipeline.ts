@@ -55,7 +55,7 @@ const DEFAULT_EAGER_SILENCE = 30 * 1000;       // 30 sec
  * - `flush:start` (messageCount: number)
  * - `flush:complete` (topics: Topic[])
  * - `flush:error` (error: Error)
- * - `topic:triage-passed` (topic: Topic, decision: TriageDecision)
+ * - `topics:triage-passed` (triagePassedTopics: Array<{ topic: Topic, decision: TriageDecision }>)
  */
 export class RecordingPipeline extends EventEmitter {
     private buffer: Message[] = [];
@@ -217,9 +217,8 @@ export class RecordingPipeline extends EventEmitter {
                         this.memory.upsertTopic(topic.id, {
                             chatId: String(chatId),
                             label: topic.label,
-                            // 仅在有 triage 结果时写入 summary/keyPoints，避免后续 flush 覆写已有数据
+                            // 仅在有 triage 结果时写入 summary，避免后续 flush 覆写已有数据
                             ...(triage?.summary ? { summary: triage.summary } : {}),
-                            ...(triage?.keyPoints?.length ? { keyPoints: triage.keyPoints } : {}),
                             keywords: topic.keywords,
                             participants: [...topic.participantIds].map(String),
                             messageRange: {
@@ -486,7 +485,7 @@ export class RecordingPipeline extends EventEmitter {
     /**
      * 构建话题上下文字符串（供 Step 2 prompt 使用）
      *
-     * 对旧话题：附带 label、上一轮 summary/keyPoints/reason、recentContext 历史消息
+     * 对旧话题：附带 label、上一轮 summary/reason、recentContext 历史消息
      * 对新话题：只含本批次消息
      */
     private buildTopicContextStr(
@@ -512,9 +511,6 @@ export class RecordingPipeline extends EventEmitter {
             // 上一轮的摘要信息
             if (topic?.lastSummary) {
                 parts.push(`  上一轮摘要: ${topic.lastSummary}`);
-            }
-            if (topic?.lastKeyPoints?.length) {
-                parts.push(`  上一轮要点: ${topic.lastKeyPoints.join("; ")}`);
             }
             if (topic?.decision?.reason) {
                 parts.push(`  上一轮判断: ${topic.decision.reason}`);
@@ -546,6 +542,8 @@ export class RecordingPipeline extends EventEmitter {
         triageResult: TopicSummaryTriageResult
     ): { topics: Topic[]; clusterIdMap: Map<string, string> } {
         const updatedTopics: Topic[] = [];
+        // 收集本次 flush 通过 triage 的话题，在循环结束后批量 emit
+        const triagePassedTopics: Array<{ topic: Topic; decision: TriageDecision }> = [];
         // 映射: 真实话题ID → clustering 临时 ID（如 NEW_1），用于 Step 4 查找 triage 结果
         const clusterIdMap = new Map<string, string>();
 
@@ -597,7 +595,6 @@ export class RecordingPipeline extends EventEmitter {
             if (triage) {
                 // 缓存摘要信息到 Topic 对象，供下一轮 flush 时作为旧话题上下文
                 topic.lastSummary = triage.summary;
-                topic.lastKeyPoints = triage.keyPoints;
 
                 const wasAlreadyHandledByFastPath = topicMsgs.some(msg => msg._viaFastPath);
 
@@ -621,8 +618,6 @@ export class RecordingPipeline extends EventEmitter {
                     const decision: TriageDecision = {
                         should_intervene: false,
                         reason,
-                        intervention_type: "NOT_APPLICABLE",
-                        confidence: 1.0,
                     };
 
                     this.registry.transition(topic.id, "TRIAGING");
@@ -636,31 +631,28 @@ export class RecordingPipeline extends EventEmitter {
                 const decision: TriageDecision = {
                     should_intervene: triage.should_intervene,
                     reason: triage.reason,
-                    intervention_type: triage.intervention_type,
-                    confidence: triage.confidence,
                 };
-
-                // 冷却增强：提高置信度阈值
-                const threshold = topic.cooldownBoost ? 0.75 : 0.6;
 
                 this.registry.transition(topic.id, "TRIAGING");
 
-                if (triage.should_intervene && triage.confidence >= threshold) {
+                if (triage.should_intervene) {
                     this.registry.setDecision(topic.id, decision);
                     this.registry.transition(topic.id, "PRELOADING");
                     this.registry.transition(topic.id, "ENGAGED");
-                    this.emit("topic:triage-passed", topic, decision);
+                    triagePassedTopics.push({ topic, decision });
                 } else {
                     this.registry.setDecision(topic.id, decision);
-                    const ignoreState = triage.confidence < 0.3
-                        ? "IGNORED_LOW_VALUE" as const
-                        : "IGNORED" as const;
                     topic.ignoreReason = triage.reason;
-                    this.registry.transition(topic.id, ignoreState);
+                    this.registry.transition(topic.id, "IGNORED");
                 }
             }
 
             updatedTopics.push(topic);
+        }
+
+        // 批量 emit triage-passed 事件（一次 flush 只触发一次入队）
+        if (triagePassedTopics.length > 0) {
+            this.emit("topics:triage-passed", triagePassedTopics);
         }
 
         return { topics: updatedTopics, clusterIdMap };

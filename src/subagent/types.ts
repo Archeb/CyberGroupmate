@@ -30,10 +30,8 @@ export interface TopicDigest {
     messageCount: number;
     /** 最后活跃时间 */
     lastActivityAt: string;
-    /** Triage 决策（如果有） */
-    triageDecision?: "ENGAGE" | "IGNORE" | null;
-    /** Triage 置信度 */
-    triageConfidence?: number;
+    /** Triage 判断理由（should_intervene=true 时填充） */
+    triageReason?: string;
 }
 
 /** Observer 告警（高 engagement 时主动上报） */

@@ -424,7 +424,6 @@ export class TopicRegistry extends EventEmitter {
                 messageCount: t.messageCount ?? 0,
                 recentContext: "",
                 lastSummary: t.summary ?? undefined,
-                lastKeyPoints: t.keyPoints ?? undefined,
             };
 
             this.topics.set(topic.id, topic);
@@ -453,7 +452,6 @@ export interface RestorableTopic {
     chatId: string;
     label: string;
     summary?: string;
-    keyPoints?: string[];
     keywords?: string[];
     participants?: string[];
     messageIds?: string[];

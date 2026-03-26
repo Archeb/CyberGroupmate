@@ -64,21 +64,6 @@ export type TopicState =
     | "STALE"              // 15 分钟无新消息
     | "ARCHIVED";          // 2 小时无新消息，归入长期记忆
 
-// ─── 介入类型 ───
-
-/** Triage 判定的介入类型 */
-export type InterventionType =
-    | "FACTUAL_CORRECTION"   // 事实纠正
-    | "KNOWLEDGE_GAP"        // 知识补充
-    | "QUESTION_ANSWER"      // 问答回复
-    | "RESOURCE_SHARING"     // 资源分享
-    | "CONFLICT_MEDIATION"   // 调解冲突
-    | "CONSENSUS_SUMMARY"    // 共识总结
-    | "CASUAL_CHAT"          // 闲聊参与
-    | "NOT_APPLICABLE";      // 不适合介入
-
-
-
 // ─── Triage 决策 ───
 
 /** 话题级 Triage 的结构化输出 */
@@ -87,10 +72,6 @@ export interface TriageDecision {
     should_intervene: boolean;
     /** 判断理由 */
     reason: string;
-    /** 介入类型 */
-    intervention_type: InterventionType;
-    /** 置信度 0-1 */
-    confidence: number;
 }
 
 // ─── 退出信号 ───
@@ -186,8 +167,6 @@ export interface Topic {
     recentContext: string;
     /** 上一轮 Triage 生成的一句话摘要（跨 flush 持久化） */
     lastSummary?: string;
-    /** 上一轮 Triage 生成的要点列表（跨 flush 持久化） */
-    lastKeyPoints?: string[];
 }
 
 // ─── quickTriage 相关类型 ───
@@ -254,8 +233,6 @@ export interface ModelRouteRule {
     match: {
         isDirect?: boolean;        // 直接 @ 或私聊
         isComplex?: boolean;       // 复杂问题
-        interventionType?: InterventionType[];
-        confidenceRange?: [number, number];
     };
     /** 路由结果 */
     route: {
@@ -351,11 +328,8 @@ export interface TopicSummaryTriageResult {
     topics: Array<{
         topicId: string;
         summary: string;
-        keyPoints: string[];
         /** Triage 结果 */
         should_intervene: boolean;
-        intervention_type: InterventionType;
-        confidence: number;
         reason: string;
     }>;
 }

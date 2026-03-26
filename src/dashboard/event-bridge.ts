@@ -182,22 +182,22 @@ export class EventBridge {
                 });
             });
 
-            pipeline.on("topic:triage-passed", (topic: any, decision: any) => {
-                this.broadcast({
-                    type: "recording:triage-passed",
-                    timestamp: new Date().toISOString(),
-                    data: {
-                        chatId: sub.chatId,
-                        topicId: topic.id,
-                        topicLabel: topic.label,
-                        decision: {
-                            should_intervene: decision.should_intervene,
-                            intervention_type: decision.intervention_type,
-                            confidence: decision.confidence,
-                            reason: decision.reason,
+            pipeline.on("topics:triage-passed", (passedTopics: Array<{ topic: any; decision: any }>) => {
+                for (const { topic, decision } of passedTopics) {
+                    this.broadcast({
+                        type: "recording:triage-passed",
+                        timestamp: new Date().toISOString(),
+                        data: {
+                            chatId: sub.chatId,
+                            topicId: topic.id,
+                            topicLabel: topic.label,
+                            decision: {
+                                should_intervene: decision.should_intervene,
+                                reason: decision.reason,
+                            },
                         },
-                    },
-                });
+                    });
+                }
             });
         };
 

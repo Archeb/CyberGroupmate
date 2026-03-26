@@ -121,22 +121,19 @@ export class GroupSubagent extends EventEmitter {
                 deps.pipelineConfig,
             );
 
-            this.recordingPipeline.on("topic:triage-passed", (topic: any, decision: any) => {
-                log.info("话题通过 Triage", {
+            this.recordingPipeline.on("topics:triage-passed", (passedTopics: Array<{ topic: any; decision: any }>) => {
+                log.info("话题通过 Triage（批量）", {
                     chatId: this.chatId,
-                    topicId: topic.id,
-                    label: topic.label,
-                    interventionType: decision?.intervention_type,
-                    confidence: decision?.confidence,
+                    count: passedTopics.length,
+                    topics: passedTopics.map(({ topic, decision }) => ({
+                        topicId: topic.id,
+                        label: topic.label,
+                        reason: decision?.reason,
+                    })),
                 });
 
-                // 标记有话题需要介入，触发 Q3 重新入队
+                // 标记有话题需要介入，触发 Q3 重新入队（一次 flush 只触发一次）
                 this.hasTriageEngaged = true;
-                log.info("triage-engage: 话题需要介入，触发 Q3 重入队", {
-                    chatId: this.chatId,
-                    topicId: topic.id,
-                    label: topic.label,
-                });
                 this.emit("triage-engage", this.chatId);
             });
 
@@ -201,6 +198,8 @@ export class GroupSubagent extends EventEmitter {
             keywords: Array.isArray(t.keywords) ? t.keywords : [],
             messageCount: t.messageIds?.length ?? 0,
             lastActivityAt: new Date(t.createdAt ?? Date.now()).toISOString(),
+            // 仅对 ENGAGED 状态的话题传递 triage reason，供 attend-handler 做二次决策
+            ...(t.state === "ENGAGED" && t.decision?.reason ? { triageReason: t.decision.reason } : {}),
         }));
 
         // 来源标记：优先使用调用方传入的 sourceOverride（如 DIRECT_ADDRESS）
@@ -391,7 +390,6 @@ export class GroupSubagent extends EventEmitter {
             chatId: tn.chatId,
             label: tn.label,
             summary: tn.summary,
-            keyPoints: tn.keyPoints,
             keywords: tn.keywords,
             participants: tn.participants,
             messageIds: tn.messageRange?.messageIds,
