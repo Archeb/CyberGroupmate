@@ -17,7 +17,6 @@ llm_profiles:
                                   # 设置后 compact 按此值触发，而非全局默认的 32000。
                                   # 建议设为模型实际上下文窗口减去 max_tokens 的值。
     vision: true  # 启用后此 profile 支持多模态图片输入
-    # request_timeout_ms: 60000  # 单次 LLM 请求超时（毫秒），默认 60000（60秒）。超时后自动重试。
     # supports_prefill: true   # 是否支持 assistant prefill（预填充回复开头引导思考方向）。默认 true。
                                # 不支持的模型（如原版 OpenAI）设为 false 以避免报错
     # pricing:                 # 可选，每百万 token USD，用于 Dashboard 费用统计
