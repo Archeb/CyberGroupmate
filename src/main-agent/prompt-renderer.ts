@@ -201,6 +201,7 @@ export function buildAttentionVariables(
         description: pkg.groupModel?.description ?? "",
         avgMessagesPerDay: pkg.groupModel?.avgMessagesPerDay ?? 0,
         engagementLevel: pkg.groupModel?.engagementLevel ?? "",
+        recentFeedback: pkg.groupModel?.recentFeedback ?? "",
 
         // Callbacks
         hasCallbacks: !!opts.callbacks?.length,

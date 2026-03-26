@@ -3,6 +3,9 @@
 上次关注: {{lastAttendedAt}} ({{timeSinceLastAttend}} 前)
 上下文深度: L{{depth}}
 粘性级别: {{stickinessLevel}} | 优先级乘数: {{priorityMultiplier}}
+{{#recentFeedback}}
+最近观察：{{recentFeedback}}
+{{/recentFeedback}}
 
 ## 话题注册表
 {{topicDigests}}
