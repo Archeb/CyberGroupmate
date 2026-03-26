@@ -105,7 +105,6 @@ export function createAttendHandler(
         let depth = calculateDepth(
             entry.attendCount,
             subagent.stickiness.depthCyclePeriod,
-            entry.alert ? { forceMinDepth: 2 } : undefined,
         );
 
         // 获取群组画像和最近 callbacks（L1+ 深度可见）
@@ -270,7 +269,6 @@ export function createAttendHandler(
                     ? subagent.lastCallbacks.slice(-3)
                     : undefined,
                 fastPathHistory: fpHistory,
-                alertReason: entry.alert?.reason,
                 messages: messagesText || undefined,
                 dispatchedTopicIds: [...subagent.getDispatchedTopicIds()],
             });

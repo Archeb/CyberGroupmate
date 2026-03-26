@@ -11,7 +11,6 @@
 
 import type {
     AttentionQueueEntry,
-    ObserverAlert,
     TopicDigest,
     QueueEvaluation,
     StickinessLevel,
@@ -87,7 +86,6 @@ export class DynamicAttentionQueue {
             if (entry.source) existing.source = entry.source;
             // 更新其他字段
             if (entry.topicDigests) existing.topicDigests = entry.topicDigests;
-            if (entry.alert) existing.alert = entry.alert;
             if (entry.newMessageCount !== undefined) existing.newMessageCount = entry.newMessageCount;
             if (entry.hasFastPathRequest !== undefined) existing.hasFastPathRequest = entry.hasFastPathRequest;
             if (entry.stickinessLevel) existing.stickinessLevel = entry.stickinessLevel;
@@ -111,7 +109,6 @@ export class DynamicAttentionQueue {
                 blocked: false,
                 blockReason: undefined,
                 hasFastPathRequest: entry.hasFastPathRequest ?? false,
-                alert: entry.alert,
                 newMessageCount: entry.newMessageCount ?? 0,
                 topicDigests: entry.topicDigests ?? [],
                 stickinessLevel: entry.stickinessLevel ?? "STRANGER",

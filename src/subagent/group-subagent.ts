@@ -35,9 +35,9 @@ import { createLogger } from "../core/logger.js";
 
 const log = createLogger("group-subagent");
 
-/** RecordingPipeline 依赖（注入到 GroupSubagent） */
 export interface RecordingPipelineDeps {
     llmConfig: LLMConfig;
+    personaName: string;
     personaDescription: string;
     memory?: MemoryStoreV2;
     embeddingConfig?: EmbeddingConfig;
@@ -115,6 +115,7 @@ export class GroupSubagent extends EventEmitter {
             this.recordingPipeline = new RecordingPipeline(
                 this.topicRegistry,
                 deps.llmConfig,
+                deps.personaName,
                 deps.personaDescription,
                 deps.memory,
                 deps.embeddingConfig,
@@ -183,7 +184,6 @@ export class GroupSubagent extends EventEmitter {
      */
     buildQueueEntry(sourceOverride?: AttentionQueueEntry["source"]): AttentionQueueEntry {
         const engagement = this.observer.getEngagementScore();
-        const alert = this.observer.checkAlert();
         const hasFastPathRequest = this.observer.checkFastPathRequest();
         const basePriority = engagement * this.stickiness.priorityMultiplier;
 
@@ -204,9 +204,7 @@ export class GroupSubagent extends EventEmitter {
 
         // 来源标记：优先使用调用方传入的 sourceOverride（如 DIRECT_ADDRESS）
         const source: AttentionQueueEntry["source"] = sourceOverride
-            ?? (alert
-                ? "OBSERVER_ALERT"
-                : hasFastPathRequest
+            ?? (hasFastPathRequest
                     ? "FAST_PATH_REQUEST"
                     : "DIGEST_UPDATE");
 
@@ -220,7 +218,6 @@ export class GroupSubagent extends EventEmitter {
             attendCount: this.attendCount,
             blocked: false,
             hasFastPathRequest,
-            alert: alert ?? undefined,
             newMessageCount: this.observer.getBufferSize(),
             topicDigests,
             stickinessLevel: this.stickiness.level,

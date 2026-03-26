@@ -14,7 +14,6 @@
 
 import type { NotificationEvent } from "../event/notification-center.js";
 import type {
-    ObserverAlert,
     SubagentConfig,
 } from "./types.js";
 import { DEFAULT_SUBAGENT_CONFIG } from "./types.js";
@@ -134,28 +133,6 @@ export class Observer {
         return this.cachedEngagement;
     }
 
-    /**
-     * 检查是否需要发出 OBSERVER_ALERT
-     * @returns ObserverAlert 或 null
-     */
-    checkAlert(): ObserverAlert | null {
-        if (this.cachedEngagement < this.config.alertEngagementThreshold) {
-            return null;
-        }
-
-        return {
-            type: "OBSERVER_ALERT",
-            chatId: this.chatId,
-            engagementScore: this.cachedEngagement,
-            topicCount: 0,
-            hotTopic: undefined,
-            hasMention: this.mentionCount > 0,
-            reason: this.mentionCount > 0
-                ? `High engagement (${this.cachedEngagement}) with @mentions`
-                : `High engagement (${this.cachedEngagement})`,
-            timestamp: new Date().toISOString(),
-        };
-    }
 
     /**
      * 检查是否推荐 FastPath

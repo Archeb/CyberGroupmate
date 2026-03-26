@@ -34,20 +34,6 @@ export interface TopicDigest {
     triageReason?: string;
 }
 
-/** Observer 告警（高 engagement 时主动上报） */
-export interface ObserverAlert {
-    type: "OBSERVER_ALERT";
-    chatId: string;
-    engagementScore: number;
-    topicCount: number;
-    /** 最活跃的话题 */
-    hotTopic?: TopicDigest;
-    /** 是否有 @ bot 消息 */
-    hasMention: boolean;
-    /** 告警原因 */
-    reason: string;
-    timestamp: string;
-}
 
 // ─── 注意力队列 (Q3) ───
 
@@ -73,8 +59,6 @@ export interface AttentionQueueEntry {
     blockReason?: string;
     /** 是否有 FastPath 请求 */
     hasFastPathRequest: boolean;
-    /** 最新 Observer 告警 */
-    alert?: ObserverAlert;
     /** 消息计数（自上次 attend 以来） — 即 pendingMessageCount */
     newMessageCount: number;
     /** 话题摘要列表 — 即 topicDigest */

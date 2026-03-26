@@ -12,7 +12,6 @@
 
 ## Engagement
 分数: {{engagementScore}}/100
-{{#hasAlert}}⚠️ 观察者告警: {{alertReason}}{{/hasAlert}}
 
 {{#hasCallbacks}}
 ## 上次 Subagent 执行结果

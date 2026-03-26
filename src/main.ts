@@ -303,6 +303,7 @@ async function main(): Promise<void> {
         },
         recordingDeps: {
             llmConfig: recordingConfig,
+            personaName: appConfig.persona?.name ?? "赛博群友",
             personaDescription: appConfig.persona?.description ?? "赛博群友",
             memory,
             pipelineConfig: appConfig.recordingPipeline,

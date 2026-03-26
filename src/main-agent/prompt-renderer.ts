@@ -167,7 +167,6 @@ export function buildAttentionVariables(
         tonePreset?: string;
         callbacks?: SubagentCallback[];
         fastPathHistory?: string;
-        alertReason?: string;
         messages?: string;
         dispatchedTopicIds?: string[];
     },
@@ -210,9 +209,6 @@ export function buildAttentionVariables(
         // Messages
         messages: opts.messages ?? "",
 
-        // Alert
-        hasAlert: !!opts.alertReason,
-        alertReason: opts.alertReason ?? "",
 
         // FastPath history
         hasFastPathHistory: !!opts.fastPathHistory,
@@ -434,7 +430,7 @@ export function formatTopicList(topics: FormattableTopic[], emptyText = "(无活
             : (t.recentContext
                 ? `: ${t.recentContext.split("\n").slice(-2).join("; ")}`
                 : "");
-        const reason = t.triageReason ? ` │ ✅ 建议介入，原因: ${t.triageReason}` : "";
+        const reason = t.triageReason ? ` │ ✅ 建议介入，原因及方向: ${t.triageReason}` : "";
         return `${time} ${t.label}${people}${detail}${reason}${id}`.trim();
     }).join("\n");
 }

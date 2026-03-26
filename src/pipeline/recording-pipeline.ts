@@ -22,6 +22,7 @@ import type { MemoryStoreV2 } from "../memory-v2/index.js";
 import { embed } from "../memory-v2/embedding.js";
 import type { EmbeddingConfig } from "../core/config.js";
 import type { TopicRegistry } from "./topic-registry.js";
+import { getRawId, getGroupModelKey } from "../core/chat-id.js";
 import type {
     Message,
     TopicClusteringResult,
@@ -76,6 +77,7 @@ export class RecordingPipeline extends EventEmitter {
     constructor(
         private registry: TopicRegistry,
         private llmConfig: LLMConfig,
+        private personaName: string = "赛博群友",
         private personaDescription: string = "赛博群友",
         private memory?: MemoryStoreV2,
         private embeddingConfig?: EmbeddingConfig,
@@ -415,12 +417,19 @@ export class RecordingPipeline extends EventEmitter {
         const topicMessagesStr = this.buildTopicContextStr(allTopicIds, topicGroups, clustering);
 
         const prompt = renderPrompt("TOPIC_TRIAGE", {
-            persona: this.personaDescription
+            personaName: this.personaName,
+            persona: this.personaDescription,
         });
+
+        // 构建富化的 user message：群组信息 + 参与者画像 + 话题上下文
+        const contextSections: string[] = [];
+        contextSections.push(...this.buildTriageContext(chatId, messages));
+        contextSections.push(topicMessagesStr);
+        const userMessage = contextSections.join("\n\n");
 
         const llmMessages: ChatMessage[] = [
             { role: "system", content: prompt },
-            { role: "user", content: topicMessagesStr },
+            { role: "user", content: userMessage },
         ];
 
         const response = await callLLM(llmMessages, this.llmConfig, { caller: "recording-pipeline" });
@@ -451,6 +460,7 @@ export class RecordingPipeline extends EventEmitter {
             // 只对缺失的话题重跑一次
             const retryStr = this.buildTopicContextStr(missingIds, topicGroups, clustering);
             const retryPrompt = renderPrompt("TOPIC_TRIAGE", {
+                personaName: this.personaName,
                 persona: this.personaDescription,
             });
 
@@ -530,6 +540,81 @@ export class RecordingPipeline extends EventEmitter {
 
             return parts.join("\n");
         }).join("\n\n");
+    }
+
+    /**
+     * 构建 Triage 富化上下文（群组信息 + 参与者画像 + 事实）
+     *
+     * 从 MemoryV2 获取群组模型、参与者画像和核心事实，
+     * 使 triage LLM 能理解群组动态、人际关系、和已知事实。
+     */
+    private buildTriageContext(chatId: string, messages: Message[]): string[] {
+        if (!this.memory) return [];
+
+        const sections: string[] = [];
+
+        // --- 群组信息 ---
+        const groupModel = this.memory.getGroupModel(getGroupModelKey(chatId));
+        if (groupModel) {
+            const isDirectMessage = !!groupModel.isDirectMessage;
+            if (isDirectMessage) {
+                sections.push(`## 私聊信息\n` +
+                    `- 对话对象: ${groupModel.chatTitle}\n` +
+                    `- 我的角色: ${groupModel.agentRole || "(未定义)"}\n` +
+                    `- 聊天类型: 一对一私聊`);
+            } else {
+                sections.push(`## 群组信息\n` +
+                    `- 群名: ${groupModel.chatTitle}\n` +
+                    `- 我的角色: ${groupModel.agentRole || "(未定义)"}\n` +
+                    `- 活跃度: ${groupModel.engagementLevel || "(未知)"}\n` +
+                    (groupModel.hotTopics?.length ? `- 热点话题: ${groupModel.hotTopics.join(", ")}` : ""));
+            }
+        }
+
+        // --- 参与者画像 ---
+        const profiles = this.memory.getProfilesForChat(chatId);
+        // 只展示本批消息中出现的发言者，避免占用过多 token
+        const activeSenderIds = new Set(messages.map(m => m.senderId));
+        const relevantProfiles = profiles.filter(p => {
+            const rawId = getRawId(p.userId);
+            return activeSenderIds.has(p.userId) || activeSenderIds.has(rawId);
+        });
+
+        if (relevantProfiles.length > 0) {
+            const profileLines = relevantProfiles.map(p => {
+                const identity = this.memory!.getPersonIdentity(p.userId);
+                const namePart = identity?.displayName
+                    ? ` (显示名: ${identity.displayName}` +
+                    (identity.username ? `, @${identity.username}` : "") +
+                    `)`
+                    : "";
+                const parts = [
+                    `- **${getRawId(p.userId)}**${namePart}`,
+                    `Tier ${p.dunbarTier}`,
+                    p.traits.length ? `traits=[${p.traits.join(", ")}]` : null,
+                    p.interests.length ? `interests=[${p.interests.join(", ")}]` : null,
+                    p.relationToAgent ? `relation="${p.relationToAgent}"` : null,
+                ].filter(Boolean).join(", ");
+                return parts;
+            }).join("\n");
+            sections.push(`## 本批消息参与者画像 (${relevantProfiles.length} 人)\n\n${profileLines}`);
+        }
+
+        // --- 核心事实（只取本批参与者的） ---
+        if (relevantProfiles.length > 0) {
+            const factLines: string[] = [];
+            for (const p of relevantProfiles) {
+                const result = this.memory!.listCoreFacts({ subject: p.userId, limit: 5 });
+                for (const f of result.items) {
+                    factLines.push(`- (${f.category}) ${getRawId(f.subject)}: ${f.content}`);
+                }
+            }
+            if (factLines.length > 0) {
+                sections.push(`## 相关事实 (${factLines.length} 条)\n\n${factLines.join("\n")}`);
+            }
+        }
+
+        return sections;
     }
 
     /**

@@ -1,5 +1,36 @@
 # Changelog
 
+## 2026-03-26: Triage 上下文富化 + ObserverAlert 移除
+
+### Triage 上下文富化
+
+Triage LLM 的 user message 从纯话题消息扩展为包含群组环境和人际关系的完整上下文。新增 `buildTriageContext` 方法，从 MemoryV2 拉取：
+
+- **群组/私聊信息**：`getGroupModel()` → 群名/对话对象、agent 角色、活跃度、热点话题
+- **本批消息参与者画像**：`getProfilesForChat()` → 仅本批发言者，展示 Dunbar Tier、traits、interests、relation
+- **相关事实**：`listCoreFacts()` → 每人最多 5 条核心事实
+
+同时注入 `personaName` 到 triage system prompt 的 `{{personaName}}` 变量。
+
+### ObserverAlert 移除
+
+移除已废弃的 `ObserverAlert` 全链路代码（alert 早已不再作为 Q3 入队触发条件）。
+
+### 改动
+
+| 文件 | 改动 |
+|------|------|
+| `src/pipeline/recording-pipeline.ts` | 构造函数新增 `personaName`；`renderPrompt` 注入 `personaName`；新增 `buildTriageContext()` 方法 |
+| `src/subagent/group-subagent.ts` | `RecordingPipelineDeps` 新增 `personaName`；移除 `checkAlert()` 调用和 `alert` from `buildQueueEntry()` |
+| `src/main.ts` | `recordingDeps` 新增 `personaName`（from `appConfig.persona?.name`） |
+| `src/subagent/types.ts` | 移除 `ObserverAlert` 接口、`AttentionQueueEntry.alert` 字段 |
+| `src/subagent/observer.ts` | 移除 `checkAlert()` 方法 |
+| `src/subagent/attention-queue.ts` | 移除 `ObserverAlert` 引用 |
+| `src/main-agent/attend-handler.ts` | 移除 alert-based `forceMinDepth` 和 `alertReason` |
+| `src/main-agent/prompt-renderer.ts` | 移除 `alertReason`/`hasAlert` |
+| `system-prompts/main-agent/mainagent-attention.md` | 移除 `{{#hasAlert}}` 模板块 |
+| `system-prompts/recording/recording-topic-triage.md` | 重写为静态 system prompt（用户手动修改） |
+
 ## 2026-03-26: Triage 简化 — 移除 confidence/keyPoints/intervention_type + Reason 传递到 Attend
 
 简化 Recording Pipeline 的 Triage 输出，移除冗余字段，使用纯布尔值控制入队，将判断理由传递到 attend-handler 供二次决策。
