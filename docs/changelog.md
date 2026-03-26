@@ -1,5 +1,60 @@
 # Changelog
 
+## 2026-03-26: 记忆面板修复 + 聊天记录管理 + 邓巴层可视化
+
+### 字段补全
+
+Memory Panel 各 Tab 补齐数据库中存在但前端未显示的字段：
+
+| Tab | 新增显示列 |
+|-----|-----------|
+| PersonsTab | `username`、`firstSeenAt` |
+| ProfilesTab | `affinityScore`（色标）、`communicationStyle`、`relationToAgent`、`lastSeenAt` |
+| GroupsTab | `activeMembers`、`avgMessagesPerDay`、`engagementLevel`（色标）、`isDirectMessage` |
+| MemoryEditModal | person 编辑新增 `username`；新增 `message` 类型（编辑消息文本/显示名） |
+
+### 邓巴层计算可视化
+
+ProfilesTab 中邓巴层 badge 和好感度分数 badge 新增悬停 tooltip，显示：
+- 分层阈值（T1≥70 / T2≥40 / T3≥15 / T4<15）
+- 四维度百分位排名公式（消息量40% + 话题30% + 活跃天20% + 画像深度10%）
+- 修正因子（friendly +10 / dependent +15 / instrumental ±0 / hostile -20）
+- `dunbarReason`（LLM 分层理由，如有）
+
+### 聊天记录管理（新功能）
+
+新增「聊天记录」Tab，管理 `message_log` 表：
+- 按 chatId / userId / 关键词三维过滤查询
+- checkbox 多选 + 全选 + 批量删除（带确认）
+- 单条编辑（通过 MemoryEditModal）
+- 分页浏览
+
+### 跨 Tab 导航修复
+
+修复从 Messages/Topics/Decisions 面板点击 userId/chatId 跳转到 Memory 面板无效的 bug。根因：`quickQueryUser`/`quickQueryGroup` 事件触发时 RecallTab 未挂载。修复方案：在 MemoryPanel 组件级别注册事件监听，自动切换到 m-recall 子 Tab。
+
+### 跨表关联跳转
+
+各 Tab 中 userId/chatId 新增关联跳转功能：
+- PersonsTab：dropdown 菜单 → 群内画像 / 核心事实 / 聊天记录
+- ProfilesTab：按钮 → 用户画像 / 聊天记录
+- GroupsTab：按钮 → 群内画像列表 / 聊天记录
+- FactsTab：接收 memoryLinkQuery 事件自动填充 subject 过滤
+
+### 改动
+
+| 文件 | 改动 |
+|------|------|
+| `src/memory-v2/memory-v2.ts` | `listPersonIdentities` 补 `username`；新增 `listMessages`/`deleteMessages`/`updateMessage` |
+| `src/dashboard/api-routes.ts` | 新增 `GET /memory/messages`、`PUT /memory/message/:chatId/:messageId`、`DELETE /memory/messages` |
+| `src/dashboard/ui/src/panels/MemoryPanel.svelte` | 注册 ChatLogTab；注册 quickQueryUser/quickQueryGroup 事件监听 |
+| `src/dashboard/ui/src/panels/memory/PersonsTab.svelte` | 补 username/firstSeenAt 列 + 关联跳转 dropdown |
+| `src/dashboard/ui/src/panels/memory/ProfilesTab.svelte` | 补 affinityScore/communicationStyle/relationToAgent/lastSeenAt 列 + tierTooltip/scoreTooltip + 关联跳转 |
+| `src/dashboard/ui/src/panels/memory/GroupsTab.svelte` | 补 activeMembers/avgMessagesPerDay/engagementLevel/isDirectMessage 列 + 关联跳转 |
+| `src/dashboard/ui/src/panels/memory/ChatLogTab.svelte` | **[NEW]** 聊天记录查询/编辑/批量删除 |
+| `src/dashboard/ui/src/panels/memory/FactsTab.svelte` | 新增 memoryLinkQuery 监听 |
+| `src/dashboard/ui/src/panels/MemoryEditModal.svelte` | person 加 username 字段；新增 message 类型 |
+
 ## 2026-03-26: Triage 上下文富化 + ObserverAlert 移除
 
 ### Triage 上下文富化

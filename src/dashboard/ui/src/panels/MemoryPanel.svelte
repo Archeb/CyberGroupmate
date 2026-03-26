@@ -1,4 +1,5 @@
 <script>
+  import { onMount } from "svelte";
   import { activeMemoryTab, activeTab } from "../lib/stores.js";
   import PersonsTab from "./memory/PersonsTab.svelte";
   import ProfilesTab from "./memory/ProfilesTab.svelte";
@@ -6,6 +7,7 @@
   import FactsTab from "./memory/FactsTab.svelte";
   import InteractionsTab from "./memory/InteractionsTab.svelte";
   import RecallTab from "./memory/RecallTab.svelte";
+  import ChatLogTab from "./memory/ChatLogTab.svelte";
   import MemoryEditModal from "./MemoryEditModal.svelte";
 
   const subTabs = [
@@ -14,12 +16,30 @@
     { id: "m-groups", label: "群组画像", icon: "fa-users" },
     { id: "m-facts", label: "核心事实", icon: "fa-lightbulb" },
     { id: "m-interactions", label: "交互日志", icon: "fa-list-check" },
+    { id: "m-chatlog", label: "聊天记录", icon: "fa-comments" },
     { id: "m-recall", label: "记忆搜索", icon: "fa-magnifying-glass" },
   ];
 
   function switchTab(id) {
     activeMemoryTab.set(id);
   }
+
+  // Fix cross-tab navigation: listen at MemoryPanel level,
+  // auto-switch to m-recall sub-tab when quickQueryUser/quickQueryGroup fires
+  onMount(() => {
+    function onQuickUser(e) {
+      activeMemoryTab.set("m-recall");
+    }
+    function onQuickGroup(e) {
+      activeMemoryTab.set("m-recall");
+    }
+    window.addEventListener("quickQueryUser", onQuickUser);
+    window.addEventListener("quickQueryGroup", onQuickGroup);
+    return () => {
+      window.removeEventListener("quickQueryUser", onQuickUser);
+      window.removeEventListener("quickQueryGroup", onQuickGroup);
+    };
+  });
 </script>
 
 <div class="memory-layout">
@@ -55,6 +75,7 @@
         {:else if $activeMemoryTab === "m-groups"}<GroupsTab />
         {:else if $activeMemoryTab === "m-facts"}<FactsTab />
         {:else if $activeMemoryTab === "m-interactions"}<InteractionsTab />
+        {:else if $activeMemoryTab === "m-chatlog"}<ChatLogTab />
         {:else if $activeMemoryTab === "m-recall"}<RecallTab />
         {/if}
       </div>

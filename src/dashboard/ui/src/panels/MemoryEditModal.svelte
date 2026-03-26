@@ -18,6 +18,7 @@
         title = `编辑用户: ${detail.userId}`;
         fields = [
           { name: 'displayName', label: '显示名', type: 'input', value: identity.displayName || '' },
+          { name: 'username', label: 'Username', type: 'input', value: identity.username || '' },
           { name: 'aliases', label: '别名 (逗号分隔)', type: 'input', value: (identity.aliases || []).join(', ') },
         ];
       } else if (detail.type === 'profile') {
@@ -61,6 +62,13 @@
           { name: 'confidence', label: '置信度 (0-1)', type: 'input', value: String(f.confidence ?? 1) },
           { name: 'expiresAt', label: '过期时间 (ISO)', type: 'input', value: f.expiresAt || '' },
         ];
+      } else if (detail.type === 'message') {
+        editCtx = { type: 'message', key: { chatId: detail.chatId, messageId: detail.messageId }, data: detail };
+        title = `编辑消息: ${detail.messageId}`;
+        fields = [
+          { name: 'text', label: '消息内容', type: 'textarea', value: detail.text || '' },
+          { name: 'displayName', label: '显示名', type: 'input', value: detail.displayName || '' },
+        ];
       }
       modal?.showModal();
     }
@@ -85,7 +93,7 @@
     const { type, key } = editCtx;
     try {
       if (type === 'person') {
-        await api(`/memory/person/${key.userId}`, { method: 'PUT', body: { displayName: v.displayName, aliases: splitCSV(v.aliases) }});
+        await api(`/memory/person/${key.userId}`, { method: 'PUT', body: { displayName: v.displayName, username: v.username || undefined, aliases: splitCSV(v.aliases) }});
       } else if (type === 'profile') {
         await api(`/memory/profile/${key.userId}/${key.chatId}`, { method: 'PUT', body: {
           dunbarTier: parseInt(v.dunbarTier) || 4, dunbarReason: v.dunbarReason,
@@ -104,6 +112,10 @@
           content: v.content, category: v.category,
           confidence: parseFloat(v.confidence) || 1.0,
           expiresAt: v.expiresAt || null,
+        }});
+      } else if (type === 'message') {
+        await api(`/memory/message/${key.chatId}/${key.messageId}`, { method: 'PUT', body: {
+          text: v.text, displayName: v.displayName,
         }});
       }
     } catch (err) {

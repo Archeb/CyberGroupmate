@@ -26,6 +26,21 @@
     load();
   }
 
+  function jumpToProfiles(userId) {
+    activeMemoryTab.set('m-profiles');
+    window.dispatchEvent(new CustomEvent('memoryLinkQuery', { detail: { tab: 'm-profiles', userId } }));
+  }
+
+  function jumpToChatLog(userId) {
+    activeMemoryTab.set('m-chatlog');
+    window.dispatchEvent(new CustomEvent('memoryLinkQuery', { detail: { tab: 'm-chatlog', userId } }));
+  }
+
+  function jumpToFacts(userId) {
+    activeMemoryTab.set('m-facts');
+    window.dispatchEvent(new CustomEvent('memoryLinkQuery', { detail: { tab: 'm-facts', subject: userId } }));
+  }
+
   export function refresh() { load(); }
 </script>
 
@@ -41,11 +56,11 @@
     <div class="overflow-x-auto">
       <table class="table table-xs">
         <thead><tr>
-          <th>UserId</th><th>显示名</th><th>别名</th><th>消息数</th><th>最后活跃</th><th>操作</th>
+          <th>UserId</th><th>显示名</th><th>Username</th><th>别名</th><th>消息数</th><th>最后活跃</th><th>首次出现</th><th>操作</th>
         </tr></thead>
         <tbody>
           {#if !items.length}
-            <tr><td colspan="6" class="text-center opacity-60">暂无数据</td></tr>
+            <tr><td colspan="8" class="text-center opacity-60">暂无数据</td></tr>
           {:else}
             {#each items as p}
               <tr>
@@ -54,11 +69,22 @@
                   {stripPlatform(p.userId)}
                 </td>
                 <td>{p.displayName}</td>
+                <td class="text-xs opacity-70">{p.username ? `@${p.username}` : '-'}</td>
                 <td class="max-w-32 truncate" title={(p.aliases || []).join(', ')}>{(p.aliases || []).join(', ') || '-'}</td>
                 <td>{p.totalMessageCount}</td>
                 <td class="text-xs opacity-60">{p.lastSeenAt ? new Date(p.lastSeenAt).toLocaleString() : '-'}</td>
+                <td class="text-xs opacity-60">{p.firstSeenAt ? new Date(p.firstSeenAt).toLocaleString() : '-'}</td>
                 <td>
                   <div class="flex gap-1">
+                    <div class="dropdown dropdown-end">
+                      <button tabindex="0" class="btn btn-xs btn-ghost" title="关联查询"><i class="fa-solid fa-link"></i></button>
+                      <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+                      <ul tabindex="0" class="dropdown-content menu menu-xs bg-base-200 rounded-box shadow-lg z-50 w-36">
+                        <li><button onclick={() => jumpToProfiles(p.userId)}>群内画像</button></li>
+                        <li><button onclick={() => jumpToFacts(p.userId)}>核心事实</button></li>
+                        <li><button onclick={() => jumpToChatLog(p.userId)}>聊天记录</button></li>
+                      </ul>
+                    </div>
                     <button class="btn btn-xs btn-ghost" onclick={() => editPerson(p.userId)}><i class="fa-solid fa-pen-to-square"></i></button>
                     <button class="btn btn-xs btn-ghost text-error" onclick={() => deletePerson(p.userId)}><i class="fa-solid fa-trash-can"></i></button>
                   </div>

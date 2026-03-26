@@ -14,6 +14,16 @@
   function editGroup(chatId) {
     window.dispatchEvent(new CustomEvent('memoryEdit', { detail: { type: 'group', chatId } }));
   }
+
+  function jumpToProfiles(chatId) {
+    activeMemoryTab.set('m-profiles');
+    window.dispatchEvent(new CustomEvent('memoryLinkQuery', { detail: { tab: 'm-profiles', chatId } }));
+  }
+
+  function jumpToChatLog(chatId) {
+    activeMemoryTab.set('m-chatlog');
+    window.dispatchEvent(new CustomEvent('memoryLinkQuery', { detail: { tab: 'm-chatlog', chatId } }));
+  }
 </script>
 
 <div class="card bg-base-100">
@@ -25,11 +35,11 @@
     <div class="overflow-x-auto">
       <table class="table table-xs">
         <thead><tr>
-          <th>ChatId</th><th>标题</th><th>描述</th><th>语言</th><th>角色</th><th>热门话题</th><th>禁忌话题</th><th>操作</th>
+          <th>ChatId</th><th>标题</th><th>描述</th><th>角色</th><th>参与度</th><th>活跃人数</th><th>日均消息</th><th>私聊</th><th>热门话题</th><th>操作</th>
         </tr></thead>
         <tbody>
           {#if !groups.length}
-            <tr><td colspan="8" class="text-center opacity-60">暂无数据</td></tr>
+            <tr><td colspan="10" class="text-center opacity-60">暂无数据</td></tr>
           {:else}
             {#each groups as g}
               <tr>
@@ -39,11 +49,27 @@
                 </td>
                 <td>{g.chatTitle || '-'}</td>
                 <td class="max-w-40 truncate" title={g.description || ''}>{g.description || '-'}</td>
-                <td>{g.dominantLanguage || '-'}</td>
-                <td class="max-w-32 truncate" title={g.agentRole || ''}>{g.agentRole || '-'}</td>
+                <td class="max-w-24 truncate" title={g.agentRole || ''}>{g.agentRole || '-'}</td>
+                <td>
+                  {#if g.engagementLevel}
+                    <span class="badge badge-xs" class:badge-success={g.engagementLevel==='high'} class:badge-warning={g.engagementLevel==='medium'} class:badge-ghost={g.engagementLevel==='low'}>
+                      {g.engagementLevel}
+                    </span>
+                  {:else}
+                    -
+                  {/if}
+                </td>
+                <td>{g.activeMembers ?? '-'}</td>
+                <td>{g.avgMessagesPerDay != null ? g.avgMessagesPerDay.toFixed(1) : '-'}</td>
+                <td>{g.isDirectMessage ? '✓' : '-'}</td>
                 <td class="max-w-32 truncate" title={(g.hotTopics || []).join(', ')}>{(g.hotTopics || []).join(', ') || '-'}</td>
-                <td class="max-w-32 truncate" title={(g.tabooTopics || []).join(', ')}>{(g.tabooTopics || []).join(', ') || '-'}</td>
-                <td><button class="btn btn-xs btn-ghost" onclick={() => editGroup(g.chatId)}><i class="fa-solid fa-pen-to-square"></i></button></td>
+                <td>
+                  <div class="flex gap-1">
+                    <button class="btn btn-xs btn-ghost" title="群内画像列表" onclick={() => jumpToProfiles(g.chatId)}><i class="fa-solid fa-id-badge"></i></button>
+                    <button class="btn btn-xs btn-ghost" title="聊天记录" onclick={() => jumpToChatLog(g.chatId)}><i class="fa-solid fa-comments"></i></button>
+                    <button class="btn btn-xs btn-ghost" onclick={() => editGroup(g.chatId)}><i class="fa-solid fa-pen-to-square"></i></button>
+                  </div>
+                </td>
               </tr>
             {/each}
           {/if}

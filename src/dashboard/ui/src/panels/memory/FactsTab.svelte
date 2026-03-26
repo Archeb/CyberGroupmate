@@ -2,6 +2,7 @@
   import { activeTab, activeMemoryTab } from '../../lib/stores.js';
   import { api } from '../../lib/api.js';
   import { escapeHtml } from '../../lib/utils.js';
+  import { onMount } from 'svelte';
 
   let items = [];
   let total = 0;
@@ -10,6 +11,18 @@
   let category = '';
 
   $: if ($activeTab === 'memory' && $activeMemoryTab === 'm-facts') load();
+
+  onMount(() => {
+    function onLink(e) {
+      if (e.detail?.tab !== 'm-facts') return;
+      if (e.detail.subject) {
+        subject = e.detail.subject;
+        load();
+      }
+    }
+    window.addEventListener('memoryLinkQuery', onLink);
+    return () => window.removeEventListener('memoryLinkQuery', onLink);
+  });
 
   async function load(p) {
     if (p !== undefined) page = p;

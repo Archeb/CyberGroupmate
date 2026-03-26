@@ -375,6 +375,46 @@ export function createApiRouter(deps: DashboardDeps, bridge: EventBridge): Route
         }
     });
 
+    // ─── Memory: Message Log CRUD ───
+    router.get("/memory/messages", (req, res) => {
+        try {
+            const chatId = qs(req.query.chatId) || undefined;
+            const userId = qs(req.query.userId) || undefined;
+            const keyword = qs(req.query.keyword) || undefined;
+            const limit = req.query.limit ? Math.min(Number(req.query.limit), 200) : 50;
+            const offset = req.query.offset ? Number(req.query.offset) : 0;
+            const result = deps.memory.listMessages({ chatId, userId, keyword, limit, offset });
+            res.json(result);
+        } catch (err) {
+            res.status(500).json({ error: String(err) });
+        }
+    });
+
+    router.put("/memory/message/:chatId/:messageId", (req, res) => {
+        try {
+            const { chatId, messageId } = req.params;
+            const { text, displayName } = req.body;
+            const ok = deps.memory.updateMessage(chatId, messageId, { text, displayName });
+            res.json({ ok });
+        } catch (err) {
+            res.status(500).json({ error: String(err) });
+        }
+    });
+
+    router.delete("/memory/messages", (req, res) => {
+        try {
+            const { chatId, messageIds } = req.body;
+            if (!chatId || !Array.isArray(messageIds)) {
+                res.status(400).json({ error: "chatId and messageIds[] required" });
+                return;
+            }
+            const deleted = deps.memory.deleteMessages(chatId, messageIds);
+            res.json({ ok: true, deleted });
+        } catch (err) {
+            res.status(500).json({ error: String(err) });
+        }
+    });
+
     // ─── CodeAct ───
     router.get("/codeact/:chatId", (req, res) => {
         const sub = deps.subagentManager.get(req.params.chatId);

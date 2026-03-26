@@ -1852,6 +1852,7 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
             items: rows.map(row => ({
                 userId: row.user_id as string,
                 displayName: row.display_name as string,
+                username: (row.username as string) ?? undefined,
                 aliases: fromJSON(row.aliases as string, []),
                 totalMessageCount: row.total_message_count as number,
                 lastSeenAt: row.last_seen_at as string,
@@ -2028,6 +2029,76 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
                 significance: (row.significance as number) ?? 0.5,
             })),
         };
+    }
+
+    /** 分页列出 message_log */
+    listMessages(options?: { chatId?: string; userId?: string; keyword?: string; limit?: number; offset?: number }): { items: Array<Record<string, unknown>>; total: number } {
+        const limit = options?.limit ?? 50;
+        const offset = options?.offset ?? 0;
+
+        let countSql = "SELECT COUNT(*) as cnt FROM message_log WHERE 1=1";
+        let querySql = "SELECT * FROM message_log WHERE 1=1";
+        const params: unknown[] = [];
+
+        if (options?.chatId) {
+            countSql += " AND chat_id = ?";
+            querySql += " AND chat_id = ?";
+            params.push(options.chatId);
+        }
+        if (options?.userId) {
+            countSql += " AND user_id = ?";
+            querySql += " AND user_id = ?";
+            params.push(options.userId);
+        }
+        if (options?.keyword) {
+            countSql += " AND text LIKE ?";
+            querySql += " AND text LIKE ?";
+            params.push(`%${options.keyword}%`);
+        }
+
+        const total = (this.db.prepare(countSql).get(...params) as { cnt: number }).cnt;
+        querySql += " ORDER BY timestamp DESC LIMIT ? OFFSET ?";
+        const rows = this.db.prepare(querySql).all(...params, limit, offset) as Record<string, unknown>[];
+
+        return {
+            total,
+            items: rows.map(row => ({
+                messageId: row.message_id as string,
+                chatId: row.chat_id as string,
+                userId: row.user_id as string,
+                displayName: row.display_name as string,
+                text: row.text as string,
+                replyToMessageId: (row.reply_to_message_id as string) ?? null,
+                timestamp: row.timestamp as string,
+                mediaType: (row.media_type as string) ?? null,
+                mediaInfo: (row.media_info as string) ?? null,
+            })),
+        };
+    }
+
+    /** 批量删除 message_log 中的消息 */
+    deleteMessages(chatId: string, messageIds: string[]): number {
+        if (messageIds.length === 0) return 0;
+        const placeholders = messageIds.map(() => "?").join(", ");
+        const result = this.db.prepare(
+            `DELETE FROM message_log WHERE chat_id = ? AND message_id IN (${placeholders})`
+        ).run(chatId, ...messageIds);
+        log.info("deleteMessages", { chatId, count: messageIds.length, deleted: result.changes });
+        return result.changes;
+    }
+
+    /** 更新 message_log 中单条消息的文本 */
+    updateMessage(chatId: string, messageId: string, data: { text?: string; displayName?: string }): boolean {
+        const builder = new SafeUpdateBuilder("message_log");
+        if (data.text !== undefined) builder.set("text", data.text);
+        if (data.displayName !== undefined) builder.set("display_name", data.displayName);
+        builder.where("chat_id", chatId);
+        builder.where("message_id", messageId);
+        if (!builder.hasSets) return false;
+        const { sql, params } = builder.build();
+        const result = this.db.prepare(sql).run(...params);
+        log.info("updateMessage", { chatId, messageId, changed: result.changes > 0 });
+        return result.changes > 0;
     }
 
     /** 按 ID 删除 interaction */
