@@ -281,7 +281,7 @@ export async function runReflection(
             }
         }
         const updatedProfiles = memory.getProfilesForChat(chatId);
-        const scores = computeAffinityScores(updatedProfiles, stats, qualityMap, isDirectMessage);
+        const scores = computeAffinityScores(updatedProfiles, stats, qualityMap, isDirectMessage, memory, chatId);
         for (const [userId, { score, tier }] of scores) {
             memory.upsertPersonGroupProfile(userId, chatId, {
                 affinityScore: score,
@@ -573,7 +573,7 @@ function computeParticipantStats(
     return statsMap;
 }
 
-// ─── 亲和度评分（Percentile Ranking + Quality Delta） ───
+// ─── 亲和度评分（30 天互动驱动 + Quality Delta + 时间衰减） ───
 
 /** 计算百分位排名 (0-100) */
 function percentileRank(value: number, sortedValues: number[]): number {
@@ -607,106 +607,116 @@ function scoreToTier(score: number): 1 | 2 | 3 | 4 {
     return 4;
 }
 
+/** 30 天滚动窗口 */
+const AFFINITY_WINDOW_DAYS = 30;
+/** 超过此天数无互动则开始衰减 */
+const DECAY_START_DAYS = 14;
+/** 衰减系数 (每天减少的分数) */
+const DECAY_PER_DAY = 2;
+
 /**
  * 计算所有参与者的亲和度分数和 Dunbar Tier
  *
- * 算法：
- * 1. 四维度百分位排名（messageCount 40%, topicsParticipated 30%, activeDays 20%, relationshipDepth 10%）
- * 2. 私聊特殊处理（baseScore = min(80, messageCount/5)）
- * 3. 小群组线性映射（<5人时）
- * 4. Quality Delta 累加
- * 5. finalScore = clamp(max(baseScore, existingScore) + qualityDelta, 0, 100)
+ * 算法（v2 — 30天互动驱动）：
+ * 1. 从 interactions 表查询最近 30 天的 DIRECT_ADDRESS 互动（direct_message / agent_mentioned / agent_replied）
+ * 2. 三维度百分位排名：互动次数 50%, 互动天数 30%, 画像深度 20%
+ * 3. Quality Delta 累加（friendly +10, dependent +15, instrumental ±0, hostile -20）
+ * 4. 时间衰减：若最后互动超过 14 天前，每多一天 -2 分
+ * 5. finalScore = clamp(baseScore + qualityDelta - decayPenalty, 0, 100)
  */
 function computeAffinityScores(
     profiles: PersonGroupProfile[],
-    stats: Map<string, ParticipantStats>,
+    _stats: Map<string, ParticipantStats>,
     qualityMap: Map<string, InteractionQuality | undefined>,
     isDirectMessage: boolean,
+    memory: MemoryStoreV2,
+    chatId: string,
 ): Map<string, { score: number; tier: 1 | 2 | 3 | 4 }> {
     const result = new Map<string, { score: number; tier: 1 | 2 | 3 | 4 }>();
     if (profiles.length === 0) return result;
 
-    // 私聊特殊处理
-    if (isDirectMessage || profiles.length <= 2) {
-        for (const p of profiles) {
-            const baseScore = Math.min(80, p.messageCount / 5);
-            const quality = qualityMap.get(p.userId);
-            const delta = quality ? (QUALITY_DELTAS[quality] ?? 0) : 0;
-            const finalScore = Math.max(0, Math.min(100,
-                Math.max(baseScore, p.affinityScore ?? 0) + delta
-            ));
-            result.set(p.userId, { score: finalScore, tier: scoreToTier(finalScore) });
-        }
-        return result;
-    }
+    // 查询 30 天互动数据
+    const interactionStats = memory.countInteractionsPerUser(chatId, AFFINITY_WINDOW_DAYS);
+    const nowMs = Date.now();
 
-    // 收集每个维度的值
-    const msgCounts: number[] = [];
-    const topicCounts: number[] = [];
-    const dayCounts: number[] = [];
+    // 收集每个维度的值（用于百分位排名）
+    const interactionCounts: number[] = [];
+    const interactionDays: number[] = [];
     const depthValues: number[] = [];
 
     const profileDimensions = profiles.map(p => {
-        const s = stats.get(p.userId);
-        const messageCount = s?.messageCount ?? p.messageCount;
-        const topicsParticipated = s?.topicsParticipated ?? 0;
-        const activeDays = s?.activeDays?.size ?? 0;
+        const iStats = interactionStats.get(p.userId);
+        const interactionCount = iStats?.interactionCount ?? 0;
+        const activeDays = iStats?.activeDays ?? 0;
+        const lastInteractionAt = iStats?.lastInteractionAt ?? null;
         const depth = p.traits.length + p.interests.length;
 
-        msgCounts.push(messageCount);
-        topicCounts.push(topicsParticipated);
-        dayCounts.push(activeDays);
+        interactionCounts.push(interactionCount);
+        interactionDays.push(activeDays);
         depthValues.push(depth);
 
-        return { userId: p.userId, messageCount, topicsParticipated, activeDays, depth, existingScore: p.affinityScore ?? 0 };
+        return { userId: p.userId, interactionCount, activeDays, depth, lastInteractionAt };
     });
 
     // 排序用于百分位计算
-    msgCounts.sort((a, b) => a - b);
-    topicCounts.sort((a, b) => a - b);
-    dayCounts.sort((a, b) => a - b);
+    interactionCounts.sort((a, b) => a - b);
+    interactionDays.sort((a, b) => a - b);
     depthValues.sort((a, b) => a - b);
 
     const usePercentile = profiles.length >= 5;
-    const medianMsg = msgCounts[Math.floor(msgCounts.length / 2)] || 1;
-    const medianTopics = topicCounts[Math.floor(topicCounts.length / 2)] || 1;
-    const medianDays = dayCounts[Math.floor(dayCounts.length / 2)] || 1;
+    const medianInteractions = interactionCounts[Math.floor(interactionCounts.length / 2)] || 1;
+    const medianDays = interactionDays[Math.floor(interactionDays.length / 2)] || 1;
     const medianDepth = depthValues[Math.floor(depthValues.length / 2)] || 1;
 
     for (const dim of profileDimensions) {
-        // 新人保底
-        if (dim.messageCount < 3) {
-            const quality = qualityMap.get(dim.userId);
-            const delta = quality ? (QUALITY_DELTAS[quality] ?? 0) : 0;
-            const finalScore = Math.max(0, Math.min(100, Math.max(5, dim.existingScore) + delta));
+        // 30天内零互动 → 保底 5 分或原分衰减
+        if (dim.interactionCount === 0) {
+            const existing = profiles.find(p => p.userId === dim.userId)?.affinityScore ?? 0;
+            // 如果之前有分，按时间衰减
+            const daysSilent = dim.lastInteractionAt
+                ? (nowMs - new Date(dim.lastInteractionAt).getTime()) / 86400_000
+                : AFFINITY_WINDOW_DAYS;
+            const decay = Math.max(0, daysSilent - DECAY_START_DAYS) * DECAY_PER_DAY;
+            const finalScore = Math.max(0, Math.min(100, existing - decay));
             result.set(dim.userId, { score: finalScore, tier: scoreToTier(finalScore) });
             continue;
         }
 
-        // 四维度加权基础分
+        // 三维度加权基础分
         let baseScore: number;
         if (usePercentile) {
-            const msgP = percentileRank(dim.messageCount, msgCounts);
-            const topicP = percentileRank(dim.topicsParticipated, topicCounts);
-            const dayP = percentileRank(dim.activeDays, dayCounts);
+            const interP = percentileRank(dim.interactionCount, interactionCounts);
+            const dayP = percentileRank(dim.activeDays, interactionDays);
             const depthP = percentileRank(dim.depth, depthValues);
-            baseScore = msgP * 0.4 + topicP * 0.3 + dayP * 0.2 + depthP * 0.1;
+            baseScore = interP * 0.50 + dayP * 0.30 + depthP * 0.20;
         } else {
-            // 小群组线性映射
-            const msgL = linearMap(dim.messageCount, medianMsg);
-            const topicL = linearMap(dim.topicsParticipated, medianTopics);
+            // 小群组 / 私聊 线性映射
+            const interL = linearMap(dim.interactionCount, medianInteractions);
             const dayL = linearMap(dim.activeDays, medianDays);
             const depthL = linearMap(dim.depth, medianDepth);
-            baseScore = msgL * 0.4 + topicL * 0.3 + dayL * 0.2 + depthL * 0.1;
+            baseScore = interL * 0.50 + dayL * 0.30 + depthL * 0.20;
+        }
+
+        // 私聊 / DM 额外加成（私聊本身意味着更高亲密度）
+        if (isDirectMessage) {
+            baseScore = Math.min(100, baseScore + 15);
         }
 
         // Quality delta
         const quality = qualityMap.get(dim.userId);
         const delta = quality ? (QUALITY_DELTAS[quality] ?? 0) : 0;
 
-        // 合并：max(baseScore, existingScore) + delta
+        // 时间衰减：最后互动超过 DECAY_START_DAYS 天前 → 减分
+        let decayPenalty = 0;
+        if (dim.lastInteractionAt) {
+            const daysSinceLastInteraction = (nowMs - new Date(dim.lastInteractionAt).getTime()) / 86400_000;
+            if (daysSinceLastInteraction > DECAY_START_DAYS) {
+                decayPenalty = (daysSinceLastInteraction - DECAY_START_DAYS) * DECAY_PER_DAY;
+            }
+        }
+
         const finalScore = Math.max(0, Math.min(100,
-            Math.max(baseScore, dim.existingScore) + delta
+            baseScore + delta - decayPenalty
         ));
         result.set(dim.userId, { score: finalScore, tier: scoreToTier(finalScore) });
     }

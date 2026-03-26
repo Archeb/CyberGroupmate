@@ -1,5 +1,32 @@
 # Changelog
 
+## 2026-03-26: 亲和度评分算法 v2 — 30天互动驱动 + 时间衰减
+
+重写 `computeAffinityScores`，从"群内总消息数"改为"30天内与 Agent 互动次数"驱动，修复以下问题：
+- **消息数含义错误**：旧算法用的是用户在群里发的所有消息，不是和 Agent 互动的消息
+- **无时间窗口**：旧算法分数只涨不降（ratchet），用户消失三个月分数不变
+- **私聊公式离谱**：`min(80, messageCount/5)` 用的是群内总消息数
+
+### 新算法
+
+| 维度 | 权重 | 数据源 |
+|------|------|--------|
+| 互动次数 | 50% | `interactions` 表 30天内 `direct_message`/`agent_mentioned`/`agent_replied` |
+| 互动天数 | 30% | 同上，`COUNT(DISTINCT DATE)` |
+| 画像深度 | 20% | `traits.length + interests.length` |
+
+- **时间衰减**：最后互动超过 14 天前 → 每多一天 -2 分
+- **私聊加成**：DM 额外 +15 分
+- **移除 ratchet**：`max(base, existing)` → 纯 `base + delta - decay`
+
+### 改动
+
+| 文件 | 改动 |
+|------|------|
+| `src/memory-v2/memory-v2.ts` | 新增 `countInteractionsPerUser(chatId, days)` — 按用户统计 30 天互动次数/天数/最后互动时间 |
+| `src/memory-v2/reflection.ts` | 重写 `computeAffinityScores()`：3 维度 + 时间衰减；移除旧的4维度/ratchet/私聊特殊公式 |
+| `src/dashboard/ui/src/panels/memory/ProfilesTab.svelte` | 更新 `scoreTooltip` 显示新算法说明 |
+
 ## 2026-03-26: 记忆面板修复 + 聊天记录管理 + 邓巴层可视化
 
 ### 字段补全
