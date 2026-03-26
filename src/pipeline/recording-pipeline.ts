@@ -17,6 +17,7 @@
 import { EventEmitter } from "node:events";
 import { createLogger } from "../core/logger.js";
 import { callLLM, type LLMConfig, type ChatMessage } from "../core/llm.js";
+import { renderPrompt } from "../main-agent/prompt-renderer.js";
 import type { MemoryStoreV2 } from "../memory-v2/index.js";
 import { embed } from "../memory-v2/embedding.js";
 import type { EmbeddingConfig } from "../core/config.js";
@@ -45,65 +46,7 @@ const DEFAULT_NORMAL_SILENCE = 2 * 60 * 1000;  // 2 min
 /** 加速静默触发（毫秒） */
 const DEFAULT_EAGER_SILENCE = 30 * 1000;       // 30 sec
 
-// ─── Prompt 模板 ───
 
-const TOPIC_CLUSTERING_PROMPT = `你是一个消息话题分析器。
-请分析以下消息，将每条消息归属到一个话题中。
-
-已有话题列表（如果有的话）：
-{EXISTING_TOPICS}
-
-新消息列表：
-{MESSAGES}
-
-请输出 JSON 格式：
-{
-  "assignments": [
-    { "messageId": "<字符串消息ID>", "topicId": "<已有话题ID或NEW_1/NEW_2等>", "topicLabel": "<仅新话题>", "keywords": ["<仅新话题>"] }
-  ],
-  "evolutions": [
-    { "parentTopicId": "<父话题ID>", "newTopicLabel": "<新话题标签>", "reason": "<演变原因>" }
-  ]
-}
-
-规则：
-- 如果消息属于已有话题，直接用已有话题 ID
-- 不是每一条消息都必定属于一个话题，如果某消息相对孤立，与当前上下文无关、之前也没出现过，请直接跳过。
-- 如果是全新话题，用 NEW_1, NEW_2 等临时 ID，并提供 topicLabel 和 keywords
-- 如果话题从已有话题演变而来（内容明显偏移但有关联），在 evolutions 中记录
-- topicLabel 应为 3-5 个词，概括话题主旨
-- 只输出 JSON，不要其他内容`;
-
-const TOPIC_TRIAGE_PROMPT = `你是一个AI 智能体的决策顾问。
-请分析每个话题，判断 AI 智能体是否应该介入。
-
-AI 智能体人设：{PERSONA}
-
-话题列表及其消息：
-{TOPIC_MESSAGES}
-
-请输出 JSON 格式：
-{
-  "topics": [
-    {
-      "topicId": "<话题ID>",
-      "summary": "<2-3句话摘要，和标题不重复>",
-      "keyPoints": ["<要点1>", "<要点2>"],
-      "should_intervene": true/false,
-      "intervention_type": "FACTUAL_CORRECTION|KNOWLEDGE_GAP|QUESTION_ANSWER|RESOURCE_SHARING|CONFLICT_MEDIATION|CONSENSUS_SUMMARY|CASUAL_CHAT|NOT_APPLICABLE",
-      "confidence": 0.0-1.0,
-      "reason": "<判断理由>"
-    }
-  ]
-}
-
-判断标准：
-- confidence < 0.6 一律不介入
-- 优先介入：有人提问无人回答、事实性错误、群友求助
-- 谨慎介入：闲聊、八卦、争吵
-- 不介入：私密对话、敏感话题、已有专业人士在解答
-- 注意：群可能有多个 AI 智能体或者 Bot，看清楚话题是否与人设中描述的那个智能体一致
-- 只输出 JSON，不要其他内容`;
 
 /**
  * RecordingPipeline — 后台消息观察者
@@ -416,9 +359,10 @@ export class RecordingPipeline extends EventEmitter {
             `[${m.id}] ${m.senderName} (${new Date(m.timestamp).toLocaleTimeString()}): ${m.text}`
         ).join("\n");
 
-        const prompt = TOPIC_CLUSTERING_PROMPT
-            .replace("{EXISTING_TOPICS}", existingTopicsStr)
-            .replace("{MESSAGES}", messagesStr);
+        const prompt = renderPrompt("TOPIC_CLUSTERING", {
+            existingTopics: existingTopicsStr,
+            messages: messagesStr,
+        });
 
         const llmMessages: ChatMessage[] = [
             { role: "system", content: "你是一个精确的 JSON 输出助手。只输出合法 JSON，不要任何其他内容。" },
@@ -471,9 +415,10 @@ export class RecordingPipeline extends EventEmitter {
         const allTopicIds = Array.from(topicGroups.keys());
         const topicMessagesStr = this.buildTopicContextStr(allTopicIds, topicGroups, clustering);
 
-        const prompt = TOPIC_TRIAGE_PROMPT
-            .replace("{PERSONA}", this.personaDescription)
-            .replace("{TOPIC_MESSAGES}", topicMessagesStr);
+        const prompt = renderPrompt("TOPIC_TRIAGE", {
+            persona: this.personaDescription,
+            topicMessages: topicMessagesStr,
+        });
 
         const llmMessages: ChatMessage[] = [
             { role: "system", content: "你是一个精确的 JSON 输出助手。只输出合法 JSON，不要任何其他内容。" },
@@ -507,9 +452,10 @@ export class RecordingPipeline extends EventEmitter {
 
             // 只对缺失的话题重跑一次
             const retryStr = this.buildTopicContextStr(missingIds, topicGroups, clustering);
-            const retryPrompt = TOPIC_TRIAGE_PROMPT
-                .replace("{PERSONA}", this.personaDescription)
-                .replace("{TOPIC_MESSAGES}", retryStr);
+            const retryPrompt = renderPrompt("TOPIC_TRIAGE", {
+                persona: this.personaDescription,
+                topicMessages: retryStr,
+            });
 
             const retryMessages: ChatMessage[] = [
                 { role: "system", content: "你是一个精确的 JSON 输出助手。只输出合法 JSON，不要任何其他内容。" },

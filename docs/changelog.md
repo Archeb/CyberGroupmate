@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-03-26: Recording Pipeline Prompt 模板化
+
+将 `recording-pipeline.ts` 中硬编码的两个 prompt（话题聚类 + 话题 Triage）迁移到 `prompt-renderer.ts` 模板渲染系统，与 `attend-handler` 保持一致。
+
+### 改动
+
+| 文件 | 改动 |
+|------|------|
+| `system-prompts/recording/recording-topic-clustering.md` | **[NEW]** 话题聚类 prompt 模板（Mustache 变量：`existingTopics`、`messages`） |
+| `system-prompts/recording/recording-topic-triage.md` | **[NEW]** 话题 Triage prompt 模板（Mustache 变量：`persona`、`topicMessages`） |
+| `src/main-agent/prompt-renderer.ts` | `PROMPT_FILE_MAP` 新增 `TOPIC_CLUSTERING`、`TOPIC_TRIAGE` 两个映射 |
+| `src/pipeline/recording-pipeline.ts` | 移除硬编码 `TOPIC_CLUSTERING_PROMPT` / `TOPIC_TRIAGE_PROMPT` 常量；改用 `renderPrompt()` 渲染；3 处 `.replace()` 调用替换为 `renderPrompt("TOPIC_CLUSTERING", ...)` / `renderPrompt("TOPIC_TRIAGE", ...)` |
+
 ## 2026-03-26: 消息富化 — URL OpenGraph 链接预览 + Vision 封面图描述
 
 消息富化管线新增 URL 链接预览功能：自动提取消息中的 HTTP/HTTPS URL，抓取 OpenGraph 元数据（标题、描述、站点名），并使用 Vision LLM 描述 OG 封面图内容，将富化信息注入上下文。
