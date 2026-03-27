@@ -20,6 +20,68 @@
   let flushing = false;
   let reflecting = false;
 
+  // ─── Mute 状态 ───
+  let mutedChatIds = new Set();
+  let muteRemaining = {};  // chatId → remaining string
+  let globalMuteLoading = false;
+  let chatMuteLoading = false;
+
+  async function fetchMuteStatus() {
+    try {
+      const res = await api("/mute/status");
+      const newSet = new Set();
+      const newRemaining = {};
+      for (const m of (res.muted ?? [])) {
+        newSet.add(m.chatId);
+        newRemaining[m.chatId] = m.remaining;
+      }
+      mutedChatIds = newSet;
+      muteRemaining = newRemaining;
+    } catch { /* ignore */ }
+  }
+
+  $: isCurrentChatMuted = $selectedChatId ? mutedChatIds.has($selectedChatId) : false;
+  $: anyMuted = mutedChatIds.size > 0;
+
+  async function toggleGlobalMute() {
+    globalMuteLoading = true;
+    try {
+      if (anyMuted) {
+        await api("/mute/clear", { method: "POST" });
+      } else {
+        await api("/mute/all", { method: "POST", body: { hours: 1 } });
+      }
+      await fetchMuteStatus();
+    } catch (e) {
+      alert("操作失败: " + e.message);
+    } finally {
+      globalMuteLoading = false;
+    }
+  }
+
+  async function toggleChatMute() {
+    if (!$selectedChatId) return;
+    chatMuteLoading = true;
+    try {
+      if (isCurrentChatMuted) {
+        await api(`/mute/chat/${encodeURIComponent($selectedChatId)}/unmute`, { method: "POST" });
+      } else {
+        await api(`/mute/chat/${encodeURIComponent($selectedChatId)}`, { method: "POST", body: { hours: 1 } });
+      }
+      await fetchMuteStatus();
+    } catch (e) {
+      alert("操作失败: " + e.message);
+    } finally {
+      chatMuteLoading = false;
+    }
+  }
+
+  onMount(() => {
+    fetchMuteStatus();
+    const interval = setInterval(fetchMuteStatus, 15000);
+    return () => clearInterval(interval);
+  });
+
   async function triggerFlush() {
     if (!$selectedChatId || flushing) return;
     flushing = true;
@@ -163,7 +225,10 @@
                   >{/if}
                 {getGroupLabel(chatId)}
               </span>
-              <span class="badge badge-sm">{count}</span>
+              <span class="flex items-center gap-1">
+                {#if mutedChatIds.has(chatId)}<span title="禁言中">🔇</span>{/if}
+                <span class="badge badge-sm">{count}</span>
+              </span>
             </button>
           {/each}
         </div>
@@ -186,12 +251,28 @@
               <span class="text-xs opacity-60"
                 >{getGroupLabel($selectedChatId)}</span
               >
+              {#if isCurrentChatMuted}
+                <span class="badge badge-warning badge-xs">🔇 禁言中</span>
+              {/if}
             {:else}
               <span class="text-xs opacity-60">全部</span>
+              {#if anyMuted}
+                <span class="badge badge-warning badge-xs">🔇 {mutedChatIds.size} 个群禁言中</span>
+              {/if}
             {/if}
           </h3>
           {#if $selectedChatId}
             <div class="flex gap-1">
+              <button
+                class="btn btn-xs {isCurrentChatMuted ? 'btn-warning' : 'btn-ghost'}"
+                title={isCurrentChatMuted ? `解除禁言（剩余 ${muteRemaining[$selectedChatId] ?? '?'}）` : '禁言 1 小时（Bot 不发消息）'}
+                disabled={chatMuteLoading}
+                onclick={toggleChatMute}
+              >
+                {#if chatMuteLoading}<span class="loading loading-spinner loading-xs"
+                  ></span>{:else}{isCurrentChatMuted ? '🔊' : '🔇'}{/if}
+                {isCurrentChatMuted ? 'Unmute' : 'Mute'}
+              </button>
               <button
                 class="btn btn-xs btn-ghost"
                 title="手动入队（触发 Agent 处理此群）"
@@ -224,6 +305,19 @@
                 {#if reflecting}<span class="loading loading-spinner loading-xs"
                   ></span>{:else}<i class="fa-solid fa-brain"></i>{/if}
                 Reflect
+              </button>
+            </div>
+          {:else}
+            <div class="flex gap-1">
+              <button
+                class="btn btn-xs {anyMuted ? 'btn-warning' : 'btn-ghost'}"
+                title={anyMuted ? '解除所有群禁言' : '全局禁言 1 小时（所有群 Bot 不发消息）'}
+                disabled={globalMuteLoading}
+                onclick={toggleGlobalMute}
+              >
+                {#if globalMuteLoading}<span class="loading loading-spinner loading-xs"
+                  ></span>{:else}{anyMuted ? '🔊' : '🔇'}{/if}
+                {anyMuted ? 'Unmute All' : 'Mute All'}
               </button>
             </div>
           {/if}

@@ -13,6 +13,7 @@ import type { NotificationCenter } from "../event/notification-center.js";
 import type { FeedbackLoop } from "../pipeline/feedback-loop.js";
 import type { TokenStatsCollector } from "./token-stats.js";
 import type { MediaDownloader } from "../core/media-downloader.js";
+import type { PlatformAdapter } from "../adapter/platform-adapter.js";
 
 /** Dashboard 需要的所有组件引用 */
 export interface DashboardDeps {
@@ -28,6 +29,8 @@ export interface DashboardDeps {
     tokenStats: TokenStatsCollector;
     /** 媒体下载管理器（用于贴纸预览等） */
     mediaDownloader?: MediaDownloader;
+    /** 平台 adapter 引用（用于 mute 等控制操作） */
+    adapters?: PlatformAdapter[];
 }
 
 /** Dashboard 配置 */

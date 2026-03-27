@@ -345,7 +345,8 @@ export class TelegramAdapter implements PlatformAdapter {
         // ─── /mute 写操作拦截 ───
         const MUTE_BLOCKED_METHODS = ["telegram.sendText", "telegram.sendMedia", "telegram.sendFile", "telegram.sendSticker", "telegram.sendTyping"];
         if (MUTE_BLOCKED_METHODS.includes(method)) {
-            const chatId = String(args[0] ?? "");
+            // args[0] 可能是 raw ID（来自 sandbox）或 composite key，统一为 composite key 再查 mute 状态
+            const chatId = ensureCompositeId("telegram", String(args[0] ?? ""));
             if (this.isChatMuted(chatId)) {
                 const remaining = this.getMuteRemainingHours(chatId);
                 const msg = `[禁言中] 你在该聊天已被 /mute，剩余 ${remaining}。所有发送操作已被抑制。`;
@@ -642,6 +643,33 @@ export class TelegramAdapter implements PlatformAdapter {
         if (remainMin < 60) return `${remainMin} 分钟`;
         const remainH = (remainMs / 3_600_000).toFixed(1);
         return `${remainH} 小时`;
+    }
+
+    /** 外部设置 mute（Dashboard 用） */
+    muteChat(chatId: string, hours: number): void {
+        const h = Math.max(0.1, Math.min(24, hours));
+        const expiryMs = Date.now() + h * 3_600_000;
+        this.mutedChats.set(chatId, expiryMs);
+        log.info("muteChat (external)", { chatId, hours: h, expiryMs });
+    }
+
+    /** 外部解除 mute（Dashboard 用） */
+    unmuteChat(chatId: string): void {
+        this.mutedChats.delete(chatId);
+        log.info("unmuteChat (external)", { chatId });
+    }
+
+    /** 获取所有被禁言的聊天 */
+    getMutedChats(): Array<{ chatId: string; expiry: number; remaining: string }> {
+        const result: Array<{ chatId: string; expiry: number; remaining: string }> = [];
+        for (const [chatId, expiry] of this.mutedChats) {
+            if (Date.now() >= expiry) {
+                this.mutedChats.delete(chatId);
+                continue;
+            }
+            result.push({ chatId, expiry, remaining: this.getMuteRemainingHours(chatId) });
+        }
+        return result;
     }
 
     // ─── /invisible & /mute 命令处理 ───

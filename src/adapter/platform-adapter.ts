@@ -19,4 +19,12 @@ export interface PlatformAdapter {
     downloadMedia?(rawMessage: unknown, mediaRef: string): Promise<Buffer>;
     /** 构造平台特定的 @ 提及格式（如 Telegram "@username", Discord "<@id>"） */
     formatMention(rawUserId: string, username?: string): string | undefined;
+    /** 禁言指定聊天（Dashboard 用） */
+    muteChat?(chatId: string, hours: number): void;
+    /** 解除禁言（Dashboard 用） */
+    unmuteChat?(chatId: string): void;
+    /** 获取所有被禁言的聊天列表 */
+    getMutedChats?(): Array<{ chatId: string; expiry: number; remaining: string }>;
+    /** 检查指定聊天是否被禁言 */
+    isChatMuted?(chatId: string): boolean;
 }

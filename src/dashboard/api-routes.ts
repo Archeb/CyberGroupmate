@@ -776,6 +776,103 @@ export function createApiRouter(deps: DashboardDeps, bridge: EventBridge): Route
         }
     });
 
+    // ─── Mute Control ───
+    // 获取所有 muted 聊天状态
+    router.get("/mute/status", (_req, res) => {
+        const allMuted: Array<{ chatId: string; expiry: number; remaining: string; platform: string }> = [];
+        for (const adapter of (deps.adapters ?? [])) {
+            if (typeof adapter.getMutedChats === "function") {
+                for (const m of adapter.getMutedChats()) {
+                    allMuted.push({ ...m, platform: adapter.platform });
+                }
+            }
+        }
+        res.json({ muted: allMuted });
+    });
+
+    // 检查单个 chatId 的 mute 状态
+    router.get("/mute/chat/:chatId", (req, res) => {
+        const chatId = req.params.chatId;
+        for (const adapter of (deps.adapters ?? [])) {
+            if (typeof adapter.isChatMuted === "function" && adapter.isChatMuted(chatId)) {
+                const mutedList = adapter.getMutedChats?.() ?? [];
+                const entry = mutedList.find(m => m.chatId === chatId);
+                res.json({ muted: true, remaining: entry?.remaining ?? "?" });
+                return;
+            }
+        }
+        res.json({ muted: false });
+    });
+
+    // Mute 单个聊天
+    router.post("/mute/chat/:chatId", (req, res) => {
+        const chatId = req.params.chatId;
+        const hours = Number(req.body?.hours) || 1;
+        for (const adapter of (deps.adapters ?? [])) {
+            if (typeof adapter.muteChat === "function") {
+                // 找到对应平台的 adapter
+                if (chatId.startsWith(`${adapter.platform}:`)) {
+                    adapter.muteChat(chatId, hours);
+                    log.info("Dashboard mute chat", { chatId, hours });
+                    res.json({ ok: true });
+                    return;
+                }
+            }
+        }
+        res.status(404).json({ error: "no adapter found for chatId" });
+    });
+
+    // Unmute 单个聊天
+    router.post("/mute/chat/:chatId/unmute", (req, res) => {
+        const chatId = req.params.chatId;
+        for (const adapter of (deps.adapters ?? [])) {
+            if (typeof adapter.unmuteChat === "function" && chatId.startsWith(`${adapter.platform}:`)) {
+                adapter.unmuteChat(chatId);
+                log.info("Dashboard unmute chat", { chatId });
+                res.json({ ok: true });
+                return;
+            }
+        }
+        res.status(404).json({ error: "no adapter found for chatId" });
+    });
+
+    // 全局 mute：对所有已知 chatId 设置 mute
+    router.post("/mute/all", (req, res) => {
+        const hours = Number(req.body?.hours) || 1;
+        const allChatIds = new Set<string>();
+        for (const sub of deps.subagentManager.getAllSubagents()) {
+            allChatIds.add(sub.chatId);
+        }
+        let count = 0;
+        for (const chatId of allChatIds) {
+            for (const adapter of (deps.adapters ?? [])) {
+                if (typeof adapter.muteChat === "function" && chatId.startsWith(`${adapter.platform}:`)) {
+                    adapter.muteChat(chatId, hours);
+                    count++;
+                    break;
+                }
+            }
+        }
+        log.info("Dashboard mute all", { count, hours });
+        res.json({ ok: true, mutedCount: count });
+    });
+
+    // 全局 unmute
+    router.post("/mute/clear", (_req, res) => {
+        let count = 0;
+        for (const adapter of (deps.adapters ?? [])) {
+            if (typeof adapter.getMutedChats === "function" && typeof adapter.unmuteChat === "function") {
+                const muted = adapter.getMutedChats();
+                for (const m of muted) {
+                    adapter.unmuteChat(m.chatId);
+                    count++;
+                }
+            }
+        }
+        log.info("Dashboard unmute all", { count });
+        res.json({ ok: true, unmutedCount: count });
+    });
+
     router.post("/restart", (_req, res) => {
         log.info("收到重启请求，进程将在 1 秒后退出");
         res.json({ ok: true, message: "进程将在 1 秒后退出，请确保有进程管理器（pm2/systemd）自动重启" });

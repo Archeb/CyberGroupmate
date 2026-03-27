@@ -754,7 +754,7 @@ async function main(): Promise<void> {
         process.on("exit", () => tokenStats.shutdown());
 
         const dashboard = new DashboardServer(
-            { nc, subagentManager, q3, q5, mainLoop, globalState, sandboxPool, memory, feedbackLoop, tokenStats, mediaDownloader: sharedMediaDownloader },
+            { nc, subagentManager, q3, q5, mainLoop, globalState, sandboxPool, memory, feedbackLoop, tokenStats, mediaDownloader: sharedMediaDownloader, adapters },
             { port: dashboardPort, token: dashboardToken, enabled: true },
         );
         await dashboard.start();
