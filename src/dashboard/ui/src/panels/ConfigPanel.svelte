@@ -9,6 +9,12 @@
   let saving = false;
   let toast = null;
   let toastTimer = null;
+  let telegramEnabled = false;
+  let discordEnabled = false;
+
+  /** Password 输入框：focus 显示明文，blur 恢复隐藏 */
+  function pwFocus(e) { e.target.type = 'text'; }
+  function pwBlur(e) { e.target.type = 'password'; }
   let currentSection = "llmProfiles";
 
   let profileTests = {};
@@ -68,8 +74,13 @@
       if (!config.subagent) config.subagent = {};
       if (!config.llmRouting) config.llmRouting = {};
       if (!config.llmRouting.timeouts) config.llmRouting.timeouts = {};
-      if (!config.discord) config.discord = { botToken: "", applicationId: "" };
       if (!config.recordingPipeline) config.recordingPipeline = {};
+      // Adapter 启用状态：根据后端是否返回了有效配置来判断
+      telegramEnabled = !!config.telegram?.botToken;
+      discordEnabled = !!config.discord?.botToken;
+      // 始终确保 UI 有空对象可绑定
+      if (!config.telegram) config.telegram = { mode: 'bot', botToken: '', apiId: '', apiHash: '', phone: '' };
+      if (!config.discord) config.discord = { botToken: "", applicationId: "" };
       if (config.telegram && !config.telegram.humanizedDelay) {
         config.telegram.humanizedDelay = {
           enabled: false,
@@ -107,7 +118,11 @@
     saving = true;
     const needsRestart = hasRestartChanges();
     try {
-      const res = await api("/config", { method: "PUT", body: config });
+      // 根据开关决定是否包含 adapter 配置
+      const payload = JSON.parse(JSON.stringify(config));
+      if (!telegramEnabled) delete payload.telegram;
+      if (!discordEnabled) delete payload.discord;
+      const res = await api("/config", { method: "PUT", body: payload });
       if (res.ok) {
         originalConfig = JSON.parse(JSON.stringify(config));
         if (needsRestart) {
@@ -390,6 +405,8 @@
                       type="password"
                       class="input input-xs input-bordered w-full"
                       bind:value={p.apiKey}
+                      on:focus={pwFocus}
+                      on:blur={pwBlur}
                     /></label
                   >
                   <label class="cfg-field"
@@ -699,6 +716,18 @@
             <h3 class="card-title text-sm">
               <i class="fa-solid fa-paper-plane opacity-50 mr-1"></i> Telegram 设置
             </h3>
+            <label class="cfg-check mb-2">
+              <input
+                type="checkbox"
+                class="toggle toggle-sm"
+                bind:checked={telegramEnabled}
+              />
+              <span class="text-sm font-medium">启用 Telegram Adapter</span>
+            </label>
+            {#if !telegramEnabled}
+              <p class="text-xs opacity-40 italic mb-3">未启用，设置不会保存到配置文件。</p>
+            {/if}
+            <div class:opacity-40={!telegramEnabled} class:pointer-events-none={!telegramEnabled}>
             <p class="text-xs opacity-50 mb-3">连接参数和发送行为。</p>
             <div class="cfg-grid-2">
               <label class="cfg-field"
@@ -722,6 +751,8 @@
                   type="password"
                   class="input input-xs input-bordered w-full"
                   bind:value={config.telegram.botToken}
+                  on:focus={pwFocus}
+                  on:blur={pwBlur}
                 /></label
               >
               <label class="cfg-field"
@@ -742,6 +773,8 @@
                   type="password"
                   class="input input-xs input-bordered w-full"
                   bind:value={config.telegram.apiHash}
+                  on:focus={pwFocus}
+                  on:blur={pwBlur}
                 /></label
               >
               <label class="cfg-field col-span-2"
@@ -793,6 +826,7 @@
                 >
               </div>
             {/if}
+            </div>
           {/if}
 
           <!-- ══ Discord ══ -->
@@ -800,6 +834,18 @@
             <h3 class="card-title text-sm">
               <i class="fa-solid fa-gamepad opacity-50 mr-1"></i> Discord 设置
             </h3>
+            <label class="cfg-check mb-2">
+              <input
+                type="checkbox"
+                class="toggle toggle-sm"
+                bind:checked={discordEnabled}
+              />
+              <span class="text-sm font-medium">启用 Discord Adapter</span>
+            </label>
+            {#if !discordEnabled}
+              <p class="text-xs opacity-40 italic mb-3">未启用，设置不会保存到配置文件。</p>
+            {/if}
+            <div class:opacity-40={!discordEnabled} class:pointer-events-none={!discordEnabled}>
             <p class="text-xs opacity-50 mb-3">Bot 连接参数。修改后需重启服务。</p>
             <div class="cfg-grid-2">
               <label class="cfg-field col-span-2"
@@ -811,6 +857,8 @@
                   class="input input-xs input-bordered w-full"
                   bind:value={config.discord.botToken}
                   placeholder="Discord Bot Token"
+                  on:focus={pwFocus}
+                  on:blur={pwBlur}
                 /></label
               >
               <label class="cfg-field col-span-2"
@@ -822,6 +870,7 @@
                   placeholder="(可选)"
                 /></label
               >
+            </div>
             </div>
           {/if}
 
@@ -1077,6 +1126,8 @@
                     type="password"
                     class="input input-xs input-bordered w-full"
                     bind:value={config.embedding.apiKey}
+                    on:focus={pwFocus}
+                    on:blur={pwBlur}
                   /></label
                 >
                 <label class="cfg-field"
@@ -1191,6 +1242,8 @@
                   type="password"
                   class="input input-xs input-bordered w-full"
                   bind:value={config.dashboard.token}
+                  on:focus={pwFocus}
+                  on:blur={pwBlur}
                 /></label
               >
             </div>
@@ -1381,6 +1434,8 @@
                 class="input input-sm input-bordered w-full max-w-md"
                 bind:value={config.tavilyApiKey}
                 placeholder="tvly-..."
+                on:focus={pwFocus}
+                on:blur={pwBlur}
               />
             </label>
           {/if}
