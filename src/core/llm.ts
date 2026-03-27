@@ -182,7 +182,9 @@ function isQuotaError(err: unknown): boolean {
     const msg = err.message;
     return msg.includes("429") || msg.includes("rate limit") ||
         msg.includes("quota") || msg.includes("RESOURCE_EXHAUSTED") ||
-        msg.includes("overloaded");
+        msg.includes("overloaded") || msg.includes("402") ||
+        msg.includes("payment") || msg.includes("Payment Required") ||
+        msg.includes("insufficient");
 }
 
 /**
@@ -260,7 +262,7 @@ async function callLLMWithPool(
         };
 
         try {
-            const result = await callLLMSingleKey(messages, effectiveConfig, options, true);
+            const result = await callLLMSingleKey(messages, effectiveConfig, options);
             pool.release(handle, true);
             return result;
         } catch (err) {
@@ -296,7 +298,6 @@ async function callLLMSingleKey(
     messages: ChatMessage[],
     config: LLMConfig,
     options?: LLMCallOptions,
-    skipRetryOnQuota = false,
 ): Promise<LLMResponse> {
     // ── 擦屁股：清洗空 assistant 消息 ──
     for (const msg of messages) {
@@ -438,12 +439,12 @@ async function callLLMSingleKey(
                 err instanceof Error &&
                 err.message.includes("empty response");
 
-            const isRetryable = isUserAbort || isRateLimit || isServerError || isNetworkError || isEmptyResponse;
+            // quota/billing 类错误不在此层重试，直接抛出让 callLLMWithFallback 层 fallback 到下一个 profile
+            const isRetryable = isUserAbort || isServerError || isNetworkError || isEmptyResponse;
 
-            const reason = isUserAbort ? "user_retry" : isRateLimit ? "rate_limit" : isServerError ? "server_error" : isNetworkError ? "network_error" : "empty_response";
+            const reason = isUserAbort ? "user_retry" : isRateLimit ? "rate_limit" : isServerError ? "server_error" : isNetworkError ? "network_error" : isEmptyResponse ? "empty_response" : "quota_or_billing";
 
-            // Pool 模式下，429/quota 不在此层重试（由 pool 层切换 key 处理）
-            if (isRetryable && attempt < MAX_RETRIES && !(skipRetryOnQuota && isRateLimit)) {
+            if (isRetryable && attempt < MAX_RETRIES) {
                 const delay = wasUserRetry ? 0 : (RETRY_DELAYS[attempt] ?? 4000);
                 log.warn(`LLM call failed (attempt ${attempt + 1}/${MAX_RETRIES}), retrying in ${delay}ms`, {
                     caller,
@@ -524,40 +525,29 @@ export async function callLLMWithFallback(
             return await callLLM(messages, configs[i], options);
         } catch (err) {
             lastError = err instanceof Error ? err : new Error(String(err));
-            const msg = lastError.message;
-            const isQuota = msg.includes("429") ||
-                msg.includes("quota") ||
-                msg.includes("RESOURCE_EXHAUSTED") ||
-                msg.includes("rate limit") ||
-                msg.includes("overloaded");
 
-            const isTransient = lastError.name === "TimeoutError" ||
-                msg.includes("operation was aborted due to timeout") ||
-                msg.includes("fetch failed") ||
-                msg.includes("ECONNRESET") ||
-                msg.includes("ECONNREFUSED") ||
-                msg.includes("ETIMEDOUT") ||
-                msg.includes("socket hang up") ||
-                msg.includes("UND_ERR") ||
-                msg.includes("network") ||
-                msg.includes("empty response") ||
-                msg.includes("500") ||
-                msg.includes("502") ||
-                msg.includes("503");
-
-            const shouldFallback = isQuota || isTransient;
-
-            if (!shouldFallback || i === configs.length - 1) {
-                // 非可恢复错误或最后一个 config → 直接抛出
+            // 最后一个 config 也失败 → 抛出
+            if (i === configs.length - 1) {
                 throw lastError;
             }
+
+            // 分类仅用于日志
+            const msg = lastError.message;
+            const reason = (msg.includes("429") || msg.includes("quota") || msg.includes("RESOURCE_EXHAUSTED") ||
+                msg.includes("rate limit") || msg.includes("overloaded") || msg.includes("402") ||
+                msg.includes("payment") || msg.includes("insufficient"))
+                ? "quota"
+                : (msg.includes("401") || msg.includes("403") || msg.includes("PERMISSION_DENIED") ||
+                    msg.includes("billing") || msg.includes("Unauthorized") || msg.includes("Forbidden"))
+                    ? "auth"
+                    : "other";
 
             log.warn("callLLMWithFallback: 错误，尝试下一个 profile", {
                 failedModel: configs[i].model,
                 nextModel: configs[i + 1]?.model,
                 attempt: i + 1,
                 total: configs.length,
-                reason: isQuota ? "quota" : "transient",
+                reason,
                 error: msg.slice(0, 150),
             });
         }
