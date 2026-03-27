@@ -591,7 +591,7 @@ export class RecordingPipeline extends EventEmitter {
                     : "";
                 const parts = [
                     `- **${getRawId(p.userId)}**${namePart}`,
-                    `Tier ${p.dunbarTier}`,
+                    "关系：" + getDunbarTierLabel(p.dunbarTier),
                     p.traits.length ? `traits=[${p.traits.join(", ")}]` : null,
                     p.interests.length ? `interests=[${p.interests.join(", ")}]` : null,
                     p.relationToAgent ? `relation="${p.relationToAgent}"` : null,

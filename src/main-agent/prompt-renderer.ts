@@ -20,7 +20,7 @@ import type { GroupContextPackage, TopicDigest, SubagentCallback, FastPathConfig
 import type { GlobalState } from "./global-state.js";
 import type { GroupModel } from "../memory-v2/types.js";
 import { createLogger } from "../core/logger.js";
-import { getRawId } from "../core/chat-id.js";
+import { getRawId, getDunbarTierLabel } from "../core/chat-id.js";
 import { readFileSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -222,8 +222,7 @@ export function buildAttentionVariables(
         // Active persons (Issue 3: PersonGroupProfile + aliases + mention 注入)
         activePersons: pkg.activePersons?.length
             ? pkg.activePersons.map((p: any) => {
-                const tierLabels: Record<number, string> = { 1: "好友", 2: "认识", 3: "生疏", 4: "陌生" };
-                const tier = p.dunbarTier ? `亲密程度: ${tierLabels[p.dunbarTier] ?? `Tier${p.dunbarTier}`}` : "不熟";
+                const tier = getDunbarTierLabel(p.dunbarTier);
                 const rel = p.relationToAgent ? `, 关系: ${p.relationToAgent}` : "";
                 const mentionStr = p.mention ? ` (提及方式: ${p.mention})` : "";
                 const aka = p.aliases?.length ? ` (又名: ${p.aliases.join(", ")})` : "";
