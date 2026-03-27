@@ -76,7 +76,11 @@
       if (!config.llmRouting.timeouts) config.llmRouting.timeouts = {};
       if (!config.recordingPipeline) config.recordingPipeline = {};
       // Adapter 启用状态：根据后端是否返回了有效配置来判断
-      telegramEnabled = !!config.telegram?.botToken;
+      // bot 模式看 botToken，userbot 模式看 apiId + apiHash + phone
+      telegramEnabled = !!(
+        config.telegram?.botToken ||
+        (config.telegram?.apiId && config.telegram?.apiHash && config.telegram?.phone)
+      );
       discordEnabled = !!config.discord?.botToken;
       // 始终确保 UI 有空对象可绑定
       if (!config.telegram) config.telegram = { mode: 'bot', botToken: '', apiId: '', apiHash: '', phone: '' };
