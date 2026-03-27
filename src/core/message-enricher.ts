@@ -13,7 +13,7 @@
  */
 
 import { processMediaBatch, type MediaAttachment, type ProcessedMedia, type DownloadFn, type StickerCache } from "./vision-processor.js";
-import type { LLMConfig, VisionConfig } from "./config.js";
+import { resolveComponentTimeout, type LLMConfig, type VisionConfig } from "./config.js";
 import type { MediaDownloader } from "./media-downloader.js";
 import { formatTsForDisplay } from "./timezone.js";
 import { createLogger } from "./logger.js";
@@ -510,7 +510,7 @@ async function enrichWithOpenGraph(
                         imageParts: [{ url: dataUri }],
                     },
                 ];
-                const response = await callLLM(visionMessages, visionLlmConfig, { caller: "og-vision" });
+                const response = await callLLM(visionMessages, visionLlmConfig, { caller: "og-vision", timeoutMs: resolveComponentTimeout("vision") });
                 const description = response.content.trim();
 
                 imageDescriptions.set(imageUrl, {

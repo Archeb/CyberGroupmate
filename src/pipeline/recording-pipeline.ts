@@ -22,7 +22,7 @@ import type { MemoryStoreV2 } from "../memory-v2/index.js";
 import { embed } from "../memory-v2/embedding.js";
 import type { EmbeddingConfig } from "../core/config.js";
 import type { TopicRegistry } from "./topic-registry.js";
-import { getRawId, getGroupModelKey } from "../core/chat-id.js";
+import { getRawId, getGroupModelKey, getDunbarTierLabel } from "../core/chat-id.js";
 import type {
     Message,
     TopicClusteringResult,
@@ -82,6 +82,7 @@ export class RecordingPipeline extends EventEmitter {
         private memory?: MemoryStoreV2,
         private embeddingConfig?: EmbeddingConfig,
         pipelineConfig?: RecordingPipelineConfig,
+        private timeoutMs?: number,
     ) {
         super();
         this.minFlushSize = pipelineConfig?.minFlushSize ?? DEFAULT_MIN_FLUSH_SIZE;
@@ -370,7 +371,7 @@ export class RecordingPipeline extends EventEmitter {
             { role: "user", content: prompt },
         ];
 
-        const response = await callLLM(llmMessages, this.llmConfig, { caller: "recording-pipeline" });
+        const response = await callLLM(llmMessages, this.llmConfig, { caller: "recording-pipeline", timeoutMs: this.timeoutMs });
 
         try {
             // 提取 JSON（处理可能的 markdown 包裹）
@@ -432,7 +433,7 @@ export class RecordingPipeline extends EventEmitter {
             { role: "user", content: userMessage },
         ];
 
-        const response = await callLLM(llmMessages, this.llmConfig, { caller: "recording-pipeline" });
+        const response = await callLLM(llmMessages, this.llmConfig, { caller: "recording-pipeline", timeoutMs: this.timeoutMs });
 
         let result: TopicSummaryTriageResult;
         try {
@@ -470,7 +471,7 @@ export class RecordingPipeline extends EventEmitter {
             ];
 
             try {
-                const retryResponse = await callLLM(retryMessages, this.llmConfig, { caller: "recording-pipeline" });
+                const retryResponse = await callLLM(retryMessages, this.llmConfig, { caller: "recording-pipeline", timeoutMs: this.timeoutMs });
                 const retryJson = retryResponse.content
                     .replace(/```json\s*/g, "")
                     .replace(/```\s*/g, "")

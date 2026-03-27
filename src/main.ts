@@ -15,7 +15,7 @@ import { ensureCompositeId, getRawId, getPlatform, getGroupModelKey } from "./co
 import { SandboxPool } from "./sandbox/sandbox-pool.js";
 import { createTaskListSkill, buildTaskListHostCalls } from "./sandbox/skills/task-list.js";
 import { MemoryStoreV2 } from "./memory-v2/index.js";
-import { loadConfig, resolveComponentProfiles, type AppConfig, type LLMConfig } from "./core/config.js";
+import { loadConfig, resolveComponentProfiles, resolveComponentTimeout, type AppConfig, type LLMConfig } from "./core/config.js";
 import {
     TopicRegistry,
     FeedbackLoop,
@@ -307,6 +307,7 @@ async function main(): Promise<void> {
             personaDescription: appConfig.persona?.description ?? "赛博群友",
             memory,
             pipelineConfig: appConfig.recordingPipeline,
+            timeoutMs: resolveComponentTimeout("recording", appConfig),
         },
         memory,  // 用于启动时恢复 TopicRegistry
         sessionsDir: SESSIONS_DIR,

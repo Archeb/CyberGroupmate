@@ -11,7 +11,7 @@
  */
 
 import { callLLM, type ChatMessage } from "./llm.js";
-import type { LLMConfig, VisionConfig } from "./config.js";
+import { resolveComponentTimeout, type LLMConfig, type VisionConfig } from "./config.js";
 import { createLogger } from "./logger.js";
 import type { MediaDownloader } from "./media-downloader.js";
 
@@ -423,7 +423,7 @@ async function describeImage(
         },
     ];
 
-    const response = await callLLM(messages, visionConfig, { caller: "vision" });
+    const response = await callLLM(messages, visionConfig, { caller: "vision", timeoutMs: resolveComponentTimeout("vision") });
     return response.content.trim();
 }
 

@@ -42,6 +42,8 @@ export interface RecordingPipelineDeps {
     memory?: MemoryStoreV2;
     embeddingConfig?: EmbeddingConfig;
     pipelineConfig?: RecordingPipelineConfig;
+    /** LLM 请求超时（毫秒），来自 resolveComponentTimeout('recording') */
+    timeoutMs?: number;
 }
 
 /** GroupSubagent 构造参数 */
@@ -120,6 +122,7 @@ export class GroupSubagent extends EventEmitter {
                 deps.memory,
                 deps.embeddingConfig,
                 deps.pipelineConfig,
+                deps.timeoutMs,
             );
 
             this.recordingPipeline.on("topics:triage-passed", (passedTopics: Array<{ topic: any; decision: any }>) => {

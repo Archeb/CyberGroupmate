@@ -1,7 +1,6 @@
 import { createLogger } from "../core/logger.js";
 import { callLLM, type ChatMessage } from "../core/llm.js";
-import type { LLMConfig } from "../core/config.js";
-import { loadConfig } from "../core/config.js";
+import { loadConfig, resolveComponentTimeout, type LLMConfig } from "../core/config.js";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { encodingForModel } from "js-tiktoken";
@@ -521,7 +520,7 @@ async function generateBriefing(
     ];
 
     try {
-        const response = await callLLM(briefingMessages, llmConfig, { caller: "context-manager" });
+        const response = await callLLM(briefingMessages, llmConfig, { caller: "context-manager", timeoutMs: resolveComponentTimeout("compact") });
         const briefing = response.content.trim();
 
         // 检查 briefing 是否超过预算

@@ -18,7 +18,7 @@ import type {
 import { DEFAULT_SUBAGENT_CONFIG } from "./types.js";
 import { callLLM, type ChatMessage } from "../core/llm.js";
 import { renderPrompt, buildFastPathTaskVariables, buildFastPathTurnContent } from "../main-agent/prompt-renderer.js";
-import type { LLMConfig } from "../core/config.js";
+import { resolveComponentTimeout, type LLMConfig } from "../core/config.js";
 import { createLogger } from "../core/logger.js";
 
 const log = createLogger("fast-path");
@@ -306,7 +306,7 @@ export class FastPathHandler {
                 const response = await callLLM(
                     messages,
                     this.llmConfig,
-                    { caller: "fast-path" },
+                    { caller: "fast-path", timeoutMs: resolveComponentTimeout("fast_path") },
                 );
 
                 return response.content.trim();
