@@ -159,11 +159,22 @@ export function createAttendHandler(
             }
         }
 
+        // 预解析话题参与者的 composite ID → display name（供 ATTENTION prompt 展示）
+        const resolvedTopicDigests = entry.topicDigests.map(d => ({
+            ...d,
+            participants: d.participants.map(id => {
+                try {
+                    const identity = memory.getPersonIdentity(id);
+                    return identity?.displayName ?? id;
+                } catch { return id; }
+            }),
+        }));
+
         const contextPkg = buildGroupContext({
             chatId: entry.chatId,
             depth,
             snapshotTimestamp: new Date().toISOString(),
-            topicDigests: entry.topicDigests,
+            topicDigests: resolvedTopicDigests,
             engagementScore: entry.priority,
             groupModel,
             lastCallbacks: subagent.lastCallbacks,

@@ -20,6 +20,8 @@ import type {
     Message,
     ExitSignal,
 } from "./types.js";
+import type { TopicDigest } from "../subagent/types.js";
+import type { FormattableTopic } from "../main-agent/prompt-renderer.js";
 
 const log = createLogger("topic-registry");
 
@@ -443,6 +445,51 @@ export class TopicRegistry extends EventEmitter {
     /** 当前话题总数（调试用） */
     get size(): number {
         return this.topics.size;
+    }
+
+    // ─── 统一转换方法 ───
+
+    /**
+     * Topic → TopicDigest（结构化 DTO，用于 AttentionQueueEntry / contextSnapshot）
+     *
+     * 所有 callsite 统一使用此方法，不再各自手动 .map()。
+     */
+    static toDigest(topic: Topic): TopicDigest {
+        return {
+            topicId: String(topic.id),
+            label: String(topic.label ?? ""),
+            summary: String(topic.lastSummary ?? topic.recentContext ?? ""),
+            state: String(topic.state ?? "ACTIVE"),
+            participants: [...(topic.participantIds ?? [])].map(String),
+            keywords: Array.isArray(topic.keywords) ? topic.keywords : [],
+            messageCount: topic.messageIds?.length ?? 0,
+            lastActivityAt: new Date(topic.createdAt ?? Date.now()).toISOString(),
+            // 仅对 ENGAGED 状态的话题传递 triage reason
+            ...(topic.state === "ENGAGED" && topic.decision?.reason ? { triageReason: topic.decision.reason } : {}),
+        };
+    }
+
+    /**
+     * Topic → FormattableTopic（用于 formatTopicList 渲染）
+     *
+     * @param nameResolver 可选的 participant ID → display name 解析函数。
+     *   不传则回退到 raw ID。
+     */
+    static toFormattable(
+        topic: Topic,
+        nameResolver?: (id: string) => string,
+    ): FormattableTopic {
+        const resolver = nameResolver ?? ((id: string) => id);
+        return {
+            id: topic.id,
+            label: topic.label ?? "",
+            summary: topic.lastSummary,
+            recentContext: topic.recentContext,
+            createdAt: topic.createdAt,
+            participants: [...(topic.participantIds ?? [])].map(resolver),
+            messageCount: topic.messageIds?.length ?? 0,
+            triageReason: topic.state === "ENGAGED" ? topic.decision?.reason : undefined,
+        };
     }
 }
 

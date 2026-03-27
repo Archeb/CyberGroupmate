@@ -304,17 +304,6 @@ export class CodeActExecutor {
             hasSandbox: this.hasDependencies(),
         });
 
-        // 记录 task 上下文到 session
-        this.session.push({
-            role: "user",
-            content: `[TASK ${task.taskId}] ${JSON.stringify({
-                replyMode: task.replyMode,
-                decisions: task.decisions,
-                topicDigests: task.contextSnapshot.topicDigests,
-            })}`,
-            timestamp: task.createdAt,
-        });
-
         // 检查 session 长度
         if (this.session.length > this.config.maxSessionMessages) {
             await this.compactSession();

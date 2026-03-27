@@ -445,6 +445,7 @@ function formatTopicDigests(digests: TopicDigest[]): string {
         state: d.state,
         label: d.label,
         summary: d.summary,
+        participants: d.participants,
         messageCount: d.messageCount,
         createdAt: d.lastActivityAt,
         triageReason: (d as any).triageReason,

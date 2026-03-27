@@ -190,20 +190,9 @@ export class GroupSubagent extends EventEmitter {
         const hasFastPathRequest = this.observer.checkFastPathRequest();
         const basePriority = engagement * this.stickiness.priorityMultiplier;
 
-        // topicDigests: 直接从 TopicRegistry 取当前话题
+        // topicDigests: 直接从 TopicRegistry 取当前话题，使用统一转换方法
         const allTopics = this.topicRegistry.getByChat(this.chatId);
-        const topicDigests: TopicDigest[] = allTopics.map((t: any) => ({
-            topicId: String(t.id),
-            label: String(t.label ?? ""),
-            summary: String(t.lastSummary ?? t.recentContext ?? ""),
-            state: String(t.state ?? "ACTIVE"),
-            participants: [...(t.participantIds ?? [])].map(String),
-            keywords: Array.isArray(t.keywords) ? t.keywords : [],
-            messageCount: t.messageIds?.length ?? 0,
-            lastActivityAt: new Date(t.createdAt ?? Date.now()).toISOString(),
-            // 仅对 ENGAGED 状态的话题传递 triage reason，供 attend-handler 做二次决策
-            ...(t.state === "ENGAGED" && t.decision?.reason ? { triageReason: t.decision.reason } : {}),
-        }));
+        const topicDigests: TopicDigest[] = allTopics.map(t => TopicRegistry.toDigest(t));
 
         // 来源标记：优先使用调用方传入的 sourceOverride（如 DIRECT_ADDRESS）
         const source: AttentionQueueEntry["source"] = sourceOverride

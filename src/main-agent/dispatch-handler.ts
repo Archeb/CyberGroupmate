@@ -31,6 +31,7 @@ import { MediaDownloader } from "../core/media-downloader.js";
 import type { AppConfig } from "../core/config.js";
 import type { PlatformAdapter } from "../adapter/platform-adapter.js";
 import { getPlatform, getGroupModelKey } from "../core/chat-id.js";
+import { TopicRegistry } from "../pipeline/topic-registry.js";
 
 const log = createLogger("dispatch-handler");
 
@@ -125,14 +126,12 @@ export function createDispatchHandler(
                     const sortedTopics = [...allTopics]
                         .sort((a: any, b: any) => (b.createdAt ?? 0) - (a.createdAt ?? 0))
                         .slice(0, 20);
-                    topicSummary = formatTopicList(sortedTopics.map((t: any) => ({
-                        id: t.id,
-                        state: t.state,
-                        label: t.label ?? "",
-                        summary: t.lastSummary,
-                        recentContext: t.recentContext,
-                        createdAt: t.createdAt,
-                    })));
+                    topicSummary = formatTopicList(sortedTopics.map(t =>
+                        TopicRegistry.toFormattable(t, id => {
+                            const identity = memory.getPersonIdentity(id);
+                            return identity?.displayName ?? id;
+                        })
+                    ));
                 } else {
                     // Fallback: TopicRegistry 为空时（Pipeline 尚未 flush 或重启后无近期话题），
                     // 从 MemoryV2 查询最近 20 条持久化话题（无时间限制）
@@ -204,16 +203,7 @@ export function createDispatchHandler(
                     chatId: result.chatId,
                     depth: 2, // 提供足够上下文
                     snapshotTimestamp: new Date().toISOString(),
-                    topicDigests: subagent.topicRegistry.getByChat(result.chatId).map((t: any) => ({
-                        topicId: String(t.id),
-                        label: String(t.label ?? ""),
-                        summary: String(t.lastSummary ?? t.recentContext ?? ""),
-                        state: String(t.state ?? "ACTIVE"),
-                        participants: [...(t.participantIds ?? [])].map(String),
-                        keywords: Array.isArray(t.keywords) ? t.keywords : [],
-                        messageCount: t.messageIds?.length ?? 0,
-                        lastActivityAt: new Date(t.createdAt ?? Date.now()).toISOString(),
-                    })),
+                    topicDigests: subagent.topicRegistry.getByChat(result.chatId).map(t => TopicRegistry.toDigest(t)),
                     engagementScore: subagent.observer.getEngagementScore(),
                     groupModel,
                     lastCallbacks: subagent.lastCallbacks,
