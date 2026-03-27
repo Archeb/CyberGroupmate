@@ -42,6 +42,10 @@
 
   $: isCurrentChatMuted = $selectedChatId ? mutedChatIds.has($selectedChatId) : false;
   $: anyMuted = mutedChatIds.size > 0;
+  // 全局禁言 = 所有已知群都被 mute
+  $: isGlobalMuted = allChatIds.length > 0 && allChatIds.every(id => mutedChatIds.has(id));
+  // 当前群是因为全局禁言而被 mute（不是单独 mute 的）
+  $: isCurrentMutedByGlobal = isCurrentChatMuted && isGlobalMuted;
 
   async function toggleGlobalMute() {
     globalMuteLoading = true;
@@ -226,7 +230,7 @@
                 {getGroupLabel(chatId)}
               </span>
               <span class="flex items-center gap-1">
-                {#if mutedChatIds.has(chatId)}<span title="禁言中">🔇</span>{/if}
+                {#if mutedChatIds.has(chatId)}<span title="禁言中"><i class="fa-solid fa-volume-xmark" style="font-size:0.65rem;color:var(--color-warning)"></i></span>{/if}
                 <span class="badge badge-sm">{count}</span>
               </span>
             </button>
@@ -251,27 +255,21 @@
               <span class="text-xs opacity-60"
                 >{getGroupLabel($selectedChatId)}</span
               >
-              {#if isCurrentChatMuted}
-                <span class="badge badge-warning badge-xs">🔇 禁言中</span>
-              {/if}
             {:else}
               <span class="text-xs opacity-60">全部</span>
-              {#if anyMuted}
-                <span class="badge badge-warning badge-xs">🔇 {mutedChatIds.size} 个群禁言中</span>
-              {/if}
             {/if}
           </h3>
           {#if $selectedChatId}
             <div class="flex gap-1">
               <button
                 class="btn btn-xs {isCurrentChatMuted ? 'btn-warning' : 'btn-ghost'}"
-                title={isCurrentChatMuted ? `解除禁言（剩余 ${muteRemaining[$selectedChatId] ?? '?'}）` : '禁言 1 小时（Bot 不发消息）'}
-                disabled={chatMuteLoading}
+                title={isCurrentMutedByGlobal ? '全局禁言中，请先在「全部」视图解除全局禁言' : isCurrentChatMuted ? `已禁言（剩余 ${muteRemaining[$selectedChatId] ?? '?'}），点击解除` : '禁言 1 小时（Bot 不发消息）'}
+                disabled={chatMuteLoading || isCurrentMutedByGlobal}
                 onclick={toggleChatMute}
               >
                 {#if chatMuteLoading}<span class="loading loading-spinner loading-xs"
-                  ></span>{:else}{isCurrentChatMuted ? '🔊' : '🔇'}{/if}
-                {isCurrentChatMuted ? 'Unmute' : 'Mute'}
+                  ></span>{:else}<i class="fa-solid {isCurrentChatMuted ? 'fa-volume-xmark' : 'fa-volume-high'}"></i>{/if}
+                {isCurrentChatMuted ? 'Muted' : 'Mute'}
               </button>
               <button
                 class="btn btn-xs btn-ghost"
@@ -316,8 +314,8 @@
                 onclick={toggleGlobalMute}
               >
                 {#if globalMuteLoading}<span class="loading loading-spinner loading-xs"
-                  ></span>{:else}{anyMuted ? '🔊' : '🔇'}{/if}
-                {anyMuted ? 'Unmute All' : 'Mute All'}
+                  ></span>{:else}<i class="fa-solid {anyMuted ? 'fa-volume-xmark' : 'fa-volume-high'}"></i>{/if}
+                {anyMuted ? 'Muted' : 'Mute All'}
               </button>
             </div>
           {/if}
