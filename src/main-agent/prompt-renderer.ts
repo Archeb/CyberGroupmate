@@ -222,7 +222,8 @@ export function buildAttentionVariables(
         // Active persons (Issue 3: PersonGroupProfile + aliases + mention 注入)
         activePersons: pkg.activePersons?.length
             ? pkg.activePersons.map((p: any) => {
-                const tier = p.dunbarTier ? `亲密程度: Tier${p.dunbarTier}` : "不熟";
+                const tierLabels: Record<number, string> = { 1: "好友", 2: "认识", 3: "生疏", 4: "陌生" };
+                const tier = p.dunbarTier ? `亲密程度: ${tierLabels[p.dunbarTier] ?? `Tier${p.dunbarTier}`}` : "不熟";
                 const rel = p.relationToAgent ? `, 关系: ${p.relationToAgent}` : "";
                 const mentionStr = p.mention ? ` (提及方式: ${p.mention})` : "";
                 const aka = p.aliases?.length ? ` (又名: ${p.aliases.join(", ")})` : "";
