@@ -353,7 +353,10 @@ export async function runReflection(
             log.debug("Reflection 4b: 更新事实", { id: fact.id, subject: fact.subject });
         } else {
             // 新增 fact（稍后生成 embedding）
-            newFactsForEmbedding.push({ index: i, text: `${fact.subject}: ${fact.content}` });
+            // 确保 subject 是 composite ID（防止 LLM 写入显示名）
+            const resolvedSubject = ensureCompositeId(getPlatform(chatId), fact.subject);
+            fact.subject = resolvedSubject;
+            newFactsForEmbedding.push({ index: i, text: `${resolvedSubject}: ${fact.content}` });
         }
     }
     // 为新增 facts 生成 embedding

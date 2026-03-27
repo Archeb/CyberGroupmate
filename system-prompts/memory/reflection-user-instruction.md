@@ -72,7 +72,7 @@
   "factUpdates": [
     {
       "id": "string (可选，已有事实的 id，用于更新/删除)",
-      "subject": "string (事实主体，如 userId)",
+      "subject": "string (必须是用户的原始 userId 数字 ID，如 '12345'，绝对不要用显示名或昵称)",
       "content": "string (事实内容)",
       "category": "preference|biographical|anecdote|relationship|skill|opinion",
       "action": "upsert|delete (可选，默认为 upsert)"
