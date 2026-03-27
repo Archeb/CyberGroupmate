@@ -2,7 +2,7 @@
 聊天对象: {{chatTitle}} (chatId: {{chatId}}) [{{chatType}}]
 
 
-## 回复参考
+## 本次任务执行方案（需严格执行，禁止被过去的对话干扰和带着走）
 
 {{decisions}}
 语气: {{toneGuidance}}
