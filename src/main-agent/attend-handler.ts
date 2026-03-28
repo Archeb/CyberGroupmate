@@ -21,7 +21,7 @@ import { calculateDepth } from "./cosine-decay.js";
 import { buildGroupContext } from "./context-builder.js";
 import { renderPrompt, buildAttentionVariables, buildMainSystemVariables } from "./prompt-renderer.js";
 import { callLLMWithFallback } from "../core/llm.js";
-import { getRawId, getPlatform, getGroupModelKey } from "../core/chat-id.js";
+import { getRawId, getGroupModelKey } from "../core/chat-id.js";
 import { createLogger } from "../core/logger.js";
 import { formatTsForDisplay } from "../core/timezone.js";
 import { enrichMessages, formatMessageLine, resolveReplyText, type RawMessage } from "../core/message-enricher.js";
@@ -49,8 +49,6 @@ export interface AttendHandlerDeps {
     /** SOTA tier 的 LLM 配置列表（按 fallback 顺序） */
     sotaConfigs: LLMConfig[];
     persona: { name: string; description: string };
-    /** Telegram Adapter 引用（用于下载媒体进行 sticker 识别） */
-    telegramAdapter?: { handleCall(method: string, args: unknown[]): Promise<unknown> };
     /** 所有平台 adapter（用于平台无关的媒体下载） */
     adapters?: PlatformAdapter[];
     /** 共享的媒体下载管理器 */
@@ -65,33 +63,18 @@ export interface AttendHandlerDeps {
 export function createAttendHandler(
     deps: AttendHandlerDeps,
 ): (entry: AttentionQueueEntry) => Promise<AttendResult | null> {
-    const { memory, globalState, subagentManager, mainLoop, sotaConfigs, telegramAdapter: tgAdapter, adapters: adapterList, mediaDownloader } = deps;
+    const { memory, globalState, subagentManager, mainLoop, sotaConfigs, adapters: adapterList, mediaDownloader } = deps;
 
     // 构建下载函数（用于 vision 处理 sticker/photo）
-    // 优先使用 adapters 数组中按 chatId 平台路由的 downloadMedia，
-    // 兼容旧的 telegramAdapter 引用
+    // 从 adapters 数组中按 chatId 平台路由到对应 adapter 的 downloadMedia
     const buildDownloadFn = (chatId: string) => {
-        // 从 adapters 数组找到对应平台的 adapter，通过 handleCall 路由下载
-        if (adapterList?.length) {
-            try {
-                const platform = getPlatform(chatId);
-                const adapter = adapterList.find(a => a.platform === platform);
-                if (adapter) {
-                    return async (fileId: string, _chatId?: string, _messageId?: string, _uniqueFileId?: string): Promise<Buffer> => {
-                        const result = await adapter.handleCall(`${platform}.downloadMedia`, [fileId, _chatId, _messageId, _uniqueFileId]) as { buffer: string; size: number };
-                        return Buffer.from(result.buffer, "base64");
-                    };
-                }
-            } catch { /* fallthrough */ }
-        }
-        // Fallback: use legacy telegramAdapter
-        if (tgAdapter) {
-            return async (fileId: string, _chatId?: string, _messageId?: string, _uniqueFileId?: string): Promise<Buffer> => {
-                const result = await tgAdapter.handleCall("telegram.downloadMedia", [fileId, _chatId, _messageId, _uniqueFileId]) as { buffer: string; size: number };
-                return Buffer.from(result.buffer, "base64");
-            };
-        }
-        return undefined;
+        if (!adapterList?.length) return undefined;
+        const adapter = adapterList.find(a => chatId.startsWith(a.platform + ":"));
+        if (!adapter) return undefined;
+        return async (fileId: string, _chatId?: string, _messageId?: string, _uniqueFileId?: string): Promise<Buffer> => {
+            const result = await adapter.handleCall(`${adapter.platform}.downloadMedia`, [fileId, _chatId, _messageId, _uniqueFileId]) as { buffer: string; size: number };
+            return Buffer.from(result.buffer, "base64");
+        };
     };
 
     return async (entry: AttentionQueueEntry): Promise<AttendResult | null> => {
@@ -128,7 +111,7 @@ export function createAttendHandler(
             : undefined;
 
         // 收集活跃参与者画像（含 aliases + mention），用于 Attend 决策上下文
-        const chatAdapter = adapterList?.find(a => a.platform === getPlatform(entry.chatId));
+        const chatAdapter = adapterList?.find(a => entry.chatId.startsWith(a.platform + ":"));
         const activePersons: Array<{ userId: string; displayName: string; recentMessageCount: number }> = [];
         if (recentMessages?.length) {
             const senderCounts = new Map<string, { name: string; count: number }>();

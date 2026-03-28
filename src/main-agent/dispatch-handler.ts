@@ -30,7 +30,7 @@ import { resolveReplyText } from "../core/message-enricher.js";
 import { MediaDownloader } from "../core/media-downloader.js";
 import type { AppConfig } from "../core/config.js";
 import type { PlatformAdapter } from "../adapter/platform-adapter.js";
-import { getPlatform, getGroupModelKey } from "../core/chat-id.js";
+import { getGroupModelKey } from "../core/chat-id.js";
 import { TopicRegistry } from "../pipeline/topic-registry.js";
 
 const log = createLogger("dispatch-handler");
@@ -52,9 +52,7 @@ export interface DispatchHandlerDeps {
 
     /** 完整 AppConfig（用于解析 vision 等配置） */
     appConfig: AppConfig;
-    /** Telegram Adapter 引用（用于下载媒体，传给 Executor） */
-    telegramAdapter?: { handleCall(method: string, args: unknown[]): Promise<unknown> };
-    /** 所有平台 adapter（用于平台无关的媒体下载） */
+    /** 所有平台 adapter（用于平台无关的媒体下载和消息发送） */
     adapters?: PlatformAdapter[];
     /** 平台无关的 typing 状态发送（sandbox 执行期间展示 typing） */
     sendTyping?: (chatId: string) => Promise<void>;
@@ -70,28 +68,16 @@ export interface DispatchHandlerDeps {
 export function createDispatchHandler(
     deps: DispatchHandlerDeps,
 ): (result: AttendResult) => Promise<void> {
-    const { memory, globalState, subagentManager, sandboxPool, nc, q3, q5, llmConfigs, fastPathConfig, appConfig: _appConfig, telegramAdapter: tgAdapter, adapters: adapterList, sendTyping, mediaDownloader } = deps;
+    const { memory, globalState, subagentManager, sandboxPool, nc, q3, q5, llmConfigs, fastPathConfig, appConfig: _appConfig, adapters: adapterList, sendTyping, mediaDownloader } = deps;
     // 构建下载函数（根据 chatId 平台路由到对应 adapter）
     const buildDownloadFn = (chatId: string) => {
-        if (adapterList?.length) {
-            try {
-                const platform = getPlatform(chatId);
-                const adapter = adapterList.find(a => a.platform === platform);
-                if (adapter) {
-                    return async (fileId: string, _chatId?: string, _messageId?: string, _uniqueFileId?: string): Promise<Buffer> => {
-                        const result = await adapter.handleCall(`${platform}.downloadMedia`, [fileId, _chatId, _messageId, _uniqueFileId]) as { buffer: string; size: number };
-                        return Buffer.from(result.buffer, "base64");
-                    };
-                }
-            } catch { /* fallthrough */ }
-        }
-        if (tgAdapter) {
-            return async (fileId: string, _chatId?: string, _messageId?: string, _uniqueFileId?: string): Promise<Buffer> => {
-                const result = await tgAdapter.handleCall("telegram.downloadMedia", [fileId, _chatId, _messageId, _uniqueFileId]) as { buffer: string; size: number };
-                return Buffer.from(result.buffer, "base64");
-            };
-        }
-        return undefined;
+        if (!adapterList?.length) return undefined;
+        const adapter = adapterList.find(a => chatId.startsWith(a.platform + ":"));
+        if (!adapter) return undefined;
+        return async (fileId: string, _chatId?: string, _messageId?: string, _uniqueFileId?: string): Promise<Buffer> => {
+            const result = await adapter.handleCall(`${adapter.platform}.downloadMedia`, [fileId, _chatId, _messageId, _uniqueFileId]) as { buffer: string; size: number };
+            return Buffer.from(result.buffer, "base64");
+        };
     };
 
     return async (result: AttendResult): Promise<void> => {
@@ -310,7 +296,7 @@ export function createDispatchHandler(
                     // Fix 9: 注入 Sandbox + NC + LLM 依赖 + Memory + Vision
                     const downloadFn = buildDownloadFn(result.chatId);
                     // 获取平台对应的 formatMention 函数
-                    const chatAdapter = adapterList?.find(a => a.platform === getPlatform(result.chatId));
+                    const chatAdapter = adapterList?.find(a => result.chatId.startsWith(a.platform + ":"));
                     const formatMention = chatAdapter ? (rawId: string, username?: string) => chatAdapter.formatMention(rawId, username) : undefined;
                     executor.setDependencies(sandboxPool, nc, llmConfigs, persona, memory, visionConfig, downloadFn, sendTyping, visionLlmConfig, mediaDownloader, formatMention);
                 }
@@ -352,11 +338,12 @@ export function createDispatchHandler(
                     fp = new FastPathHandler(result.chatId);
                     fp.setCallbackHandler((cb: SubagentCallback) => q5.enqueue(cb));
                     fp.setLLMConfig(fastPathConfig, persona, fpGroupModel?.chatTitle ?? result.chatId, fpGroupModel?.isDirectMessage);
-                    // 注入发送函数：通过 TelegramAdapter 发送消息
-                    if (tgAdapter) {
+                    // 注入发送函数：通过平台 adapter 路由发送消息
+                    const fpAdapter = adapterList?.find(a => result.chatId.startsWith(a.platform + ":"));
+                    if (fpAdapter) {
                         fp.setSendFunction(async (chatId: string, text: string): Promise<string | undefined> => {
-                            const sendResult = await tgAdapter!.handleCall("telegram.sendText", [chatId, text]) as any;
-                            const messageId = sendResult?.messageId ? String(sendResult.messageId) : undefined;
+                            const sendResult = await fpAdapter.handleCall(`${fpAdapter.platform}.sendText`, [chatId, text]) as any;
+                            const messageId = sendResult?.messageId ?? sendResult?.id ? String(sendResult.messageId ?? sendResult.id) : undefined;
                             // 发出 agent_message_sent 事件：触发 FeedbackLoop 追踪 + 消息落盘
                             nc.push({
                                 type: "system.agent_message_sent",
