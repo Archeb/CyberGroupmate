@@ -21,6 +21,10 @@
 - **统计 CSV**：`GET /api/llm-logs/export/stats` — 每行一个请求，含 timestamp/caller/model/temperature/tokens/duration/error
 - **完整日志 tar.gz**：`GET /api/llm-logs/export/full` — 按 callId 分文件的 JSON 打包下载（Node.js 内置 zlib，无额外依赖）
 
+### Cached Tokens 汇总统计
+
+后端 `getStats()` 和前端 `llmStats` 新增 `totalCachedTokens` 聚合字段，工具栏显示累计缓存命中 token 数（`fa-database` 图标）。支持 OpenAI（`prompt_tokens_details.cached_tokens`）、Anthropic（`cache_read_input_tokens`）、Google（`cachedContentTokenCount`）三种提供商的缓存 token 统计。
+
 ### 改动
 
 | 文件 | 改动 |

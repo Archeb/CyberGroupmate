@@ -213,6 +213,11 @@
       <span class="text-xs opacity-60"
         >Tok <b>{$llmStats.totalTokens.toLocaleString()}</b></span
       >
+      {#if $llmStats.totalCachedTokens > 0}
+        <span class="text-xs text-info"
+          ><i class="fa-solid fa-database fa-xs"></i> <b>{$llmStats.totalCachedTokens.toLocaleString()}</b></span
+        >
+      {/if}
       {#if $llmStats.totalCost > 0}
         <span class="text-xs text-warning"
           ><i class="fa-solid fa-coins"></i> <b>{formatCost($llmStats.totalCost)}</b></span

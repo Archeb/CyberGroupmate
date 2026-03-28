@@ -127,17 +127,18 @@ export class LLMLogBuffer {
     }
 
     /** 获取汇总统计 */
-    getStats(): { total: number; success: number; error: number; totalTokens: number } {
-        let total = 0, success = 0, error = 0, totalTokens = 0;
+    getStats(): { total: number; success: number; error: number; totalTokens: number; totalCachedTokens: number } {
+        let total = 0, success = 0, error = 0, totalTokens = 0, totalCachedTokens = 0;
         for (const e of this.buffer) {
             total++;
             if (e.response) {
                 if (e.response.error) error++;
                 else success++;
                 if (e.response.usage?.totalTokens) totalTokens += e.response.usage.totalTokens;
+                if (e.response.usage?.cachedTokens) totalCachedTokens += e.response.usage.cachedTokens;
             }
         }
-        return { total, success, error, totalTokens };
+        return { total, success, error, totalTokens, totalCachedTokens };
     }
 
     get size(): number {

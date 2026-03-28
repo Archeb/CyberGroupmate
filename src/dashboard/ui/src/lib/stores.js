@@ -50,7 +50,7 @@ export const selectedRecordingChatId = writable(null);
 
 // ─── LLM Logs (progressive loading) ───
 export const llmLogs = writable([]);
-export const llmStats = writable({ total: 0, success: 0, error: 0, totalTokens: 0, totalCost: 0 });
+export const llmStats = writable({ total: 0, success: 0, error: 0, totalTokens: 0, totalCachedTokens: 0, totalCost: 0 });
 export const selectedLLMCallId = writable(null);
 export const tokenPricing = writable({});
 export const llmLogHasMore = writable(false);
@@ -114,6 +114,7 @@ export function handleLLMInit(data) {
     success: stats?.success ?? 0,
     error: stats?.error ?? 0,
     totalTokens: stats?.totalTokens ?? 0,
+    totalCachedTokens: stats?.totalCachedTokens ?? 0,
     totalCost: costTotal,
   });
 }
@@ -151,6 +152,9 @@ export function handleLLMResponse(data) {
     }
     if (data.usage?.totalTokens) {
       s.totalTokens += data.usage.totalTokens;
+    }
+    if (data.usage?.cachedTokens) {
+      s.totalCachedTokens += data.usage.cachedTokens;
     }
     s.totalCost += cost;
     return s;
@@ -193,7 +197,7 @@ export async function loadMoreLLMLogs() {
 
 export function clearLLMLogs() {
   llmLogs.set([]);
-  llmStats.set({ total: 0, success: 0, error: 0, totalTokens: 0, totalCost: 0 });
+  llmStats.set({ total: 0, success: 0, error: 0, totalTokens: 0, totalCachedTokens: 0, totalCost: 0 });
   selectedLLMCallId.set(null);
   llmLogHasMore.set(false);
   llmLogTotal.set(0);
