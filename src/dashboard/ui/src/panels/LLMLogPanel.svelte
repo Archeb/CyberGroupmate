@@ -6,8 +6,13 @@
     selectedLLMCallId,
     clearLLMLogs,
     calculateCallCost,
+    llmLogHasMore,
+    llmLogLoading,
+    llmLogTotal,
+    loadMoreLLMLogs,
   } from "../lib/stores.js";
   import { sendCommand } from "../lib/ws.js";
+  import { api, apiBase } from "../lib/api.js";
   import { escapeHtml } from "../lib/utils.js";
 
   function formatCost(cost) {
@@ -36,6 +41,37 @@
   let detailPane;
   let msgElements = [];
   let respElement;
+
+  // ─── Export panel state ───
+  let showExportPanel = false;
+  let exportPreset = '1h';
+  let exportCustomFrom = '';
+  let exportCustomTo = '';
+  let exportBusy = false;
+
+  function getExportRange() {
+    if (exportPreset === 'custom') {
+      return { from: exportCustomFrom, to: exportCustomTo };
+    }
+    const now = new Date();
+    const hours = exportPreset === '1h' ? 1 : exportPreset === '6h' ? 6 : 24;
+    const from = new Date(now.getTime() - hours * 3600000).toISOString();
+    return { from, to: now.toISOString() };
+  }
+
+  function exportCSV() {
+    const { from, to } = getExportRange();
+    if (!from || !to) return;
+    const url = apiBase(`/llm-logs/export/stats?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);
+    window.open(url, '_blank');
+  }
+
+  function exportFull() {
+    const { from, to } = getExportRange();
+    if (!from || !to) return;
+    const url = apiBase(`/llm-logs/export/full?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);
+    window.open(url, '_blank');
+  }
 
   function selectLog(callId) {
     selectedLLMCallId.set(callId);
@@ -172,26 +208,64 @@
   <div class="llm-log-left">
     <div class="llm-log-toolbar">
       <span class="text-xs opacity-60">调用 <b>{$llmStats.total}</b></span>
-      <span class="text-xs text-success">✓ <b>{$llmStats.success}</b></span>
-      <span class="text-xs text-error">✗ <b>{$llmStats.error}</b></span>
+      <span class="text-xs text-success"><i class="fa-solid fa-check"></i> <b>{$llmStats.success}</b></span>
+      <span class="text-xs text-error"><i class="fa-solid fa-xmark"></i> <b>{$llmStats.error}</b></span>
       <span class="text-xs opacity-60"
         >Tok <b>{$llmStats.totalTokens.toLocaleString()}</b></span
       >
       {#if $llmStats.totalCost > 0}
         <span class="text-xs text-warning"
-          >💰 <b>{formatCost($llmStats.totalCost)}</b></span
+          ><i class="fa-solid fa-coins"></i> <b>{formatCost($llmStats.totalCost)}</b></span
         >
       {/if}
 
-      <button
-        class="btn btn-xs btn-ghost"
-        onclick={() => {
-          clearLLMLogs();
-          expandedMsgs = {};
-          expandedResp = {};
-        }}>清空</button
-      >
+      <div class="llm-toolbar-actions">
+        <button
+          class="btn btn-xs btn-ghost"
+          onclick={() => { showExportPanel = !showExportPanel; }}
+          title="导出统计/日志"
+        ><i class="fa-solid fa-file-export"></i></button>
+        <button
+          class="btn btn-xs btn-ghost"
+          onclick={() => {
+            clearLLMLogs();
+            expandedMsgs = {};
+            expandedResp = {};
+          }}>清空</button
+        >
+      </div>
     </div>
+
+    <!-- Export panel (collapsible) -->
+    {#if showExportPanel}
+      <div class="llm-export-panel">
+        <div class="llm-export-row">
+          <span class="text-xs font-bold opacity-70">时间范围</span>
+          <div class="llm-export-presets">
+            <button class="btn btn-xs" class:btn-primary={exportPreset === '1h'} onclick={() => exportPreset = '1h'}>1h</button>
+            <button class="btn btn-xs" class:btn-primary={exportPreset === '6h'} onclick={() => exportPreset = '6h'}>6h</button>
+            <button class="btn btn-xs" class:btn-primary={exportPreset === '24h'} onclick={() => exportPreset = '24h'}>24h</button>
+            <button class="btn btn-xs" class:btn-primary={exportPreset === 'custom'} onclick={() => exportPreset = 'custom'}>自定义</button>
+          </div>
+        </div>
+        {#if exportPreset === 'custom'}
+          <div class="llm-export-row">
+            <input type="datetime-local" class="input input-xs input-bordered llm-export-input" bind:value={exportCustomFrom} />
+            <span class="text-xs opacity-40">→</span>
+            <input type="datetime-local" class="input input-xs input-bordered llm-export-input" bind:value={exportCustomTo} />
+          </div>
+        {/if}
+        <div class="llm-export-row">
+          <button class="btn btn-xs btn-outline btn-info" onclick={exportCSV}>
+            <i class="fa-solid fa-table"></i> 导出统计 CSV
+          </button>
+          <button class="btn btn-xs btn-outline btn-secondary" onclick={exportFull}>
+            <i class="fa-solid fa-file-zipper"></i> 导出完整日志
+          </button>
+        </div>
+      </div>
+    {/if}
+
     <div class="llm-log-list">
       {#if !$llmLogs.length}
         <div class="text-sm opacity-40 p-4">等待 LLM 调用...</div>
@@ -215,13 +289,17 @@
               class="llm-row-status"
               data-status={r ? (r.error ? "error" : "ok") : "pending"}
             >
-              {r ? (r.error ? "✗" : "✓") : "⠇"}
+              {#if r}
+                {#if r.error}<i class="fa-solid fa-xmark"></i>{:else}<i class="fa-solid fa-check"></i>{/if}
+              {:else}
+                <i class="fa-solid fa-spinner fa-pulse"></i>
+              {/if}
             </span>
             <span class="llm-row-time">{time}</span>
             <span class="badge badge-xs {callerBadge}">{entry.caller}</span>
             <span class="llm-row-model">{entry.model}</span>
             <span class="llm-row-meta"
-              >✉{msgCount}{hasImages ? " 🖼" : ""}</span
+              ><i class="fa-solid fa-envelope fa-xs"></i>{msgCount}{hasImages ? " " : ""}{#if hasImages}<i class="fa-solid fa-image fa-xs"></i>{/if}</span
             >
             <span class="llm-row-duration">
               {#if r}{r.durationMs}ms{r.usage?.totalTokens
@@ -229,10 +307,31 @@
                   : ""}{@const cost = calculateCallCost(r.usage, entry.model)}{cost > 0 ? ` ${formatCost(cost)}` : ""}{:else}...{/if}
             </span>
             {#if entry.retries?.length > 0}
-              <span class="llm-row-retry-badge" title="重试 {entry.retries.length} 次">⟳{entry.retries.length}</span>
+              <span class="llm-row-retry-badge" title="重试 {entry.retries.length} 次"><i class="fa-solid fa-rotate fa-xs"></i>{entry.retries.length}</span>
             {/if}
           </button>
         {/each}
+
+        <!-- Load more button -->
+        {#if $llmLogHasMore}
+          <div class="llm-load-more">
+            <button
+              class="btn btn-xs btn-ghost btn-block"
+              disabled={$llmLogLoading}
+              onclick={loadMoreLLMLogs}
+            >
+              {#if $llmLogLoading}
+                <i class="fa-solid fa-spinner fa-pulse"></i> 加载中...
+              {:else}
+                <i class="fa-solid fa-arrow-down"></i> 加载更多 ({$llmLogs.length}/{$llmLogTotal})
+              {/if}
+            </button>
+          </div>
+        {:else if $llmLogs.length > 0}
+          <div class="llm-load-more">
+            <span class="text-xs opacity-30">已加载全部 {$llmLogs.length} 条</span>
+          </div>
+        {/if}
       {/if}
     </div>
   </div>
@@ -274,7 +373,7 @@
             {:else}
               <span class="text-warning">进行中...
                 <button class="btn btn-xs btn-warning btn-outline llm-retry-btn" onclick={() => cancelAndRetry(selectedEntry.callId)} title="取消当前请求并立即重试">
-                  ⟳ 立即重试
+                  <i class="fa-solid fa-rotate"></i> 立即重试
                 </button>
               </span>
             {/if}
@@ -286,20 +385,20 @@
               onclick={() => toggleAutoExpand()}
               title="自动展开全部内容"
             >
-              {autoExpand ? "🔽 收起全部" : "🔼 展开全部"}
+              {#if autoExpand}<i class="fa-solid fa-chevron-down"></i> 收起全部{:else}<i class="fa-solid fa-chevron-up"></i> 展开全部{/if}
             </button>
             <span class="llm-nav-divider"></span>
-            <button class="btn btn-xs btn-ghost" onclick={() => navigateMsg(-1)} title="上一个 message">▲</button>
+            <button class="btn btn-xs btn-ghost" onclick={() => navigateMsg(-1)} title="上一个 message"><i class="fa-solid fa-caret-up"></i></button>
             <span class="llm-nav-pos">
               {#if totalMsgCount > 0}
                 {currentVisibleIdx + 1}/{totalMsgCount}
               {/if}
             </span>
-            <button class="btn btn-xs btn-ghost" onclick={() => navigateMsg(1)} title="下一个 message">▼</button>
+            <button class="btn btn-xs btn-ghost" onclick={() => navigateMsg(1)} title="下一个 message"><i class="fa-solid fa-caret-down"></i></button>
             <span class="llm-nav-divider"></span>
-            <button class="btn btn-xs btn-ghost" onclick={() => scrollToLatest()} title="定位到最新">⏬</button>
+            <button class="btn btn-xs btn-ghost" onclick={() => scrollToLatest()} title="定位到最新"><i class="fa-solid fa-angles-down"></i></button>
             <span class="llm-nav-divider"></span>
-            <button class="btn btn-xs btn-ghost" onclick={() => exportCurrentLog()} title="导出当前日志为 JSON">📥</button>
+            <button class="btn btn-xs btn-ghost" onclick={() => exportCurrentLog()} title="导出当前日志为 JSON"><i class="fa-solid fa-file-export"></i></button>
           </div>
         </div>
 
@@ -342,7 +441,7 @@
                       : "URL"}
                     <span class="llm-img-hover-wrap">
                       <span class="badge badge-sm badge-outline"
-                        >🖼️ {label}</span
+                        ><i class="fa-solid fa-image"></i> {label}</span
                       >
                       <img
                         class="llm-img-preview"
@@ -440,6 +539,42 @@
     border-bottom: 1px solid
       color-mix(in srgb, var(--color-base-content) 8%, transparent);
     flex-shrink: 0;
+    flex-wrap: wrap;
+  }
+
+  .llm-toolbar-actions {
+    margin-left: auto;
+    display: flex;
+    gap: 0.25rem;
+    flex-shrink: 0;
+  }
+
+  /* ── Export panel ── */
+  .llm-export-panel {
+    padding: 0.5rem 0.75rem;
+    border-bottom: 1px solid color-mix(in srgb, var(--color-base-content) 8%, transparent);
+    background: color-mix(in srgb, var(--color-base-content) 3%, transparent);
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    flex-shrink: 0;
+  }
+
+  .llm-export-row {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    flex-wrap: wrap;
+  }
+
+  .llm-export-presets {
+    display: flex;
+    gap: 0.2rem;
+  }
+
+  .llm-export-input {
+    width: 160px;
+    font-size: 0.7rem;
   }
 
   .llm-log-list {
@@ -752,6 +887,12 @@
     flex-shrink: 0;
   }
 
+  /* ── Load more ── */
+  .llm-load-more {
+    padding: 0.5rem 0.75rem;
+    text-align: center;
+  }
+
   /* ── Mobile ── */
   @media (max-width: 768px) {
     .llm-log-layout {
@@ -773,5 +914,6 @@
     .llm-detail-nav-bar { flex-wrap: wrap; }
     .llm-detail-msg-content { font-size: 0.7rem; }
     .llm-detail-response-body { font-size: 0.7rem; padding: 0.4rem 0.5rem; }
+    .llm-export-input { width: 130px; }
   }
 </style>

@@ -641,6 +641,95 @@ export function createApiRouter(deps: DashboardDeps, bridge: EventBridge): Route
         res.json({ ok });
     });
 
+    // ─── LLM Logs (paginated + export) ───
+    router.get("/llm-logs", (_req, res) => {
+        const limit = Math.min(parseInt(qs(_req.query.limit)) || 30, 100);
+        const offset = Math.max(parseInt(qs(_req.query.offset)) || 0, 0);
+        const result = bridge.llmLogBuffer.getPage(offset, limit);
+        res.json(result);
+    });
+
+    router.get("/llm-logs/export/stats", (_req, res) => {
+        const from = qs(_req.query.from);
+        const to = qs(_req.query.to);
+        if (!from || !to) {
+            res.status(400).json({ error: "from and to query params required (ISO datetime)" });
+            return;
+        }
+        const csv = bridge.llmLogBuffer.exportStatsCSV(from, to);
+        res.setHeader("Content-Type", "text/csv; charset=utf-8");
+        res.setHeader("Content-Disposition", `attachment; filename="llm-stats-${from.slice(0, 10)}_${to.slice(0, 10)}.csv"`);
+        res.send(csv);
+    });
+
+    router.get("/llm-logs/export/full", (_req, res) => {
+        const from = qs(_req.query.from);
+        const to = qs(_req.query.to);
+        if (!from || !to) {
+            res.status(400).json({ error: "from and to query params required (ISO datetime)" });
+            return;
+        }
+        const logs = bridge.llmLogBuffer.exportFullLogs(from, to);
+
+        // 构建 tar.gz 格式（使用 Node.js 内置 zlib）
+        import("node:zlib").then(async ({ createGzip }) => {
+            const { Readable } = await import("node:stream");
+
+            // 简易 tar 格式：每个文件一个 512 字节头 + 内容（512 对齐）
+            const chunks: Buffer[] = [];
+            for (const entry of logs) {
+                const content = JSON.stringify(entry, null, 2);
+                const buf = Buffer.from(content, "utf-8");
+                const name = `llm-logs/${entry.callId}.json`;
+
+                // tar header (512 bytes)
+                const header = Buffer.alloc(512);
+                header.write(name.slice(0, 100), 0, 100);                            // name
+                header.write("0000644\0", 100, 8);                                     // mode
+                header.write("0001000\0", 108, 8);                                     // uid
+                header.write("0001000\0", 116, 8);                                     // gid
+                header.write(buf.length.toString(8).padStart(11, "0") + "\0", 124, 12); // size
+                const mtime = Math.floor(new Date(entry.timestamp).getTime() / 1000);
+                header.write(mtime.toString(8).padStart(11, "0") + "\0", 136, 12);     // mtime
+                header.write("        ", 148, 8);                                       // checksum placeholder
+                header[156] = 0x30;                                                     // typeflag '0' = regular file
+
+                // Calculate checksum
+                let chksum = 0;
+                for (let i = 0; i < 512; i++) chksum += header[i];
+                header.write(chksum.toString(8).padStart(6, "0") + "\0 ", 148, 8);
+
+                chunks.push(header);
+                chunks.push(buf);
+                // Pad to 512 boundary
+                const padding = 512 - (buf.length % 512);
+                if (padding < 512) chunks.push(Buffer.alloc(padding));
+            }
+            // End of archive (two 512-byte zero blocks)
+            chunks.push(Buffer.alloc(1024));
+
+            const tarBuf = Buffer.concat(chunks);
+
+            res.setHeader("Content-Type", "application/gzip");
+            res.setHeader("Content-Disposition", `attachment; filename="llm-logs-${from.slice(0, 10)}_${to.slice(0, 10)}.tar.gz"`);
+
+            const gzip = createGzip();
+            const source = Readable.from(tarBuf);
+            source.pipe(gzip).pipe(res);
+        }).catch(err => {
+            res.status(500).json({ error: String(err) });
+        });
+    });
+
+    router.get("/llm-logs/:callId", (req, res) => {
+        const entry = bridge.llmLogBuffer.getByCallId(req.params.callId);
+        if (!entry) {
+            res.status(404).json({ error: "log not found" });
+            return;
+        }
+        res.json(entry);
+    });
+
     // ─── Token Stats ───
     router.get("/token-stats", (_req, res) => {
         res.json(deps.tokenStats.getStats());

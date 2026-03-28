@@ -3,6 +3,7 @@
  */
 
 import { writable, get } from 'svelte/store';
+import { api } from './api.js';
 
 // ─── Connection ───
 export const wsStatus = writable('disconnected');
@@ -47,12 +48,15 @@ export const selectedChatId = writable(null);
 export const selectedCodeActChatId = writable(null);
 export const selectedRecordingChatId = writable(null);
 
-// ─── LLM Logs ───
+// ─── LLM Logs (progressive loading) ───
 export const llmLogs = writable([]);
 export const llmStats = writable({ total: 0, success: 0, error: 0, totalTokens: 0, totalCost: 0 });
 export const selectedLLMCallId = writable(null);
 export const tokenPricing = writable({});
-const MAX_LLM_LOGS = 200;
+export const llmLogHasMore = writable(false);
+export const llmLogLoading = writable(false);
+export const llmLogTotal = writable(0);
+const MAX_LLM_LOGS = 2000;
 
 /** profile name → model name reverse map (built from snapshot) */
 let _modelToProfile = {};
@@ -92,8 +96,32 @@ export function calculateCallCost(usage, model) {
   return cost;
 }
 
+/** 初始加载：从 llm:init 事件接收最近 N 条 log */
+export function handleLLMInit(data) {
+  const { logs, total, hasMore, stats } = data;
+  llmLogs.set(logs || []);
+  llmLogTotal.set(total || 0);
+  llmLogHasMore.set(!!hasMore);
+  // 用后端汇总统计重建 llmStats（含累计 cost）
+  const costTotal = (logs || []).reduce((sum, e) => {
+    if (e.response && !e.response.error) {
+      return sum + calculateCallCost(e.response.usage, e.model);
+    }
+    return sum;
+  }, 0);
+  llmStats.set({
+    total: stats?.total ?? total ?? 0,
+    success: stats?.success ?? 0,
+    error: stats?.error ?? 0,
+    totalTokens: stats?.totalTokens ?? 0,
+    totalCost: costTotal,
+  });
+}
+
+/** 增量：实时接收新的 LLM call */
 export function handleLLMCall(data) {
   llmStats.update(s => ({ ...s, total: s.total + 1 }));
+  llmLogTotal.update(n => n + 1);
   llmLogs.update(logs => {
     logs.unshift({ ...data, response: null, retries: [] });
     if (logs.length > MAX_LLM_LOGS) logs.pop();
@@ -140,10 +168,35 @@ export function handleLLMRetry(data) {
   });
 }
 
+/** 加载更多历史 LLM logs（分页） */
+export async function loadMoreLLMLogs() {
+  if (get(llmLogLoading) || !get(llmLogHasMore)) return;
+  llmLogLoading.set(true);
+  try {
+    const currentLogs = get(llmLogs);
+    const offset = currentLogs.length;
+    const result = await api(`/llm-logs?offset=${offset}&limit=30`);
+    if (result && result.logs) {
+      llmLogs.update(logs => {
+        logs.push(...result.logs);
+        return logs;
+      });
+      llmLogTotal.set(result.total);
+      llmLogHasMore.set(result.hasMore);
+    }
+  } catch (err) {
+    console.error('loadMoreLLMLogs error:', err);
+  } finally {
+    llmLogLoading.set(false);
+  }
+}
+
 export function clearLLMLogs() {
   llmLogs.set([]);
   llmStats.set({ total: 0, success: 0, error: 0, totalTokens: 0, totalCost: 0 });
   selectedLLMCallId.set(null);
+  llmLogHasMore.set(false);
+  llmLogTotal.set(0);
 }
 
 // ─── Topic Detail ───

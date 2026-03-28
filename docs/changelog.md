@@ -1,5 +1,36 @@
 # Changelog
 
+## 2026-03-28: LLM Log 面板增强 — FA 图标 + 6h 缓冲 + 渐进加载 + 导出
+
+### Emoji → Font Awesome 图标
+
+面板内所有 emoji（✓✗⠇✉🖼💰⟳🔽🔼▲▼⏬📥）替换为 Font Awesome 6 图标（`fa-check`/`fa-xmark`/`fa-spinner fa-pulse`/`fa-envelope`/`fa-image`/`fa-coins`/`fa-rotate`/`fa-chevron-down`/`fa-chevron-up`/`fa-caret-up`/`fa-caret-down`/`fa-angles-down`/`fa-file-export`），FA 6.5.1 CSS 已通过 CDN 引入。
+
+### 后端 LLM Log 环形缓冲（2000 条）
+
+`EventBridge` 新增专用 `LLMLogBuffer`（2000 条，约覆盖 6 小时），独立于通用 `recentEvents` 环形缓冲。LLM 事件不再存入通用缓冲，避免挤占其他事件空间。
+
+### 渐进式加载
+
+- WebSocket 初始连接只推送最近 30 条 LLM log（`llm:init` 事件），不再回放全部
+- 前端列表底部"加载更多"按钮，REST API 分页加载历史记录（`GET /api/llm-logs?offset=&limit=`）
+
+### 导出统计
+
+工具栏新增导出面板（可折叠），支持时间范围选择（预设 1h/6h/24h + 自定义）：
+- **统计 CSV**：`GET /api/llm-logs/export/stats` — 每行一个请求，含 timestamp/caller/model/temperature/tokens/duration/error
+- **完整日志 tar.gz**：`GET /api/llm-logs/export/full` — 按 callId 分文件的 JSON 打包下载（Node.js 内置 zlib，无额外依赖）
+
+### 改动
+
+| 文件 | 改动 |
+|------|------|
+| `src/dashboard/event-bridge.ts` | 新增 `LLMLogBuffer` 类（2000 条环形缓冲）；`broadcast()` 新增 `skipRecentBuffer` 参数；LLM 事件存入专用缓冲；`sendSnapshot` 发送 `llm:init` 事件（30 条 + 汇总统计） |
+| `src/dashboard/api-routes.ts` | 新增 `GET /llm-logs`（分页）、`GET /llm-logs/:callId`（详情）、`GET /llm-logs/export/stats`（CSV）、`GET /llm-logs/export/full`（tar.gz） |
+| `src/dashboard/ui/src/lib/stores.js` | `MAX_LLM_LOGS` 200→2000；新增 `llmLogHasMore`/`llmLogLoading`/`llmLogTotal` store；新增 `handleLLMInit()`、`loadMoreLLMLogs()` |
+| `src/dashboard/ui/src/lib/ws.js` | 新增 `llm:init` 事件处理 |
+| `src/dashboard/ui/src/panels/LLMLogPanel.svelte` | 全部 emoji→FA 图标；新增"加载更多"按钮 + 进度计数；新增导出面板（时间选择 + CSV/tar.gz 下载按钮） |
+
 ## 2026-03-26: 亲和度评分算法 v2 — 30天互动驱动 + 时间衰减
 
 重写 `computeAffinityScores`，从"群内总消息数"改为"30天内与 Agent 互动次数"驱动，修复以下问题：
