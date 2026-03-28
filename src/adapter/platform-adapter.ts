@@ -27,4 +27,6 @@ export interface PlatformAdapter {
     getMutedChats?(): Array<{ chatId: string; expiry: number; remaining: string }>;
     /** 检查指定聊天是否被禁言 */
     isChatMuted?(chatId: string): boolean;
+    /** 将指定聊天标记为已读（不支持的平台应静默忽略） */
+    markAsRead?(chatId: string): Promise<void>;
 }

@@ -367,6 +367,17 @@ export function createAttendHandler(
             // LLM 成功 → 重置熔断器
             mainLoop.resetCircuitBreaker();
 
+            // ═══ 已读标记（fire-and-forget）═══
+            // 在 attend 完成后，将该聊天中出现在上下文里的消息标记为已读。
+            // 各平台 adapter 自行决定是否支持；不支持的平台不实现 markAsRead 即可。
+            if (adapterList?.length) {
+                const adapter = adapterList.find(a => entry.chatId.startsWith(a.platform + ":"));
+                if (adapter?.markAsRead) {
+                    adapter.markAsRead(entry.chatId)
+                        .catch(e => log.debug("已读标记失败（非关键）", { chatId: entry.chatId, error: String(e).slice(0, 100) }));
+                }
+            }
+
             return llmResult;
 
         } catch (err) {

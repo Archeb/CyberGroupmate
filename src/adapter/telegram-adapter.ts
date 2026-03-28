@@ -672,6 +672,15 @@ export class TelegramAdapter implements PlatformAdapter {
         return result;
     }
 
+    /** 将指定聊天标记为已读（通过 Telegram readHistory） */
+    async markAsRead(chatId: string): Promise<void> {
+        try {
+            await this.handleCall("telegram.readHistory", [chatId]);
+        } catch (e) {
+            log.debug("markAsRead 失败（非关键）", { chatId, error: String(e).slice(0, 100) });
+        }
+    }
+
     // ─── /invisible & /mute 命令处理 ───
 
     /**
