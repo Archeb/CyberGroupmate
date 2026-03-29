@@ -1,4 +1,4 @@
-以纯JSON格式输出:
+以代码块方式输出纯JSON:
 ```json
 {
   "replyMode": "NONE | SINGLE",
@@ -28,5 +28,3 @@
 - REPLY: 需要给出明确的 contentDirection（内容方向）、targetMessageIds（回复目标）、toneGuidance（语气）和 suggestedEmojis（相关表情）
 - IGNORE: 说明不介入的理由
 - DEFER: 非紧急，下次再看
-
-仅返回 JSON，不要包含其他文本。
