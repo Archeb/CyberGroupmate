@@ -168,15 +168,13 @@
   }
 
   .token-stats-summary {
-    display: flex;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
     gap: 0.75rem;
-    flex-wrap: wrap;
     margin-bottom: 1.25rem;
   }
 
   .stat-card {
-    flex: 1;
-    min-width: 120px;
     background: color-mix(in srgb, var(--color-base-content) 5%, transparent);
     border-radius: 0.5rem;
     padding: 0.75rem 1rem;
@@ -265,7 +263,8 @@
   @media (max-width: 768px) {
     .token-stats-header { flex-wrap: wrap; gap: 0.5rem; }
     .token-stats-header h3 { font-size: 0.85rem; }
-    .stat-card { min-width: 0; padding: 0.5rem 0.6rem; }
+    .stat-card { padding: 0.5rem 0.6rem; }
+    .token-stats-summary { grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); gap: 0.5rem; }
     .stat-value { font-size: 0.95rem; }
     .token-stats-table .model-name { max-width: 120px; }
   }

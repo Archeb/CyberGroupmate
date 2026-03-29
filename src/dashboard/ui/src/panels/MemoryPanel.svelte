@@ -142,15 +142,11 @@
     .memory-sidebar .card-title { display: none; }
     .memory-sidebar .space-y-0\.5 {
       display: flex;
+      flex-wrap: wrap;
       gap: 0.25rem;
-      overflow-x: auto;
-      -webkit-overflow-scrolling: touch;
-      scrollbar-width: none;
     }
-    .memory-sidebar .space-y-0\.5::-webkit-scrollbar { display: none; }
     .mem-nav-item {
       white-space: nowrap;
-      flex-shrink: 0;
       padding: 0.3rem 0.5rem;
       font-size: 0.7rem;
     }
