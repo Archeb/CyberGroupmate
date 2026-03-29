@@ -152,8 +152,8 @@ export class EventBridge {
     /** 最近 NC 事件（环形缓冲，用于新连接回放） */
     private recentEvents: WsEvent[] = [];
     private maxRecent = 200;
-    /** LLM 日志专用缓冲（2000 条，约 6 小时） */
-    readonly llmLogBuffer = new LLMLogBuffer(2000);
+    /** LLM 日志专用缓冲（10000 条） */
+    readonly llmLogBuffer = new LLMLogBuffer(10000);
 
     constructor(deps: DashboardDeps) {
         this.deps = deps;
