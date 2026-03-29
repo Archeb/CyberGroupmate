@@ -130,6 +130,7 @@ export class RecordingPipeline extends EventEmitter {
         return (
             msg.text.includes("?") ||
             msg.text.includes("？") ||
+            msg.text.includes("吗") ||
             msg.text.length > 200 ||
             this.matchesHotTopicKeywords(msg)
         );
