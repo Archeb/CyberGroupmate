@@ -371,7 +371,7 @@ export class RecordingPipeline extends EventEmitter {
             { role: "user", content: prompt },
         ];
 
-        const response = await callLLM(llmMessages, this.llmConfig, { caller: "recording-pipeline", timeoutMs: this.timeoutMs });
+        const response = await callLLM(llmMessages, this.llmConfig, { caller: "recording-cluster", timeoutMs: this.timeoutMs });
 
         try {
             // 提取 JSON（处理可能的 markdown 包裹）
@@ -433,7 +433,7 @@ export class RecordingPipeline extends EventEmitter {
             { role: "user", content: userMessage },
         ];
 
-        const response = await callLLM(llmMessages, this.llmConfig, { caller: "recording-pipeline", timeoutMs: this.timeoutMs });
+        const response = await callLLM(llmMessages, this.llmConfig, { caller: "recording-triage", timeoutMs: this.timeoutMs });
 
         let result: TopicSummaryTriageResult;
         try {
@@ -471,7 +471,7 @@ export class RecordingPipeline extends EventEmitter {
             ];
 
             try {
-                const retryResponse = await callLLM(retryMessages, this.llmConfig, { caller: "recording-pipeline", timeoutMs: this.timeoutMs });
+                const retryResponse = await callLLM(retryMessages, this.llmConfig, { caller: "recording-triage", timeoutMs: this.timeoutMs });
                 const retryJson = retryResponse.content
                     .replace(/```json\s*/g, "")
                     .replace(/```\s*/g, "")
