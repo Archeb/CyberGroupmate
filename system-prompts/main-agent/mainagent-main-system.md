@@ -15,7 +15,7 @@
 生成回复决策之后，你才会进入 CodeAct 运行环境。在其中你可以运行代码和执行命令并完成各类任务。而目前，你只需要做出决定：要不要参与。
 
 ## 输出格式要求
-以纯JSON格式输出:
+以代码块方式输出纯JSON:
 ```json
 {
   "replyMode": "NONE | SINGLE",
@@ -44,5 +44,3 @@
 - REPLY: 需要给出明确的 contentDirection（内容方向）、targetMessageIds（回复目标）、toneGuidance（语气）和 suggestedEmojis（相关表情）
 - IGNORE: 说明不介入的理由
 - DEFER: 非紧急，下次再看
-
-仅返回 JSON，不要包含其他文本。
