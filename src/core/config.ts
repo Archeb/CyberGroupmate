@@ -88,7 +88,7 @@ export interface EmbeddingConfig {
 }
 
 /** 组件路由中可配置超时的组件名 */
-export type RoutingComponentKey = 'attend' | 'session' | 'fast_path' | 'recording' | 'reflection' | 'compact' | 'memory' | 'vision';
+export type RoutingComponentKey = 'attend' | 'session' | 'fast_path' | 'recording_cluster' | 'recording_triage' | 'reflection' | 'compact' | 'memory' | 'vision';
 
 /** 组件级 LLM 路由 — 每个组件可指定一个或多个 profile（fallback chain） */
 export interface LLMRoutingConfig {
@@ -98,8 +98,10 @@ export interface LLMRoutingConfig {
     session?: string | string[];
     /** 快速回复（fast-path-handler） */
     fast_path?: string | string[];
-    /** 话题聚类 + Triage（recording-pipeline） */
-    recording?: string | string[];
+    /** 话题聚类（recording-pipeline Step 1） */
+    recording_cluster?: string | string[];
+    /** 话题摘要 + Triage（recording-pipeline Step 2） */
+    recording_triage?: string | string[];
     /** 反思引擎（reflection） */
     reflection?: string | string[];
     /** 上下文压缩（context-manager compact） */
@@ -109,7 +111,10 @@ export interface LLMRoutingConfig {
     /** Vision 描述（vision-processor，独立配置） */
     vision?: string | string[];
     /** 每组件 LLM 请求超时（毫秒）。未设置的组件使用默认 60000 */
-    timeouts?: Partial<Record<RoutingComponentKey, number>>;
+    /** @deprecated 兼容旧配置：recording 会被同时应用到 recording_cluster 和 recording_triage */
+    recording?: string | string[];
+    /** 每组件 LLM 请求超时（毫秒）。未设置的组件使用默认 60000 */
+    timeouts?: Partial<Record<RoutingComponentKey | 'recording', number>>;
 }
 
 export interface PersonaConfig {
@@ -362,17 +367,20 @@ export function loadConfig(configPath?: string, forceReload?: boolean): AppConfi
     // 解析 per-component timeouts
     const rawTimeouts = (fileRouting.timeouts ?? {}) as Record<string, unknown>;
     const parsedTimeouts: LLMRoutingConfig['timeouts'] = {};
-    for (const key of ['attend', 'session', 'fast_path', 'recording', 'reflection', 'compact', 'memory', 'vision'] as const) {
+    for (const key of ['attend', 'session', 'fast_path', 'recording_cluster', 'recording_triage', 'recording', 'reflection', 'compact', 'memory', 'vision'] as const) {
         if (rawTimeouts[key] != null) {
             parsedTimeouts[key] = num(rawTimeouts[key], 60000);
         }
     }
 
+    // 兼容旧配置：如果只配了 recording，同时应用到 cluster 和 triage
+    const recordingFallback = parseRoutingValue(fileRouting.recording);
     const llmRouting: LLMRoutingConfig = {
         attend: parseRoutingValue(fileRouting.attend),
         session: parseRoutingValue(fileRouting.session),
         fast_path: parseRoutingValue(fileRouting.fast_path),
-        recording: parseRoutingValue(fileRouting.recording),
+        recording_cluster: parseRoutingValue(fileRouting.recording_cluster) ?? recordingFallback,
+        recording_triage: parseRoutingValue(fileRouting.recording_triage) ?? recordingFallback,
         reflection: parseRoutingValue(fileRouting.reflection),
         compact: parseRoutingValue(fileRouting.compact),
         memory: parseRoutingValue(fileRouting.memory),
@@ -503,7 +511,13 @@ export function resolveComponentProfiles(component: RoutingComponentKey, config?
  */
 export function resolveComponentTimeout(component: RoutingComponentKey, config?: AppConfig): number | undefined {
     const cfg = config ?? loadConfig();
-    return cfg.llmRouting.timeouts?.[component];
+    const direct = cfg.llmRouting.timeouts?.[component];
+    if (direct != null) return direct;
+    // 兼容旧配置：recording_cluster / recording_triage 可 fallback 到 recording
+    if (component === 'recording_cluster' || component === 'recording_triage') {
+        return cfg.llmRouting.timeouts?.['recording' as keyof typeof cfg.llmRouting.timeouts];
+    }
+    return undefined;
 }
 
 /** 获取 embedding 配置 */

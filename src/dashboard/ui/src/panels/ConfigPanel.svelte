@@ -52,7 +52,8 @@
     { key: "attend", label: "注意力决策", desc: "判断是否需要回复" },
     { key: "session", label: "CodeAct 交互", desc: "生成回复内容" },
     { key: "fast_path", label: "快速回复", desc: "轻量级即时回复" },
-    { key: "recording", label: "话题聚类", desc: "Triage + 聚类分析" },
+    { key: "recording_cluster", label: "话题聚类", desc: "消息→话题分组" },
+    { key: "recording_triage", label: "话题 Triage", desc: "摘要 + 介入判断" },
     { key: "reflection", label: "反思引擎", desc: "人物画像/总结" },
     { key: "compact", label: "上下文压缩", desc: "对话历史摘要" },
     { key: "memory", label: "记忆检索", desc: "Deep recall" },
@@ -1630,17 +1631,11 @@
     }
     .config-sidebar .space-y-0\.5 {
       display: flex;
+      flex-wrap: wrap;
       gap: 0.25rem;
-      overflow-x: auto;
-      -webkit-overflow-scrolling: touch;
-      scrollbar-width: none;
-    }
-    .config-sidebar .space-y-0\.5::-webkit-scrollbar {
-      display: none;
     }
     .nav-item {
       white-space: nowrap;
-      flex-shrink: 0;
       padding: 0.3rem 0.5rem;
       font-size: 0.7rem;
     }

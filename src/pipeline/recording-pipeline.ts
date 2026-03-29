@@ -76,13 +76,15 @@ export class RecordingPipeline extends EventEmitter {
 
     constructor(
         private registry: TopicRegistry,
-        private llmConfig: LLMConfig,
+        private clusterLlmConfig: LLMConfig,
+        private triageLlmConfig: LLMConfig,
         private personaName: string = "赛博群友",
         private personaDescription: string = "赛博群友",
         private memory?: MemoryStoreV2,
         private embeddingConfig?: EmbeddingConfig,
         pipelineConfig?: RecordingPipelineConfig,
-        private timeoutMs?: number,
+        private clusterTimeoutMs?: number,
+        private triageTimeoutMs?: number,
     ) {
         super();
         this.minFlushSize = pipelineConfig?.minFlushSize ?? DEFAULT_MIN_FLUSH_SIZE;
@@ -371,7 +373,7 @@ export class RecordingPipeline extends EventEmitter {
             { role: "user", content: prompt },
         ];
 
-        const response = await callLLM(llmMessages, this.llmConfig, { caller: "recording-cluster", timeoutMs: this.timeoutMs });
+        const response = await callLLM(llmMessages, this.clusterLlmConfig, { caller: "recording-cluster", timeoutMs: this.clusterTimeoutMs });
 
         try {
             // 提取 JSON（处理可能的 markdown 包裹）
@@ -433,7 +435,7 @@ export class RecordingPipeline extends EventEmitter {
             { role: "user", content: userMessage },
         ];
 
-        const response = await callLLM(llmMessages, this.llmConfig, { caller: "recording-triage", timeoutMs: this.timeoutMs });
+        const response = await callLLM(llmMessages, this.triageLlmConfig, { caller: "recording-triage", timeoutMs: this.triageTimeoutMs });
 
         let result: TopicSummaryTriageResult;
         try {
@@ -471,7 +473,7 @@ export class RecordingPipeline extends EventEmitter {
             ];
 
             try {
-                const retryResponse = await callLLM(retryMessages, this.llmConfig, { caller: "recording-triage", timeoutMs: this.timeoutMs });
+                const retryResponse = await callLLM(retryMessages, this.triageLlmConfig, { caller: "recording-triage", timeoutMs: this.triageTimeoutMs });
                 const retryJson = retryResponse.content
                     .replace(/```json\s*/g, "")
                     .replace(/```\s*/g, "")

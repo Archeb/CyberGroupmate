@@ -106,7 +106,8 @@ async function main(): Promise<void> {
     const attendConfigs = resolveComponentProfiles("attend", appConfig);
     const sessionConfigs = resolveComponentProfiles("session", appConfig);
     const fastPathConfig = resolveComponentProfiles("fast_path", appConfig)[0];
-    const recordingConfig = resolveComponentProfiles("recording", appConfig)[0];
+    const clusterConfig = resolveComponentProfiles("recording_cluster", appConfig)[0];
+    const triageConfig = resolveComponentProfiles("recording_triage", appConfig)[0];
     const compactConfig = resolveComponentProfiles("compact", appConfig)[0];
     const memoryConfig = resolveComponentProfiles("memory", appConfig)[0];
     const reflectionConfig = resolveComponentProfiles("reflection", appConfig)[0];
@@ -302,12 +303,14 @@ async function main(): Promise<void> {
             mentionKeywords: appConfig.notification?.mentionKeywords ?? [],
         },
         recordingDeps: {
-            llmConfig: recordingConfig,
+            clusterLlmConfig: clusterConfig,
+            triageLlmConfig: triageConfig,
             personaName: appConfig.persona?.name ?? "赛博群友",
             personaDescription: appConfig.persona?.description ?? "赛博群友",
             memory,
             pipelineConfig: appConfig.recordingPipeline,
-            timeoutMs: resolveComponentTimeout("recording", appConfig),
+            clusterTimeoutMs: resolveComponentTimeout("recording_cluster", appConfig),
+            triageTimeoutMs: resolveComponentTimeout("recording_triage", appConfig),
         },
         memory,  // 用于启动时恢复 TopicRegistry
         sessionsDir: SESSIONS_DIR,

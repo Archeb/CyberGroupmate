@@ -36,14 +36,16 @@ import { createLogger } from "../core/logger.js";
 const log = createLogger("group-subagent");
 
 export interface RecordingPipelineDeps {
-    llmConfig: LLMConfig;
+    clusterLlmConfig: LLMConfig;
+    triageLlmConfig: LLMConfig;
     personaName: string;
     personaDescription: string;
     memory?: MemoryStoreV2;
     embeddingConfig?: EmbeddingConfig;
     pipelineConfig?: RecordingPipelineConfig;
-    /** LLM 请求超时（毫秒），来自 resolveComponentTimeout('recording') */
-    timeoutMs?: number;
+    /** LLM 请求超时（毫秒），来自 resolveComponentTimeout('recording_cluster') / ('recording_triage') */
+    clusterTimeoutMs?: number;
+    triageTimeoutMs?: number;
 }
 
 /** GroupSubagent 构造参数 */
@@ -116,13 +118,15 @@ export class GroupSubagent extends EventEmitter {
             const deps = options.recordingDeps;
             this.recordingPipeline = new RecordingPipeline(
                 this.topicRegistry,
-                deps.llmConfig,
+                deps.clusterLlmConfig,
+                deps.triageLlmConfig,
                 deps.personaName,
                 deps.personaDescription,
                 deps.memory,
                 deps.embeddingConfig,
                 deps.pipelineConfig,
-                deps.timeoutMs,
+                deps.clusterTimeoutMs,
+                deps.triageTimeoutMs,
             );
 
             this.recordingPipeline.on("topics:triage-passed", (passedTopics: Array<{ topic: any; decision: any }>) => {
