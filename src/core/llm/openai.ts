@@ -68,6 +68,8 @@ export async function callOpenAI(
             } : {}),
             // Stop sequences
             ...(stop && stop.length > 0 ? { stop } : {}),
+            // Extra body（用户自定义额外字段）
+            ...(config.extraBody ?? {}),
         }),
         signal,
     });

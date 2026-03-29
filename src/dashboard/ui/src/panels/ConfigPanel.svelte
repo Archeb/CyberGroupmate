@@ -527,6 +527,46 @@
                     >
                   </div>
                 {/if}
+                {#if p.provider === "openai" || p.provider === "anthropic"}
+                  <div class="divider text-xs opacity-50 my-2">
+                    <i class="fa-solid fa-plus-circle mr-1"></i>Extra Body（可选）
+                  </div>
+                  <p class="text-xs opacity-40 mb-2">
+                    额外请求体字段，JSON 对象格式。会被展开合并到 API 请求中。例如：<code class="text-[10px]">&lbrace;"chat_template_kwargs":&lbrace;"enable_thinking":false&rbrace;&rbrace;</code>
+                  </p>
+                  <label class="cfg-field"
+                    ><span class="cfg-label">Extra Body (JSON)</span>
+                    <textarea
+                      class="textarea textarea-bordered w-full font-mono text-xs"
+                      rows="3"
+                      placeholder={'{"key": "value"}'}
+                      value={p.extraBody ? JSON.stringify(p.extraBody, null, 2) : ""}
+                      on:blur={(e) => {
+                        const val = e.target.value.trim();
+                        if (!val) {
+                          p.extraBody = undefined;
+                          p._extraBodyError = undefined;
+                        } else {
+                          try {
+                            const parsed = JSON.parse(val);
+                            if (typeof parsed !== "object" || Array.isArray(parsed)) {
+                              p._extraBodyError = "必须是 JSON 对象（不能是数组或基本类型）";
+                            } else {
+                              p.extraBody = parsed;
+                              p._extraBodyError = undefined;
+                            }
+                          } catch (err) {
+                            p._extraBodyError = "JSON 格式错误: " + err.message;
+                          }
+                        }
+                        config = config;
+                      }}
+                    ></textarea>
+                  </label>
+                  {#if p._extraBodyError}
+                    <div class="text-xs text-error mt-1"><i class="fa-solid fa-triangle-exclamation mr-1"></i>{p._extraBodyError}</div>
+                  {/if}
+                {/if}
                 </div>
                 {/if}
               </div>

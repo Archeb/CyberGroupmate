@@ -57,6 +57,8 @@ export interface LLMCallEvent {
     }>;
     /** 调用开始时间 */
     timestamp: string;
+    /** 额外请求体字段（如有） */
+    extraBody?: Record<string, unknown>;
 }
 
 /** LLM 响应事件数据 */
@@ -328,6 +330,7 @@ async function callLLMSingleKey(
             provider: config.provider ?? "openai",
             messageSummaries: summarizeMessages(messages),
             timestamp: new Date().toISOString(),
+            extraBody: config.extraBody,
         };
         llmEvents.emit("llm:call", callEvent);
     }

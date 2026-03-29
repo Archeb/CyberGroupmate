@@ -77,6 +77,8 @@ export async function callAnthropic(
         max_tokens: maxTokens,
         // Stop sequences（Anthropic 使用 stop_sequences 字段）
         ...(stop && stop.length > 0 ? { stop_sequences: stop } : {}),
+        // Extra body（用户自定义额外字段）
+        ...(config.extraBody ?? {}),
     };
 
     if (systemMsg) {

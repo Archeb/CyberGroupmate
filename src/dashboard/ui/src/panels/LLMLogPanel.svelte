@@ -360,6 +360,11 @@
             <span class="opacity-40"
               >T={selectedEntry.temperature} max={selectedEntry.maxTokens}</span
             >
+            {#if selectedEntry.extraBody && Object.keys(selectedEntry.extraBody).length > 0}
+              <span class="llm-extra-body-badge" title={JSON.stringify(selectedEntry.extraBody, null, 2)}>
+                <i class="fa-solid fa-plus-circle fa-xs"></i> extraBody
+              </span>
+            {/if}
             {#if r}
               <span class="opacity-60">{r.durationMs}ms</span>
               {#if r.usage}
@@ -461,6 +466,18 @@
             </div>
           {/each}
         </div>
+
+        <!-- Extra Body -->
+        {#if selectedEntry.extraBody && Object.keys(selectedEntry.extraBody).length > 0}
+          <div class="llm-detail-section">
+            <div class="llm-detail-section-title">
+              Extra Body
+            </div>
+            <div class="llm-detail-extra-body">
+              <pre class="llm-extra-body-json">{JSON.stringify(selectedEntry.extraBody, null, 2)}</pre>
+            </div>
+          </div>
+        {/if}
 
         <!-- Retries -->
         {#if selectedEntry.retries?.length > 0}
@@ -838,6 +855,32 @@
     background: color-mix(in srgb, var(--color-base-content) 4%, transparent);
     border-radius: 0.375rem;
     border-left: 3px solid var(--color-secondary);
+  }
+
+  /* ── Extra Body styles ── */
+  .llm-extra-body-badge {
+    font-size: 0.65rem;
+    color: var(--color-accent);
+    cursor: help;
+    opacity: 0.8;
+    font-weight: 600;
+  }
+
+  .llm-detail-extra-body {
+    padding: 0.5rem 0.75rem;
+    background: color-mix(in srgb, var(--color-accent) 6%, transparent);
+    border-radius: 0.375rem;
+    border-left: 3px solid var(--color-accent);
+  }
+
+  .llm-extra-body-json {
+    font-size: 0.72rem;
+    font-family: ui-monospace, monospace;
+    white-space: pre-wrap;
+    word-break: break-word;
+    margin: 0;
+    opacity: 0.85;
+    line-height: 1.5;
   }
 
   /* ── Retry styles ── */

@@ -66,6 +66,8 @@ export interface LLMConfig {
     vertexRegion?: string;
     /** Vertex AI 服务账号 JSON 密钥（原文保存在 config.yaml，仅 provider=google 时生效） */
     vertexCredentials?: Record<string, unknown>;
+    /** 额外请求体字段。JSON 对象，会被直接展开合并到 API 请求体中（仅 openai/anthropic provider） */
+    extraBody?: Record<string, unknown>;
 }
 
 /** 相似度度量方法 */
@@ -742,6 +744,9 @@ function parseLLMProfile(raw: Record<string, unknown>): LLMConfig {
         vertexProject: str(raw.vertex_project),
         vertexRegion: str(raw.vertex_region),
         vertexCredentials,
+        extraBody: (raw.extra_body && typeof raw.extra_body === "object" && !Array.isArray(raw.extra_body))
+            ? raw.extra_body as Record<string, unknown>
+            : undefined,
     };
 }
 
@@ -798,6 +803,7 @@ export function serializeConfigToObject(config: AppConfig): Record<string, unkno
         if (p.vertexProject) entry.vertex_project = p.vertexProject;
         if (p.vertexRegion) entry.vertex_region = p.vertexRegion;
         if (p.vertexCredentials) entry.vertex_credentials = p.vertexCredentials;
+        if (p.extraBody && Object.keys(p.extraBody).length > 0) entry.extra_body = p.extraBody;
         if (p.supportsPrefill === false) entry.supports_prefill = false;
         if (p.pricing) {
             const pricing: Record<string, unknown> = {
