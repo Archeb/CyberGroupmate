@@ -7,6 +7,7 @@ RUN apt-get update && \
 
 WORKDIR /app
 COPY package.json package-lock.json ./
+COPY patches/ ./patches/
 RUN npm ci
 
 # ── Stage 2: Build dashboard UI ──
