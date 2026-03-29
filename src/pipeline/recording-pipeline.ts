@@ -28,6 +28,7 @@ import type {
     TopicClusteringResult,
     TopicSummaryTriageResult,
     Topic,
+    TopicState,
     TriageDecision,
 } from "./types.js";
 import type { RecordingPipelineConfig } from "../core/config.js";
@@ -672,22 +673,13 @@ export class RecordingPipeline extends EventEmitter {
 
             if (!topic) continue;
 
-            // 只对 ACTIVE 状态的话题应用 Triage（已 IGNORED/ENGAGED 的不重复 triage）
-            if (topic.state !== "ACTIVE") {
-                log.debug("跳过已决策话题", { topicId: topic.id, state: topic.state, label: topic.label });
-                updatedTopics.push(topic);
-                continue;
-            }
-
             const triage = triageResult.topics.find(t => t.topicId === topicId);
             if (triage) {
                 // 缓存摘要信息到 Topic 对象，供下一轮 flush 时作为旧话题上下文
                 topic.lastSummary = triage.summary;
 
+                // 唯一的跳过条件：agent 已经回复过比这批消息更新的内容
                 const wasAlreadyHandledByFastPath = topicMsgs.some(msg => msg._viaFastPath);
-
-                // 时间戳防重复：如果话题的所有消息都在 agent 上次回复之前，
-                // 说明 agent 已通过其他路径（alert→CodeAct/FastPath）回复过，不再重复介入
                 const latestMsgTs = Math.max(...topicMsgs.map(m => m.timestamp));
                 const wasAlreadyRepliedByAgent = this.lastAgentReplyAt > 0
                     && latestMsgTs <= this.lastAgentReplyAt;
@@ -696,22 +688,12 @@ export class RecordingPipeline extends EventEmitter {
                     const reason = wasAlreadyHandledByFastPath
                         ? "already handled via fast path"
                         : `agent already replied at ${new Date(this.lastAgentReplyAt).toISOString()}, topic last msg at ${new Date(latestMsgTs).toISOString()}`;
-                    log.info("话题跳过 triage（已回复）", {
+                    log.info("话题跳过入队（已回复）", {
                         topicId: topic.id,
                         label: topic.label,
+                        state: topic.state,
                         reason,
-                        lastAgentReplyAt: this.lastAgentReplyAt,
-                        latestMsgTs,
                     });
-                    const decision: TriageDecision = {
-                        should_intervene: false,
-                        reason,
-                    };
-
-                    this.registry.transition(topic.id, "TRIAGING");
-                    this.registry.setDecision(topic.id, decision);
-                    topic.ignoreReason = decision.reason;
-                    this.registry.transition(topic.id, "IGNORED");
                     updatedTopics.push(topic);
                     continue;
                 }
@@ -721,17 +703,8 @@ export class RecordingPipeline extends EventEmitter {
                     reason: triage.reason,
                 };
 
-                this.registry.transition(topic.id, "TRIAGING");
-
                 if (triage.should_intervene) {
-                    this.registry.setDecision(topic.id, decision);
-                    this.registry.transition(topic.id, "PRELOADING");
-                    this.registry.transition(topic.id, "ENGAGED");
                     triagePassedTopics.push({ topic, decision });
-                } else {
-                    this.registry.setDecision(topic.id, decision);
-                    topic.ignoreReason = triage.reason;
-                    this.registry.transition(topic.id, "IGNORED");
                 }
             }
 
