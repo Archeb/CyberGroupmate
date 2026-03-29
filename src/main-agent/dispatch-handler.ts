@@ -214,12 +214,15 @@ export function createDispatchHandler(
                         const availableStickers: Array<{ emoji: string; description: string; uniqueFileId: string }> = [];
                         for (const s of stickerMatches) {
                             const filePath = mediaDownloader.getExistingPath(s.uniqueFileId);
-                            if (filePath && existsSync(filePath)) {
+                            if (filePath && existsSync(filePath) && !filePath.toLowerCase().endsWith(".webm")) {
                                 availableStickers.push({
                                     emoji: s.emoji,
                                     description: s.description,
                                     uniqueFileId: s.uniqueFileId,
                                 });
+                            } else if (filePath && existsSync(filePath) && filePath.toLowerCase().endsWith(".webm")) {
+                                // 排除 webm 格式贴纸，不加入 availableStickers
+                                log.debug("跳过 webm 格式贴纸", { uniqueFileId: s.uniqueFileId, filePath });
                             } else {
                                 // 文件不存在：清理 DB 中的过期条目
                                 memory.deleteStickerDescription(s.uniqueFileId);

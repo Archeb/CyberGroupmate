@@ -589,6 +589,9 @@ export class TelegramAdapter implements PlatformAdapter {
                 const stickerPath = this.mediaDownloader.getExistingPath(uniqueFileId);
                 if (!stickerPath) throw new Error(`sendSticker: 未找到贴纸文件 uniqueFileId=${uniqueFileId}`);
                 if (!fs.existsSync(stickerPath)) throw new Error(`sendSticker: 文件不存在 ${stickerPath}`);
+                if (stickerPath.toLowerCase().endsWith(".webm")) {
+                    throw new Error("sendSticker: 禁止发送 webm 格式贴纸 (通常为视频贴纸)");
+                }
                 const stickerBuffer = fs.readFileSync(stickerPath);
                 const stickerOpts = args[2] ?? undefined;
                 return this.handleCall("telegram.sendMedia", [
