@@ -17,7 +17,7 @@
  */
 
 import type { GroupContextPackage, TopicDigest, SubagentCallback, FastPathConfig } from "../subagent/types.js";
-import type { GlobalState } from "./global-state.js";
+
 import type { GroupModel } from "../memory-v2/types.js";
 import { createLogger } from "../core/logger.js";
 import { getRawId, getDunbarTierLabel } from "../core/chat-id.js";
@@ -169,6 +169,10 @@ export function buildAttentionVariables(
         fastPathHistory?: string;
         messages?: string;
         dispatchedTopicIds?: string[];
+        /** 从 system prompt 迁移过来的动态字段 */
+        attentionSummary?: string;
+        recentDecisions?: string;
+        activeTasks?: string;
     },
 ): Record<string, unknown> {
     const opts = options ?? {};
@@ -194,6 +198,11 @@ export function buildAttentionVariables(
         stickinessLevel: opts.stickinessLevel ?? "STRANGER",
         priorityMultiplier: opts.priorityMultiplier ?? 0.2,
         tonePreset: opts.tonePreset ?? "礼貌得体",
+
+        // Global state (从 system prompt 迁移到 user message)
+        attentionSummary: opts.attentionSummary ?? "（无）",
+        recentDecisions: opts.recentDecisions ?? "（无）",
+        activeTasks: opts.activeTasks ?? "（无待办任务）",
 
         // Group model
         groupModel: !!pkg.groupModel,
@@ -233,28 +242,17 @@ export function buildAttentionVariables(
 }
 
 /**
- * 从 GlobalState + persona 构建 MAIN_SYSTEM prompt 的变量
+ * 从 persona 构建 MAIN_SYSTEM prompt 的变量（纯静态，用于缓存）
+ *
+ * 动态内容（attentionSummary / recentDecisions / activeTasks / decisionPrompt）
+ * 已迁移到 ATTENTION prompt（user message），以确保 system prompt 可被前缀缓存。
  */
 export function buildMainSystemVariables(
     persona: { name: string; description: string },
-    globalState: GlobalState,
-    decisionPrompt: string,
 ): Record<string, unknown> {
-    // 备注 #9: recentDecisions 和 activeTasks 保留完整 composite chatId，让主 Agent 能区分平台来源
-    const recentDecisions = globalState.getRecentDecisions().slice(-5)
-        .map(d => `- [${d.chatId}] ${d.decision}`).join("\n") || "（无）";
-    const activeTasks = globalState.getTaskList()
-        .filter(t => t.status !== "DONE" && t.status !== "CANCELLED")
-        .map(t => `- [${t.priority}][${t.status}] ${t.description}${t.chatId ? ` (群:${t.chatId})` : ""}`)
-        .join("\n") || "（无待办任务）";
-
     return {
         personaName: persona.name,
         personaDescription: persona.description,
-        attentionSummary: globalState.getAttentionSummary() || "（无）",
-        recentDecisions,
-        activeTasks,
-        decisionPrompt,
     };
 }
 

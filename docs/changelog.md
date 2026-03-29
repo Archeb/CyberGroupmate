@@ -1,5 +1,28 @@
 # Changelog
 
+## 2026-03-29: Attend-Handler System Prompt 缓存优化 — 动态内容下沉到 User Message
+
+### 问题
+
+`attend-handler` 的 LLM 调用缓存命中率为 0。根因：system prompt 中嵌入了 4 个高频变动的动态变量（`attentionSummary`、`recentDecisions`、`activeTasks`、`decisionPrompt`），导致每次调用的 system prompt 内容不同，前缀缓存永远无法匹配。
+
+### 修复方案
+
+将 system prompt 变为**纯静态**（仅含 persona + 规则 + 输出格式），所有动态内容下沉到 ATTENTION prompt（user message）。Decision prompt 中的输出格式规则直接内联到 system prompt（去掉 `{{stickinessLevel}}` 变量），`stickinessLevel` 移至 attention prompt 的「本次决策上下文」section。
+
+### 缓存效果
+
+修复后 ~9,670 tokens 的 system prompt 在所有 attend 调用间完全相同，可被前缀缓存命中。`system + conversation history` 前缀也可累积缓存。
+
+### 改动
+
+| 文件 | 改动 |
+|------|------|
+| `system-prompts/main-agent/mainagent-main-system.md` | 移除 `{{attentionSummary}}`/`{{recentDecisions}}`/`{{activeTasks}}`/`{{decisionPrompt}}` 4 个动态变量；内联 decision 输出格式规则（去掉 `{{stickinessLevel}}`）；prompt 变为 100% 静态 |
+| `system-prompts/main-agent/mainagent-attention.md` | 新增「全局状态快照」「最近决策记录」「当前任务列表」3 个 section（从 system prompt 迁移）；新增「当前粘性级别」字段（从 decision prompt 迁移）；重组为「本次决策上下文」统一 section |
+| `src/main-agent/prompt-renderer.ts` | `buildMainSystemVariables` 简化为仅接受 `persona`（移除 `globalState`/`decisionPrompt` 参数）；`buildAttentionVariables` 新增 `attentionSummary`/`recentDecisions`/`activeTasks` 3 个可选字段；移除未使用的 `GlobalState` import |
+| `src/main-agent/attend-handler.ts` | 动态状态计算（recentDecisions/activeTasks/attentionSummary）移至 attention prompt 变量构建；移除 `decisionPrompt` 渲染调用；`buildMainSystemVariables` 调用简化为 `(persona)` |
+
 ## 2026-03-28: LLM Log 面板增强 — FA 图标 + 6h 缓冲 + 渐进加载 + 导出
 
 ### Emoji → Font Awesome 图标

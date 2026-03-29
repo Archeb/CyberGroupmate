@@ -1,8 +1,20 @@
 ═══ 注意力切换: {{chatTitle}} ({{chatId}}) [{{chatType}}] ═══
-当前时间： {{snapshotTimestamp}}
+
+## 全局状态快照
+{{attentionSummary}}
+
+## 最近决策记录
+{{recentDecisions}}
+
+## 当前任务列表
+{{activeTasks}}
+
+## 本次决策上下文
+当前粘性级别: {{stickinessLevel}}
+当前时间: {{snapshotTimestamp}}
 上次关注: {{lastAttendedAt}} ({{timeSinceLastAttend}} 前)
 上下文深度: L{{depth}}
-粘性级别: {{stickinessLevel}} | 优先级乘数: {{priorityMultiplier}}
+优先级乘数: {{priorityMultiplier}}
 {{#recentFeedback}}
 最近观察：{{recentFeedback}}
 {{/recentFeedback}}

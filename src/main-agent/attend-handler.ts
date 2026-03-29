@@ -250,7 +250,15 @@ export function createAttendHandler(
                 ? `${Math.round((Date.now() - new Date(entry.lastAttendedAt).getTime()) / 60_000)}分钟`
                 : "从未关注";
 
-            // ➌ Attend 上下文注入 + ➍ Decision 输出格式
+            // ➌ Attend 上下文注入（动态内容全部注入 user message，确保 system prompt 可缓存）
+            // 备注 #9: recentDecisions 和 activeTasks 保留完整 composite chatId，让主 Agent 能区分平台来源
+            const recentDecisions = globalState.getRecentDecisions().slice(-5)
+                .map(d => `- [${d.chatId}] ${d.decision}`).join("\n") || "（无）";
+            const activeTasks = globalState.getTaskList()
+                .filter(t => t.status !== "DONE" && t.status !== "CANCELLED")
+                .map(t => `- [${t.priority}][${t.status}] ${t.description}${t.chatId ? ` (群:${t.chatId})` : ""}`)
+                .join("\n") || "（无待办任务）";
+
             const promptVars = buildAttentionVariables(contextPkg, entry.newMessageCount, {
                 persona: `你是「${persona.name}」。${persona.description}`,
                 lastAttendedAt: entry.lastAttendedAt,
@@ -265,13 +273,16 @@ export function createAttendHandler(
                 fastPathHistory: fpHistory,
                 messages: messagesText || undefined,
                 dispatchedTopicIds: [...subagent.getDispatchedTopicIds()],
+                // 从 system prompt 迁移过来的动态字段
+                attentionSummary: globalState.getAttentionSummary() || "（无）",
+                recentDecisions,
+                activeTasks,
             });
 
             const attentionPrompt = renderPrompt("ATTENTION", promptVars);
-            const decisionPrompt = renderPrompt("DECISION", promptVars);
 
-            // ➋ 主 Agent 系统 Prompt — 使用模板渲染 (subagent.md §12.2 ➋)
-            const mainSystemVars = buildMainSystemVariables(persona, globalState, decisionPrompt);
+            // ➋ 主 Agent 系统 Prompt — 纯静态，确保前缀缓存命中 (subagent.md §12.2 ➋)
+            const mainSystemVars = buildMainSystemVariables(persona);
             const mainSystemPrompt = renderPrompt("MAIN_SYSTEM", mainSystemVars);
 
             // ➝ 构建 messages: [system, ...历史对话, 当前轮 attend prompt]
