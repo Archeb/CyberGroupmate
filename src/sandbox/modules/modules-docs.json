@@ -1,0 +1,235 @@
+[
+  {
+    "name": "actions",
+    "description": "* shared/actions.d.ts — 所有 scene 共享的 actions 能力",
+    "methods": [
+      {
+        "name": "getTopicContext",
+        "brief": "获取某个话题的结构化上下文",
+        "fullDoc": "```typescript\ngetTopicContext(topicId: string): Promise<Record<string, unknown> | null>\n```\n\n\n获取某个话题的结构化上下文"
+      },
+      {
+        "name": "listActiveTopics",
+        "brief": "列出当前活跃话题",
+        "fullDoc": "```typescript\nlistActiveTopics(chatId?: string): Promise<Array<Record<string, unknown> | null>>\n```\n\n\n列出当前活跃话题"
+      },
+      {
+        "name": "recallForTopic",
+        "brief": "以话题为中心触发一次记忆检索",
+        "fullDoc": "```typescript\nrecallForTopic(topicId: string, options?: Record<string, unknown>): Promise<unknown>\n```\n\n\n以话题为中心触发一次记忆检索"
+      }
+    ]
+  },
+  {
+    "name": "ctx.discord",
+    "description": "discord.d.ts — Discord 场景类型定义",
+    "methods": [
+      {
+        "name": "sendText",
+        "brief": "发送文本消息到指定频道。",
+        "fullDoc": "```typescript\nsendText(channelId: string, text: string, opts?: { replyTo?: string }): Promise<DiscordMessage>\n```\n\n\n发送文本消息到指定频道。\n\n**参数：**\n- `channelId`: 目标频道 ID（由 sandbox 上下文自动填入当前频道）\n- `text`: 消息内容\n- `opts`: 可选参数\n\n**示例：**\n```typescript\n// sendText(channelId, \"你好！\")\n```\n\n```typescript\n// sendText(channelId, \"回复你的问题\", { replyTo: \"1234567890\" })\n```"
+      },
+      {
+        "name": "sendMedia",
+        "brief": "发送媒体消息（附件）到指定频道。",
+        "fullDoc": "```typescript\nsendMedia(channelId: string, media: { url?: string; file?: string; caption?: string; fileName?: string }, opts?: { replyTo?: string }): Promise<DiscordMessage>\n```\n\n\n发送媒体消息（附件）到指定频道。\n\n**参数：**\n- `channelId`: 目标频道 ID\n- `media`: 媒体对象，支持 URL 或文件内容\n- `opts`: 可选参数\n\n**示例：**\n```typescript\n// sendMedia(channelId, { url: \"https://example.com/image.png\", caption: \"看看这张图\" })\n```"
+      },
+      {
+        "name": "sendTyping",
+        "brief": "在频道中显示 \"正在输入...\" 状态。",
+        "fullDoc": "```typescript\nsendTyping(channelId: string): Promise<void>\n```\n\n\n在频道中显示 \"正在输入...\" 状态。\n\n**参数：**\n- `channelId`: 目标频道 ID"
+      }
+    ]
+  },
+  {
+    "name": "docs",
+    "description": "docs.d.ts — 文档查阅系统类型定义",
+    "methods": [
+      {
+        "name": "list",
+        "brief": "列出所有可用文档（返回 slug 和标题）",
+        "fullDoc": "```typescript\nlist(): Array<{ slug: string; title: string }>\n```\n\n\n列出所有可用文档（返回 slug 和标题）"
+      },
+      {
+        "name": "read",
+        "brief": "读取指定文档的完整内容",
+        "fullDoc": "```typescript\nread(slug: string): string\n```\n\n\n读取指定文档的完整内容\n支持精确 slug 匹配和模糊匹配\n\n**参数：**\n- `slug`: 文档标识符（不含 .md 后缀的文件名）\n- **返回值**: 文档内容字符串；不存在时返回提示信息"
+      }
+    ]
+  },
+  {
+    "name": "memory",
+    "description": "memory.d.ts — Memory V2 Agent API 类型定义",
+    "methods": [
+      {
+        "name": "recall",
+        "brief": "统一记忆检索入口",
+        "fullDoc": "```typescript\nrecall(query: string, options?: RecallOptions): Promise<RecallResult>\n```\n\n\n统一记忆检索入口\n使用向量搜索 + 关键词搜索混合检索\n\n**示例：**\n```typescript\nconst result = await memory.recall(\"alice 东京\", {\n  chatId: \"-100xxx\",\n  userId: \"alice_123\",\n  categories: ['preference', 'plan'],\n});\n```"
+      },
+      {
+        "name": "browseHistory",
+        "brief": "消息档案检索",
+        "fullDoc": "```typescript\nbrowseHistory(request: HistoryBrowseRequest): Promise<HistoryBrowseResult>\n```\n\n\n消息档案检索\n话题索引引导 + 模糊搜索 + cheap model 深度阅读\n\n**示例：**\n```typescript\nconst result = await memory.browseHistory({\n  intent: \"谁说过要去京都吃抹茶\",\n  hints: { chatId: \"-100xxx\", daysBack: 7 },\n});\n```"
+      },
+      {
+        "name": "reflect",
+        "brief": "对指定群组进行反思总结",
+        "fullDoc": "```typescript\nreflect(chatId: string): Promise<{ reflectedPeriod: { from: string; to: string }\n```\n\n\n对指定群组进行反思总结\n读取上次反思以来的 topics 和 interactions，生成结构化总结"
+      }
+    ]
+  },
+  {
+    "name": "runtime",
+    "description": "* shared/runtime.d.ts — 所有 scene 共享的 runtime 能力",
+    "methods": [
+      {
+        "name": "notify",
+        "brief": "推送事件到通知中心",
+        "fullDoc": "```typescript\nnotify(event: { type: string; [key: string]: unknown }): void\n```\n\n\n推送事件到通知中心"
+      },
+      {
+        "name": "input",
+        "brief": "请求用户输入",
+        "fullDoc": "```typescript\ninput(prompt: string): Promise<string>\n```\n\n\n请求用户输入"
+      },
+      {
+        "name": "print",
+        "brief": "直接打印到宿主",
+        "fullDoc": "```typescript\nprint(msg: string): void\n```\n\n\n直接打印到宿主"
+      },
+      {
+        "name": "spawn",
+        "brief": "启动一个命名后台任务",
+        "fullDoc": "```typescript\nspawn(name: string, fn: (signal: AbortSignal) => Promise<void>): void\n```\n\n\n启动一个命名后台任务"
+      },
+      {
+        "name": "kill",
+        "brief": "停止一个后台任务",
+        "fullDoc": "```typescript\nkill(name: string): void\n```\n\n\n停止一个后台任务"
+      },
+      {
+        "name": "ps",
+        "brief": "列出后台任务",
+        "fullDoc": "```typescript\nps(): string[]\n```\n\n\n列出后台任务"
+      }
+    ]
+  },
+  {
+    "name": "scene",
+    "description": "shared/scene.d.ts — 所有 scene 共享的场景信息能力",
+    "methods": [
+      {
+        "name": "list",
+        "brief": "列出所有可用场景及简介",
+        "fullDoc": "```typescript\nlist(): void\n```\n\n\n列出所有可用场景及简介"
+      },
+      {
+        "name": "showFullTypes",
+        "brief": "展示当前场景的完整类型定义（L2）",
+        "fullDoc": "```typescript\nshowFullTypes(): void\n```\n\n\n展示当前场景的完整类型定义（L2）"
+      }
+    ]
+  },
+  {
+    "name": "skills",
+    "description": "* shared/skills.d.ts — 所有 scene 共享的代码型 skills 能力",
+    "methods": [
+      {
+        "name": "recallAndSummarize",
+        "brief": "recallAndSummarize(query: string, options?: Record<string, unknown>): Promise<unknown>",
+        "fullDoc": "```typescript\nrecallAndSummarize(query: string, options?: Record<string, unknown>): Promise<unknown>\n```"
+      },
+      {
+        "name": "browseForAnswer",
+        "brief": "browseForAnswer(request: Record<string, unknown>): Promise<unknown>",
+        "fullDoc": "```typescript\nbrowseForAnswer(request: Record<string, unknown>): Promise<unknown>\n```"
+      }
+    ]
+  },
+  {
+    "name": "ctx.tg",
+    "description": "telegram.d.ts — Telegram 场景类型定义",
+    "methods": [
+      {
+        "name": "sendText",
+        "brief": "sendText(chatId: number | string, text: string, opts?: { replyTo?: number }): Promise<Message>",
+        "fullDoc": "```typescript\nsendText(chatId: number | string, text: string, opts?: { replyTo?: number }): Promise<Message>\n```"
+      },
+      {
+        "name": "sendMedia",
+        "brief": "发送媒体消息。支持 URL 和本地文件路径。",
+        "fullDoc": "```typescript\nsendMedia(chatId: number | string, media: string | { type: 'photo' | 'video' | 'document' | 'audio' | 'auto'; file: string; caption?: string; fileName?: string }, opts?: { replyTo?: number }): Promise<Message>\n```\n\n\n发送媒体消息。支持 URL 和本地文件路径。\n\n**示例：**\n```typescript\n// sendMedia(chatId, { type: 'photo', file: 'https://example.com/img.jpg', caption: '看看这个' })\n```\n\n```typescript\n// sendMedia(chatId, { type: 'photo', file: '/path/to/local/image.jpg' })\n```"
+      },
+      {
+        "name": "sendFile",
+        "brief": "发送磁盘文件到聊天（通过绝对路径）。host 侧读取文件并上传。始终作为文件/文档发送。",
+        "fullDoc": "```typescript\nsendFile(chatId: number | string, filePath: string, opts?: { replyTo?: number; caption?: string; fileName?: string; mimeType?: string }): Promise<Message>\n```\n\n\n发送磁盘文件到聊天（通过绝对路径）。host 侧读取文件并上传。始终作为文件/文档发送。"
+      },
+      {
+        "name": "sendSticker",
+        "brief": "发送贴纸。通过 uniqueFileId 引用本地已缓存的贴纸文件。",
+        "fullDoc": "```typescript\nsendSticker(chatId: number | string, uniqueFileId: string, opts?: { replyTo?: number }): Promise<Message>\n```\n\n\n发送贴纸。通过 uniqueFileId 引用本地已缓存的贴纸文件。\n\n**示例：**\n```typescript\n// sendSticker(chatId, 'AgADAgATxxxxxx')\n```"
+      },
+      {
+        "name": "getMe",
+        "brief": "getMe(): Promise<User>",
+        "fullDoc": "```typescript\ngetMe(): Promise<User>\n```"
+      },
+      {
+        "name": "getChat",
+        "brief": "getChat(chatId: number | string): Promise<Chat>",
+        "fullDoc": "```typescript\ngetChat(chatId: number | string): Promise<Chat>\n```"
+      },
+      {
+        "name": "getUser",
+        "brief": "getUser(userId: number | string): Promise<User>",
+        "fullDoc": "```typescript\ngetUser(userId: number | string): Promise<User>\n```"
+      },
+      {
+        "name": "getDialogs",
+        "brief": "获取最近的对话列表（包含 peer、最后一条消息、未读数）",
+        "fullDoc": "```typescript\ngetDialogs(opts?: { limit?: number }): Promise<Dialog[]>\n```\n\n\n获取最近的对话列表（包含 peer、最后一条消息、未读数）"
+      },
+      {
+        "name": "getChatMembers",
+        "brief": "getChatMembers(chatId: number | string, opts?: { limit?: number }): Promise<Peer[]>",
+        "fullDoc": "```typescript\ngetChatMembers(chatId: number | string, opts?: { limit?: number }): Promise<Peer[]>\n```"
+      },
+      {
+        "name": "getHistory",
+        "brief": "getHistory(chatId: number | string, opts?: { limit?: number }): Promise<Message[]>",
+        "fullDoc": "```typescript\ngetHistory(chatId: number | string, opts?: { limit?: number }): Promise<Message[]>\n```"
+      },
+      {
+        "name": "iterHistory",
+        "brief": "iterHistory(chatId: number | string, opts?: { limit?: number }): AsyncIterable<Message>",
+        "fullDoc": "```typescript\niterHistory(chatId: number | string, opts?: { limit?: number }): AsyncIterable<Message>\n```"
+      },
+      {
+        "name": "iterDialogs",
+        "brief": "iterDialogs(opts?: { limit?: number }): AsyncIterable<Dialog>",
+        "fullDoc": "```typescript\niterDialogs(opts?: { limit?: number }): AsyncIterable<Dialog>\n```"
+      },
+      {
+        "name": "joinChat",
+        "brief": "加入一个群聊或频道",
+        "fullDoc": "```typescript\njoinChat(chatId: number | string): Promise<void>\n```\n\n\n加入一个群聊或频道"
+      },
+      {
+        "name": "leaveChat",
+        "brief": "退出一个群聊或频道",
+        "fullDoc": "```typescript\nleaveChat(chatId: number | string): Promise<void>\n```\n\n\n退出一个群聊或频道"
+      },
+      {
+        "name": "readHistory",
+        "brief": "readHistory(chatId: number | string): Promise<void>",
+        "fullDoc": "```typescript\nreadHistory(chatId: number | string): Promise<void>\n```"
+      },
+      {
+        "name": "sendTyping",
+        "brief": "sendTyping(chatId: number | string): Promise<void>",
+        "fullDoc": "```typescript\nsendTyping(chatId: number | string): Promise<void>\n```"
+      }
+    ]
+  }
+]

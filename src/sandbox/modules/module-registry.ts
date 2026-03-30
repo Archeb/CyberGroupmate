@@ -1,0 +1,117 @@
+/**
+ * module-registry.ts — Sandbox 模块注册表
+ *
+ * 统一声明所有暴露给 sandbox 的模块。每个模块条目包含：
+ * - 简短摘要（用于 Pass 1 轻量 prompt）
+ * - 完整 TypeDoc 文档（用于 Pass 2 按需注入）
+ *
+ * 由 `generate-module-docs` 工具自动填充 `fullDoc` 字段，
+ * 人工只需维护 `methods` 中的方法列表和 `brief` 描述。
+ *
+ * @see docs/sandbox-module-guide.md 了解如何添加新模块
+ */
+
+// ─── 类型定义 ───
+
+/** 单个方法的文档条目 */
+export interface MethodDoc {
+    /** 方法名 */
+    name: string;
+    /** 一句话签名摘要（Pass 1 用） */
+    brief: string;
+    /** 完整 TypeDoc 文档（MD 格式，含参数、返回值、示例代码等）（Pass 2 用） */
+    fullDoc: string;
+}
+
+/** 单个模块的注册条目 */
+export interface ModuleEntry {
+    /** 模块名（sandbox 中的全局变量名，如 "runtime", "memory", "ctx.tg"） */
+    name: string;
+    /** 模块一句话描述 */
+    description: string;
+    /** 方法列表 */
+    methods: MethodDoc[];
+}
+
+import { readFileSync } from "node:fs";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __mr_filename = fileURLToPath(import.meta.url);
+const __mr_dirname = dirname(__mr_filename);
+
+/**
+ * 从 modules-docs.json 加载模块注册表。
+ * 该 JSON 文件由 `npm run gen:module-docs` 生成。
+ *
+ * 返回值结构：ModuleEntry[]
+ */
+export function loadModuleRegistry(): ModuleEntry[] {
+    try {
+        const jsonPath = join(__mr_dirname, "modules-docs.json");
+        const raw = readFileSync(jsonPath, "utf-8");
+        return JSON.parse(raw) as ModuleEntry[];
+    } catch {
+        // fallback: 返回空（此时回退到旧的 d.ts 流程）
+        return [];
+    }
+}
+
+/**
+ * 生成 Pass 1 轻量概览：每个模块的方法名 + 简短签名
+ *
+ * 输出格式示例：
+ * ```
+ * ## runtime
+ * - notify(event): 推送事件到通知中心
+ * - input(prompt): 请求用户输入
+ * ...
+ * ## ctx.tg (TelegramClient)
+ * - sendText(chatId, text, opts?): 发送文本消息
+ * ...
+ * ```
+ */
+export function generateBriefOverview(registry: ModuleEntry[]): string {
+    const sections: string[] = [];
+    for (const mod of registry) {
+        const header = `## ${mod.name}`;
+        const desc = mod.description ? `${mod.description}\n` : "";
+        const methodLines = mod.methods.map(m => `- ${m.name}: ${m.brief}`);
+        sections.push(`${header}\n${desc}${methodLines.join("\n")}`);
+    }
+    return sections.join("\n\n");
+}
+
+/**
+ * 根据方法调用列表检索完整文档
+ *
+ * @param registry 模块注册表
+ * @param calledMethods 从代码中提取的方法调用列表，格式如 ["ctx.tg.sendText", "memory.recall"]
+ * @returns 拼接好的完整 TypeDoc 文档字符串
+ */
+export function lookupFullDocs(registry: ModuleEntry[], calledMethods: string[]): string {
+    const found: string[] = [];
+    const seen = new Set<string>();
+
+    for (const call of calledMethods) {
+        // 解析 "ctx.tg.sendText" → moduleName="ctx.tg", methodName="sendText"
+        // 解析 "memory.recall" → moduleName="memory", methodName="recall"
+        const lastDot = call.lastIndexOf(".");
+        if (lastDot === -1) continue;
+        const moduleName = call.slice(0, lastDot);
+        const methodName = call.slice(lastDot + 1);
+
+        const mod = registry.find(m => m.name === moduleName);
+        if (!mod) continue;
+        const method = mod.methods.find(m => m.name === methodName);
+        if (!method || !method.fullDoc) continue;
+
+        const key = `${moduleName}.${methodName}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        found.push(`### ${moduleName}.${methodName}\n\n${method.fullDoc}`);
+    }
+
+    if (found.length === 0) return "";
+    return `# 完整 API 文档（按需加载）\n\n${found.join("\n\n---\n\n")}`;
+}
