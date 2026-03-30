@@ -205,7 +205,8 @@ export class Sandbox extends EventEmitter {
      */
     private async startPty(): Promise<void> {
         // 创建 per-chat home 目录
-        this.shellHome = join(this.projectRoot, "workspace", this.chatId);
+        const safeDirName = this.chatId.replace(/[^a-zA-Z0-9_-]/g, '_');
+        this.shellHome = join(this.projectRoot, "workspace", safeDirName);
         if (!existsSync(this.shellHome)) {
             mkdirSync(this.shellHome, { recursive: true });
         }
