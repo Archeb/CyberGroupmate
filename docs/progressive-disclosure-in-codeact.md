@@ -61,7 +61,7 @@ LLM 的交互是在多轮流式对话中进行的：
 
 ## 延申：与当前主流 AI Agent "Skills Hub" 的对比
 
-当前业界主流的 AI Agent 框架（如 LangChain 工具箱、Dify/Coze 插件、OpenAI GPTs Actions 等）也普遍提供所谓的 "Skills Hub" 或 "Plugin Store" 机制。但在底层逻辑上，我们的 **渐进式 CodeAct 沙盒方案** 实现了降维打击：
+当前业界主流的 AI Agent 框架（如 LangChain 工具箱、Dify/Coze 插件、OpenAI GPTs Actions 等）也普遍提供所谓的 "Skills Hub" 或 "Plugin Store" 机制。但在底层逻辑上，我们的 **渐进式 CodeAct 沙盒方案** 方案更加优雅：
 
 ### 传统 Skills Hub 的阿喀琉斯之踵（Schema-based Tool Calling）
 - **封装极其繁重（Wrapping Tax）**：开发者如果想让 Agent 拥有一个新技能，必须用 Python/TypeScript 编写工具类，然后手动提供冗长死板的 OpenAPI Schema（JSON），去定义每一个参数的类型、枚举、长度限制和用法。将一个原生的 SDK 强行转化为一堆松散的 Tools，不仅费时费力，还会丢失类型之间的连贯关系。
