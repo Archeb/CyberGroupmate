@@ -5,7 +5,7 @@
 
 在传统的 Agent 架构中，为大语言模型（LLM）提供工具通常需要繁琐的包裹（Wrapping）和参数定义（如 JSON Schema）。当面对复杂的外部系统（如 GitHub API、Notion API）时，我们需要手动将庞大的 SDK 转化为几十个散碎的 Tools，这不仅增加了开发成本，还极易导致 LLM 的上下文窗口（Context Window）被铺天盖地的工具说明塞满，造成注意力分散（Context Bloat / Attention Dilution）。
 
-在 CyberGroupmate 中，我们引入了基于 **CodeAct** 和 **渐进式披露（Progressive Disclosure）** 的全新架构理念。我们不把工具定死成 JSON Schema，而是给 LLM 提供一个可以直接执行原生 TypeScript / JavaScript 代码的沙盒，让它像真实开发者一样直接使用丰富的 `npm` 生态。
+在 CyberGroupmate 中，我们借鉴了基于 **CodeAct** 和 **渐进式披露（Progressive Disclosure）** 的优点并提出这个新的 TS Skills 的理念。
 
 ---
 
@@ -56,21 +56,3 @@ LLM 的交互是在多轮流式对话中进行的：
 4. **像真实程序员一样的工作流 (Human-like Workflow)**：这极度贴近真实程序员的工作状态——面对庞大的不知名 SDK，先通过 IDE 的智能提示看个函数名和短述（Pass 1 引导阶段）；如果真的要写复杂调用，再去悬停展开查看详细的 JSDoc，查阅完整的出入参和示例代码（Pass 2 请求阶段）；确保无误后书写执行。
 
 **“Stop teaching LLMs how to parse your JSON tool definitions. Let them write executable code and read JSDoc instead.”**
-
----
-
-## 延申：与当前主流 AI Agent "Skills Hub" 的对比
-
-当前业界主流的 AI Agent 框架（如 LangChain 工具箱、Dify/Coze 插件、OpenAI GPTs Actions 等）也普遍提供所谓的 "Skills Hub" 或 "Plugin Store" 机制。但在底层逻辑上，我们的 **渐进式 CodeAct 沙盒方案** 方案更加优雅：
-
-### 传统 Skills Hub 的阿喀琉斯之踵（Schema-based Tool Calling）
-- **封装极其繁重（Wrapping Tax）**：开发者如果想让 Agent 拥有一个新技能，必须用 Python/TypeScript 编写工具类，然后手动提供冗长死板的 OpenAPI Schema（JSON），去定义每一个参数的类型、枚举、长度限制和用法。将一个原生的 SDK 强行转化为一堆松散的 Tools，不仅费时费力，还会丢失类型之间的连贯关系。
-- **Context 上下文锁死**：每增加一个工具，Agent 的 System Prompt 就必须无脑吃进这个工具的全部 Schema。稍微复杂的技能库（包含二三十个端点）在初始化时就会瞬间吞噬几千个 Token，极大地稀释了模型的注意力（Attention），也注定了一个 Agent 无法同时挂载成百上千个技能。
-- **胶水逻辑的黑盒化**：真实的业务场景往往是复合的：“先调用 A 获取列表 -> 用正则过滤找到符合条件的 ID -> 并发请求 B 获取详情”。在传统的工具调用范式下，LLM 只能笨拙地一轮一轮去猜参数调用 Tools；为了稳定，开发者往往只能在沙盒外部预先写死（Hardcode）这段胶水代码，将死板的功能重新包装成一个宏观工具。
-
-### 基于原生 npm 生态的 CodeAct 降维打击
-- **不重建车轮，npm 本身即是 Skills Hub**：我们不需要专门打造一个闭源的或者定制化的插件市场。有了 Node 沙盒，**拥有千万量级包的 NPM 仓库就是全世界最庞大、最成熟的 Skills Hub**。任何包（甚至是系统内置的 `crypto`、`fs`）都可以成为 LLM 的能力延伸，只需要几行 `import` 和极其精简的认知映射（`.d.ts`）。
-- **将“参数填充器”升维为“全栈工程师”**：我们的 Agent 不再是一个只能通过补全特定 JSON 来调用外部黑盒的“填表员”。在面对上面的复合业务需求时，它会在它的 Sandbox 空间内直接使用 `for` 循环、正则匹配、甚至是 `Promise.all` 原生 JavaScript 特性，把 A 和 B 两个 SDK 行云流水地组合在一起执行，彻底夺回了逻辑编排的主动权。
-- **极简映射，动态展开**：借由渐进式披露机制，即使我们给它挂载了极其庞大的如 AWS SDK 或 octokit，它也能在平时保持“一句话概览”的清醒头脑，只有真到了执行边缘，才优雅地通过 Pass 2 将手册展开阅读。
-
-**传统模式让开发者写代码把 AI 连入 API；而在我们的 CodeAct 模式下，开发者只需把 SDK 放在桌子上，让 AI 自己去写代码。**
