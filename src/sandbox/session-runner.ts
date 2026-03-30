@@ -4,6 +4,11 @@
  * 运行一个完整的 CodeAct 交互 session：LLM 生成思考和代码 → 
  * sandbox 执行代码 → 结果作为 observation 反馈 → 重复直到完成。
  *
+ * 支持 Two-pass Code Generation：
+ * - Pass 1：LLM 基于轻量 API 概览生成初版代码
+ * - 类型解析：提取代码中调用的 API 方法，按需注入完整 TypeDoc 文档
+ * - Pass 2：LLM 基于完整文档重新生成代码（仅在需要时触发）
+ *
  * 在整体架构中的位置：
  * - Orchestrator (main.ts) 在处理事件时调用 runCodeActSession
  */
@@ -15,6 +20,7 @@ import type { LLMConfig } from "../core/config.js";
 import { ulid } from "ulid";
 import { createLogger } from "../core/logger.js";
 import { EventEmitter } from "node:events";
+import { extractApiCalls, needsDocLookup } from "./api-intent-extractor.js";
 
 // ─── CodeAct Progress Events ───
 
@@ -27,7 +33,7 @@ export interface CodeActProgressEvent {
     chatId: string;
     sessionId: string;
     turn: number;
-    phase: "thinking" | "executing" | "observation" | "new_messages" | "task" | "end";
+    phase: "thinking" | "executing" | "observation" | "new_messages" | "task" | "end" | "type_resolving";
     thinking?: string;
     codeBlocks?: CodeBlock[];
     executionOutput?: string;
@@ -286,6 +292,15 @@ export async function runCodeActSession(
     chatId?: string,
     /** 最大交互轮次，默认 15 */
     maxTurns: number = DEFAULT_MAX_TURNS,
+    /**
+     * Two-pass 配置。
+     * - prefixMap: 模块前缀映射表（由 buildPrefixMap 生成）
+     * - lookupDocs: 接收方法调用列表，返回完整 TypeDoc 文档
+     */
+    twoPassConfig?: {
+        prefixMap: Record<string, string>;
+        lookupDocs: (calledMethods: string[]) => string;
+    },
 ): Promise<SessionResult> {
     const sessionId = ulid();
     const turns: SessionTurn[] = [];
@@ -412,11 +427,109 @@ export async function runCodeActSession(
             };
         }
 
-        // ─── 执行代码块 ───
+        // ─── Two-pass: 类型解析与文档注入（无状态去重） ───
+        // 每一轮都检测代码中的 API 调用，但只注入上下文中尚未存在的方法文档。
+        // 如果文档因 compact 被清理，下次调用时会自动重新注入。
+        if (twoPassConfig && codeBlocks.length > 0) {
+            // 合并所有代码块的 API 调用
+            const allCode = codeBlocks.map(b => b.code).join("\n");
+            const calledMethods = extractApiCalls(allCode, twoPassConfig.prefixMap);
+
+            if (needsDocLookup(calledMethods)) {
+                // ─── 无状态去重：检查 messages 中哪些方法文档已经存在 ───
+                const missingMethods = calledMethods.filter(method => {
+                    // 文档注入时使用 "### module.method" 作为标记
+                    const marker = `### ${method}`;
+                    return !messages.some(m =>
+                        typeof m.content === "string" && m.content.includes(marker)
+                    );
+                });
+
+                if (missingMethods.length > 0) {
+                    const fullDocs = twoPassConfig.lookupDocs(missingMethods);
+                    if (fullDocs) {
+                        log.info(`Turn ${turnNum}: Two-pass 触发`, {
+                            calledMethods,
+                            missingMethods,
+                            alreadyInContext: calledMethods.length - missingMethods.length,
+                            docsLength: fullDocs.length,
+                        });
+
+                        // 发射 type_resolving 进度事件
+                        emitProgress({
+                            turn: turnNum,
+                            phase: "type_resolving",
+                            thinking: `正在查阅 API 文档: ${missingMethods.join(", ")}`,
+                            isProcessing: true,
+                        });
+
+                        // 移除 Pass 1 的 assistant 输出（最后一条 assistant message）
+                        messages.pop();
+
+                        // 注入文档到 history 中（作为系统提示的补充）
+                        messages.push({
+                            role: "user",
+                            content: `[📚 API 文档加载完成]
+
+你打算使用以下 API: ${missingMethods.join(", ")}。
+以下是这些方法的完整类型定义和用法文档，请仔细阅读后编写代码：
+
+${fullDocs}`,
+                        });
+
+                        // Pass 2: 重新调用 LLM，让其基于完整文档重新生成代码
+                        try {
+                            const pass2Response = await callLLMWithFallback(messages, configs, {
+                                caller: "session-runner-pass2",
+                                ...(prefill ? { prefill } : {}),
+                                ...(stopSequences ? { stop: stopSequences } : {}),
+                            });
+
+                            const pass2Text = trimAfterFirstCodeBlock(pass2Response.content);
+                            messages.push({ role: "assistant", content: pass2Text });
+
+                            // 重新解析 Pass 2 的输出
+                            const pass2Parsed = parseResponse(pass2Text);
+                            turn.assistantMessage = pass2Text;
+                            turn.thinking = pass2Parsed.thinking;
+                            turn.codeBlocks = pass2Parsed.codeBlocks;
+                            turn.usage = pass2Response.usage;
+
+                            // 如果 Pass 2 也没有代码块，结束 session
+                            if (pass2Parsed.codeBlocks.length === 0) {
+                                log.debug(`Turn ${turnNum}: Pass 2 无代码块，session 结束`);
+                                turns.push(turn);
+                                emitProgress({ turn: turnNum, phase: "end", thinking: pass2Parsed.thinking, isProcessing: false, endReason: "no_code" });
+                                return { sessionId, turns, messages, endReason: "no_code" };
+                            }
+
+                            log.info(`Turn ${turnNum}: Pass 2 完成`, {
+                                codeBlocks: pass2Parsed.codeBlocks.length,
+                            });
+                        } catch (err: unknown) {
+                            // Pass 2 LLM 失败 → 回退到 Pass 1 的代码继续执行
+                            log.warn(`Turn ${turnNum}: Pass 2 LLM 失败，回退到 Pass 1 代码`, {
+                                error: String(err),
+                            });
+                            // 移除文档注入消息，恢复 Pass 1 assistant 消息
+                            messages.pop(); // 移除文档 user message
+                            messages.push({ role: "assistant", content: assistantText }); // 恢复 Pass 1
+                        }
+                    }
+                } else {
+                    log.debug(`Turn ${turnNum}: 所有方法文档已在上下文中，跳过 Two-pass`, {
+                        calledMethods,
+                    });
+                }
+            }
+        }
+
+        // ─── 执行代码块（可能是 Pass 1 原始代码或 Pass 2 重写后的代码） ───
+        const { codeBlocks: finalCodeBlocks } = turn; // 使用可能被 Pass 2 更新的 codeBlocks
         const outputParts: string[] = [];
 
-        for (let codeIndex = 0; codeIndex < codeBlocks.length; codeIndex++) {
-            const block = codeBlocks[codeIndex];
+        for (let codeIndex = 0; codeIndex < finalCodeBlocks.length; codeIndex++) {
+            const block = finalCodeBlocks[codeIndex];
             log.debug(`Turn ${turnNum}: code[${codeIndex}] (${block.lang})`, { code: block.code });
 
             let errorOccurred = false;

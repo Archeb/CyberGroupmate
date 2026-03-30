@@ -14,6 +14,10 @@ import { installCapabilityRegistry } from "./capability-registry.js";
 import { createPromiseTracker } from "./promise-tracker.js";
 import { docs } from "./modules/docs.js";
 import { web } from "./modules/tavily.js";
+import { loadAllSkills, mountSkillsToCtx, type LoadedSkill } from "./skill-loader.js";
+
+// ─── 全局 Skills 缓存（Worker 启动时加载一次） ───
+let loadedSkills: LoadedSkill[] = [];
 
 // ─── 顶层安全网：防止未捕获的异常导致 worker 进程崩溃 ───
 
@@ -271,19 +275,33 @@ async function executeCode(id: string, code: string): Promise<void> {
         // 构造 async wrapper，注入 ctx, runtime, memory, scene, docs, actions, skills, web
         // web 模块仅在配置了 TAVILY_API_KEY 时注入，否则传 undefined
         const hasWeb = !!process.env.TAVILY_API_KEY;
+
+        // ─── 动态注入 TS Skills ───
+        // 将 loadedSkills 挂载到 ctx 并 tracker.wrap，然后作为额外参数注入
+        mountSkillsToCtx(ctx, loadedSkills);
+        const skillArgNames: string[] = [];
+        const skillArgValues: unknown[] = [];
+        for (const skill of loadedSkills) {
+            skillArgNames.push(skill.name);
+            // wrap skill exports 以追踪未 await 的 Promise
+            const wrapped = tracker.wrap(skill.exports as Record<string, unknown>);
+            skillArgValues.push(wrapped);
+            // 同时更新 ctx 上的引用为 wrapped 版本
+            (trackedCtx as Record<string, unknown>)[skill.name] = wrapped;
+        }
+
+        // 构造参数列表：固定参数 + 动态 Skill 参数
+        const fixedArgNames = ["ctx", "runtime", "memory", "scene", "docs", "actions", "skills", "web"];
+        const fixedArgValues = [trackedCtx, rt, mem, scene, docs, act, sk, hasWeb ? web : undefined];
+        const allArgNames = [...fixedArgNames, ...skillArgNames];
+        const allArgValues = [...fixedArgValues, ...skillArgValues];
+
         const asyncFn = new Function(
-            "ctx",
-            "runtime",
-            "memory",
-            "scene",
-            "docs",
-            "actions",
-            "skills",
-            "web",
+            ...allArgNames,
             `return (async () => { ${code} })()`
         );
 
-        await asyncFn(trackedCtx, rt, mem, scene, docs, act, sk, hasWeb ? web : undefined);
+        await asyncFn(...allArgValues);
 
         // 兜底：等待所有未被 await 的 API 调用完成
         const { warning } = await tracker.flush();
@@ -365,10 +383,24 @@ rl.on("line", async (line: string) => {
     }
 });
 
-// 发送 ready 信号
-sendToHost({
-    type: "result",
-    id: "__ready__",
-    output: "worker ready",
-    error: false,
-});
+// ─── Worker 初始化 ───
+
+async function initWorker(): Promise<void> {
+    // 加载用户 TS Skills（失败不阻断启动）
+    try {
+        loadedSkills = await loadAllSkills();
+    } catch (err) {
+        process.stderr.write(`[sandbox-worker] Skills 加载失败: ${err}\n`);
+        loadedSkills = [];
+    }
+
+    // 发送 ready 信号
+    sendToHost({
+        type: "result",
+        id: "__ready__",
+        output: `worker ready (${loadedSkills.length} skills loaded)`,
+        error: false,
+    });
+}
+
+initWorker();

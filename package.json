@@ -13,6 +13,7 @@
     "tg-convert": "tsx src/tools/tg-to-jsonl.ts",
     "dashboard:dev": "cd src/dashboard/ui && npm run dev",
     "dashboard:build": "cd src/dashboard/ui && npm run build",
+    "gen:module-docs": "tsx src/tools/generate-module-docs.ts",
     "postinstall": "patch-package && chmod +x node_modules/node-pty/prebuilds/darwin-arm64/spawn-helper 2>/dev/null || true"
   },
   "dependencies": {

@@ -20,6 +20,8 @@ import type { MemoryStoreV2 } from "../memory-v2/index.js";
 import { SandboxPool } from "../sandbox/sandbox-pool.js";
 import { NotificationCenter } from "../event/notification-center.js";
 import { runCodeActSession, SentMessageCollector, type SessionResult, type SentMessageRecord } from "../sandbox/session-runner.js";
+import { loadModuleRegistry, lookupFullDocs, generateBriefOverview, type ModuleEntry } from "../sandbox/modules/module-registry.js";
+import { buildPrefixMap } from "../sandbox/api-intent-extractor.js";
 import { renderPrompt, deriveChatType } from "../main-agent/prompt-renderer.js";
 import type { LLMConfig, VisionConfig } from "../core/config.js";
 import { enrichMessages, formatMessageLine, resolveReplyText } from "../core/message-enricher.js";
@@ -35,52 +37,60 @@ import { formatTsForDisplay } from "../core/timezone.js";
 
 const log = createLogger("code-act-executor");
 
-// ─── API 类型定义缓存 ───
-const _apiTypeDefsCache = new Map<string, string>();
+// ─── API 概览缓存 ───
+const _apiBriefCache = new Map<string, string>();
 
-/** 平台专属 .d.ts 文件名映射 */
-const PLATFORM_DTS: Record<string, string> = {
-    telegram: "telegram.d.ts",
-    discord: "discord.d.ts",
+/** 模块注册表缓存（Two-pass 用） */
+let _moduleRegistryCache: ModuleEntry[] | null = null;
+
+/** 平台专属模块名映射（用于过滤非当前平台的 adapter 模块） */
+const PLATFORM_MODULES: Record<string, string> = {
+    telegram: "ctx.tg",
+    discord: "ctx.discord",
 };
 
 /**
- * 加载 API 类型定义文件，按平台过滤，拼接为单个字符串注入到执行 prompt
+ * 加载 API 轻量概览，按平台过滤，注入到执行 prompt 的 {{apiTypeDefs}} 占位符。
+ *
+ * 重要变更：不再读取原始 .d.ts 全文！
+ * 改为从 modules-docs.json 提取每个方法的一句话 brief 签名。
+ * 完整文档由 Two-pass 机制在 session-runner 中按需注入。
  */
-function loadApiTypeDefs(platform: string = "telegram"): string {
-    const cached = _apiTypeDefsCache.get(platform);
+export function loadApiTypeDefs(platform: string = "telegram"): string {
+    const cached = _apiBriefCache.get(platform);
     if (cached) return cached;
 
     try {
-        const thisFile = fileURLToPath(import.meta.url);
-        const modulesDir = join(dirname(thisFile), "..", "sandbox", "modules");
+        // 确保 registry 已加载
+        if (!_moduleRegistryCache) {
+            _moduleRegistryCache = loadModuleRegistry();
+        }
 
-        // 确定需要排除的其他平台 .d.ts
-        const excludedDts = new Set<string>();
-        for (const [plat, dtsFile] of Object.entries(PLATFORM_DTS)) {
+        if (_moduleRegistryCache.length === 0) {
+            // 降级：如果 modules-docs.json 不存在，返回空提示
+            const fallback = "// API type definitions not available. Run `npm run gen:module-docs` to generate.";
+            _apiBriefCache.set(platform, fallback);
+            return fallback;
+        }
+
+        // 确定需要排除的其他平台模块
+        const excludedModules = new Set<string>();
+        for (const [plat, modName] of Object.entries(PLATFORM_MODULES)) {
             if (plat !== platform) {
-                excludedDts.add(dtsFile);
+                excludedModules.add(modName);
             }
         }
 
-        // 自动发现所有 .d.ts 文件，过滤掉其他平台的和可选的
-        const hasTavily = !!process.env.TAVILY_API_KEY;
-        const dtsFiles = readdirSync(modulesDir)
-            .filter(f => f.endsWith(".d.ts"))
-            .filter(f => !excludedDts.has(f))
-            .filter(f => hasTavily || f !== "tavily.d.ts")
-            .sort();
+        // 按平台过滤模块
+        const filteredRegistry = _moduleRegistryCache.filter(mod => !excludedModules.has(mod.name));
 
-        const parts: string[] = [];
-        for (const f of dtsFiles) {
-            parts.push(`// --- ${f} ---\n${readFileSync(join(modulesDir, f), "utf-8")}`);
-        }
-        const result = parts.join("\n\n");
-        _apiTypeDefsCache.set(platform, result);
+        // 生成轻量概览
+        const result = generateBriefOverview(filteredRegistry);
+        _apiBriefCache.set(platform, result);
         return result;
     } catch {
         const fallback = "// API type definitions not available";
-        _apiTypeDefsCache.set(platform, fallback);
+        _apiBriefCache.set(platform, fallback);
         return fallback;
     }
 }
@@ -528,6 +538,18 @@ export class CodeActExecutor {
                 ["[Execution Output]"],  // stop sequences
                 this.chatId,  // 关联 chatId，用于 codeActEvents 进度广播
                 this.config.maxTurns,  // 最大交互轮次
+                // Two-pass: 按需加载完整 API 文档
+                (() => {
+                    if (!_moduleRegistryCache) {
+                        _moduleRegistryCache = loadModuleRegistry();
+                    }
+                    if (_moduleRegistryCache.length === 0) return undefined;
+                    return {
+                        prefixMap: buildPrefixMap(_moduleRegistryCache),
+                        lookupDocs: (calledMethods: string[]) =>
+                            lookupFullDocs(_moduleRegistryCache!, calledMethods),
+                    };
+                })(),
             );
         } finally {
             // 停止 typing 指示
