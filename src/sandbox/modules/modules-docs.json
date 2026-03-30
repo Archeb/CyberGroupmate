@@ -147,22 +147,6 @@
     ]
   },
   {
-    "name": "web",
-    "description": "tavily.d.ts — 网络搜索模块类型定义",
-    "methods": [
-      {
-        "name": "search",
-        "brief": "搜索网页内容。",
-        "fullDoc": "```typescript\nsearch( query: string, opts?: { /** 搜索深度。\"basic\" 更快，\"advanced\" 更深入准确。默认 \"basic\" */ searchDepth?: \"basic\" | \"advanced\"\n```\n\n\n搜索网页内容。\n返回相关网页的标题、URL 和内容摘要。\n\n**示例：**\n```typescript\nconst result = await web.search(\"2024年奥运会金牌榜\");\nconsole.log(result.answer);         // AI 生成的直接答案\nconsole.log(result.results[0].url); // 第一个搜索结果的 URL\n```\n\n```typescript\n// 高级搜索（更深层抓取，结果更准确但更慢）\nconst result = await web.search(\"React vs Vue 对比\", {\n  searchDepth: \"advanced\",\n  maxResults: 10,\n});\n```"
-      },
-      {
-        "name": "extract",
-        "brief": "从指定 URL 提取页面内容。",
-        "fullDoc": "```typescript\nextract( urls: string[], opts?: { /** 提取深度。\"basic\" 更快，\"advanced\" 更深入。默认 \"basic\" */ extractDepth?: \"basic\" | \"advanced\"\n```\n\n\n从指定 URL 提取页面内容。\n\n**示例：**\n```typescript\nconst result = await web.extract([\"https://example.com/article\"]);\nconsole.log(result.results[0].raw_content);\n```"
-      }
-    ]
-  },
-  {
     "name": "ctx.tg",
     "description": "telegram.d.ts — Telegram 场景类型定义",
     "methods": [
@@ -245,27 +229,6 @@
         "name": "sendTyping",
         "brief": "sendTyping(chatId: number | string): Promise<void>",
         "fullDoc": "```typescript\nsendTyping(chatId: number | string): Promise<void>\n```"
-      }
-    ]
-  },
-  {
-    "name": "github",
-    "description": "github.d.ts — GitHub Skill 类型定义（示例 TS Skill）",
-    "methods": [
-      {
-        "name": "listIssues",
-        "brief": "列出仓库的 Issue",
-        "fullDoc": "```typescript\nlistIssues(owner: string, repo: string, opts?: { state?: \"open\" | \"closed\" | \"all\"\n```\n\n\n列出仓库的 Issue\n\n**参数：**\n- `owner`: 仓库所有者\n- `repo`: 仓库名称\n- `opts`: 可选过滤参数\n\n**示例：**\n```typescript\nconst issues = await github.listIssues(\"octocat\", \"Hello-World\", { state: \"open\" });\nconsole.log(issues[0].title);\n```"
-      },
-      {
-        "name": "createIssue",
-        "brief": "创建新 Issue",
-        "fullDoc": "```typescript\ncreateIssue(owner: string, repo: string, title: string, body: string): Promise<GitHubIssue>\n```\n\n\n创建新 Issue\n\n**参数：**\n- `owner`: 仓库所有者\n- `repo`: 仓库名称\n- `title`: Issue 标题\n- `body`: Issue 内容（Markdown）\n\n**示例：**\n```typescript\nconst issue = await github.createIssue(\"octocat\", \"Hello-World\", \"Bug report\", \"Found a bug...\");\n```"
-      },
-      {
-        "name": "getRepo",
-        "brief": "获取仓库信息",
-        "fullDoc": "```typescript\ngetRepo(owner: string, repo: string): Promise<GitHubRepo>\n```\n\n\n获取仓库信息\n\n**参数：**\n- `owner`: 仓库所有者\n- `repo`: 仓库名称"
       }
     ]
   }

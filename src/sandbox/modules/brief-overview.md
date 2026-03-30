@@ -49,12 +49,6 @@ shared/scene.d.ts — 所有 scene 共享的场景信息能力
 - `recallAndSummarize`: recallAndSummarize(query: string, options?: Record<string, unknown>): Promise<unknown>
 - `browseForAnswer`: browseForAnswer(request: Record<string, unknown>): Promise<unknown>
 
-## web
-tavily.d.ts — 网络搜索模块类型定义
-
-- `search`: 搜索网页内容。
-- `extract`: 从指定 URL 提取页面内容。
-
 ## ctx.tg
 telegram.d.ts — Telegram 场景类型定义
 
@@ -74,10 +68,3 @@ telegram.d.ts — Telegram 场景类型定义
 - `leaveChat`: 退出一个群聊或频道
 - `readHistory`: readHistory(chatId: number | string): Promise<void>
 - `sendTyping`: sendTyping(chatId: number | string): Promise<void>
-
-## github
-github.d.ts — GitHub Skill 类型定义（示例 TS Skill）
-
-- `listIssues`: 列出仓库的 Issue
-- `createIssue`: 创建新 Issue
-- `getRepo`: 获取仓库信息

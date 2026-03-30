@@ -12,9 +12,11 @@
  * @see docs/sandbox-module-guide.md
  */
 
-import { existsSync, readdirSync, statSync } from "node:fs";
+import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { parseDtsFile } from "./dts-parser.js";
+import type { ModuleEntry } from "./modules/module-registry.js";
 
 const SKILLS_DIR = resolve("workspace/skills");
 
@@ -138,4 +140,36 @@ export function mountSkillsToCtx(ctx: Record<string, unknown>, skills: LoadedSki
  */
 export function getSkillNames(skills: LoadedSkill[]): string[] {
     return skills.map(s => s.name);
+}
+
+/**
+ * 纯静态扫描并解析所有 Skills 的 d.ts 文件（供 Host 进程调用，防止执行不受信任代码）
+ * 依赖 dts-parser 纯正则解析，杜绝引入实际的 Node 模块。
+ *
+ * @returns 解析后的 ModuleEntry 列表，可直接馈入 LLM Context
+ */
+export function parseAllSkillDocs(): ModuleEntry[] {
+    const discovered = discoverSkills();
+    const entries: ModuleEntry[] = [];
+
+    for (const skill of discovered) {
+        if (!skill.dtsPath) continue;
+        try {
+            const content = readFileSync(skill.dtsPath, "utf-8");
+            const parsed = parseDtsFile(content, skill.dtsPath);
+            
+            // 修正默认占位符名称为实际的 skill.name
+            for (const mod of parsed) {
+                if (mod.name === "default") {
+                    mod.name = skill.name;
+                }
+                entries.push(mod);
+            }
+        } catch (err) {
+            const msg = err instanceof Error ? err.stack ?? err.message : String(err);
+            process.stderr.write(`[skill-loader] ⚠ 解析 Skill "${skill.name}" 的文档失败: ${msg}\n`);
+        }
+    }
+    
+    return entries;
 }

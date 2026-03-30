@@ -13,7 +13,6 @@ import { createInterface } from "node:readline";
 import { installCapabilityRegistry } from "./capability-registry.js";
 import { createPromiseTracker } from "./promise-tracker.js";
 import { docs } from "./modules/docs.js";
-import { web } from "./modules/tavily.js";
 import { loadAllSkills, mountSkillsToCtx, type LoadedSkill } from "./skill-loader.js";
 
 // ─── 全局 Skills 缓存（Worker 启动时加载一次） ───
@@ -272,10 +271,7 @@ async function executeCode(id: string, code: string): Promise<void> {
             })
             : ctx;
 
-        // 构造 async wrapper，注入 ctx, runtime, memory, scene, docs, actions, skills, web
-        // web 模块仅在配置了 TAVILY_API_KEY 时注入，否则传 undefined
-        const hasWeb = !!process.env.TAVILY_API_KEY;
-
+        // 构造 async wrapper，注入 ctx, runtime, memory, scene, docs, actions, skills
         // ─── 动态注入 TS Skills ───
         // 将 loadedSkills 挂载到 ctx 并 tracker.wrap，然后作为额外参数注入
         mountSkillsToCtx(ctx, loadedSkills);
@@ -291,8 +287,8 @@ async function executeCode(id: string, code: string): Promise<void> {
         }
 
         // 构造参数列表：固定参数 + 动态 Skill 参数
-        const fixedArgNames = ["ctx", "runtime", "memory", "scene", "docs", "actions", "skills", "web"];
-        const fixedArgValues = [trackedCtx, rt, mem, scene, docs, act, sk, hasWeb ? web : undefined];
+        const fixedArgNames = ["ctx", "runtime", "memory", "scene", "docs", "actions", "skills"];
+        const fixedArgValues = [trackedCtx, rt, mem, scene, docs, act, sk];
         const allArgNames = [...fixedArgNames, ...skillArgNames];
         const allArgValues = [...fixedArgValues, ...skillArgValues];
 

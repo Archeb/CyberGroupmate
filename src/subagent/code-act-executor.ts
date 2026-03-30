@@ -21,6 +21,7 @@ import { SandboxPool } from "../sandbox/sandbox-pool.js";
 import { NotificationCenter } from "../event/notification-center.js";
 import { runCodeActSession, SentMessageCollector, type SessionResult, type SentMessageRecord } from "../sandbox/session-runner.js";
 import { loadModuleRegistry, lookupFullDocs, generateBriefOverview, type ModuleEntry } from "../sandbox/modules/module-registry.js";
+import { parseAllSkillDocs } from "../sandbox/skill-loader.js";
 import { buildPrefixMap } from "../sandbox/api-intent-extractor.js";
 import { renderPrompt, deriveChatType } from "../main-agent/prompt-renderer.js";
 import type { LLMConfig, VisionConfig } from "../core/config.js";
@@ -53,7 +54,8 @@ const PLATFORM_MODULES: Record<string, string> = {
  * 加载 API 轻量概览，按平台过滤，注入到执行 prompt 的 {{apiTypeDefs}} 占位符。
  *
  * 重要变更：不再读取原始 .d.ts 全文！
- * 改为从 modules-docs.json 提取每个方法的一句话 brief 签名。
+ * 改为从 modules-docs.json 提取 Host-coupled APIs，并在运行时动态解析
+ * workspace/skills/ 里的 TS Skills 的 .d.ts，提取每个方法的一句话 brief 签名。
  * 完整文档由 Two-pass 机制在 session-runner 中按需注入。
  */
 export function loadApiTypeDefs(platform: string = "telegram"): string {
@@ -61,14 +63,16 @@ export function loadApiTypeDefs(platform: string = "telegram"): string {
     if (cached) return cached;
 
     try {
-        // 确保 registry 已加载
+        // 确保 registry 已加载（合并内置模块与动态 TS Skills）
         if (!_moduleRegistryCache) {
-            _moduleRegistryCache = loadModuleRegistry();
+            const builtin = loadModuleRegistry() || [];
+            const skills = parseAllSkillDocs() || [];
+            _moduleRegistryCache = [...builtin, ...skills];
         }
 
         if (_moduleRegistryCache.length === 0) {
-            // 降级：如果 modules-docs.json 不存在，返回空提示
-            const fallback = "// API type definitions not available. Run `npm run gen:module-docs` to generate.";
+            // 降级：如果 modules-docs.json 不存在且无 Skills，返回空提示
+            const fallback = "// API type definitions not available. Run `npm run gen:module-docs` to generate host APIs.";
             _apiBriefCache.set(platform, fallback);
             return fallback;
         }
@@ -88,7 +92,9 @@ export function loadApiTypeDefs(platform: string = "telegram"): string {
         const result = generateBriefOverview(filteredRegistry);
         _apiBriefCache.set(platform, result);
         return result;
-    } catch {
+    } catch (err) {
+        const errorMsg = err instanceof Error ? err.stack ?? err.message : String(err);
+        log.error("loadApiTypeDefs failed", { error: errorMsg });
         const fallback = "// API type definitions not available";
         _apiBriefCache.set(platform, fallback);
         return fallback;
@@ -541,7 +547,9 @@ export class CodeActExecutor {
                 // Two-pass: 按需加载完整 API 文档
                 (() => {
                     if (!_moduleRegistryCache) {
-                        _moduleRegistryCache = loadModuleRegistry();
+                        const builtin = loadModuleRegistry() || [];
+                        const skills = parseAllSkillDocs() || [];
+                        _moduleRegistryCache = [...builtin, ...skills];
                     }
                     if (_moduleRegistryCache.length === 0) return undefined;
                     return {
