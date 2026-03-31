@@ -106,6 +106,23 @@ interface TelegramClientLike {
     leaveChat?(chatId: unknown): Promise<unknown>;
     downloadAsBuffer?(location: unknown): Promise<Uint8Array>;
     getMessages?(chatId: unknown, messageIds: number[]): Promise<unknown[]>;
+    // ─── 扩展方法 ───
+    getFullUser?(userId: unknown): Promise<unknown>;
+    getFullChat?(chatId: unknown): Promise<unknown>;
+    getForumTopics?(chatId: unknown, params?: unknown): Promise<unknown>;
+    searchMessages?(params: unknown): Promise<unknown>;
+    sendMediaGroup?(chatId: unknown, medias: unknown[], opts?: unknown): Promise<unknown[]>;
+    sendReaction?(params: unknown): Promise<unknown>;
+    editMessage?(params: unknown): Promise<unknown>;
+    deleteMessagesById?(chatId: unknown, ids: number[], params?: unknown): Promise<void>;
+    pinMessage?(params: unknown): Promise<unknown>;
+    unpinMessage?(params: unknown): Promise<void>;
+    getMessageReactionsById?(chatId: unknown, messageIds: number[]): Promise<unknown[]>;
+    closePoll?(params: unknown): Promise<unknown>;
+    resolvePeer?(peer: unknown): Promise<unknown>;
+    getInputEntity?(peer: unknown): Promise<unknown>;
+    joinChannel?(peer: unknown): Promise<unknown>;
+    leaveChannel?(peer: unknown): Promise<unknown>;
 }
 
 type TelegramClientFactory = (config: TelegramConfig) => Promise<TelegramClientLike>;
@@ -316,6 +333,13 @@ export class TelegramAdapter implements PlatformAdapter {
             "telegram.sendFile",
             "telegram.sendSticker",
             "telegram.sendTyping",
+            "telegram.sendMediaGroup",
+            "telegram.sendPoll",
+            "telegram.sendReaction",
+            "telegram.editMessage",
+            "telegram.deleteMessages",
+            "telegram.pinMessage",
+            "telegram.unpinMessage",
         ];
     }
 
@@ -599,6 +623,215 @@ export class TelegramAdapter implements PlatformAdapter {
                     { type: "sticker", file: stickerBuffer },
                     stickerOpts,
                 ]);
+            }
+            // ─── 扩展: 主动拉取 ───
+            case "telegram.getFullUser": {
+                if (typeof this.client.getFullUser !== "function") {
+                    throw new Error("getFullUser is not supported by the current Telegram client");
+                }
+                const peer = await this.ensurePeerCached(args[0]);
+                const fullUser = await this.client.getFullUser(peer);
+                return this.normalizeFullUser(fullUser);
+            }
+            case "telegram.getFullChat": {
+                if (typeof this.client.getFullChat !== "function") {
+                    throw new Error("getFullChat is not supported by the current Telegram client");
+                }
+                const peer = await this.ensurePeerCached(args[0]);
+                const fullChat = await this.client.getFullChat(peer);
+                return this.normalizeFullChat(fullChat);
+            }
+            case "telegram.getForumTopics": {
+                if (typeof this.client.getForumTopics !== "function") {
+                    throw new Error("getForumTopics is not supported by the current Telegram client");
+                }
+                const peer = await this.ensurePeerCached(args[0]);
+                const topicOpts = (args[1] ?? {}) as Record<string, unknown>;
+                const limit = typeof topicOpts.limit === "number" ? topicOpts.limit : 100;
+                const topics = await this.client.getForumTopics(peer, { limit });
+                // getForumTopics returns ArrayPaginated which is array-like
+                const topicArr = Array.isArray(topics) ? topics : (topics as any);
+                return Array.isArray(topicArr) ? topicArr.map((t: any) => this.normalizeForumTopic(t)) : [];
+            }
+            case "telegram.getMessages": {
+                if (typeof this.client.getMessages !== "function") {
+                    throw new Error("getMessages is not supported by the current Telegram client");
+                }
+                const peer = await this.ensurePeerCached(args[0]);
+                const msgIds = args[1] as number[];
+                const msgs = await this.client.getMessages(peer, msgIds);
+                return msgs.map((m: any) => m ? this.normalizeMessage(m) : null);
+            }
+            case "telegram.searchMessages": {
+                if (typeof this.client.searchMessages !== "function") {
+                    throw new Error("searchMessages is not supported by the current Telegram client");
+                }
+                const peer = await this.ensurePeerCached(args[0]);
+                const query = String(args[1] ?? "");
+                const searchOpts = (args[2] ?? {}) as Record<string, unknown>;
+                const searchLimit = typeof searchOpts.limit === "number" ? searchOpts.limit : 50;
+                const result = await this.client.searchMessages({ chatId: peer, query, limit: searchLimit });
+                // searchMessages returns ArrayPaginated which is array-like
+                const resultArr = Array.isArray(result) ? result : (result as any);
+                return Array.isArray(resultArr) ? resultArr.map((m: any) => this.normalizeMessage(m)) : [];
+            }
+            case "telegram.getPollResults": {
+                // 获取投票结果: 通过重新获取包含投票的消息来提取 poll media
+                if (typeof this.client.getMessages !== "function") {
+                    throw new Error("getPollResults requires getMessages support");
+                }
+                const peer = await this.ensurePeerCached(args[0]);
+                const pollMsgId = Number(args[1]);
+                const msgs = await this.client.getMessages(peer, [pollMsgId]);
+                const pollMsg = msgs?.[0];
+                if (!pollMsg) return null;
+                const media = (pollMsg as any)?.media;
+                if (!media || media.type !== "poll") return null;
+                return this.normalizePoll(media);
+            }
+            case "telegram.getMessageReactions": {
+                if (typeof this.client.getMessageReactionsById !== "function") {
+                    throw new Error("getMessageReactions is not supported by the current Telegram client");
+                }
+                const peer = await this.ensurePeerCached(args[0]);
+                const reactionMsgIds = args[1] as number[];
+                const reactionsArr = await this.client.getMessageReactionsById(peer, reactionMsgIds);
+                // Flatten all MessageReactions into a simple Reaction[] summary
+                const result: Array<{ emoji: string; count: number }> = [];
+                for (const mr of reactionsArr) {
+                    if (!mr) continue;
+                    const reactions = (mr as any)?.reactions ?? [];
+                    for (const rc of reactions) {
+                        const emoji = typeof rc?.emoji === "string" ? rc.emoji
+                            : typeof rc?.emoji?.emoji === "string" ? rc.emoji.emoji
+                            : String(rc?.emoji ?? "?");
+                        result.push({ emoji, count: Number(rc?.count ?? 0) });
+                    }
+                }
+                return result;
+            }
+
+            // ─── 扩展: 发送与交互 ───
+            case "telegram.sendMediaGroup": {
+                if (typeof this.client.sendMediaGroup !== "function") {
+                    throw new Error("sendMediaGroup is not supported by the current Telegram client");
+                }
+                const peer = await this.ensurePeerCached(args[0]);
+                let medias = args[1] as any[];
+                const sendOpts = this.normalizeReplyOpts(args[2]);
+
+                // 处理本地文件路径
+                const { readFileSync, existsSync } = await import("node:fs");
+                const pathMod = await import("node:path");
+                medias = medias.map((m: any) => {
+                    if (m && typeof m === "object" && typeof m.file === "string") {
+                        const fileStr = m.file as string;
+                        const isLocalPath = fileStr.startsWith("/") || fileStr.startsWith("./") || fileStr.startsWith("../");
+                        if (isLocalPath) {
+                            const resolvedPath = pathMod.resolve(fileStr);
+                            if (!existsSync(resolvedPath)) {
+                                throw new Error(`sendMediaGroup: 文件不存在: ${resolvedPath}`);
+                            }
+                            const buffer = readFileSync(resolvedPath);
+                            return { ...m, file: buffer, fileName: m.fileName ?? pathMod.basename(resolvedPath) };
+                        }
+                    }
+                    return m;
+                });
+
+                await this.applyHumanizedDelay(String(args[0] ?? ""), 0);
+                const sentMsgs = await this.client.sendMediaGroup(peer, medias, sendOpts);
+                return sentMsgs.map((m: any) => this.normalizeMessage(m));
+            }
+            case "telegram.sendPoll": {
+                // sendPoll 通过 sendMedia + InputMedia.poll 实现
+                const peer = await this.ensurePeerCached(args[0]);
+                const question = String(args[1] ?? "");
+                const options = args[2] as string[];
+                const pollOpts = (args[3] ?? {}) as Record<string, unknown>;
+                const sendOpts = this.normalizeReplyOpts(pollOpts);
+
+                // 构造 InputMedia.poll 参数
+                const pollMedia: Record<string, unknown> = {
+                    type: "poll",
+                    question,
+                    answers: options.map(opt => ({ text: opt })),
+                };
+                if (typeof pollOpts.isAnonymous === "boolean") pollMedia.isAnonymous = pollOpts.isAnonymous;
+                if (pollOpts.type === "quiz") {
+                    pollMedia.quiz = true;
+                    if (typeof pollOpts.correctOptionId === "number") pollMedia.correctOptionId = pollOpts.correctOptionId;
+                    if (typeof pollOpts.explanation === "string") pollMedia.solution = pollOpts.explanation;
+                }
+                if (pollOpts.allowsMultipleAnswers === true) pollMedia.allowMultipleAnswers = true;
+
+                await this.applyHumanizedDelay(String(args[0] ?? ""), question.length);
+                return this.normalizeMessage(
+                    await this.client.sendMedia(peer, pollMedia, sendOpts),
+                );
+            }
+            case "telegram.sendReaction": {
+                if (typeof this.client.sendReaction !== "function") {
+                    throw new Error("sendReaction is not supported by the current Telegram client");
+                }
+                const peer = await this.ensurePeerCached(args[0]);
+                const reactionMsgId = Number(args[1]);
+                const emoji = args[2];
+                await this.client.sendReaction({
+                    chatId: peer,
+                    message: reactionMsgId,
+                    emoji: emoji === null ? null : emoji,
+                });
+                return null;
+            }
+            case "telegram.editMessage": {
+                if (typeof this.client.editMessage !== "function") {
+                    throw new Error("editMessage is not supported by the current Telegram client");
+                }
+                const peer = await this.ensurePeerCached(args[0]);
+                const editMsgId = Number(args[1]);
+                const newText = String(args[2] ?? "");
+                const edited = await this.client.editMessage({
+                    chatId: peer,
+                    message: editMsgId,
+                    text: newText,
+                });
+                return this.normalizeMessage(edited);
+            }
+            case "telegram.deleteMessages": {
+                if (typeof this.client.deleteMessagesById !== "function") {
+                    throw new Error("deleteMessages is not supported by the current Telegram client");
+                }
+                const peer = await this.ensurePeerCached(args[0]);
+                const deleteIds = args[1] as number[];
+                await this.client.deleteMessagesById(peer, deleteIds, { revoke: true });
+                return null;
+            }
+            case "telegram.pinMessage": {
+                if (typeof this.client.pinMessage !== "function") {
+                    throw new Error("pinMessage is not supported by the current Telegram client");
+                }
+                const peer = await this.ensurePeerCached(args[0]);
+                const pinMsgId = Number(args[1]);
+                const pinOpts = (args[2] ?? {}) as Record<string, unknown>;
+                await this.client.pinMessage({
+                    chatId: peer,
+                    message: pinMsgId,
+                    notify: pinOpts.silent !== true,
+                });
+                return null;
+            }
+            case "telegram.unpinMessage": {
+                if (typeof this.client.unpinMessage !== "function") {
+                    throw new Error("unpinMessage is not supported by the current Telegram client");
+                }
+                const peer = await this.ensurePeerCached(args[0]);
+                const unpinMsgId = Number(args[1]);
+                await this.client.unpinMessage({
+                    chatId: peer,
+                    message: unpinMsgId,
+                });
+                return null;
             }
             default:
                 throw new Error(`Unsupported TelegramAdapter call: ${method}`);
@@ -1099,6 +1332,63 @@ export class TelegramAdapter implements PlatformAdapter {
         if (!media) return undefined;
         if (typeof media.fileId === "string") return media.fileId;
         return undefined;
+    }
+
+    // ─── 扩展 Normalizer ───
+
+    private normalizeFullUser(user: any): Record<string, unknown> {
+        const base = this.normalizeUser(user);
+        return {
+            ...base,
+            bio: typeof user?.bio === "string" ? user.bio : undefined,
+            commonChatsCount: typeof user?.commonChatsCount === "number" ? user.commonChatsCount : undefined,
+        };
+    }
+
+    private normalizeFullChat(chat: any): Record<string, unknown> {
+        const base = this.normalizeChat(chat);
+        return {
+            ...base,
+            about: typeof chat?.bio === "string" ? chat.bio : undefined,
+            membersCount: typeof chat?.membersCount === "number" ? chat.membersCount : undefined,
+            onlineCount: typeof chat?.onlineCount === "number" ? chat.onlineCount : undefined,
+            isForum: Boolean(chat?.isForum),
+        };
+    }
+
+    private normalizeForumTopic(topic: any): Record<string, unknown> {
+        return {
+            id: Number(topic?.id ?? 0),
+            title: String(topic?.title ?? ""),
+            isClosed: Boolean(topic?.isClosed),
+            isPinned: Boolean(topic?.isPinned),
+            creatorId: Number(topic?.creator?.id ?? topic?.creatorId ?? 0),
+            unreadCount: Number(topic?.unreadCount ?? 0),
+        };
+    }
+
+    private normalizePoll(media: any): Record<string, unknown> | null {
+        if (!media || media.type !== "poll") return null;
+        const answers = Array.isArray(media.answers)
+            ? media.answers.map((a: any) => ({
+                text: typeof a?.text === "string" ? a.text : String(a?.text ?? ""),
+                voterCount: Number(a?.voters ?? a?.voterCount ?? 0),
+                chosen: Boolean(a?.chosen),
+                correct: Boolean(a?.correct),
+            }))
+            : [];
+        return {
+            type: "poll",
+            id: String(media.id ?? ""),
+            question: typeof media.question === "string" ? media.question : String(media.question ?? ""),
+            answers,
+            totalVoters: Number(media.voters ?? media.totalVoters ?? 0),
+            isClosed: Boolean(media.isClosed),
+            isPublic: Boolean(media.isPublic),
+            isQuiz: Boolean(media.isQuiz),
+            isMultiple: Boolean(media.isMultiple),
+            solution: typeof media.solution === "string" ? media.solution : undefined,
+        };
     }
 }
 
