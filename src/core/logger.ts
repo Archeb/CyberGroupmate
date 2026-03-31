@@ -40,6 +40,8 @@ export interface LogConfig {
     format: "text" | "json";
     /** 是否使用颜色（仅 text 格式），默认 true */
     color: boolean;
+    /** 自定义输出 sink（如设置，所有日志通过此函数输出，不再写 stdout/stderr） */
+    sink?: (line: string) => void;
 }
 
 // ─── 全局配置 ───
@@ -112,8 +114,13 @@ export function createLogger(module: string): Logger {
             if (data && Object.keys(data).length > 0) {
                 record.data = data;
             }
-            const stream = level === "error" ? process.stderr : process.stdout;
-            stream.write(JSON.stringify(record) + "\n");
+            const output = JSON.stringify(record);
+            if (globalConfig.sink) {
+                globalConfig.sink(output);
+            } else {
+                const stream = level === "error" ? process.stderr : process.stdout;
+                stream.write(output + "\n");
+            }
         } else {
             // Text 格式
             const time = ts.slice(11, 23); // HH:mm:ss.SSS
@@ -141,8 +148,12 @@ export function createLogger(module: string): Logger {
                 line += ` ${globalConfig.color ? "\x1b[90m" : ""}${dataStr}${globalConfig.color ? RESET : ""}`;
             }
 
-            const stream = level === "error" ? process.stderr : process.stdout;
-            stream.write(line + "\n");
+            if (globalConfig.sink) {
+                globalConfig.sink(line);
+            } else {
+                const stream = level === "error" ? process.stderr : process.stdout;
+                stream.write(line + "\n");
+            }
         }
     }
 
