@@ -142,6 +142,7 @@ export class GroupSubagent extends EventEmitter {
 
                 // 标记有话题需要介入，触发 Q3 重新入队（一次 flush 只触发一次）
                 this.hasTriageEngaged = true;
+                log.info("triage-engage: emitting", { chatId: this.chatId, hasTriageEngaged: this.hasTriageEngaged, listenerCount: this.listenerCount("triage-engage") });
                 this.emit("triage-engage", this.chatId);
             });
 

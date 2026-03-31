@@ -503,8 +503,21 @@ async function main(): Promise<void> {
         // 监听 triage-engage 事件：RecordingPipeline flush 后 triage 通过时触发 Q3 重入队
         if (!sub.listenerCount("triage-engage")) {
             sub.on("triage-engage", (cid: string) => {
-                q3.enqueueOrUpdate(sub.buildQueueEntry());
-                log.info("triage-engage → Q3 入队", { chatId: cid });
+                const isBlocked = q3.isBlocked(cid);
+                const entry = sub.buildQueueEntry();
+                log.info("triage-engage → Q3 入队", {
+                    chatId: cid,
+                    isBlocked,
+                    priority: entry.priority,
+                    source: entry.source,
+                    topicDigestCount: entry.topicDigests?.length,
+                    hasTriageEngaged: sub.hasTriageEngaged,
+                });
+                if (!isBlocked) {
+                    q3.enqueueOrUpdate(entry);
+                } else {
+                    log.warn("triage-engage: Q3 入队被阻塞，chatId 在 blockedChatIds 中", { chatId: cid });
+                }
             });
         }
         // Per-group: Observer + RecordingPipeline 同时处理消息 (subagent.md §3.1)
