@@ -1,59 +1,69 @@
 /**
- * dts-parser.ts — 轻量级 .d.ts 解析器
+ * dts-parser.ts — .d.ts 解析器（基于 TypeScript Compiler API）
  *
- * 用于静态生成或在运行时纯正则解析 .d.ts 文件，提取方法签名和 JSDoc。
+ * 使用 TypeScript AST 解析 .d.ts 文件，提取方法签名和 JSDoc。
  * 被 `generate-module-docs.ts` (构建时) 和 `skill-loader.ts` (运行时) 共享。
  */
 
+import ts from "typescript";
 import type { MethodDoc, ModuleEntry } from "./modules/module-registry.js";
 
-/**
- * 从一段 JSDoc 注释中提取描述文本
- */
-function extractJsDocDescription(jsDoc: string): string {
-    const trimmedDoc = jsDoc.trim();
-
-    // 处理单行 JSDoc: /** text */
-    const singleLine = trimmedDoc.match(/^\/\*\*\s*(.*?)\s*\*\/$/);
-    if (singleLine) return singleLine[1].trim();
-
-    // 多行 JSDoc
-    return trimmedDoc
-        .replace(/^\/\*\*\s*/, "")     // 去掉开头 /**
-        .replace(/\s*\*\/\s*$/, "")    // 去掉结尾 */
-        .split("\n")
-        .map(line => line.replace(/^\s*\*\s?/, ""))  // 去掉行首 * 
-        .join("\n")
-        .trim();
-}
+// ─── JSDoc 提取 ───
 
 /**
- * 从 JSDoc 中提取第一行作为 brief（一句话描述）
+ * 从 AST 节点提取 JSDoc 注释原文（包含 /** ... * / 标记）
  */
-function extractBrief(jsDoc: string): string {
-    const desc = extractJsDocDescription(jsDoc);
-    // 取第一行，去掉 @tag 行
-    const lines = desc.split("\n");
-    for (const line of lines) {
-        const trimmed = line.trim();
-        if (trimmed && !trimmed.startsWith("@")) {
-            return trimmed;
+function getJsDocText(node: ts.Node, sourceFile: ts.SourceFile): string {
+    const fullText = sourceFile.getFullText();
+    const ranges = ts.getLeadingCommentRanges(fullText, node.getFullStart());
+    if (!ranges) return "";
+
+    // 取最后一个 block comment（即紧邻声明的 JSDoc）
+    for (let i = ranges.length - 1; i >= 0; i--) {
+        const range = ranges[i];
+        if (range.kind === ts.SyntaxKind.MultiLineCommentTrivia) {
+            const text = fullText.slice(range.pos, range.end);
+            if (text.startsWith("/**")) return text;
         }
     }
     return "";
 }
 
 /**
- * 从 JSDoc 生成完整的 Markdown 格式文档
+ * 从 JSDoc 注释文本中提取描述（去除 / ** * / 标记和 @tag 行）
+ */
+function extractDescription(jsDoc: string): string {
+    if (!jsDoc) return "";
+    return jsDoc
+        .replace(/^\/\*\*\s*/, "")
+        .replace(/\s*\*\/\s*$/, "")
+        .split("\n")
+        .map(line => line.replace(/^\s*\*\s?/, ""))
+        .join("\n")
+        .trim();
+}
+
+/**
+ * 从 JSDoc 中提取第一行非 @tag 的描述作为 brief
+ */
+function extractBrief(jsDoc: string): string {
+    const desc = extractDescription(jsDoc);
+    for (const line of desc.split("\n")) {
+        const trimmed = line.trim();
+        if (trimmed && !trimmed.startsWith("@")) return trimmed;
+    }
+    return "";
+}
+
+/**
+ * 格式化完整的 Markdown 文档
  */
 function formatFullDoc(jsDoc: string, signature: string): string {
-    const desc = extractJsDocDescription(jsDoc);
+    const desc = extractDescription(jsDoc);
     const parts: string[] = [];
 
-    // 签名
     parts.push("```typescript\n" + signature + "\n```\n");
 
-    // 描述 (非 @tag 行)
     const descLines: string[] = [];
     const paramLines: string[] = [];
     const exampleBlocks: string[] = [];
@@ -68,7 +78,6 @@ function formatFullDoc(jsDoc: string, signature: string): string {
             }
             inExample = true;
             currentExample = [];
-            // @example 后面可能有标题文字
             const exTitle = trimmed.replace("@example", "").trim();
             if (exTitle) currentExample.push(`// ${exTitle}`);
         } else if (trimmed.startsWith("@param")) {
@@ -90,7 +99,6 @@ function formatFullDoc(jsDoc: string, signature: string): string {
             const retDesc = trimmed.replace(/@returns?\s*/, "");
             if (retDesc) paramLines.push(`- **返回值**: ${retDesc}`);
         } else if (trimmed.startsWith("@")) {
-            // 其他 tag，忽略
             inExample = false;
         } else if (inExample) {
             currentExample.push(line);
@@ -102,7 +110,6 @@ function formatFullDoc(jsDoc: string, signature: string): string {
         exampleBlocks.push(currentExample.join("\n"));
     }
 
-    // 组装
     const descText = descLines.join("\n").trim();
     if (descText) parts.push(descText);
 
@@ -119,112 +126,70 @@ function formatFullDoc(jsDoc: string, signature: string): string {
     return parts.join("\n\n");
 }
 
+// ─── AST 方法提取 ───
+
 /**
- * 从 interface / object literal body 中解析方法签名和 JSDoc
+ * 将 AST 节点序列化为签名字符串
  */
-export function parseMethodsFromBody(body: string): MethodDoc[] {
+function nodeToSignature(node: ts.Node, sourceFile: ts.SourceFile): string {
+    return node.getText(sourceFile).replace(/;\s*$/, "").trim();
+}
+
+/**
+ * 从类型字面量（object type literal）或 interface body 中提取方法
+ */
+function extractMethodsFromMembers(
+    members: ts.NodeArray<ts.TypeElement>,
+    sourceFile: ts.SourceFile,
+    prefix?: string,
+): MethodDoc[] {
     const methods: MethodDoc[] = [];
-    const lines = body.split("\n");
 
-    let currentJsDoc = "";
-    let collectingJsDoc = false;
+    for (const member of members) {
+        const jsDoc = getJsDocText(member, sourceFile);
 
-    for (let i = 0; i < lines.length; i++) {
-        const line = lines[i];
-        const trimmed = line.trim();
+        if (ts.isMethodSignature(member) || ts.isPropertySignature(member)) {
+            const name = member.name?.getText(sourceFile) ?? "";
+            if (!name) continue;
 
-        // 收集 JSDoc
-        if (trimmed.startsWith("/**")) {
-            currentJsDoc = line + "\n";
-            if (trimmed.endsWith("*/")) {
-                collectingJsDoc = false;
-            } else {
-                collectingJsDoc = true;
-            }
-            continue;
-        }
-        if (collectingJsDoc) {
-            currentJsDoc += line + "\n";
-            if (trimmed.includes("*/")) {
-                collectingJsDoc = false;
-            }
-            continue;
-        }
-
-        // 跳过注释行和分隔线
-        if (trimmed.startsWith("//") || trimmed === "" || trimmed.startsWith("*")) continue;
-
-        // 检测多行方法签名的开始: methodName( 但没有以 ; 结尾
-        const multiLineStart = trimmed.match(/^(?:readonly\s+)?(\w+)\s*\(/);
-        if (multiLineStart && !trimmed.endsWith(";")) {
-            // 累积后续行直到找到 ;
-            let fullSig = trimmed;
-            let j = i + 1;
-            while (j < lines.length) {
-                const nextLine = lines[j].trim();
-                fullSig += " " + nextLine;
-                if (nextLine.endsWith(";")) break;
-                j++;
+            // 如果 property 的类型是 object literal，递归提取
+            if (ts.isPropertySignature(member) && member.type && ts.isTypeLiteralNode(member.type)) {
+                const nested = extractMethodsFromMembers(member.type.members, sourceFile, prefix ? `${prefix}.${name}` : name);
+                methods.push(...nested);
+                continue;
             }
 
-            const name = multiLineStart[1];
-            const signature = fullSig.replace(/;\s*$/, "");
-            const brief = currentJsDoc ? extractBrief(currentJsDoc) : signature;
-            const fullDoc = currentJsDoc
-                ? formatFullDoc(currentJsDoc, signature)
+            // 如果 property 的类型引用了一个 interface，解析该 interface 的方法
+            if (ts.isPropertySignature(member) && member.type && ts.isTypeReferenceNode(member.type)) {
+                const typeName = member.type.typeName.getText(sourceFile);
+                const iface = findInterface(sourceFile, typeName);
+                if (iface) {
+                    const nested = extractMethodsFromMembers(iface.members, sourceFile, prefix ? `${prefix}.${name}` : name);
+                    if (nested.length > 0) {
+                        methods.push(...nested);
+                        continue;
+                    }
+                }
+            }
+
+            const signature = nodeToSignature(member, sourceFile);
+            const displayName = prefix ? `${prefix}.${name}` : name;
+            const brief = jsDoc ? extractBrief(jsDoc) : signature;
+            const fullDoc = jsDoc
+                ? formatFullDoc(jsDoc, signature)
                 : `\`\`\`typescript\n${signature}\n\`\`\``;
 
-            methods.push({ name, brief, fullDoc });
-            currentJsDoc = "";
-            i = j;
-            continue;
+            methods.push({ name: displayName, brief, fullDoc });
         }
 
-        // 匹配单行方法签名: methodName(...): ReturnType;
-        // 也匹配 readonly property: get current: string;
-        const methodMatch = trimmed.match(
-            /^(?:readonly\s+)?(\w+)(?:\s*\([\s\S]*?\)[\s\S]*?)?;\s*$/
-        );
-        if (methodMatch) {
-            const name = methodMatch[1];
-            // 清理签名（移除末尾分号，保留完整类型）
-            const signature = trimmed.replace(/;\s*$/, "");
-            const brief = currentJsDoc ? extractBrief(currentJsDoc) : signature;
-            const fullDoc = currentJsDoc
-                ? formatFullDoc(currentJsDoc, signature)
+        // 处理 call signature: (param: Type) => ReturnType 作为函数式成员
+        if (ts.isCallSignatureDeclaration(member)) {
+            const signature = nodeToSignature(member, sourceFile);
+            const brief = jsDoc ? extractBrief(jsDoc) : signature;
+            const fullDoc = jsDoc
+                ? formatFullDoc(jsDoc, signature)
                 : `\`\`\`typescript\n${signature}\n\`\`\``;
-
-
-            methods.push({ name, brief, fullDoc });
-            currentJsDoc = "";
-        }
-
-        // 匹配嵌套对象中的方法 (如 skills.memory.recall)
-        // 形如: key: { ... }
-        const nestedObjMatch = trimmed.match(/^(\w+)\s*:\s*\{/);
-        if (nestedObjMatch) {
-            // 找到闭合 }
-            let depth = 1;
-            let j = i + 1;
-            let nestedBody = "";
-            while (j < lines.length && depth > 0) {
-                nestedBody += lines[j] + "\n";
-                if (lines[j].includes("{")) depth++;
-                if (lines[j].includes("}")) depth--;
-                j++;
-            }
-            // 递归解析嵌套方法
-            const nestedMethods = parseMethodsFromBody(nestedBody);
-            for (const nm of nestedMethods) {
-                methods.push(nm);
-            }
-            i = j - 1;
-            currentJsDoc = "";
-        }
-
-        // 不匹配时清除 JSDoc（防止错误关联）
-        if (!methodMatch && !collectingJsDoc) {
-            currentJsDoc = "";
+            methods.push({ name: prefix ?? "call", brief, fullDoc });
         }
     }
 
@@ -232,118 +197,188 @@ export function parseMethodsFromBody(body: string): MethodDoc[] {
 }
 
 /**
- * 从 .d.ts 文件内容中提取所有 interface / type / enum 定义的原文。
- * 提取的类型定义将附加到 ModuleEntry.typeDefs，
- * 在 Pass 2 文档注入时一并提供给 LLM，使其能理解参数/返回值的结构。
+ * 在 source file 中查找指定名称的 interface 声明
  */
-function extractTypeDefs(content: string): string {
+function findInterface(sourceFile: ts.SourceFile, typeName: string): ts.InterfaceDeclaration | undefined {
+    for (const stmt of sourceFile.statements) {
+        if (ts.isInterfaceDeclaration(stmt) && stmt.name.text === typeName) {
+            return stmt;
+        }
+    }
+    return undefined;
+}
+
+/**
+ * 从类型节点中解析出方法列表
+ */
+function extractMethodsFromType(
+    typeNode: ts.TypeNode,
+    sourceFile: ts.SourceFile,
+): MethodDoc[] {
+    // 直接是 { ... } 类型字面量
+    if (ts.isTypeLiteralNode(typeNode)) {
+        return extractMethodsFromMembers(typeNode.members, sourceFile);
+    }
+
+    // 类型引用 → 查找 interface
+    if (ts.isTypeReferenceNode(typeNode)) {
+        const typeName = typeNode.typeName.getText(sourceFile);
+        const iface = findInterface(sourceFile, typeName);
+        if (iface) {
+            return extractMethodsFromMembers(iface.members, sourceFile);
+        }
+    }
+
+    // Union type (如 ((file: ...) => ...) | null) → 递归每个分支
+    if (ts.isUnionTypeNode(typeNode)) {
+        for (const member of typeNode.types) {
+            // 跳过 null / undefined 字面量
+            if (member.kind === ts.SyntaxKind.NullKeyword ||
+                member.kind === ts.SyntaxKind.UndefinedKeyword ||
+                (ts.isLiteralTypeNode(member) && member.literal.kind === ts.SyntaxKind.NullKeyword)) {
+                continue;
+            }
+            const methods = extractMethodsFromType(member, sourceFile);
+            if (methods.length > 0) return methods;
+        }
+    }
+
+    // 带括号的类型 → 解包
+    if (ts.isParenthesizedTypeNode(typeNode)) {
+        return extractMethodsFromType(typeNode.type, sourceFile);
+    }
+
+    // 函数类型 → 整体作为单个 method
+    if (ts.isFunctionTypeNode(typeNode)) {
+        return []; // 由 caller 处理（需要变量名信息）
+    }
+
+    // Intersection type → 合并所有分支
+    if (ts.isIntersectionTypeNode(typeNode)) {
+        const methods: MethodDoc[] = [];
+        for (const member of typeNode.types) {
+            methods.push(...extractMethodsFromType(member, sourceFile));
+        }
+        return methods;
+    }
+
+    return [];
+}
+
+/**
+ * 判断类型节点是否是函数类型（可能被 union 或 parenthesized 包裹）
+ */
+function isFunctionLikeType(typeNode: ts.TypeNode): boolean {
+    if (ts.isFunctionTypeNode(typeNode)) return true;
+    if (ts.isParenthesizedTypeNode(typeNode)) return isFunctionLikeType(typeNode.type);
+    if (ts.isUnionTypeNode(typeNode)) {
+        return typeNode.types.some(t => {
+            if (t.kind === ts.SyntaxKind.NullKeyword || t.kind === ts.SyntaxKind.UndefinedKeyword) return false;
+            if (ts.isLiteralTypeNode(t) && t.literal.kind === ts.SyntaxKind.NullKeyword) return false;
+            return isFunctionLikeType(t);
+        });
+    }
+    return false;
+}
+
+// ─── 类型定义提取 ───
+
+/**
+ * 提取 interface / type alias / enum 定义的原文（供 LLM 参考参数/返回值结构）
+ */
+function extractTypeDefs(sourceFile: ts.SourceFile): string {
     const defs: string[] = [];
 
-    // 提取 interface 块（含可选的前置 JSDoc）
-    const ifaceRegex = /(?:(?:\/\*\*[\s\S]*?\*\/\s*)?\n)?(interface\s+\w+[\s\S]*?\n\})/g;
-    let m;
-    while ((m = ifaceRegex.exec(content)) !== null) {
-        defs.push(m[1].trim());
-    }
-
-    // 提取 type alias
-    const typeRegex = /(?:(?:\/\*\*[\s\S]*?\*\/\s*)?\n)?(type\s+\w+\s*=[\s\S]*?;)/g;
-    while ((m = typeRegex.exec(content)) !== null) {
-        defs.push(m[1].trim());
-    }
-
-    // 提取 enum 块
-    const enumRegex = /(?:(?:\/\*\*[\s\S]*?\*\/\s*)?\n)?((?:const\s+)?enum\s+\w+\s*\{[\s\S]*?\n\})/g;
-    while ((m = enumRegex.exec(content)) !== null) {
-        defs.push(m[1].trim());
+    for (const stmt of sourceFile.statements) {
+        if (ts.isInterfaceDeclaration(stmt)) {
+            defs.push(stmt.getText(sourceFile));
+        } else if (ts.isTypeAliasDeclaration(stmt)) {
+            defs.push(stmt.getText(sourceFile));
+        } else if (ts.isEnumDeclaration(stmt)) {
+            defs.push(stmt.getText(sourceFile));
+        }
     }
 
     return defs.join("\n\n");
 }
 
+// ─── 主入口 ───
+
 /**
- * 解析 .d.ts 文件中的 `interface XXX { ... }` 或 `declare const xxx: { ... }` 块，
- * 提取方法签名和 JSDoc，同时提取 interface/type/enum 定义附加到 typeDefs。
+ * 解析 .d.ts 文件，提取模块名、方法签名、JSDoc 和类型定义
+ *
+ * 支持的声明形式：
+ * - `declare const xxx: { method(): Type; ... };`  — 对象类型字面量
+ * - `declare const xxx: InterfaceName;`            — 类型引用
+ * - `declare const xxx: ((arg: T) => R) | null;`   — 函数类型
+ * - `declare const xxx: { key: InterfaceName };`   — 嵌套类型引用
+ * - `interface XXX { ... }` (无 declare const)       — fallback
  */
 export function parseDtsFile(content: string, fileName: string): ModuleEntry[] {
+    const sourceFile = ts.createSourceFile(
+        fileName,
+        content,
+        ts.ScriptTarget.Latest,
+        /* setParentNodes */ true,
+        ts.ScriptKind.TS,
+    );
+
     const entries: ModuleEntry[] = [];
+    const seenNames = new Set<string>();
 
-    // 提取文件级 JSDoc（第一行 /** ... */）
-    const fileDocMatch = content.match(/^\/\*\*[\s\S]*?\*\//m);
-    const fileDesc = fileDocMatch ? extractBrief(fileDocMatch[0]) : "";
+    // 提取文件级 JSDoc（第一个 /** ... */ 注释）
+    const fileDesc = (() => {
+        const fullText = sourceFile.getFullText();
+        const match = fullText.match(/^\/\*\*[\s\S]*?\*\//m);
+        return match ? extractBrief(match[0]) : "";
+    })();
 
-    // 提取文件中所有类型定义
-    const typeDefs = extractTypeDefs(content);
+    // 提取类型定义
+    const typeDefs = extractTypeDefs(sourceFile);
 
-    // ─── 解析 declare const xxx: { ... } 形式的模块 ───
-    const declareConstRegex = /declare\s+const\s+(\w+)\s*:\s*\{([\s\S]*?)\n\};/g;
-    let declMatch;
-    while ((declMatch = declareConstRegex.exec(content)) !== null) {
-        const moduleName = declMatch[1];
-        const body = declMatch[2];
-        const methods = parseMethodsFromBody(body);
+    // 遍历顶层声明
+    for (const stmt of sourceFile.statements) {
+        // ─── declare const xxx: ... ───
+        if (ts.isVariableStatement(stmt)) {
+            const isAmbient = stmt.modifiers?.some(m => m.kind === ts.SyntaxKind.DeclareKeyword);
+            if (!isAmbient) continue;
 
-        if (methods.length > 0) {
-            entries.push({
-                name: moduleName,
-                description: fileDesc,
-                methods,
-                ...(typeDefs ? { typeDefs } : {}),
-            });
-        }
-    }
+            for (const decl of stmt.declarationList.declarations) {
+                const name = decl.name.getText(sourceFile);
+                if (seenNames.has(name)) continue;
 
-    // ─── 解析 declare const xxx: TypeName 引用形式 ───
-    const declareRefRegex = /declare\s+const\s+(\w+)\s*:\s*(\w+)\s*;/g;
-    let refMatch;
-    while ((refMatch = declareRefRegex.exec(content)) !== null) {
-        const moduleName = refMatch[1];
-        const typeName = refMatch[2];
+                const typeNode = decl.type;
+                if (!typeNode) continue;
 
-        // 查找对应的 interface
-        const ifaceRegex = new RegExp(
-            `interface\\s+${typeName}\\s*\\{([\\s\\S]*?)\\n\\}`,
-            "g"
-        );
-        const ifaceMatch = ifaceRegex.exec(content);
-        if (ifaceMatch) {
-            const methods = parseMethodsFromBody(ifaceMatch[1]);
-            if (methods.length > 0) {
-                entries.push({
-                    name: moduleName,
-                    description: fileDesc,
-                    methods,
-                    ...(typeDefs ? { typeDefs } : {}),
-                });
-            }
-        }
-    }
+                // 1) 对象类型字面量、类型引用、嵌套对象 → 提取方法
+                const methods = extractMethodsFromType(typeNode, sourceFile);
 
-    // ─── 解析 declare const xxx: { key: InterfaceName } 中引用的嵌套表结构 ───
-    // （如 ctx.tg → TelegramClient）
-    const nestedDeclRegex = /declare\s+const\s+(\w+)\s*:\s*\{\s*(\w+)\s*:\s*(\w+)\s*;/g;
-    let nestedMatch;
-    while ((nestedMatch = nestedDeclRegex.exec(content)) !== null) {
-        const parentName = nestedMatch[1];   // "ctx"
-        const childKey = nestedMatch[2];      // "tg"
-        const typeName = nestedMatch[3];      // "TelegramClient"
-
-        // 查找对应的 interface
-        const ifaceRegex2 = new RegExp(
-            `interface\\s+${typeName}\\s*\\{([\\s\\S]*?)\\n\\}`,
-            "g"
-        );
-        const ifaceMatch2 = ifaceRegex2.exec(content);
-        if (ifaceMatch2) {
-            const methods = parseMethodsFromBody(ifaceMatch2[1]);
-            if (methods.length > 0) {
-                const moduleName = `${parentName}.${childKey}`;
-                // 避免和前面重复
-                if (!entries.find(e => e.name === moduleName)) {
+                if (methods.length > 0) {
+                    seenNames.add(name);
                     entries.push({
-                        name: moduleName,
+                        name,
                         description: fileDesc,
                         methods,
+                        ...(typeDefs ? { typeDefs } : {}),
+                    });
+                    continue;
+                }
+
+                // 2) 函数类型（如 saucenao）→ 整体作为单个方法
+                if (isFunctionLikeType(typeNode)) {
+                    const jsDoc = getJsDocText(stmt, sourceFile);
+                    const typeText = typeNode.getText(sourceFile);
+                    const signature = `${name}: ${typeText}`;
+                    const brief = jsDoc ? extractBrief(jsDoc) : typeText;
+                    const fullDoc = jsDoc
+                        ? formatFullDoc(jsDoc, signature)
+                        : `\`\`\`typescript\n${signature}\n\`\`\``;
+
+                    seenNames.add(name);
+                    entries.push({
+                        name,
+                        description: fileDesc,
+                        methods: [{ name, brief, fullDoc }],
                         ...(typeDefs ? { typeDefs } : {}),
                     });
                 }
@@ -351,17 +386,17 @@ export function parseDtsFile(content: string, fileName: string): ModuleEntry[] {
         }
     }
 
-    // 如果没有使用 declare const，但有 interface，将这些暴露的方法打包成一个默认 entry (Skill 名字后续会覆盖它)
+    // ─── Fallback: 没有 declare const，但有 interface → 聚合所有 interface 的方法 ───
     if (entries.length === 0) {
-        const ifaceRegex = /interface\s+\w+\s*\{([\s\S]*?)\n\}/g;
-        let ifaceMatch;
         const methods: MethodDoc[] = [];
-        while ((ifaceMatch = ifaceRegex.exec(content)) !== null) {
-            methods.push(...parseMethodsFromBody(ifaceMatch[1]));
+        for (const stmt of sourceFile.statements) {
+            if (ts.isInterfaceDeclaration(stmt)) {
+                methods.push(...extractMethodsFromMembers(stmt.members, sourceFile));
+            }
         }
         if (methods.length > 0) {
             entries.push({
-                name: "default", // 这是一个占位符，外部加载器会替换为真实 Skill name
+                name: "default",
                 description: fileDesc,
                 methods,
                 ...(typeDefs ? { typeDefs } : {}),

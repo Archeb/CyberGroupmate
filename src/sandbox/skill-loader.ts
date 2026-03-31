@@ -60,9 +60,11 @@ export function discoverSkills(): Array<{ name: string; indexPath: string; dtsPa
             continue;
         }
 
-        // 查找 d.ts 文件
+        // 查找 d.ts 文件（优先 <name>.d.ts，其次取第一个）
         const dtsFiles = readdirSync(dirPath).filter(f => f.endsWith(".d.ts"));
-        const dtsPath = dtsFiles.length > 0 ? join(dirPath, dtsFiles[0]) : undefined;
+        const preferredDts = dtsFiles.find(f => f === `${entry}.d.ts`);
+        const dtsPath = preferredDts ? join(dirPath, preferredDts)
+            : dtsFiles.length > 0 ? join(dirPath, dtsFiles[0]) : undefined;
 
         skills.push({ name: entry, indexPath, dtsPath });
     }
