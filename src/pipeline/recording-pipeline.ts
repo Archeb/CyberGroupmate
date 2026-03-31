@@ -440,6 +440,7 @@ export class RecordingPipeline extends EventEmitter {
         const contextSections: string[] = [];
         contextSections.push(...this.buildTriageContext(chatId, messages));
         contextSections.push(topicMessagesStr);
+        contextSections.push("请根据以上信息，对每个话题进行摘要和 triage，严格遵循格式输出 JSON.");
         const userMessage = contextSections.join("\n\n");
 
         const llmMessages: ChatMessage[] = [
@@ -481,7 +482,7 @@ export class RecordingPipeline extends EventEmitter {
 
             const retryMessages: ChatMessage[] = [
                 { role: "system", content: retryPrompt },
-                { role: "user", content: retryStr },
+                { role: "user", content: retryStr + "\n\n请根据以上信息，对每个话题进行摘要和 triage，严格遵循格式输出 JSON." },
             ];
 
             try {
