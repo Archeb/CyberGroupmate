@@ -328,7 +328,16 @@ dashboard:
 #   # 加速静默触发时间（ms）：强信号模式下的静默触发 (30000 = 30s)
 #   eager_silence_ms: 30000
 
-# ─── Tavily 网络搜索 ───
-# Tavily Search API key，用于 subagent 的联网搜索能力 (web.search / web.extract)
-# 在 https://app.tavily.com 注册获取。可选，未配置时 web 模块不可用。
-# tavily_api_key: "tvly-your-api-key"
+# ─── 环境变量 ───
+# 自定义环境变量，通过 Dashboard 管理面板可视化编辑。
+# 每个变量可设置作用域 (scope):
+#   both    — 同时注入主进程和沙盒环境
+#   host    — 仅注入主进程，沙盒不可见（适用于敏感密钥）
+#   sandbox — 仅注入沙盒环境，主进程不可见（适用于 Skill 第三方 API Key）
+# env_vars:
+#   - key: TAVILY_API_KEY
+#     value: "tvly-your-api-key"
+#     scope: sandbox
+#   - key: DATABASE_URL
+#     value: "postgres://..."
+#     scope: host

@@ -292,6 +292,16 @@ export interface DashboardExternalConfig {
 /** Token 价格配置（每百万 token，USD） */
 export type TokenPricingEntry = NonNullable<LLMConfig["pricing"]>;
 
+/** 环境变量配置项 */
+export interface EnvironmentVariable {
+    /** 环境变量名称 */
+    key: string;
+    /** 环境变量值 */
+    value: string;
+    /** 作用域：both=主进程+沙盒, host=仅主进程, sandbox=仅沙盒 */
+    scope: "both" | "host" | "sandbox";
+}
+
 export interface AppConfig {
     llmProfiles: Record<string, LLMConfig>;
     llmRouting: LLMRoutingConfig;
@@ -309,8 +319,8 @@ export interface AppConfig {
     vision?: VisionConfig;
     /** Recording Pipeline 缓冲/触发配置 */
     recordingPipeline?: RecordingPipelineConfig;
-    /** Tavily Search API key */
-    tavilyApiKey?: string;
+    /** 自定义环境变量（通过 Dashboard 管理） */
+    envVars?: EnvironmentVariable[];
 }
 
 // ─── 默认值 ───
@@ -470,7 +480,7 @@ export function loadConfig(configPath?: string, forceReload?: boolean): AppConfi
         dashboard: parseDashboardConfig(fileConfig),
         vision: parseVisionConfig(fileConfig),
         recordingPipeline: parseRecordingPipelineConfig(fileConfig),
-        tavilyApiKey: str(fileConfig.tavily_api_key),
+        envVars: parseEnvVars(fileConfig),
     };
 
     _cached = config;
@@ -678,6 +688,24 @@ function parseRecordingPipelineConfig(fileConfig: Record<string, unknown>): Reco
         normalSilenceMs: raw.normal_silence_ms != null ? num(raw.normal_silence_ms, 120000) : undefined,
         eagerSilenceMs: raw.eager_silence_ms != null ? num(raw.eager_silence_ms, 30000) : undefined,
     };
+}
+
+// ─── 环境变量配置解析 ───
+
+function parseEnvVars(fileConfig: Record<string, unknown>): EnvironmentVariable[] | undefined {
+    const raw = fileConfig.env_vars as Array<Record<string, unknown>> | undefined;
+    if (!Array.isArray(raw) || raw.length === 0) return undefined;
+    const VALID_SCOPES = new Set(["both", "host", "sandbox"]);
+    const result: EnvironmentVariable[] = [];
+    for (const item of raw) {
+        const key = str(item.key);
+        const value = str(item.value);
+        const scope = str(item.scope) ?? "both";
+        if (!key) continue; // key 是必需的
+        if (!VALID_SCOPES.has(scope)) continue;
+        result.push({ key, value: value ?? "", scope: scope as EnvironmentVariable["scope"] });
+    }
+    return result.length > 0 ? result : undefined;
 }
 
 // ─── 内部辅助 ───
@@ -1038,8 +1066,14 @@ export function serializeConfigToObject(config: AppConfig): Record<string, unkno
         obj.subagent = s;
     }
 
-    // tavily_api_key
-    if (config.tavilyApiKey) obj.tavily_api_key = config.tavilyApiKey;
+    // env_vars
+    if (config.envVars && config.envVars.length > 0) {
+        obj.env_vars = config.envVars.map(ev => ({
+            key: ev.key,
+            value: ev.value,
+            scope: ev.scope,
+        }));
+    }
 
     return obj;
 }

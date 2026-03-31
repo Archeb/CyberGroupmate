@@ -27,6 +27,10 @@ export interface SandboxPoolConfig {
     workerScript?: string;
     /** Sandbox 工作目录 */
     workDir?: string;
+    /** 仅注入 sandbox 进程的额外环境变量 */
+    sandboxEnv?: Record<string, string>;
+    /** 仅限 host 的环境变量 key 列表（从 sandbox 进程 env 中剔除） */
+    hostOnlyKeys?: string[];
     /**
      * 新 sandbox 实例创建后的初始化回调。
      * 用于注册 hostCallHandler、event listener 等。
@@ -108,6 +112,8 @@ export class SandboxPool {
         const sandbox = new Sandbox(
             this.config.workDir,
             chatId,
+            this.config.sandboxEnv,
+            this.config.hostOnlyKeys,
         );
         await sandbox.start();
 

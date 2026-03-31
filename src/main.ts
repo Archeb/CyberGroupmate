@@ -116,9 +116,28 @@ async function main(): Promise<void> {
     // ─── 全局时区初始化 ───
     setGlobalTimezone(appConfig.timezone);
 
-    // ─── Tavily API key → 环境变量（供 sandbox worker 继承） ───
-    if (appConfig.tavilyApiKey) {
-        process.env.TAVILY_API_KEY = appConfig.tavilyApiKey;
+    // ─── 环境变量注入（按 scope 分流） ───
+    const sandboxEnv: Record<string, string> = {};
+    const hostOnlyKeys: string[] = [];
+    if (appConfig.envVars) {
+        for (const ev of appConfig.envVars) {
+            if (ev.scope === "host" || ev.scope === "both") {
+                process.env[ev.key] = ev.value;
+            }
+            if (ev.scope === "host") {
+                hostOnlyKeys.push(ev.key);
+            }
+            if (ev.scope === "sandbox" || ev.scope === "both") {
+                sandboxEnv[ev.key] = ev.value;
+            }
+        }
+        if (Object.keys(sandboxEnv).length > 0 || hostOnlyKeys.length > 0) {
+            log.info("环境变量注入", {
+                hostOnly: hostOnlyKeys.length,
+                sandboxOnly: Object.keys(sandboxEnv).filter(k => !process.env[k] || hostOnlyKeys.includes(k)).length,
+                both: appConfig.envVars.filter(e => e.scope === "both").length,
+            });
+        }
     }
 
     log.info("LLM Profiles 加载完成", {
@@ -154,6 +173,8 @@ async function main(): Promise<void> {
     const sandboxPool = new SandboxPool({
         maxInstances: appConfig.subagent?.maxSandboxInstances ?? 5,
         idleTimeout: appConfig.subagent?.sandboxIdleTimeout ?? 600_000,
+        sandboxEnv,
+        hostOnlyKeys,
         onAcquire: (sandbox, chatId) => {
             // 每个新建的 sandbox 实例注册事件处理和 host call handler
             sandbox.on("notify", (event: Record<string, unknown>) => {

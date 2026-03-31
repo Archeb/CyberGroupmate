@@ -87,6 +87,10 @@ export class Sandbox extends EventEmitter {
     private requestCounter = 0;
     private projectRoot: string;
     private hostCallHandler: HostCallHandler | null = null;
+    /** 仅注入 sandbox 的额外环境变量 */
+    private sandboxEnv: Record<string, string>;
+    /** 仅限 host 的环境变量 key 列表（从 sandbox env 中剔除） */
+    private hostOnlyKeys: string[];
 
     /** PTY 持久化交互式 shell */
     private ptyProcess: pty.IPty | null = null;
@@ -107,11 +111,32 @@ export class Sandbox extends EventEmitter {
     /** chatId（用于创建 per-chat home 目录） */
     private chatId: string;
 
-    constructor(projectRoot?: string, chatId?: string) {
+    constructor(projectRoot?: string, chatId?: string, sandboxEnv?: Record<string, string>, hostOnlyKeys?: string[]) {
         super();
         // __dirname = src/sandbox/, need to go up 2 levels to reach project root
         this.projectRoot = projectRoot ?? join(__dirname, "..", "..");
         this.chatId = chatId ?? "default";
+        this.sandboxEnv = sandboxEnv ?? {};
+        this.hostOnlyKeys = hostOnlyKeys ?? [];
+    }
+
+    /**
+     * 构建子进程 env：基于 process.env，注入 sandboxEnv，剔除 hostOnlyKeys
+     */
+    private buildWorkerEnv(): Record<string, string> {
+        const env: Record<string, string> = {};
+        for (const [k, v] of Object.entries(process.env)) {
+            if (v !== undefined) env[k] = v;
+        }
+        // 注入 sandbox 专属环境变量
+        for (const [k, v] of Object.entries(this.sandboxEnv)) {
+            env[k] = v;
+        }
+        // 剔除仅限 host 的环境变量
+        for (const key of this.hostOnlyKeys) {
+            delete env[key];
+        }
+        return env;
     }
 
     /**
@@ -132,7 +157,7 @@ export class Sandbox extends EventEmitter {
         this.child = cpSpawn(process.execPath, [tsxCliPath, workerPath], {
             stdio: ["pipe", "pipe", "pipe"],
             cwd: this.projectRoot,
-            env: { ...process.env },
+            env: this.buildWorkerEnv(),
         });
 
         this.child.stderr?.on("data", (data: Buffer) => {
@@ -212,11 +237,8 @@ export class Sandbox extends EventEmitter {
         }
         this.shellCwd = this.shellHome;
 
-        // 过滤 process.env 中的 undefined 值（node-pty 要求 env 值全部为 string）
-        const cleanEnv: Record<string, string> = {};
-        for (const [k, v] of Object.entries(process.env)) {
-            if (v !== undefined) cleanEnv[k] = v;
-        }
+        // 构建子进程 env
+        const workerEnv = this.buildWorkerEnv();
 
         this.ptyProcess = pty.spawn("/bin/bash", ["--norc", "--noprofile"], {
             name: "xterm-256color",
@@ -224,7 +246,7 @@ export class Sandbox extends EventEmitter {
             rows: 50,
             cwd: this.shellHome,
             env: {
-                ...cleanEnv,
+                ...workerEnv,
                 HOME: this.shellHome,
                 // 使用简单提示符，避免干扰输出
                 PS1: "",
