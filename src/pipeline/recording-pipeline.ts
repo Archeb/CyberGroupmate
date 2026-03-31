@@ -206,6 +206,16 @@ export class RecordingPipeline extends EventEmitter {
 
                 const clustering = await this.llmTopicClustering(chatMessages, existingTopics);
 
+                // 聚类返回空结果时，消息累积回 buffer 等待下轮 flush，不浪费 triage 调用
+                if (clustering.assignments.length === 0) {
+                    log.info("聚类结果为空，消息回退到 buffer", {
+                        chatId,
+                        messageCount: chatMessages.length,
+                    });
+                    this.buffer.push(...chatMessages);
+                    continue;
+                }
+
                 // ─── Step 2: 摘要 + Triage（clusterOnly 模式跳过）───
                 const triageResult = clusterOnly
                     ? { topics: [] } as TopicSummaryTriageResult
@@ -512,14 +522,16 @@ export class RecordingPipeline extends EventEmitter {
             const msgs = topicGroups.get(topicId) ?? [];
             const newMsgLines = msgs.map(m => `  ${m.senderName}: ${m.text}`).join("\n");
 
-            if (topicId.startsWith("NEW_")) {
-                // 新话题：用 clustering 里的 label
-                const label = clustering.assignments.find(a => a.topicId === topicId)?.topicLabel ?? "新话题";
+            // 尝试获取旧话题
+            const topic = this.registry.get(topicId);
+
+            if (!topic) {
+                // 新话题（或者是 LLM 编造的临时 ID，不在 registry 中）
+                const label = clustering.assignments.find(a => a.topicId === topicId)?.topicLabel ?? topicId;
                 return `### 话题: ${label} (ID: ${topicId})\n${newMsgLines}`;
             }
 
             // 旧话题：从 registry 取完整上下文
-            const topic = this.registry.get(topicId);
             const label = topic?.label ?? topicId;
             const parts: string[] = [`### 话题: ${label} (ID: ${topicId}) [持续话题]`];
 
@@ -650,26 +662,26 @@ export class RecordingPipeline extends EventEmitter {
         for (const [topicId, topicMsgs] of topicMsgMap) {
             let topic: Topic | undefined;
 
-            if (topicId.startsWith("NEW_")) {
-                // 新话题
+            // 尝试获取已有话题
+            topic = this.registry.get(topicId);
+
+            if (!topic) {
+                // 当 ID 不存在于 registry 时，无论它是不是 "NEW_" 开头，都视为新话题（容错 LLM 乱编 ID）
                 const assignment = clustering.assignments.find(a => a.topicId === topicId);
-                const label = assignment?.topicLabel ?? "未命名话题";
+                const label = assignment?.topicLabel ?? topicId;
                 const keywords = assignment?.keywords ?? [];
 
                 // 检查是否是流变
                 const evolution = clustering.evolutions.find(e => e.newTopicLabel === label);
                 topic = this.registry.create(chatId, label, keywords, topicMsgs, evolution?.parentTopicId);
-                clusterIdMap.set(topic.id, topicId); // topic.id=真实ID, topicId=NEW_x
+                clusterIdMap.set(topic.id, topicId); // topic.id=真实ID, topicId=临时ID
 
                 if (evolution?.parentTopicId) {
                     this.registry.inheritDecision(evolution.parentTopicId, topic.id);
                 }
             } else {
-                // 已有话题
-                topic = this.registry.get(topicId);
-                if (topic) {
-                    this.registry.addMessages(topicId, topicMsgs);
-                }
+                // 已有话题，追加消息
+                this.registry.addMessages(topicId, topicMsgs);
             }
 
             if (!topic) continue;
@@ -703,6 +715,8 @@ export class RecordingPipeline extends EventEmitter {
                     should_intervene: triage.should_intervene,
                     reason: triage.reason,
                 };
+                // 将 decision 持久化到 topic 对象，supply triageReason 给下游 toDigest
+                this.registry.setDecision(topic.id, decision);
 
                 if (triage.should_intervene) {
                     triagePassedTopics.push({ topic, decision });
