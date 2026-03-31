@@ -18,9 +18,21 @@ CyberGroupmate 的 Sandbox 模块系统被划分为两大阵营：
 
 ---
 
-## 2. 目录结构
+## 2. 快速开始与目录结构
 
-所有 TS Skills 皆通过统一约定放置在 `workspace/skills/` 目录下。框架在每次 Sandbox Worker 启动时都会扫描此目录：
+所有 TS Skills 皆通过统一约定放置在根目录的 `workspace/skills/` 下。框架在每次 Sandbox Worker 启动时都会扫描此目录。
+
+### 快速开始 (推荐)
+你可以直接以官方模板仓库 [Archeb/skills](https://github.com/Archeb/skills) 作为起点。
+
+1. **直接克隆**：如果你只想基于现有模板使用，可以直接把它 clone 到你的本地：
+   ```bash
+   git clone https://github.com/Archeb/skills workspace/skills
+   ```
+2. **Fork 后定制**：你可以先在 GitHub 上 Fork 这个仓库，在里面添加你自己需要的新模块（Skills），然后再将你自己 Fork 的仓库 clone 到 `workspace/skills` 目录下使用。这种方式可以让你方便地使用 Git 维护属于你自己的专属能力库。
+
+### 目录结构约定
+无论你是 clone 模板还是从零开始写，你的 `workspace/skills/` 应当保持如下结构：
 
 ```text
 workspace/skills/
@@ -114,15 +126,11 @@ declare const github: {
 ### 4.1 预热与依赖
 任何用到第三方库（如 `npm install @octokit/rest`）的 Skill，只需在 `workspace/skills/package.json` 添加依赖并自行 `npm install`。Sandbox Worker 启动时可以毫无阻碍地 `require / import` 这些包。
 
-### 4.2 文档生成与 Two-Pass 类型推断
-新增/修改 Skill 的 `.d.ts` 后，请重跑一次：
-```bash
-npm run gen:module-docs
-```
+### 4.2 纯动态文档解析与 Two-Pass 类型推断
+你**无需**为了 TS Skills 执行任何文档生成命令（`npm run gen:module-docs` 仅针对框架自带的核心接口）。框架在每次运行时会自动读取并解析文档：
 
-- 该工具不仅会扫 `src/sandbox/modules/` 下的内建模块，还会**递归扫描 `workspace/skills/` 目录中后缀为 `.d.ts` 的文件**。
-- 它会将所有的注释聚合到一个大词典：`modules-docs.json`。
-- 在 LLM 生成代码阶段（Two-pass第一阶段），如果意图提取器通过正则表达式检测到了类似 `github.listIssues(...)`，框架会自动将该方法完整的 TypeDoc 提取出并注入上下文告知大模型重试。
+- 扫描机制：`skill-loader.ts` 会在运行时自动扫描 `workspace/skills/` 目录下带有 `.d.ts` 后缀的文件，并用正则表达式提取其中方法的 JSDoc 注释。
+- 注入原理：在 LLM 生成代码阶段（Two-pass第一阶段），如果意图提取器通过正则表达式检测到了类似 `github.listIssues(...)`，框架会自动将该方法完整的 TypeDoc 动态提取出并注入上下文告知大模型重试。
 
 ### 4.3 动态挂载机制 (Hot Mounting)
 当你启动系统时，`sandbox-worker.ts` 将执行以下动作：
@@ -138,8 +146,8 @@ npm run gen:module-docs
 **Q：TS Skills 里的代码不安全，可能执行任意脚本吗？**
 A：是的。TS Skills 本身就是赋予系统高度定制权的 Node.js 插件。它在执行权限上近乎等同于主服务。所有的沙盒隔离只防御 Agent 实时生成的随机代码，不对由系统管理员（你）显式部署在工作区的依赖包做底层文件权限锁定。
 
-**Q：如果我在编写 index.ts 时改了代码，系统会热更新吗？**
-A：Sandbox Worker 本质是持续运行的长连接进程。如果你修改了 `index.ts` 的逻辑代码，你需要触发 Sandbox Worker 进程重启方可重新动态加载；如果你修改了 `.d.ts` 文档代码，你需要重新执行 `npm run gen:module-docs` 更新 JSON 词典。
+**Q：如果我在编写 index.ts 或 .d.ts 时改了代码，系统会热更新吗？**
+A：Sandbox Worker 本质是持续运行的长连接进程。如果你修改了 `index.ts` 的逻辑代码，或者是修改了 `.d.ts` 提供给 LLM 的注释，你都只需要**触发 Sandbox Worker 进程重启**方可重新动态加载，无须手动运行任何编译脚本。
 
 **Q：如果在 `index.ts` 里有复杂的 TypeScript 语法（如 Enum、Type Assertion），Worker 能够加载吗？**
 A：框架已使用 `tsx`（TypeScript 执行器）接管了 Worker 的加载。因此你不仅能写标准的 ESM / CommonJS `index.js`，也可以直接零转译地使用现代 `index.ts` 语法进行加载。
