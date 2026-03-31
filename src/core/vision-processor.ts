@@ -165,6 +165,9 @@ export async function processMediaBatch(
     // ─── 处理 Photo（并行） ───
     // 先分类：前 maxImages 张走路径 A（内联），其余走路径 B（描述）或 C（占位）
     // 描述结果按 uniqueFileId 缓存，避免重复 vision LLM 调用
+    // 路径 B 下载的原始 buffer 暂存（用于后续保存到磁盘）
+    const pathBBuffers = new Map<string, { buffer: Buffer; mimeType: string }>();
+
     const photoTasks: Array<Promise<ProcessedMedia>> = photos.map((photo, i) => {
         const shouldInline = isPathA && i < maxImages && downloadFn;
         const canDescribe = (isPathA || isPathB) && downloadFn;
@@ -182,6 +185,8 @@ export async function processMediaBatch(
             const { buffer, mimeType } = await ensureSupportedFormat(rawBuffer, photo.mimeType ?? "image/jpeg");
             const desc = await describeImage(buffer, mimeType, visionCfg);
             photoDescriptionCache.set(photo.uniqueFileId, desc);
+            // 暂存原始 buffer 供后续保存到磁盘
+            pathBBuffers.set(photo.uniqueFileId, { buffer: rawBuffer, mimeType: photo.mimeType ?? "image/jpeg" });
             return { index: photo.messageIndex, description: desc };
         };
 
@@ -248,6 +253,18 @@ export async function processMediaBatch(
                     uniqueFileId: att.uniqueFileId,
                     mediaType: att.type,
                     mimeType: pm.mimeType ?? att.mimeType,
+                    fileName: att.fileName,
+                });
+                if (saved) pm.filePath = saved.path;
+            } else if (pathBBuffers.has(att.uniqueFileId)) {
+                // 路径 B: 使用 vision 描述时暂存的原始 buffer 保存到磁盘
+                const { buffer: rawBuf, mimeType: rawMime } = pathBBuffers.get(att.uniqueFileId)!;
+                const saved = mediaDownloader.saveMedia(rawBuf, {
+                    chatId: att.chatId,
+                    messageId: att.messageId,
+                    uniqueFileId: att.uniqueFileId,
+                    mediaType: att.type,
+                    mimeType: rawMime ?? att.mimeType,
                     fileName: att.fileName,
                 });
                 if (saved) pm.filePath = saved.path;
