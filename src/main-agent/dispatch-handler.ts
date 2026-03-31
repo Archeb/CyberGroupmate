@@ -136,7 +136,7 @@ export function createDispatchHandler(
                 }
 
                 // 获取最近消息
-                const recentMsgs = memory.getRecentMessages(result.chatId, 20);
+                const recentMsgs = memory.getRecentMessages(result.chatId, 50);
                 // 构建 messageId → displayName 映射，用于解析 replyTo 关系
                 const dispatchMsgIdToName = new Map<string, string>();
                 for (const m of recentMsgs) {
