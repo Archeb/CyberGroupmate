@@ -221,7 +221,7 @@ function buildReplyTag(m: RawMessage): string {
     if (!m.replyTo) return "";
     const msgIdSuffix = m.replyToMsgId ? ` #${m.replyToMsgId}` : "";
     const textSuffix = m.replyToText
-        ? `: "${m.replyToText.length > 200 ? m.replyToText.slice(0, 200) + "…" : m.replyToText}"`
+        ? `: "${m.replyToText.length > 500 ? m.replyToText.slice(0, 500) + "…(已截断，请手动fetch完整消息)" : m.replyToText}"`
         : "";
     return ` (↩ reply to ${m.replyTo}${msgIdSuffix}${textSuffix})`;
 }
