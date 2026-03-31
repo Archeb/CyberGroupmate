@@ -473,8 +473,12 @@ export async function runCodeActSession(
 
 你打算使用以下 API: ${missingMethods.join(", ")}。
 以下是这些方法的完整类型定义和用法文档，请仔细阅读后编写代码：
+${fullDocs}
 
-${fullDocs}`,
+注意：获取完信息 console.log 出来看看再决定下一步行动。
+`,
+
+
                         });
 
                         // Pass 2: 重新调用 LLM，让其基于完整文档重新生成代码

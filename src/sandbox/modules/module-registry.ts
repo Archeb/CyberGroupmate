@@ -128,7 +128,7 @@ export function lookupFullDocs(registry: ModuleEntry[], calledMethods: string[])
         }
     }
 
-    let result = `# 完整 API 文档（按需加载）\n\n${found.join("\n\n---\n\n")}`;
+    let result = `# 完整 API 文档\n\n${found.join("\n\n---\n\n")}`;
     if (typeDefSections.length > 0) {
         result += `\n\n---\n\n# 相关类型定义\n\n${typeDefSections.join("\n\n")}`;
     }
