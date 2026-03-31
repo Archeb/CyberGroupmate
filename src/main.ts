@@ -13,6 +13,7 @@
 import { NotificationCenter, type NotificationEvent } from "./event/notification-center.js";
 import { ensureCompositeId, getRawId, getPlatform, getGroupModelKey } from "./core/chat-id.js";
 import { SandboxPool } from "./sandbox/sandbox-pool.js";
+import { installSkillsDependencies } from "./sandbox/skill-loader.js";
 import { createTaskListSkill, buildTaskListHostCalls } from "./sandbox/skills/task-list.js";
 import { MemoryStoreV2 } from "./memory-v2/index.js";
 import { loadConfig, resolveComponentProfiles, resolveComponentTimeout, type AppConfig, type LLMConfig } from "./core/config.js";
@@ -170,6 +171,10 @@ async function main(): Promise<void> {
     });
 
     const nc = new NotificationCenter(EVENTS_PATH);
+
+    // ─── 自动检查并安装 Skills 依赖 ───
+    await installSkillsDependencies(join(process.cwd(), "workspace", "skills"));
+
     const sandboxPool = new SandboxPool({
         maxInstances: appConfig.subagent?.maxSandboxInstances ?? 5,
         idleTimeout: appConfig.subagent?.sandboxIdleTimeout ?? 600_000,

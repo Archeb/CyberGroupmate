@@ -12,12 +12,16 @@
  * @see docs/sandbox-module-guide.md
  */
 
-import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
+import { readFileSync, existsSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { parseDtsFile } from "./dts-parser.js";
+import { createLogger } from "../core/logger.js";
 import type { ModuleEntry } from "./modules/module-registry.js";
 
+const log = createLogger("skill-loader");
 const SKILLS_DIR = resolve("workspace/skills");
 
 export interface LoadedSkill {
@@ -167,9 +171,68 @@ export function parseAllSkillDocs(): ModuleEntry[] {
             }
         } catch (err) {
             const msg = err instanceof Error ? err.stack ?? err.message : String(err);
-            process.stderr.write(`[skill-loader] ⚠ 解析 Skill "${skill.name}" 的文档失败: ${msg}\n`);
+            log.warn(`解析 Skill "${skill.name}" 的文档失败`, { error: msg });
         }
     }
     
     return entries;
+}
+
+/**
+ * 检查 workspace/skills 目录，如有 package.json 且 hash 发生变化，则自动执行 npm install
+ * @param skillsPath skills 根目录路径
+ */
+export async function installSkillsDependencies(skillsPath: string): Promise<void> {
+    const pkgPath = join(skillsPath, "package.json");
+    if (!existsSync(pkgPath)) return;
+
+    try {
+        const pkgContent = readFileSync(pkgPath, "utf-8");
+        const currentHash = createHash("md5").update(pkgContent).digest("hex");
+        
+        const hashFilePath = join(skillsPath, ".skills-deps-hash");
+        const nodeModulesPath = join(skillsPath, "node_modules");
+        
+        // 检查 node_modules 是否缺失，或者 hash 是否改变
+        let shouldInstall = false;
+        if (!existsSync(nodeModulesPath)) {
+            shouldInstall = true;
+        } else if (existsSync(hashFilePath)) {
+            const savedHash = readFileSync(hashFilePath, "utf-8").trim();
+            if (savedHash !== currentHash) {
+                shouldInstall = true;
+            }
+        } else {
+            shouldInstall = true;
+        }
+
+        if (shouldInstall) {
+            log.info("📦 检测到 Skills 依赖变更，正在自动安装...");
+            
+            await new Promise<void>((resolve, reject) => {
+                // 使用跨平台方式执行 npm (主要防 windows 环境)
+                const npmCmd = process.platform === "win32" ? "npm.cmd" : "npm";
+                
+                const child = spawn(npmCmd, ["install", "--omit=dev", "--no-audit", "--no-fund"], {
+                    cwd: skillsPath,
+                    stdio: "inherit",
+                    env: process.env
+                });
+                
+                child.on("close", (code) => {
+                    if (code === 0) {
+                        try { writeFileSync(hashFilePath, currentHash, "utf-8"); } catch {}
+                        log.info("✅ Skills 依赖安装完成");
+                        resolve();
+                    } else {
+                        reject(new Error(`npm install failed with code ${code}`));
+                    }
+                });
+                child.on("error", reject);
+            });
+        }
+    } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        log.error("自动安装 Skills 依赖失败", { error: msg });
+    }
 }
