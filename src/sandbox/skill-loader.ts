@@ -56,7 +56,7 @@ export function discoverSkills(): Array<{ name: string; indexPath: string; dtsPa
         const indexPath = existsSync(indexTs) ? indexTs : existsSync(indexJs) ? indexJs : null;
 
         if (!indexPath) {
-            process.stderr.write(`[skill-loader] ⚠ 跳过 ${entry}/: 未找到 index.ts 或 index.js\n`);
+            log.warn(`[skill-loader] ⚠ 跳过 ${entry}/: 未找到 index.ts 或 index.js\n`);
             continue;
         }
 
@@ -94,7 +94,7 @@ async function loadSingleSkill(name: string, indexPath: string): Promise<Record<
         return exports;
     } catch (err) {
         const msg = err instanceof Error ? err.stack ?? err.message : String(err);
-        process.stderr.write(`[skill-loader] ❌ 加载 Skill "${name}" 失败:\n${msg}\n`);
+        log.warn(`[skill-loader] ❌ 加载 Skill "${name}" 失败:\n${msg}\n`);
         return null;
     }
 }
@@ -108,7 +108,7 @@ export async function loadAllSkills(): Promise<LoadedSkill[]> {
     const discovered = discoverSkills();
     if (discovered.length === 0) return [];
 
-    process.stderr.write(`[skill-loader] 发现 ${discovered.length} 个 Skills: ${discovered.map(s => s.name).join(", ")}\n`);
+    log.info(`[skill-loader] 发现 ${discovered.length} 个 Skills: ${discovered.map(s => s.name).join(", ")}\n`);
 
     const loaded: LoadedSkill[] = [];
 
@@ -120,7 +120,7 @@ export async function loadAllSkills(): Promise<LoadedSkill[]> {
                 exports,
                 dtsPath: skill.dtsPath,
             });
-            process.stderr.write(`[skill-loader] ✅ ${skill.name} 已加载\n`);
+            log.info(`[skill-loader] ✅ ${skill.name} 已加载\n`);
         }
     }
 
@@ -161,7 +161,7 @@ export function parseAllSkillDocs(): ModuleEntry[] {
         try {
             const content = readFileSync(skill.dtsPath, "utf-8");
             const parsed = parseDtsFile(content, skill.dtsPath);
-            
+
             // 修正默认占位符名称为实际的 skill.name
             for (const mod of parsed) {
                 if (mod.name === "default") {
@@ -174,7 +174,7 @@ export function parseAllSkillDocs(): ModuleEntry[] {
             log.warn(`解析 Skill "${skill.name}" 的文档失败`, { error: msg });
         }
     }
-    
+
     return entries;
 }
 
@@ -189,10 +189,10 @@ export async function installSkillsDependencies(skillsPath: string): Promise<voi
     try {
         const pkgContent = readFileSync(pkgPath, "utf-8");
         const currentHash = createHash("md5").update(pkgContent).digest("hex");
-        
+
         const hashFilePath = join(skillsPath, ".skills-deps-hash");
         const nodeModulesPath = join(skillsPath, "node_modules");
-        
+
         // 检查 node_modules 是否缺失，或者 hash 是否改变
         let shouldInstall = false;
         if (!existsSync(nodeModulesPath)) {
@@ -208,20 +208,20 @@ export async function installSkillsDependencies(skillsPath: string): Promise<voi
 
         if (shouldInstall) {
             log.info("📦 检测到 Skills 依赖变更，正在自动安装...");
-            
+
             await new Promise<void>((resolve, reject) => {
                 // 使用跨平台方式执行 npm (主要防 windows 环境)
                 const npmCmd = process.platform === "win32" ? "npm.cmd" : "npm";
-                
+
                 const child = spawn(npmCmd, ["install", "--omit=dev", "--no-audit", "--no-fund"], {
                     cwd: skillsPath,
                     stdio: "inherit",
                     env: process.env
                 });
-                
+
                 child.on("close", (code) => {
                     if (code === 0) {
-                        try { writeFileSync(hashFilePath, currentHash, "utf-8"); } catch {}
+                        try { writeFileSync(hashFilePath, currentHash, "utf-8"); } catch { }
                         log.info("✅ Skills 依赖安装完成");
                         resolve();
                     } else {
