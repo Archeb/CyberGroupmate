@@ -217,5 +217,105 @@ export function createTelegramClientProxy(env: CapabilityRegistryEnv, sentHistor
             const dialogs = await env.callHost("telegram.getDialogs", [opts]);
             return Array.isArray(dialogs) ? dialogs : [];
         },
+
+        // ─── 扩展: 主动拉取 ───
+
+        getFullUser: async (userId: number | string) =>
+            env.callHost("telegram.getFullUser", [userId]),
+        getFullChat: async (chatId: number | string) =>
+            env.callHost("telegram.getFullChat", [chatId]),
+        getForumTopics: async (chatId: number | string, opts?: { limit?: number }) =>
+            env.callHost("telegram.getForumTopics", [chatId, opts]),
+        getMessages: async (chatId: number | string, messageIds: number[]) => {
+            const messages = await env.callHost("telegram.getMessages", [chatId, messageIds]);
+            return Array.isArray(messages) ? messages.map(hydrateTelegramMessage) : [];
+        },
+        searchMessages: async (chatId: number | string, query: string, opts?: { limit?: number }) => {
+            const messages = await env.callHost("telegram.searchMessages", [chatId, query, opts]);
+            return Array.isArray(messages) ? messages.map(hydrateTelegramMessage) : [];
+        },
+        getPollResults: async (chatId: number | string, messageId: number) =>
+            env.callHost("telegram.getPollResults", [chatId, messageId]),
+        getMessageReactions: async (chatId: number | string, messageIds: number[]) =>
+            env.callHost("telegram.getMessageReactions", [chatId, messageIds]),
+        downloadMedia: async (fileId: string, chatId?: number | string, messageId?: number, uniqueFileId?: string) =>
+            env.callHost("telegram.downloadMedia", [fileId, chatId, messageId, uniqueFileId]),
+
+        // ─── 扩展: 发送与交互 ───
+
+        sendMediaGroup: async (chatId: number | string, medias: unknown[], opts?: { replyTo?: number; silent?: boolean }) => {
+            // ── 重复消息拦截（基于首项 caption 或类型摘要）──
+            const firstMedia = medias[0] as Record<string, unknown> | undefined;
+            const mediaGroupText = `[mediaGroup:${medias.length}items]${firstMedia?.caption ? `|${firstMedia.caption}` : ""}`;
+            if (isDuplicate(String(chatId), mediaGroupText)) {
+                const warning = `[⚠ 运行时警告: 重复消息已拦截] 目标 chat=${String(chatId)} 的媒体组与本次 session 中已发送的内容一致，已自动拦截。`;
+                env.emitOutput(warning);
+                env.notifyHost({
+                    type: "system.duplicate_message_blocked",
+                    scene: "telegram",
+                    chatId: String(chatId),
+                    text: mediaGroupText,
+                    timestamp: new Date().toISOString(),
+                });
+                return null;
+            }
+            const sent = await env.callHost("telegram.sendMediaGroup", [chatId, medias, opts]);
+            env.emitOutput(`[Telegram] sendMediaGroup ok chat=${String(chatId)} count=${medias.length}`);
+            env.notifyHost({
+                type: "system.agent_message_sent",
+                scene: "telegram",
+                chatId: String(chatId),
+                text: mediaGroupText,
+                timestamp: new Date().toISOString(),
+            });
+            return sent;
+        },
+        sendPoll: async (chatId: number | string, question: string, options: string[], opts?: Record<string, unknown>) => {
+            // ── 重复消息拦截（基于 question）──
+            const pollText = `[poll:${question}]`;
+            if (isDuplicate(String(chatId), pollText)) {
+                const warning = `[⚠ 运行时警告: 重复消息已拦截] 目标 chat=${String(chatId)} 的投票 "${question}" 与本次 session 中已发送的内容一致，已自动拦截。`;
+                env.emitOutput(warning);
+                env.notifyHost({
+                    type: "system.duplicate_message_blocked",
+                    scene: "telegram",
+                    chatId: String(chatId),
+                    text: pollText,
+                    timestamp: new Date().toISOString(),
+                });
+                return null;
+            }
+            const sent = hydrateTelegramMessage(await env.callHost("telegram.sendPoll", [chatId, question, options, opts]));
+            env.emitOutput(formatTelegramAck("[Telegram] sendPoll ok", sent));
+            env.notifyHost({
+                type: "system.agent_message_sent",
+                scene: "telegram",
+                chatId: String(chatId),
+                text: pollText,
+                timestamp: new Date().toISOString(),
+            });
+            return sent;
+        },
+        sendReaction: async (chatId: number | string, messageId: number, emoji: string | null) => {
+            await env.callHost("telegram.sendReaction", [chatId, messageId, emoji]);
+            env.emitOutput(`[Telegram] sendReaction ok chat=${String(chatId)} msg=${messageId} emoji=${emoji ?? "(removed)"}`);
+        },
+        editMessage: async (chatId: number | string, messageId: number, text: string) => {
+            const edited = hydrateTelegramMessage(await env.callHost("telegram.editMessage", [chatId, messageId, text]));
+            env.emitOutput(formatTelegramAck("[Telegram] editMessage ok", edited));
+            return edited;
+        },
+        deleteMessages: async (chatId: number | string, messageIds: number[]) => {
+            await env.callHost("telegram.deleteMessages", [chatId, messageIds]);
+            env.emitOutput(`[Telegram] deleteMessages ok chat=${String(chatId)} ids=[${messageIds.join(",")}]`);
+        },
+        pinMessage: async (chatId: number | string, messageId: number, opts?: { silent?: boolean }) => {
+            await env.callHost("telegram.pinMessage", [chatId, messageId, opts]);
+            env.emitOutput(`[Telegram] pinMessage ok chat=${String(chatId)} msg=${messageId}`);
+        },
+        unpinMessage: async (chatId: number | string, messageId: number) => {
+            await env.callHost("telegram.unpinMessage", [chatId, messageId]);
+            env.emitOutput(`[Telegram] unpinMessage ok chat=${String(chatId)} msg=${messageId}`);
+        },
     };
 }
