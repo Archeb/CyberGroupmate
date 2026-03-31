@@ -687,6 +687,15 @@ export class RecordingPipeline extends EventEmitter {
             if (!topic) continue;
 
             const triage = triageResult.topics.find(t => t.topicId === topicId);
+            log.info("updateRegistry: 话题处理", {
+                topicId: topic.id,
+                clusterTopicId: topicId,
+                label: topic.label,
+                state: topic.state,
+                triageFound: !!triage,
+                triageShouldIntervene: triage?.should_intervene,
+                msgCount: topicMsgs.length,
+            });
             if (triage) {
                 // 缓存摘要信息到 Topic 对象，供下一轮 flush 时作为旧话题上下文
                 topic.lastSummary = triage.summary;
@@ -727,6 +736,12 @@ export class RecordingPipeline extends EventEmitter {
         }
 
         // 批量 emit triage-passed 事件（一次 flush 只触发一次入队）
+        log.info("updateRegistry: 完成", {
+            totalTopics: updatedTopics.length,
+            triagePassedCount: triagePassedTopics.length,
+            triagePassedTopicIds: triagePassedTopics.map(tp => tp.topic.id),
+            listenerCount: this.listenerCount("topics:triage-passed"),
+        });
         if (triagePassedTopics.length > 0) {
             this.emit("topics:triage-passed", triagePassedTopics);
         }
