@@ -31,6 +31,8 @@ export interface ModuleEntry {
     description: string;
     /** 方法列表 */
     methods: MethodDoc[];
+    /** 该模块涉及的 interface / type / enum 定义原文（Pass 2 按需注入） */
+    typeDefs?: string;
 }
 
 import { readFileSync } from "node:fs";
@@ -92,6 +94,8 @@ export function generateBriefOverview(registry: ModuleEntry[]): string {
 export function lookupFullDocs(registry: ModuleEntry[], calledMethods: string[]): string {
     const found: string[] = [];
     const seen = new Set<string>();
+    /** 收集涉及的模块（用于追加 typeDefs） */
+    const referencedModules = new Set<string>();
 
     for (const call of calledMethods) {
         // 解析 "ctx.tg.sendText" → moduleName="ctx.tg", methodName="sendText"
@@ -110,8 +114,23 @@ export function lookupFullDocs(registry: ModuleEntry[], calledMethods: string[])
         if (seen.has(key)) continue;
         seen.add(key);
         found.push(`### ${moduleName}.${methodName}\n\n${method.fullDoc}`);
+        referencedModules.add(moduleName);
     }
 
     if (found.length === 0) return "";
-    return `# 完整 API 文档（按需加载）\n\n${found.join("\n\n---\n\n")}`;
+
+    // 追加涉及模块的 interface / type / enum 定义
+    const typeDefSections: string[] = [];
+    for (const modName of referencedModules) {
+        const mod = registry.find(m => m.name === modName);
+        if (mod?.typeDefs) {
+            typeDefSections.push(`#### ${modName} 相关类型定义\n\n\`\`\`typescript\n${mod.typeDefs}\n\`\`\``);
+        }
+    }
+
+    let result = `# 完整 API 文档（按需加载）\n\n${found.join("\n\n---\n\n")}`;
+    if (typeDefSections.length > 0) {
+        result += `\n\n---\n\n# 相关类型定义\n\n${typeDefSections.join("\n\n")}`;
+    }
+    return result;
 }

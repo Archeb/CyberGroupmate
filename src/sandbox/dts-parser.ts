@@ -232,8 +232,38 @@ export function parseMethodsFromBody(body: string): MethodDoc[] {
 }
 
 /**
+ * 从 .d.ts 文件内容中提取所有 interface / type / enum 定义的原文。
+ * 提取的类型定义将附加到 ModuleEntry.typeDefs，
+ * 在 Pass 2 文档注入时一并提供给 LLM，使其能理解参数/返回值的结构。
+ */
+function extractTypeDefs(content: string): string {
+    const defs: string[] = [];
+
+    // 提取 interface 块（含可选的前置 JSDoc）
+    const ifaceRegex = /(?:(?:\/\*\*[\s\S]*?\*\/\s*)?\n)?(interface\s+\w+[\s\S]*?\n\})/g;
+    let m;
+    while ((m = ifaceRegex.exec(content)) !== null) {
+        defs.push(m[1].trim());
+    }
+
+    // 提取 type alias
+    const typeRegex = /(?:(?:\/\*\*[\s\S]*?\*\/\s*)?\n)?(type\s+\w+\s*=[\s\S]*?;)/g;
+    while ((m = typeRegex.exec(content)) !== null) {
+        defs.push(m[1].trim());
+    }
+
+    // 提取 enum 块
+    const enumRegex = /(?:(?:\/\*\*[\s\S]*?\*\/\s*)?\n)?((?:const\s+)?enum\s+\w+\s*\{[\s\S]*?\n\})/g;
+    while ((m = enumRegex.exec(content)) !== null) {
+        defs.push(m[1].trim());
+    }
+
+    return defs.join("\n\n");
+}
+
+/**
  * 解析 .d.ts 文件中的 `interface XXX { ... }` 或 `declare const xxx: { ... }` 块，
- * 提取方法签名和 JSDoc。
+ * 提取方法签名和 JSDoc，同时提取 interface/type/enum 定义附加到 typeDefs。
  */
 export function parseDtsFile(content: string, fileName: string): ModuleEntry[] {
     const entries: ModuleEntry[] = [];
@@ -241,6 +271,9 @@ export function parseDtsFile(content: string, fileName: string): ModuleEntry[] {
     // 提取文件级 JSDoc（第一行 /** ... */）
     const fileDocMatch = content.match(/^\/\*\*[\s\S]*?\*\//m);
     const fileDesc = fileDocMatch ? extractBrief(fileDocMatch[0]) : "";
+
+    // 提取文件中所有类型定义
+    const typeDefs = extractTypeDefs(content);
 
     // ─── 解析 declare const xxx: { ... } 形式的模块 ───
     const declareConstRegex = /declare\s+const\s+(\w+)\s*:\s*\{([\s\S]*?)\n\};/g;
@@ -255,6 +288,7 @@ export function parseDtsFile(content: string, fileName: string): ModuleEntry[] {
                 name: moduleName,
                 description: fileDesc,
                 methods,
+                ...(typeDefs ? { typeDefs } : {}),
             });
         }
     }
@@ -279,6 +313,7 @@ export function parseDtsFile(content: string, fileName: string): ModuleEntry[] {
                     name: moduleName,
                     description: fileDesc,
                     methods,
+                    ...(typeDefs ? { typeDefs } : {}),
                 });
             }
         }
@@ -309,6 +344,7 @@ export function parseDtsFile(content: string, fileName: string): ModuleEntry[] {
                         name: moduleName,
                         description: fileDesc,
                         methods,
+                        ...(typeDefs ? { typeDefs } : {}),
                     });
                 }
             }
@@ -328,6 +364,7 @@ export function parseDtsFile(content: string, fileName: string): ModuleEntry[] {
                 name: "default", // 这是一个占位符，外部加载器会替换为真实 Skill name
                 description: fileDesc,
                 methods,
+                ...(typeDefs ? { typeDefs } : {}),
             });
         }
     }

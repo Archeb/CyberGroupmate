@@ -75,7 +75,7 @@ function main(): void {
     console.log(`✅ 已生成: ${briefPath}`);
 }
 
-/** 合并模块条目（同名模块合并方法列表） */
+/** 合并模块条目（同名模块合并方法列表和类型定义） */
 function mergeEntries(allEntries: ModuleEntry[], newEntries: ModuleEntry[]): void {
     for (const entry of newEntries) {
         const existing = allEntries.find(e => e.name === entry.name);
@@ -83,6 +83,12 @@ function mergeEntries(allEntries: ModuleEntry[], newEntries: ModuleEntry[]): voi
             existing.methods.push(...entry.methods);
             if (!existing.description && entry.description) {
                 existing.description = entry.description;
+            }
+            // 合并 typeDefs
+            if (entry.typeDefs) {
+                existing.typeDefs = existing.typeDefs
+                    ? `${existing.typeDefs}\n\n${entry.typeDefs}`
+                    : entry.typeDefs;
             }
         } else {
             allEntries.push(entry);
