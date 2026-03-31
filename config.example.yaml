@@ -300,6 +300,21 @@ dashboard:
   # 认证 Token（访问时需携带 ?token=xxx）
   token: "your-secret-token"
 
+# ─── Prometheus Metrics Exporter ───
+# 对外暴露 Prometheus 兼容的 /metrics 端点，供 Grafana / Prometheus 抓取
+# 所有字段可选，缺省使用括号内安全默认值
+metrics:
+  # 是否启用（默认 true）
+  enabled: true
+  # ⚠️ 绑定地址（默认 "127.0.0.1" = 仅本机可访问）
+  # 强烈建议保持此值。若需要远端 Prometheus 抓取，请使用 nginx/Caddy 反向代理
+  # 并配置 IP allowlist，而非直接修改此字段为 0.0.0.0。
+  host: "127.0.0.1"
+  # HTTP 监听端口（默认 9091）
+  port: 9091
+  # scrape 路径（默认 "/metrics"，通常不需要修改）
+  path: "/metrics"
+
 # ─── Subagent / CodeAct 设置 ───
 # 控制 CodeAct 交互引擎的行为参数
 # 所有字段可选，缺省使用括号内默认值

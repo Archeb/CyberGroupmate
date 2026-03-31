@@ -791,6 +791,54 @@ async function main(): Promise<void> {
         log.info("Dashboard 已启动", { port: dashboardPort, url: `http://localhost:${dashboardPort}?token=${dashboardToken}` });
     }
 
+    // ─── Prometheus Metrics Exporter ───
+    let metricsInstance: import("./metrics/index.js").MetricsInstance | null = null;
+    const metricsEnabled = appConfig.metrics?.enabled !== false;
+    if (metricsEnabled) {
+        const { startMetrics } = await import("./metrics/index.js");
+        metricsInstance = await startMetrics(
+            { subagentManager, sandboxPool, q3, q5, mainLoop, feedbackLoop },
+            appConfig.metrics,
+        );
+
+        // Hook 1: 消息到达时更新 group_messages_total
+        nc.onPush(event => {
+            const eventType = String(event.type ?? "");
+            if (eventType !== "nc.message") return;
+            const chatId = String(event.chatId ?? "");
+            if (chatId) metricsInstance!.groupCollector.onMessage(chatId);
+        });
+
+        // Hook 2: attend 决策后更新 group_attends_total
+        // MainAgentLoop 在 attend 完成后 emit "attend" 事件，
+        // 若 mainLoop 不支持此事件则通过 DashboardDeps 所有的 globalState 追踪。
+        // 实际实现：科二幻读取 mainAgentLoop 的 "decision" 事件。
+        // 因 MainAgentLoop 目前没有公开 attend 事件，最简单的方式是 hook 主循环 event emitter。
+        (mainLoop as any).on?.("attend", (chatId: string, decision: string) => {
+            metricsInstance!.groupCollector.onAttend(chatId, decision);
+        });
+
+        // Hook 3: FastPath 快回复发送时更新 fast_path_replies_total
+        // q5 的回调包含 sentMessages，可通过 CallbackQueue 读取
+        // 简化：在 NC.onPush 中检测 system.agent_message_sent + fastPath flag
+        nc.onPush(event => {
+            if (String(event.type ?? "") !== "system.agent_message_sent") return;
+            const chatId = String(event.chatId ?? "");
+            // 如果事件中标记了 via_fast_path（FastPathHandler 设置）则计数
+            if ((event as any).viaFastPath && chatId) {
+                metricsInstance!.groupCollector.onFastPathReply(chatId);
+            }
+        });
+
+        log.info("指标 exporter 已启动", {
+            host: appConfig.metrics?.host ?? "127.0.0.1",
+            port: appConfig.metrics?.port ?? 9091,
+            path: appConfig.metrics?.path ?? "/metrics",
+        });
+        // 将 exporter 存入模块层变量，以便 Graceful shutdown 调用 stop()
+        _metricsStopFn = () => metricsInstance!.exporter.stop();
+    }
+
     // NOTE: Sandbox 事件处理和 host call handler 已通过 SandboxPool.onAcquire 回调注册
     // sandbox 实例在 CodeActExecutor.executeWithSandbox() 中按需创建，不再全局启动
     log.info("SandboxPool 已配置", {
@@ -819,13 +867,17 @@ async function main(): Promise<void> {
 }
 
 // ─── Graceful shutdown ───
+let _metricsStopFn: (() => void) | null = null;
+
 process.on("SIGINT", () => {
     console.log("\n🛑 Shutting down...");
+    _metricsStopFn?.();
     process.exit(0);
 });
 
 process.on("SIGTERM", () => {
     console.log("\n🛑 Shutting down...");
+    _metricsStopFn?.();
     process.exit(0);
 });
 

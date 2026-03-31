@@ -289,6 +289,22 @@ export interface DashboardExternalConfig {
     token?: string;
 }
 
+/** Metrics Exporter 配置 */
+export interface MetricsConfig {
+    /** 是否启用。默认 true */
+    enabled?: boolean;
+    /**
+     * 绑定地址。默认且强烈推荐保持 "127.0.0.1"（仅本机可访问）。
+     * 若需要远端 Prometheus 抓取，请使用反向代理并加 IP allowlist，
+     * 不要直接改为 0.0.0.0，除非你清楚了解安全风险。
+     */
+    host?: string;
+    /** HTTP 监听端口。默认 9091 */
+    port?: number;
+    /** scrape 路径。默认 "/metrics" */
+    path?: string;
+}
+
 /** Token 价格配置（每百万 token，USD） */
 export type TokenPricingEntry = NonNullable<LLMConfig["pricing"]>;
 
@@ -321,6 +337,8 @@ export interface AppConfig {
     recordingPipeline?: RecordingPipelineConfig;
     /** 自定义环境变量（通过 Dashboard 管理） */
     envVars?: EnvironmentVariable[];
+    /** Prometheus Metrics Exporter 配置 */
+    metrics?: MetricsConfig;
 }
 
 // ─── 默认值 ───
@@ -481,6 +499,7 @@ export function loadConfig(configPath?: string, forceReload?: boolean): AppConfi
         vision: parseVisionConfig(fileConfig),
         recordingPipeline: parseRecordingPipelineConfig(fileConfig),
         envVars: parseEnvVars(fileConfig),
+        metrics: parseMetricsConfig(fileConfig),
     };
 
     _cached = config;
@@ -575,6 +594,19 @@ function parseDashboardConfig(fileConfig: Record<string, unknown>): DashboardExt
         enabled: raw.enabled != null ? Boolean(raw.enabled) : undefined,
         port: raw.port != null ? num(raw.port, 6767) : undefined,
         token: str(raw.token),
+    };
+}
+
+// ─── Metrics 配置解析 ───
+
+function parseMetricsConfig(fileConfig: Record<string, unknown>): MetricsConfig | undefined {
+    const raw = fileConfig.metrics as Record<string, unknown> | undefined;
+    if (!raw || typeof raw !== "object") return undefined;
+    return {
+        enabled: raw.enabled != null ? Boolean(raw.enabled) : undefined,
+        host: str(raw.host),
+        port: raw.port != null ? num(raw.port, 9091) : undefined,
+        path: str(raw.path),
     };
 }
 

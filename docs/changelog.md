@@ -1,5 +1,155 @@
 # Changelog
 
+## 2026-03-31: Prometheus Scrape 兼容性测试套件 — 端到端格式与数值验证
+
+在已有 21 个单元测试基础上，新增 `tests/metrics-prometheus.test.ts`（25 个测试用例），通过内嵌 Prometheus 文本格式解析器模拟真实 Prometheus scraper 的完整抓取行为，验证每个 metric 的数值准确性、格式合规性和安全绑定行为。
+
+### 核心新增
+
+**`PrometheusTextParser`（测试内嵌）**：完整实现 [Prometheus 文本格式规范](https://prometheus.io/docs/instrumenting/exposition_formats/) 解析器：
+- 解析 `# HELP` / `# TYPE` 元数据
+- 结构化 labeled / plain sample
+- Histogram `_bucket` / `_sum` / `_count` suffix 识别与归属（仅对已声明为 `histogram` 类型的 family 执行 suffix 剥离，避免误匹配 `group_topic_count` 等名称）
+- 字符串转义处理（`\"` `\n` `\\`）
+- `le="+Inf"` label value 与 metric 数值 `+Inf` 的区分解析
+
+**端到端数据流验证**：
+- Counter: `onMessage/onAttend/onFastPathReply` 写入 → HTTP scrape → 精确数值断言
+- Histogram: `observe(300ms/1500ms/8000ms)` → scrape → 验证每个 bucket 的累计值、`_sum=9800`、`_count=3`、`+Inf=3`
+- Gauge: mock deps（sandbox=3, q3=5, q5=2, ticks=9999）→ scrape → 全部数值验证
+- GroupCollector: stickiness 指示器（CORE=1/FAMILIAR=0）、topic 状态分组计数（OPEN/SEALED/ARCHIVED）、last attend age（±5s 容差）
+
+### 测试覆盖（25 用例 / 9 测试组）
+
+| 测试组 | 用例 |
+|:--- |:--- |
+| A. PrometheusTextParser 自测 | 6 |
+| B. Counter E2E 数据流（含单调递增验证） | 2 |
+| C. Histogram 精确性（bucket/sum/count 数值） | 2 |
+| D. Gauge 数据流（SystemCollector 全属性） | 2 |
+| E. GroupCollector 全属性 scrape | 2 |
+| F. Label 格式（转义、字母序、多 label series） | 3 |
+| G. 全量 metric 完整性（29 个 family + HELP/TYPE 完整性） | 3 |
+| H. 安全性（localhost、自定义 path、query string） | 3 |
+| I. 幂等性与稳定性（Gauge 稳定、Counter 单调） | 2 |
+
+### Bug 修复（测试驱动发现）
+
+| 问题 | 修复 |
+|:--- |:--- |
+| `group_topic_count` 被误归属到 `group_topic` family | Parser 仅对 `# TYPE xxx histogram` 声明后的 family 执行 `_count` suffix 剥离 |
+| `le="+Inf"` 中 `+Inf` 被误解析为 `Infinity` | 区分 label value 中的 `+Inf` 字符串与 metric 数字值 |
+
+### 改动
+
+| 文件 | 改动 |
+|:--- |:--- |
+| `tests/metrics-prometheus.test.ts` | **[NEW]** 25 个 Prometheus scrape 兼容性测试用例 |
+| `docs/telemetry.md` | 测试状态更新为 46/46，新增 §8 Prometheus Scrape 测试文档 |
+
+### 测试结果
+
+```
+# 合计 tests 46 / pass 46 / fail 0
+# metrics.test.ts:            21/21
+# metrics-prometheus.test.ts: 25/25
+# duration_ms ~220
+```
+
+---
+
+## 2026-03-31: Prometheus Metrics Node Exporter — 实时可观测性端点
+
+新增生产级 Prometheus 兼容的 Metrics Exporter (`src/metrics/`)，暴露 LLM SLA、Token 用量、群聊活动质量和系统健康指标，默认仅绑定 `127.0.0.1:9091` 防止数据意外泄露到公网。
+
+### 架构概览
+
+| 模块 | 职责 |
+|:--- |:--- |
+| `src/metrics/registry.ts` | 自实现 Prometheus 文本格式渲染（Counter/Gauge/Histogram），无外部依赖 |
+| `src/metrics/collectors/llm-collector.ts` | 订阅 `llmEvents`，追踪 LLM SLA（延迟、TPS、token 用量、重试） |
+| `src/metrics/collectors/group-collector.ts` | scrape 时读取 SubagentManager 快照 + NC push 事件计数 |
+| `src/metrics/collectors/system-collector.ts` | 进程内存、SandboxPool、Q3/Q5 队列、主循环状态 |
+| `src/metrics/exporter.ts` | `node:http` HTTP server，`GET /metrics` + `GET /healthz` |
+| `src/metrics/index.ts` | `startMetrics()` 工厂函数 |
+| `src/core/llm-events.ts` | 轻量 re-export，绕开 provider 重型依赖（@google/genai 等） |
+
+### 指标覆盖（30 个 metrics）
+
+**LLM Token 用量（Counters）** — labels: `model × caller × provider`
+- `cybergroupmate_llm_tokens_prompt_total`
+- `cybergroupmate_llm_tokens_completion_total`
+- `cybergroupmate_llm_tokens_cached_total`
+- `cybergroupmate_llm_tokens_cache_creation_total`
+
+**LLM 推理 SLA**
+- `cybergroupmate_llm_request_duration_ms` — Histogram，buckets: 500ms～60s，labels 含 `status=success|error`
+- `cybergroupmate_llm_tps` — Histogram，buckets: 5～200 tokens/s（非流式推算）
+- `cybergroupmate_llm_requests_total` — Counter
+- `cybergroupmate_llm_retries_total` — Counter，含 `reason` label
+
+**群聊统计**
+- `cybergroupmate_groups_total`、`cybergroupmate_group_engagement_score`
+- `cybergroupmate_group_messages_total`、`cybergroupmate_group_attends_total`（含 `decision` label）
+- `cybergroupmate_group_fast_path_replies_total`
+- `cybergroupmate_group_stickiness`、`cybergroupmate_group_topic_count`
+- `cybergroupmate_group_buffer_size`、`cybergroupmate_group_codeact_queue_size`
+- `cybergroupmate_group_last_attend_age_seconds`
+
+**系统与队列**
+- `cybergroupmate_main_loop_ticks_total`（Gauge）、`cybergroupmate_main_loop_running`
+- `cybergroupmate_sandbox_pool_active`、`cybergroupmate_sandbox_pool_idle`
+- `cybergroupmate_q3_queue_size`、`cybergroupmate_q5_callback_pending`
+- `cybergroupmate_feedback_loop_windows_active`
+
+**进程级**
+- `cybergroupmate_process_uptime_seconds`
+- `cybergroupmate_process_heap_used_bytes`、`cybergroupmate_process_heap_total_bytes`
+- `cybergroupmate_process_rss_bytes`
+
+### 安全设计
+
+```yaml
+metrics:
+  host: "127.0.0.1"  # ⚠️ 默认 localhost-only，需显式修改才能对外暴露
+  port: 9091
+  path: "/metrics"
+```
+
+远端抓取推荐使用 nginx/Caddy 反向代理 + IP allowlist，不直接绑定 `0.0.0.0`。
+
+### 已知限制（设计决策）
+
+- **TTFT/ITL 近似**：当前三个 Provider（OpenAI/Anthropic/Google）均使用非流式调用，TTFT ≈ 端到端延迟，ITL 通过 `completion_tokens / duration_s` 推算 TPS。待切换流式调用后，在各 Provider 的 `onFirstChunk` hook 获取精确 TTFT。
+- **Counter 非持久化**：进程重启后 Counter 重置为 0，Prometheus 的 `rate()` 函数可自动处理 counter reset。
+
+### 改动
+
+| 文件 | 改动 |
+|:--- |:--- |
+| `src/metrics/registry.ts` | **[NEW]** Prometheus 文本格式自实现 + 30 个 metric 对象注册 |
+| `src/metrics/collectors/llm-collector.ts` | **[NEW]** LLM SLA 事件驱动收集器 |
+| `src/metrics/collectors/group-collector.ts` | **[NEW]** 群聊统计 scrape + push 双模式收集器 |
+| `src/metrics/collectors/system-collector.ts` | **[NEW]** 系统级指标 scrape 收集器 |
+| `src/metrics/exporter.ts` | **[NEW]** localhost-only HTTP server |
+| `src/metrics/index.ts` | **[NEW]** `startMetrics()` 公共入口 |
+| `src/core/llm-events.ts` | **[NEW]** llmEvents 轻量 re-export（隔离 provider 依赖） |
+| `src/core/config.ts` | 新增 `MetricsConfig` 接口 + `parseMetricsConfig()` |
+| `src/main.ts` | 新增 metrics 初始化块 + NC hook + graceful shutdown |
+| `config.example.yaml` | 新增 `metrics:` 配置区块（含安全警告注释） |
+| `docs/telemetry.md` | 文档状态更新为「已实现」，修正 `main_loop_ticks_total` metric 类型 |
+| `tests/metrics.test.ts` | **[NEW]** 21 个测试用例（Counter/Gauge/Histogram + HTTP 端点） |
+
+### 测试结果
+
+```
+# tests 21 / pass 21 / fail 0 / duration_ms ~190
+```
+
+覆盖范围：Counter/Gauge/Histogram 渲染格式、空 label 规范化、Histogram 累计桶逻辑、GroupCollector Counter/Gauge 更新、SystemCollector 进程指标、MetricsExporter HTTP（/metrics、/healthz、404、localhost 默认绑定）。
+
+---
+
 ## 2026-03-29: Attend-Handler System Prompt 缓存优化 — 动态内容下沉到 User Message
 
 ### 问题
