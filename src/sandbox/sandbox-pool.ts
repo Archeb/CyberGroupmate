@@ -115,12 +115,13 @@ export class SandboxPool {
             this.config.sandboxEnv,
             this.config.hostOnlyKeys,
         );
-        await sandbox.start();
-
-        // 调用 onAcquire 初始化新实例（注册 hostCallHandler、event listener 等）
+        // 先注册 event listener 和 hostCallHandler（必须在 start() 之前，
+        // 因为 worker 初始化阶段 skill-loader 就会通过 IPC 发送 print 消息）
         if (this.config.onAcquire) {
             this.config.onAcquire(sandbox, chatId);
         }
+
+        await sandbox.start();
 
         this.pool.set(chatId, {
             sandbox,
