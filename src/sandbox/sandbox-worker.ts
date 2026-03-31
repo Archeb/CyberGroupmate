@@ -14,6 +14,7 @@ import { installCapabilityRegistry } from "./capability-registry.js";
 import { createPromiseTracker } from "./promise-tracker.js";
 import { docs } from "./modules/docs.js";
 import { loadAllSkills, mountSkillsToCtx, type LoadedSkill } from "./skill-loader.js";
+import { configureLogger } from "../core/logger.js";
 
 // ─── 全局 Skills 缓存（Worker 启动时加载一次） ───
 let loadedSkills: LoadedSkill[] = [];
@@ -382,6 +383,9 @@ rl.on("line", async (line: string) => {
 // ─── Worker 初始化 ───
 
 async function initWorker(): Promise<void> {
+    // Worker 的 stdout 是 IPC 通道，把所有 logger 输出重定向到 printToHost
+    configureLogger({ sink: (line) => printToHost(line) });
+
     // 加载用户 TS Skills（失败不阻断启动）
     try {
         loadedSkills = await loadAllSkills();
