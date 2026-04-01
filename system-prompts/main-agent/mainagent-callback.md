@@ -1,4 +1,4 @@
-═══ Subagent 执行结果 ═══
+═══ 消息回复结果 ═══
 群组: {{chatTitle}} ({{chatId}}) [{{chatType}}]
 任务: {{taskId}} ({{executionType}})
 状态: {{status}}
@@ -14,4 +14,4 @@ Session 摘要: {{summary}}
 错误: {{error}}
 {{/hasError}}
 
-请更新全局状态并决定后续动作。
+请根据已发送消息分析：刚才的行为是否OOC、违背自己的准则或设定，是否达成目标，并且在下一次查看时纠正或者停止。
