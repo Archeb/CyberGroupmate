@@ -453,6 +453,11 @@ export function formatMessages(
 
 // ─── OpenGraph 富化内部函数 ───
 
+/** OG 封面图 Vision 描述缓存: imageUrl → { description, base64?, mimeType? } */
+const ogImageDescriptionCache = new Map<string, { description?: string; base64?: string; mimeType?: string }>();
+const OG_IMAGE_CACHE_MAX = 200;
+
+
 /**
  * 对消息中的 URL 进行 OpenGraph 元数据抓取 + 封面图 Vision 描述
  */
@@ -500,6 +505,19 @@ async function enrichWithOpenGraph(
 
     if (uniqueImageUrls.length > 0 && visionLlmConfigs?.length) {
         const imageTasks = uniqueImageUrls.map(async (imageUrl) => {
+            // 缓存命中
+            const cached = ogImageDescriptionCache.get(imageUrl);
+            if (cached) {
+                log.debug("OG 封面图 Vision 缓存命中", { imageUrl });
+                imageDescriptions.set(imageUrl, {
+                    description: cached.description,
+                    // Path A: 需要 base64 时从缓存取（缓存可能在非 Path A 下写入，此时无 base64）
+                    base64: isPathA ? cached.base64 : undefined,
+                    mimeType: isPathA ? cached.mimeType : undefined,
+                });
+                return;
+            }
+
             const downloaded = await downloadOgImage(imageUrl);
             if (!downloaded) return;
 
@@ -517,9 +535,21 @@ async function enrichWithOpenGraph(
                 const response = await callLLMWithFallback(visionMessages, visionLlmConfigs, { caller: "og-vision", timeoutMs: resolveComponentTimeout("vision") });
                 const description = response.content.trim();
 
+                const entry = {
+                    description,
+                    base64: b64,
+                    mimeType: downloaded.mimeType,
+                };
+
+                // 写入缓存（LRU 淘汰）
+                if (ogImageDescriptionCache.size >= OG_IMAGE_CACHE_MAX) {
+                    const firstKey = ogImageDescriptionCache.keys().next().value;
+                    if (firstKey) ogImageDescriptionCache.delete(firstKey);
+                }
+                ogImageDescriptionCache.set(imageUrl, entry);
+
                 imageDescriptions.set(imageUrl, {
                     description,
-                    // Path A: 同时保留 base64 数据给主 LLM 内联查看
                     base64: isPathA ? b64 : undefined,
                     mimeType: isPathA ? downloaded.mimeType : undefined,
                 });
