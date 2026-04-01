@@ -320,11 +320,6 @@ export class CodeActExecutor {
             hasSandbox: this.hasDependencies(),
         });
 
-        // 检查 session 长度
-        if (this.session.length > this.config.maxSessionMessages) {
-            await this.compactSession();
-        }
-
         try {
             // ═══ Fix 9: 实际的 Sandbox 执行逻辑 ═══
             if (this.hasDependencies()) {
@@ -471,10 +466,6 @@ export class CodeActExecutor {
 
         // 注入历史 session（如果有）
         if (this.session.length > 0) {
-            // 先检查是否需要 compact
-            if (this.session.length > this.config.maxSessionMessages) {
-                await this.compactSession();
-            }
             // 将历史 session 消息作为 LLM 上下文注入
             for (const msg of this.session) {
                 messages.push({ role: msg.role, content: msg.content });
@@ -840,6 +831,11 @@ export class CodeActExecutor {
                 // 通知 callback handler (Q5)
                 if (this.callbackHandler) {
                     this.callbackHandler(callback);
+                }
+
+                // 每次任务完成后 compact session（从任务开始前移至此处，避免延迟任务执行）
+                if (this.session.length > this.config.maxSessionMessages) {
+                    await this.compactSession();
                 }
 
                 // 每次任务完成后自动持久化 session
