@@ -1,15 +1,12 @@
 /**
- * telegram.d.ts — Telegram 场景类型定义
+ * telegram.d.ts — Telegram 平台 API
  *
  * 这是系统注入的 Telegram host proxy 的接口子集。
  * 提供给 Agent 在 sandbox 执行时作为 TypeScript 强类型上下文参考。
  * 平台连接与消息监听由宿主侧官方 adapter 管理。
  */
 
-declare const ctx: {
-    tg: TelegramClient;
-    [key: string]: any;
-};
+declare const telegram: TelegramClient;
 
 // ═══════════════════════════════════════════
 //  基础实体 (Basic Entities)
@@ -260,12 +257,12 @@ interface TelegramClient {
     getDialogs(opts?: { limit?: number }): Promise<Dialog[]>;
     /**
      * 获取用户的完整资料（包含个人简介 bio 等）。
-     * @example const full = await ctx.tg.getFullUser(userId); console.log(full.bio);
+     * @example const full = await telegram.getFullUser(userId); console.log(full.bio);
      */
     getFullUser(userId: number | string): Promise<FullUser>;
     /**
      * 获取群组/频道的完整资料（包含群描述 about、成员数等）。
-     * @example const full = await ctx.tg.getFullChat(chatId); console.log(full.about, full.isForum);
+     * @example const full = await telegram.getFullChat(chatId); console.log(full.about, full.isForum);
      */
     getFullChat(chatId: number | string): Promise<FullChat>;
     // [USERBOT_ONLY_BEGIN]
@@ -273,27 +270,27 @@ interface TelegramClient {
     getHistory(chatId: number | string, opts?: { limit?: number }): Promise<Message[]>;
     /**
      * 按消息 ID 精确获取一条或多条消息。（在别人回复或者提及某消息但是你看不见的时候，善用该函数爬楼获取上下文）
-     * @example const msgs = await ctx.tg.getMessages(chatId, [100, 101, 102]);
+     * @example const msgs = await telegram.getMessages(chatId, [100, 101, 102]);
      */
     getMessages(chatId: number | string, messageIds: number[]): Promise<(Message | null)[]>;
     /**
      * 在群组内搜索消息。（可主动利用该函数获取视野外上下文信息）
-     * @example const results = await ctx.tg.searchMessages(chatId, '关键词', { limit: 20 });
+     * @example const results = await telegram.searchMessages(chatId, '关键词', { limit: 20 });
      */
     searchMessages(chatId: number | string, query: string, opts?: { limit?: number }): Promise<Message[]>;
     /**
      * 获取指定群组的论坛板块（话题）列表。要求该群组已开启 Forum 模式。
-     * @example const topics = await ctx.tg.getForumTopics(chatId);
+     * @example const topics = await telegram.getForumTopics(chatId);
      */
     getForumTopics(chatId: number | string, opts?: { limit?: number }): Promise<ForumTopic[]>;
     /**
      * 主动拉取某条投票消息的最新计票结果。
-     * @example const poll = await ctx.tg.getPollResults(chatId, pollMsgId);
+     * @example const poll = await telegram.getPollResults(chatId, pollMsgId);
      */
     getPollResults(chatId: number | string, messageId: number): Promise<Poll | null>;
     /**
      * 主动拉取某条消息的表态（Reaction）汇总数据。
-     * @example const reactions = await ctx.tg.getMessageReactions(chatId, [msgId]);
+     * @example const reactions = await telegram.getMessageReactions(chatId, [msgId]);
      */
     getMessageReactions(chatId: number | string, messageIds: number[]): Promise<Reaction[]>;
     /**
@@ -306,7 +303,7 @@ interface TelegramClient {
      * @example
      * const msg = messages[0];
      * if (msg.mediaInfo?.fileId) {
-     *   const data = await ctx.tg.downloadMedia(msg.mediaInfo.fileId, chatId, msg.id, msg.mediaInfo.uniqueFileId);
+     *   const data = await telegram.downloadMedia(msg.mediaInfo.fileId, chatId, msg.id, msg.mediaInfo.uniqueFileId);
      *   // data.buffer 是 base64 编码的文件内容, data.size 是字节数
      * }
      */

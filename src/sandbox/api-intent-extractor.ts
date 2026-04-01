@@ -18,17 +18,16 @@ const TRIVIAL_CALLS = new Set([
     "scene.current",
     "docs.list",
     "docs.read",
-    "ctx.tg.sendText",
-    "ctx.tg.sendMedia",
-    "ctx.discord.sendText",
-    "ctx.discord.sendMedia"
+    "telegram.sendText",
+    "telegram.sendMedia",
+    "discord.sendText",
+    "discord.sendMedia"
 ]);
 
 /**
  * 从 modules-docs.json 的模块列表中构建前缀映射
  *
- * 生成的映射格式：{ "ctx.tg": "ctx.tg", "tg": "ctx.tg", "memory": "memory", ... }
- * 包含别名推导（如 "ctx.tg" 的子前缀 "tg" 自动映射回 "ctx.tg"）
+ * 生成的映射格式：{ "telegram": "telegram", "memory": "memory", ... }
  *
  * @param registry 模块注册表
  * @param extraNames 额外的模块名（如动态加载的 TS Skills 名称列表）
@@ -42,24 +41,12 @@ export function buildPrefixMap(
     // 从 registry 中提取模块名
     for (const mod of registry) {
         map[mod.name] = mod.name;
-        // 为 "ctx.xxx" 格式自动创建 "xxx" 别名
-        if (mod.name.startsWith("ctx.")) {
-            const shortName = mod.name.slice(4); // "ctx.tg" → "tg"
-            if (!map[shortName]) {
-                map[shortName] = mod.name;
-            }
-        }
     }
 
     // 添加动态加载的 Skill 名称
     for (const name of extraNames) {
         if (!map[name]) {
             map[name] = name;
-        }
-        // Skills 也可能通过 ctx 访问
-        const ctxName = `ctx.${name}`;
-        if (!map[ctxName]) {
-            map[ctxName] = name;
         }
     }
 
@@ -71,23 +58,23 @@ export function buildPrefixMap(
  *
  * @param code - LLM 生成的代码字符串
  * @param prefixMap - 模块前缀映射表（由 buildPrefixMap 生成）
- * @returns 标准化的方法调用列表，如 ["ctx.tg.sendText", "memory.recall"]
+ * @returns 标准化的方法调用列表，如 ["telegram.sendText", "memory.recall"]
  *
  * @example
  * ```ts
  * const map = buildPrefixMap(registry, ["github"]);
  * const calls = extractApiCalls(`
  *   const result = await memory.recall("test");
- *   await ctx.tg.sendText(chatId, "hello");
+ *   await telegram.sendText(chatId, "hello");
  *   const issues = await github.listIssues("owner", "repo");
  * `, map);
- * // calls = ["memory.recall", "ctx.tg.sendText", "github.listIssues"]
+ * // calls = ["memory.recall", "telegram.sendText", "github.listIssues"]
  * ```
  */
 export function extractApiCalls(code: string, prefixMap: Record<string, string>): string[] {
     const found = new Set<string>();
 
-    // 按前缀长度降序排列，确保 "ctx.tg" 优先于 "tg"
+    // 按前缀长度降序排列，确保较长前缀优先匹配
     const sortedPrefixes = Object.keys(prefixMap)
         .sort((a, b) => b.length - a.length);
 

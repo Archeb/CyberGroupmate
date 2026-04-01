@@ -33,7 +33,7 @@
 | core_facts.subject | 不迁移（模糊查询，无需精确匹配 chatId 格式） |
 | 测试策略 | 修改现有测试以适应多平台架构，不单独写 Discord 专用测试 |
 | Session 路径 | `{platform}/{groupId}/{channelId}.json`（Telegram 无 channel 层） |
-| Sandbox API | 保留 `ctx.tg.*` + 新增 `ctx.discord.*`，按平台注入 |
+| Sandbox API | 保留 `telegram.*` + 新增 `discord.*`，按平台注入 |
 | 事件类型 | 所有 adapter 统一推送 `nc.message` |
 | 媒体下载 | adapter 负责，Message 增加 `rawMessage` |
 | 安全限制 | adapter 动态注册写操作白名单 |
@@ -266,7 +266,7 @@ interface Message {
 
 **BF-2: Sandbox 安全检查自动补全**
 
-LLM 生成的代码用 `ctx.tg.sendText(682932098, text)`（裸数字），但 sandbox 绑定的 chatId 是 `telegram:682932098`。解决方案：安全检查前用 `ensureCompositeId("telegram", rawTarget)` 自动补全，而不是要求 LLM 知道 composite key 格式。
+LLM 生成的代码用 `telegram.sendText(682932098, text)`（裸数字），但 sandbox 绑定的 chatId 是 `telegram:682932098`。解决方案：安全检查前用 `ensureCompositeId("telegram", rawTarget)` 自动补全，而不是要求 LLM 知道 composite key 格式。
 
 **BF-3: 存储 composite / 展示 raw 的双向转换**
 
@@ -431,7 +431,7 @@ Main agent（attend-handler）是跨平台注意力，不跑在 sandbox 里，LL
 
 修改 `capability-registry.ts`：
 - 接收 `platformName` 参数
-- 根据平台条件性注入 `ctx.tg` 或 `ctx.discord`
+- 根据平台条件性注入 `telegram` 或 `discord`
 
 修改 `scene.ts`：
 - `current` 从硬编码改为参数传入
@@ -442,7 +442,7 @@ Main agent（attend-handler）是跨平台注意力，不跑在 sandbox 里，LL
 **验证**:
 - Discord channel 中触发 CodeAct 执行
 - LLM 收到的 prompt 中包含 `discord.d.ts` 类型定义（不含 telegram.d.ts）
-- LLM 生成的 `ctx.discord.sendText()` 调用正确执行
+- LLM 生成的 `discord.sendText()` 调用正确执行
 - Sandbox 安全限制生效（不能向其他 channel 发消息）
 
 ---
@@ -501,7 +501,7 @@ Main agent（attend-handler）是跨平台注意力，不跑在 sandbox 里，LL
 - [ ] 消息接收 + 标准化
 - [ ] Observer + RecordingPipeline
 - [ ] Main Agent attend 决策
-- [ ] CodeAct session 执行（`ctx.discord.*` API）
+- [ ] CodeAct session 执行（`discord.*` API）
 - [ ] 追问检测
 - [ ] 媒体处理
 - [ ] Session 持久化（三层路径）

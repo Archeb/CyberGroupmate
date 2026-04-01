@@ -21,7 +21,7 @@ describe("parseResponse", () => {
         const response = `Let me send a message.
 
 \`\`\`typescript
-await ctx.tg.sendText(-100123, "Hello!");
+await telegram.sendText(-100123, "Hello!");
 \`\`\`
 
 That should work.`;
@@ -30,7 +30,7 @@ That should work.`;
 
         assert.equal(codeBlocks.length, 1);
         assert.equal(codeBlocks[0].lang, "js");
-        assert.equal(codeBlocks[0].code, 'await ctx.tg.sendText(-100123, "Hello!");');
+        assert.equal(codeBlocks[0].code, 'await telegram.sendText(-100123, "Hello!");');
         assert.ok(thinking.includes("Let me send a message"));
         assert.ok(thinking.includes("That should work"));
     });
@@ -70,14 +70,14 @@ const x = 42;
         const response = `First, let me get messages.
 
 \`\`\`typescript
-const msgs = await ctx.tg.getMessages(-100123, { limit: 10 });
+const msgs = await telegram.getMessages(-100123, { limit: 10 });
 console.log(msgs.map(m => m.text));
 \`\`\`
 
 Now let me reply.
 
 \`\`\`ts
-await ctx.tg.sendText(-100123, "Got it!");
+await telegram.sendText(-100123, "Got it!");
 \`\`\`
 
 Done.`;
@@ -116,7 +116,7 @@ console.log("hello")
         const response = `\`\`\`typescript
 scene.enter("telegram");
 
-const msgs = await ctx.tg.getMessages(-100123, { limit: 5 });
+const msgs = await telegram.getMessages(-100123, { limit: 5 });
 for (const msg of msgs) {
   console.log(\`\${msg.sender.firstName}: \${msg.text}\`);
 }

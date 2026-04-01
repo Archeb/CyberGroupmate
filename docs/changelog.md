@@ -1,5 +1,50 @@
 # Changelog
 
+## 2026-04-01: Sandbox 平台 API 统一 — `ctx.tg`/`ctx.discord` → 顶层 `telegram`/`discord`
+
+将 Telegram 和 Discord 平台 API 从 `ctx` 对象上摘出，变为与 `runtime`、`memory`、`scene` 等平级的顶层注入变量。同时清理 `ctx` 上的所有框架内部状态，使其回归为纯用户 state bag。
+
+### 问题
+
+- **Discord "Stale async call blocked" 错误**：`ctx` 跨 turn 持久化，但平台 proxy 每 turn 重建。旧 proxy 的闭包引用已失效的 `guardedCallHost`，导致调用被拦截
+- **PromiseTracker 遗漏**：`sandbox-worker.ts` 仅 `tracker.wrap()` 了 `ctx.tg`，Discord 调用完全不被追踪
+- **命名不一致**：其他模块使用 `模块名.方法名()`（如 `memory.recall`），唯独平台 API 使用 `ctx.tg.方法名()`
+- **ctx 污染**：框架内部状态（`_sentHistory`、`_platform`）和 Skills 对象全部挂在 `ctx` 上，LLM 可见且造成干扰
+
+### 架构变更
+
+| 变更前 | 变更后 |
+|--------|--------|
+| `await ctx.tg.sendText(chatId, text)` | `await telegram.sendText(chatId, text)` |
+| `await ctx.discord.sendText(channelId, text)` | `await discord.sendText(channelId, text)` |
+| `ctx._platform` / `ctx._sentHistory` 暴露给 LLM | 框架内部 module-level 变量，LLM 不可见 |
+| Skills 同时挂 `ctx` + 顶层参数（冗余） | 仅顶层参数注入 |
+| `ctx` = 平台 API + 框架状态 + Skills + 用户数据 | `ctx` = 纯用户 state bag（跨 turn 持久化） |
+
+### 改动
+
+| 文件 | 改动 |
+|------|------|
+| `src/sandbox/capability-registry.ts` | 重写：平台 proxy 作为返回值而非挂 ctx；`_sentHistory`/`_platform` 移至 module-level 变量；新增 `setPlatform()`/`getPlatformValue()` |
+| `src/sandbox/sandbox-worker.ts` | `telegram`/`discord` 作为顶层参数注入 + `tracker.wrap()`；删除 `ctx.tg` Proxy hack 和 `mountSkillsToCtx`；暴露 `__setPlatform` 到全局 |
+| `src/sandbox/modules/scene.ts` | 从 `getPlatformValue()` 读取平台而非 `ctx._platform` |
+| `src/sandbox/skill-loader.ts` | 删除 `mountSkillsToCtx()` 导出 |
+| `src/sandbox/api-intent-extractor.ts` | `TRIVIAL_CALLS` 更新为 `telegram.sendText` 等；移除 `ctx.` 别名推导逻辑 |
+| `src/sandbox/modules/module-registry.ts` | 注释更新 |
+| `src/sandbox/modules/telegram.d.ts` | `declare const ctx: { tg: TelegramClient }` → `declare const telegram: TelegramClient`；示例更新 |
+| `src/sandbox/modules/discord.d.ts` | `declare const ctx: { discord: DiscordClient }` → `declare const discord: DiscordClient` |
+| `src/sandbox/modules/ctx.d.ts` | 简化为纯 `Record<string, any>` state bag 声明 |
+| `src/sandbox/modules/modules-docs.json` | **[REGENERATED]** `ctx` 模块拆为独立的 `telegram`(31 方法) + `discord`(3 方法) |
+| `src/subagent/code-act-executor.ts` | `PLATFORM_MODULES` 映射更新；`ctx._platform` 设置改为 `__setPlatform()` 全局调用 |
+| `system-prompts/executor/subagent-execution-task.md` | `ctx.tg.sendSticker` → `telegram.sendSticker` |
+| `src/adapter/telegram-adapter.ts` | 注释 + 错误信息更新 |
+| `src/adapter/discord-adapter.ts` | 注释更新 |
+
+### ⚠️ Breaking Change
+
+LLM 生成代码的调用方式从 `ctx.tg.xxx()` 变为 `telegram.xxx()`。需手动清理现有 session 历史文件，否则 LLM 可能模仿旧写法。
+
+---
 ## 2026-03-31: Prometheus Scrape 兼容性测试套件 — 端到端格式与数值验证
 
 在已有 21 个单元测试基础上，新增 `tests/metrics-prometheus.test.ts`（25 个测试用例），通过内嵌 Prometheus 文本格式解析器模拟真实 Prometheus scraper 的完整抓取行为，验证每个 metric 的数值准确性、格式合规性和安全绑定行为。

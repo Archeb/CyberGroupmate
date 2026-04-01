@@ -1414,7 +1414,7 @@ Agent session 中的代码：
   //     3天前的话题 "新番讨论" — alice 参与
 
   // 2. 基于记忆 + 当前上下文生成回复
-  await ctx.tg.sendText(chatId,
+  await telegram.sendText(chatId,
     "最近有部《变人》挺治愈的，你之前喜欢芙莉莲的话应该也会喜欢！"
   );
 
@@ -1489,7 +1489,7 @@ Agent session 中的代码：
 > //   4. 返回 result.answer = "推荐的网站是 wanderlog.com"
 >
 > // Agent 拿到结果后回复 charlie
-> await ctx.tg.sendText(chatId,
+> await telegram.sendText(chatId,
 >   `之前推荐的是 wanderlog.com ，可以建行程表还能导出 Google Maps！`
 > );
 > ```
@@ -1566,7 +1566,7 @@ Agent session 中的代码：
   //              把 bob 三天的工作覆盖了"
 
   // 选最好笑的回复
-  await ctx.tg.sendText(chatId,
+  await telegram.sendText(chatId,
     "charlie 哥从不出 bug？上个月线上用户看到'张三李四王五'"
     + "那次是被黑客攻击了是吧 😏"
   );
@@ -1616,7 +1616,7 @@ Agent session 中的代码：
   // 命中 person_group_profiles:
   //   旅行交流群的画像（如果有）
 
-  await ctx.tg.sendText(chatId,
+  await telegram.sendText(chatId,
     "你不是要去秋叶原吗？附近有几个不错的商务酒店..."
   );
 

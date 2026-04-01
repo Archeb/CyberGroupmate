@@ -3,7 +3,7 @@
  *
  * 使用 discord.js 库连接 Discord Gateway，
  * 监听消息并标准化后推入 NotificationCenter。
- * 通过 host-call 为 sandbox 提供 ctx.discord 代码接口。
+ * 通过 host-call 为 sandbox 提供 discord 代码接口。
  */
 
 import type { NotificationCenter } from "../event/notification-center.js";

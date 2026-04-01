@@ -1,15 +1,12 @@
 /**
- * discord.d.ts — Discord 场景类型定义
+ * discord.d.ts — Discord 平台 API
  *
  * 系统注入的 Discord host proxy 接口。
  * 提供给 Agent 在 sandbox 执行时作为 TypeScript 强类型上下文参考。
  * 平台连接与消息监听由宿主侧 DiscordAdapter 管理。
  */
 
-declare const ctx: {
-    discord: DiscordClient;
-    [key: string]: any;
-};
+declare const discord: DiscordClient;
 
 /** Discord 消息对象 */
 interface DiscordMessage {
