@@ -325,6 +325,10 @@ export class MainAgentLoop {
                 if (this.dispatchHandler) {
                     await this.dispatchHandler(result);
                 }
+
+                // ─── Phase 6.5: dispatch 完成后 compact 对话历史 ───
+                // 从 appendToHistory 移至此处，避免在 attend 阶段 compact 延迟任务分派
+                await this.compactHistoryIfNeeded();
             }
 
             // 更新 subagent attend 状态
@@ -408,9 +412,9 @@ export class MainAgentLoop {
     /**
      * 追加消息到主 Agent 对话历史。
      *
-     * 超限时进行两层 compact：
-     * Layer 1（确定性）：保留最近 maxHistoryMessages 条
-     * Layer 2（LLM）：如果 token 仍超预算，调用 context-manager.compact()
+     * 超限时进行 Layer 1 确定性截断（保留最近 maxHistoryMessages 条）。
+     * Layer 2 LLM compact 由 compactHistoryIfNeeded() 在任务完成后触发，
+     * 避免在 attend/dispatch 阶段因 compact 延迟任务分派。
      */
     async appendToHistory(msg: ChatMessage): Promise<void> {
         this.conversationHistory.push(msg);
@@ -421,25 +425,33 @@ export class MainAgentLoop {
                 -this.config.maxHistoryMessages,
             );
         }
+    }
 
-        // Layer 2: token-budget LLM compact
-        if (this.llmConfigs.length > 0 && shouldCompact(this.conversationHistory, undefined, this.llmConfigs[0])) {
-            try {
-                log.info("主 Agent 对话历史 compact: token 超预算", {
-                    messageCount: this.conversationHistory.length,
-                });
-                this.conversationHistory = await contextManagerCompact(
-                    this.conversationHistory,
-                    this.llmConfigs,
-                );
-                log.info("主 Agent 对话历史 compact 完成", {
-                    afterCount: this.conversationHistory.length,
-                });
-            } catch (err) {
-                log.warn("主 Agent 对话历史 compact 失败，保留 Layer 1 结果", {
-                    error: String(err),
-                });
-            }
+    /**
+     * 检查并执行对话历史的 LLM compact（Layer 2）。
+     *
+     * 应在任务完成后（dispatch 之后）调用，避免 compact 延迟任务分派。
+     * 如果 token 总量未超预算，不做任何操作。
+     */
+    async compactHistoryIfNeeded(): Promise<void> {
+        if (this.llmConfigs.length === 0) return;
+        if (!shouldCompact(this.conversationHistory, undefined, this.llmConfigs[0])) return;
+
+        try {
+            log.info("主 Agent 对话历史 compact: token 超预算", {
+                messageCount: this.conversationHistory.length,
+            });
+            this.conversationHistory = await contextManagerCompact(
+                this.conversationHistory,
+                this.llmConfigs,
+            );
+            log.info("主 Agent 对话历史 compact 完成", {
+                afterCount: this.conversationHistory.length,
+            });
+        } catch (err) {
+            log.warn("主 Agent 对话历史 compact 失败", {
+                error: String(err),
+            });
         }
     }
 
