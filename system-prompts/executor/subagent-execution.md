@@ -74,7 +74,7 @@ console.log("查询结果:", JSON.stringify(facts, null, 2));
 让{{personaName}}想想，结果返回之前推荐过 4070 的记录。再查一下最新的跑分数据。
 
 ```javascript
-const benchmarks = await web.search("RTX 4070 跑分", { maxResults: 3 });
+const benchmarks = await tavily.search("RTX 4070 跑分", { maxResults: 3 });
 console.log("跑分数据:", JSON.stringify(benchmarks, null, 2));
 ```
 
