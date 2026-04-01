@@ -15,7 +15,7 @@
 
 import { createLogger } from "../core/logger.js";
 import { getPlatform, ensureCompositeId, getRawId } from "../core/chat-id.js";
-import { callLLM, type LLMConfig, type ChatMessage } from "../core/llm.js";
+import { callLLMWithFallback, type LLMConfig, type ChatMessage } from "../core/llm.js";
 import { resolveComponentTimeout } from "../core/config.js";
 import { formatMessages, type RawMessage } from "../core/message-enricher.js";
 
@@ -146,7 +146,7 @@ function resolveTierLimits(config?: ReflectionExternalConfig): Partial<TierLimit
 export async function runReflection(
     chatId: string,
     memory: MemoryStoreV2,
-    llmConfig: LLMConfig,
+    llmConfigs: LLMConfig[],
     reflectionConfig?: ReflectionExternalConfig,
 ): Promise<ReflectionResult> {
     const startTime = new Date().toISOString();
@@ -193,7 +193,7 @@ export async function runReflection(
         insights: "",
     };
     try {
-        const response = await callLLM(messages, llmConfig, {
+        const response = await callLLMWithFallback(messages, llmConfigs, {
             caller: "reflection",
             timeoutMs: resolveComponentTimeout("reflection"),
         });
@@ -433,7 +433,7 @@ export async function runReflection(
     // 4d. 情感记忆合并（LLM 辅助分析）
     let totalMerged = 0;
     for (const profile of profiles) {
-        const merged = await mergeEpisodes(profile.userId, chatId, memory, llmConfig, reflectionConfig);
+        const merged = await mergeEpisodes(profile.userId, chatId, memory, llmConfigs, reflectionConfig);
         if (merged > 0) {
             log.debug("Reflection 4d: 情感合并", { userId: profile.userId, merged });
         }
@@ -1132,7 +1132,7 @@ export async function mergeEpisodes(
     userId: string,
     chatId: string,
     memory: MemoryStoreV2,
-    llmConfig?: LLMConfig,
+    llmConfigs?: LLMConfig[],
     reflectionConfig?: ReflectionExternalConfig,
 ): Promise<number> {
     const profiles = memory.getProfilesForChat(chatId);
@@ -1178,9 +1178,9 @@ export async function mergeEpisodes(
         for (const [, items] of weekGroups) {
             const dates = items.map(i => i.date).sort();
 
-            // 使用 LLM 分析合并结果（若提供了 llmConfig）
-            const llmResult = llmConfig
-                ? await analyzeMergeWithLLM(userId, items, llmConfig, reflectionConfig)
+            // 使用 LLM 分析合并结果（若提供了 llmConfigs）
+            const llmResult = llmConfigs?.length
+                ? await analyzeMergeWithLLM(userId, items, llmConfigs, reflectionConfig)
                 : null;
 
             newMergedList.push({
@@ -1199,15 +1199,15 @@ export async function mergeEpisodes(
 
     // ── Step 3: 合并 week → month (>30天的 week) ──
     const monthCutoff = now - thresholds.weekToMonth * 86400_000;
-    await cascadeMerge(newMergedList, "week", "month", monthCutoff, llmConfig, reflectionConfig);
+    await cascadeMerge(newMergedList, "week", "month", monthCutoff, llmConfigs, reflectionConfig);
 
     // ── Step 4: 合并 month → quarter (>90天的 month) ──
     const quarterCutoff = now - thresholds.monthToQuarter * 86400_000;
-    await cascadeMerge(newMergedList, "month", "quarter", quarterCutoff, llmConfig, reflectionConfig);
+    await cascadeMerge(newMergedList, "month", "quarter", quarterCutoff, llmConfigs, reflectionConfig);
 
     // ── Step 5: 合并 quarter → year (>365天的 quarter) ──
     const yearCutoff = now - thresholds.quarterToYear * 86400_000;
-    await cascadeMerge(newMergedList, "quarter", "year", yearCutoff, llmConfig, reflectionConfig);
+    await cascadeMerge(newMergedList, "quarter", "year", yearCutoff, llmConfigs, reflectionConfig);
 
     // ── Step 6: 写回 ──
     // 按 periodStart 降序排列（最近的在前）
@@ -1267,7 +1267,7 @@ interface MergeAnalysisResult {
 async function analyzeMergeWithLLM(
     userId: string,
     items: MergeItem[],
-    llmConfig: LLMConfig,
+    llmConfigs: LLMConfig[],
     reflectionConfig?: ReflectionExternalConfig,
 ): Promise<MergeAnalysisResult | null> {
     if (items.length === 0) return null;
@@ -1287,7 +1287,7 @@ async function analyzeMergeWithLLM(
             { role: "system", content: getMergeSystemPrompt() },
             { role: "user", content: userPrompt },
         ];
-        const response = await callLLM(messages, llmConfig, {
+        const response = await callLLMWithFallback(messages, llmConfigs, {
             caller: "reflection",
             timeoutMs: resolveComponentTimeout("reflection"),
         });
@@ -1314,7 +1314,7 @@ async function analyzeMergeWithLLM(
  */
 async function analyzeCascadeMergeWithLLM(
     items: MergedMemory[],
-    llmConfig: LLMConfig,
+    llmConfigs: LLMConfig[],
     reflectionConfig?: ReflectionExternalConfig,
 ): Promise<MergeAnalysisResult | null> {
     if (items.length === 0) return null;
@@ -1335,7 +1335,7 @@ async function analyzeCascadeMergeWithLLM(
             { role: "system", content: getMergeSystemPrompt() },
             { role: "user", content: userPrompt },
         ];
-        const response = await callLLM(messages, llmConfig, {
+        const response = await callLLMWithFallback(messages, llmConfigs, {
             caller: "reflection",
             timeoutMs: resolveComponentTimeout("reflection"),
         });
@@ -1366,7 +1366,7 @@ async function cascadeMerge(
     sourceGranularity: MergedMemory["granularity"],
     targetGranularity: MergedMemory["granularity"],
     cutoffTime: number,
-    llmConfig?: LLMConfig,
+    llmConfigs?: LLMConfig[],
     reflectionConfig?: ReflectionExternalConfig,
 ): Promise<void> {
     const toUpgrade: MergedMemory[] = [];
@@ -1408,8 +1408,8 @@ async function cascadeMerge(
         const sentiments = items.map(i => i.overallSentiment);
 
         // 使用 LLM 分析级联合并结果
-        const llmResult = llmConfig
-            ? await analyzeCascadeMergeWithLLM(items, llmConfig, reflectionConfig)
+        const llmResult = llmConfigs?.length
+            ? await analyzeCascadeMergeWithLLM(items, llmConfigs, reflectionConfig)
             : null;
 
         newEntries.push({

@@ -47,7 +47,7 @@ export interface DispatchHandlerDeps {
     q3: DynamicAttentionQueue;
     q5: CallbackQueue;
     llmConfigs: LLMConfig[];
-    fastPathConfig: LLMConfig;
+    fastPathConfigs: LLMConfig[];
     persona: { name: string; description: string };
 
     /** 完整 AppConfig（用于解析 vision 等配置） */
@@ -68,7 +68,7 @@ export interface DispatchHandlerDeps {
 export function createDispatchHandler(
     deps: DispatchHandlerDeps,
 ): (result: AttendResult) => Promise<void> {
-    const { memory, globalState, subagentManager, sandboxPool, nc, q3, q5, llmConfigs, fastPathConfig, appConfig: _appConfig, adapters: adapterList, sendTyping, mediaDownloader } = deps;
+    const { memory, globalState, subagentManager, sandboxPool, nc, q3, q5, llmConfigs, fastPathConfigs, appConfig: _appConfig, adapters: adapterList, sendTyping, mediaDownloader } = deps;
     // 构建下载函数（根据 chatId 平台路由到对应 adapter）
     const buildDownloadFn = (chatId: string) => {
         if (!adapterList?.length) return undefined;
@@ -340,7 +340,7 @@ export function createDispatchHandler(
                 if (!fp) {
                     fp = new FastPathHandler(result.chatId);
                     fp.setCallbackHandler((cb: SubagentCallback) => q5.enqueue(cb));
-                    fp.setLLMConfig(fastPathConfig, persona, fpGroupModel?.chatTitle ?? result.chatId, fpGroupModel?.isDirectMessage);
+                    fp.setLLMConfig(fastPathConfigs, persona, fpGroupModel?.chatTitle ?? result.chatId, fpGroupModel?.isDirectMessage);
                     // 注入发送函数：通过平台 adapter 路由发送消息
                     const fpAdapter = adapterList?.find(a => result.chatId.startsWith(a.platform + ":"));
                     if (fpAdapter) {

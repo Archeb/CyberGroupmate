@@ -192,10 +192,10 @@ async function cmdMemory(args: string[]): Promise<void> {
 
     const cfg = loadConfig();
     const embeddingConfig = resolveEmbeddingConfig(cfg);
-    const cheapLlmConfig = resolveComponentProfiles("memory", cfg)[0];
+    const cheapLlmConfigs = resolveComponentProfiles("memory", cfg);
     const memory = new MemoryStoreV2(dbPath, {
         embeddingConfig,
-        cheapLlmConfig,
+        cheapLlmConfigs,
     });
     const subCmd = args[0] ?? "help";
 
@@ -279,10 +279,10 @@ async function cmdMemory(args: string[]): Promise<void> {
                 log.error('用法: memory reflect --chat <chatId>');
                 break;
             }
-            const llmConfig = cheapLlmConfig;
+            const reflectionLlmConfigs = resolveComponentProfiles("reflection", cfg);
             log.info(`开始对群组 ${chatId} 执行 Reflection...`);
             try {
-                const result = await memory.reflect(chatId, llmConfig, cfg.reflection);
+                const result = await memory.reflect(chatId, reflectionLlmConfigs, cfg.reflection);
                 console.log(`\n\x1b[1m=== Reflection 结果 ===\x1b[0m\n`);
                 console.log(`  时段: ${result.reflectedPeriod.from} → ${result.reflectedPeriod.to}`);
                 console.log(`  画像更新: ${result.personUpdates.length} 人`);

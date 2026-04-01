@@ -468,7 +468,7 @@ export interface IMemoryStoreV2 {
      * 对指定群组进行反思总结
      * 调用 runReflection() 执行 5 步流程
      */
-    reflect(chatId: string, llmConfig: LLMConfig, reflectionConfig?: ReflectionExternalConfig): Promise<ReflectionResult>;
+    reflect(chatId: string, llmConfigs: LLMConfig[], reflectionConfig?: ReflectionExternalConfig): Promise<ReflectionResult>;
 
     // ─── 生命周期 ───
 

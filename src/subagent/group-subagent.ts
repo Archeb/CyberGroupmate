@@ -36,8 +36,8 @@ import { createLogger } from "../core/logger.js";
 const log = createLogger("group-subagent");
 
 export interface RecordingPipelineDeps {
-    clusterLlmConfig: LLMConfig;
-    triageLlmConfig: LLMConfig;
+    clusterLlmConfigs: LLMConfig[];
+    triageLlmConfigs: LLMConfig[];
     personaName: string;
     personaDescription: string;
     memory?: MemoryStoreV2;
@@ -118,8 +118,8 @@ export class GroupSubagent extends EventEmitter {
             const deps = options.recordingDeps;
             this.recordingPipeline = new RecordingPipeline(
                 this.topicRegistry,
-                deps.clusterLlmConfig,
-                deps.triageLlmConfig,
+                deps.clusterLlmConfigs,
+                deps.triageLlmConfigs,
                 deps.personaName,
                 deps.personaDescription,
                 deps.memory,

@@ -1,5 +1,5 @@
 import { createLogger } from "../core/logger.js";
-import { callLLM, type ChatMessage } from "../core/llm.js";
+import { callLLMWithFallback, type ChatMessage } from "../core/llm.js";
 import { loadConfig, resolveComponentTimeout, type LLMConfig } from "../core/config.js";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -383,7 +383,7 @@ function getContextCompactionPrompt(): string {
  */
 export async function compact(
     messages: ChatMessage[],
-    llmConfig: LLMConfig,
+    llmConfigs: LLMConfig[],
     budget?: ContextBudget,
     options?: {
         replyChain?: Map<number, number>;
@@ -392,13 +392,14 @@ export async function compact(
 ): Promise<ChatMessage[]> {
     const resolvedBudget = budget ?? getConfiguredBudget();
 
-    // 使用 llmConfig 中的 maxContextTokens 覆盖 budget 的 effectiveContextWindow
-    const effectiveBudget = llmConfig.maxContextTokens && llmConfig.maxContextTokens > 0
-        ? { ...resolvedBudget, effectiveContextWindow: llmConfig.maxContextTokens }
+    // 使用 llmConfigs[0] 中的 maxContextTokens 覆盖 budget 的 effectiveContextWindow
+    const primaryConfig = llmConfigs[0];
+    const effectiveBudget = primaryConfig?.maxContextTokens && primaryConfig.maxContextTokens > 0
+        ? { ...resolvedBudget, effectiveContextWindow: primaryConfig.maxContextTokens }
         : resolvedBudget;
 
     // 不需要压缩时原样返回
-    if (!shouldCompact(messages, effectiveBudget, llmConfig)) {
+    if (!shouldCompact(messages, effectiveBudget, primaryConfig)) {
         log.debug("compact: 未超预算，跳过压缩");
         return messages;
     }
@@ -454,7 +455,7 @@ export async function compact(
     const briefingContent = await generateBriefing(
         unprotectedCandidates,
         classified.briefing?.content, // 已有的 briefing 也传入合并
-        llmConfig,
+        llmConfigs,
         effectiveBudget,
     );
 
@@ -500,7 +501,7 @@ export async function compact(
 async function generateBriefing(
     messagesToCompress: ChatMessage[],
     existingBriefing: string | undefined,
-    llmConfig: LLMConfig,
+    llmConfigs: LLMConfig[],
     budget: ContextBudget,
 ): Promise<string> {
     // 拼接要压缩的对话文本
@@ -520,7 +521,7 @@ async function generateBriefing(
     ];
 
     try {
-        const response = await callLLM(briefingMessages, llmConfig, { caller: "context-manager", timeoutMs: resolveComponentTimeout("compact") });
+        const response = await callLLMWithFallback(briefingMessages, llmConfigs, { caller: "context-manager", timeoutMs: resolveComponentTimeout("compact") });
         const briefing = response.content.trim();
 
         // 检查 briefing 是否超过预算

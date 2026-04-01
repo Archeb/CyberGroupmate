@@ -24,7 +24,7 @@ import {
     embed,
     getSimilarityFn,
 } from "./embedding.js";
-import { callLLM, type ChatMessage, type LLMConfig as LlmCallConfig } from "../core/llm.js";
+import { callLLMWithFallback, type ChatMessage, type LLMConfig as LlmCallConfig } from "../core/llm.js";
 import { SafeUpdateBuilder, SafeSelectBuilder } from "./query-builder.js";
 import type {
     IMemoryStoreV2,
@@ -138,19 +138,19 @@ function getBrowseDeepReadPrompt(): string {
 export class MemoryStoreV2 implements IMemoryStoreV2 {
     private db: Database.Database;
     private embeddingConfig?: EmbeddingConfig;
-    private cheapLlmConfig?: LlmCallConfig;
+    private cheapLlmConfigs?: LlmCallConfig[];
     /** sqlite-vec 扩展是否可用 */
     public sqliteVecAvailable = false;
 
     constructor(dbPath: string, options?: {
         embeddingConfig?: EmbeddingConfig;
-        cheapLlmConfig?: LlmCallConfig;
+        cheapLlmConfigs?: LlmCallConfig[];
     }) {
         this.db = new Database(dbPath);
         this.db.pragma("journal_mode = WAL");
         this.db.pragma("foreign_keys = ON");
         this.embeddingConfig = options?.embeddingConfig;
-        this.cheapLlmConfig = options?.cheapLlmConfig;
+        this.cheapLlmConfigs = options?.cheapLlmConfigs;
         this.initTables();
         this.sqliteVecAvailable = this.tryLoadSqliteVec();
         if (this.sqliteVecAvailable) {
@@ -159,7 +159,7 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
         log.info("Memory V2 SQLite 初始化完成", {
             dbPath,
             hasEmbedding: !!this.embeddingConfig,
-            hasCheapLlm: !!this.cheapLlmConfig,
+            hasCheapLlm: !!this.cheapLlmConfigs?.length,
             sqliteVec: this.sqliteVecAvailable,
         });
     }
@@ -1331,7 +1331,7 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
         let deepSummary: string | undefined;
         const threshold = options?.deepRecallThreshold ?? 2000;
         const totalTokens = this.estimateRecallTokens(topics, facts);
-        if (totalTokens > threshold && this.cheapLlmConfig) {
+        if (totalTokens > threshold && this.cheapLlmConfigs?.length) {
             try {
                 deepSummary = await this.generateDeepSummary(query, topics, facts);
                 log.debug("recall: deepSummary 生成", { tokens: totalTokens, threshold });
@@ -1404,7 +1404,7 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
         topics: TopicNode[],
         facts: Array<{ content: string; subject: string }>,
     ): Promise<string> {
-        if (!this.cheapLlmConfig) throw new Error("No cheap LLM config");
+        if (!this.cheapLlmConfigs?.length) throw new Error("No cheap LLM config");
 
         const topicSummaries = topics.slice(0, 5).map(t =>
             `- [话题] ${t.label}: ${t.summary}`
@@ -1418,7 +1418,7 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
             { role: "user", content: `查询：${query}\n\n相关记忆：\n${topicSummaries}\n${factSummaries}` },
         ];
 
-        const response = await callLLM(messages, this.cheapLlmConfig, { caller: "memory", timeoutMs: resolveComponentTimeout("memory") });
+        const response = await callLLMWithFallback(messages, this.cheapLlmConfigs!, { caller: "memory", timeoutMs: resolveComponentTimeout("memory") });
         return response.content.trim();
     }
 
@@ -1431,7 +1431,7 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
         let keywords: string[];
         let parsedHints = { ...request.hints };
 
-        if (this.cheapLlmConfig && !request.hints?.topicId) {
+        if (this.cheapLlmConfigs?.length && !request.hints?.topicId) {
             try {
                 const parsed = await this.parseIntentWithLLM(request.intent);
                 keywords = parsed.keywords;
@@ -1556,7 +1556,7 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
 
         // ─── Step 4: 生成 answer（LLM 深度阅读 或 fallback） ───
         let answer: string;
-        if (this.cheapLlmConfig && segments.length > 0 && totalMessagesRead > 0) {
+        if (this.cheapLlmConfigs?.length && segments.length > 0 && totalMessagesRead > 0) {
             try {
                 answer = await this.deepReadWithLLM(request.intent, segments);
                 log.debug("browseHistory: LLM 深度阅读完成", { answerLen: answer.length });
@@ -1578,14 +1578,14 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
 
     /** LLM 意图解析 */
     private async parseIntentWithLLM(intent: string): Promise<{ keywords: string[]; daysBack?: number; userId?: string }> {
-        if (!this.cheapLlmConfig) throw new Error("No cheap LLM config");
+        if (!this.cheapLlmConfigs?.length) throw new Error("No cheap LLM config");
 
         const messages: ChatMessage[] = [
             { role: "system", content: getBrowseIntentParsePrompt() },
             { role: "user", content: intent },
         ];
 
-        const response = await callLLM(messages, this.cheapLlmConfig, { caller: "memory", timeoutMs: resolveComponentTimeout("memory") });
+        const response = await callLLMWithFallback(messages, this.cheapLlmConfigs!, { caller: "memory", timeoutMs: resolveComponentTimeout("memory") });
         try {
             const parsed = JSON.parse(response.content.replace(/```json?\s*/g, "").replace(/```/g, "").trim());
             return {
@@ -1604,7 +1604,7 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
         intent: string,
         segments: HistoryBrowseResult["segments"],
     ): Promise<string> {
-        if (!this.cheapLlmConfig) throw new Error("No cheap LLM config");
+        if (!this.cheapLlmConfigs?.length) throw new Error("No cheap LLM config");
 
         // 拼接消息上下文（限制长度）
         const contextParts: string[] = [];
@@ -1621,7 +1621,7 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
             { role: "user", content: `问题：${intent}\n\n对话记录：\n${contextParts.join("\n\n---\n\n")}` },
         ];
 
-        const response = await callLLM(messages, this.cheapLlmConfig, { caller: "memory", timeoutMs: resolveComponentTimeout("memory") });
+        const response = await callLLMWithFallback(messages, this.cheapLlmConfigs!, { caller: "memory", timeoutMs: resolveComponentTimeout("memory") });
         return response.content.trim();
     }
 
@@ -2139,11 +2139,11 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
 
     async reflect(
         chatId: string,
-        llmConfig: LLMConfig,
+        llmConfigs: LlmCallConfig[],
         reflectionConfig?: ReflectionExternalConfig,
     ): Promise<ReflectionResult> {
         const { runReflection } = await import("./reflection.js");
-        return runReflection(chatId, this, llmConfig, reflectionConfig);
+        return runReflection(chatId, this, llmConfigs, reflectionConfig);
     }
 
     // ─── 生命周期 ───
