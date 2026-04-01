@@ -488,8 +488,8 @@ export function createApiRouter(deps: DashboardDeps, bridge: EventBridge): Route
         try {
             const config = loadConfig();
             const { resolveComponentProfiles } = await import("../core/config.js");
-            const reflectionLlmConfig = resolveComponentProfiles("reflection", config)[0];
-            const result = await deps.memory.reflect(chatId, reflectionLlmConfig, config.reflection);
+            const reflectionLlmConfigs = resolveComponentProfiles("reflection", config);
+            const result = await deps.memory.reflect(chatId, reflectionLlmConfigs, config.reflection);
             log.info("手动 Reflection 完成", { chatId, personUpdates: result.personUpdates.length, newFacts: result.newCoreFacts.length });
             res.json({ ok: true, ...result });
         } catch (err) {

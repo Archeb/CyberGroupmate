@@ -18,7 +18,7 @@ import type { MediaDownloader } from "./media-downloader.js";
 import { formatTsForDisplay } from "./timezone.js";
 import { createLogger } from "./logger.js";
 import { extractUrls, fetchOpenGraphBatch, downloadOgImage, type OGResult } from "./opengraph.js";
-import { callLLM, type ChatMessage } from "./llm.js";
+import { callLLMWithFallback, type ChatMessage } from "./llm.js";
 
 const log = createLogger("message-enricher");
 
@@ -66,7 +66,7 @@ export interface EnrichOptions {
     /** 主模型 LLM 配置（检查 vision:true） */
     llmConfig: LLMConfig;
     /** 独立 Vision tier LLM 配置 */
-    visionLlmConfig?: LLMConfig;
+    visionLlmConfig?: LLMConfig | LLMConfig[];
     /** 媒体下载函数（委托给 adapter） */
     downloadFn?: DownloadFn;
     /** Sticker 缓存 */
@@ -119,7 +119,7 @@ export async function enrichMessages(
                 attachments,
                 options.visionConfig,
                 options.llmConfig,
-                options.visionLlmConfig,
+                Array.isArray(options.visionLlmConfig) ? options.visionLlmConfig : options.visionLlmConfig ? [options.visionLlmConfig] : undefined,
                 options.downloadFn,
                 options.stickerCache,
                 options.mediaDownloader,
@@ -241,7 +241,7 @@ export async function resolveReplyText(
         stickerCache?: StickerCache;
         visionConfig?: VisionConfig;
         llmConfig?: LLMConfig;
-        visionLlmConfig?: LLMConfig;
+        visionLlmConfig?: LLMConfig | LLMConfig[];
         downloadFn?: DownloadFn;
         chatId?: string;
     },
@@ -290,7 +290,7 @@ export async function resolveReplyText(
                 [attachment],
                 deps.visionConfig,
                 deps.llmConfig,
-                deps.visionLlmConfig,
+                Array.isArray(deps.visionLlmConfig) ? deps.visionLlmConfig : deps.visionLlmConfig ? [deps.visionLlmConfig] : undefined,
                 deps.downloadFn,
                 deps.stickerCache,
             );
@@ -485,7 +485,11 @@ async function enrichWithOpenGraph(
 
     // 3. 确定 Vision 配置
     const isPathA = options.llmConfig.vision === true;
-    const visionLlmConfig = options.visionLlmConfig ?? (isPathA ? options.llmConfig : undefined);
+    const visionLlmConfigs = Array.isArray(options.visionLlmConfig)
+        ? options.visionLlmConfig
+        : options.visionLlmConfig
+            ? [options.visionLlmConfig]
+            : (isPathA ? [options.llmConfig] : undefined);
 
     // 4. 对有封面图的 OG 结果进行 Vision 描述 + 下载
     const imageDescriptions = new Map<string, { description?: string; base64?: string; mimeType?: string }>();
@@ -494,7 +498,7 @@ async function enrichWithOpenGraph(
         .map(og => og.imageUrl!);
     const uniqueImageUrls = [...new Set(imageUrls)];
 
-    if (uniqueImageUrls.length > 0 && visionLlmConfig) {
+    if (uniqueImageUrls.length > 0 && visionLlmConfigs?.length) {
         const imageTasks = uniqueImageUrls.map(async (imageUrl) => {
             const downloaded = await downloadOgImage(imageUrl);
             if (!downloaded) return;
@@ -510,7 +514,7 @@ async function enrichWithOpenGraph(
                         imageParts: [{ url: dataUri }],
                     },
                 ];
-                const response = await callLLM(visionMessages, visionLlmConfig, { caller: "og-vision", timeoutMs: resolveComponentTimeout("vision") });
+                const response = await callLLMWithFallback(visionMessages, visionLlmConfigs, { caller: "og-vision", timeoutMs: resolveComponentTimeout("vision") });
                 const description = response.content.trim();
 
                 imageDescriptions.set(imageUrl, {

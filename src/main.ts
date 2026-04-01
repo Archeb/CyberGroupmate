@@ -106,12 +106,12 @@ async function main(): Promise<void> {
     const appConfig = loadConfig();
     const attendConfigs = resolveComponentProfiles("attend", appConfig);
     const sessionConfigs = resolveComponentProfiles("session", appConfig);
-    const fastPathConfig = resolveComponentProfiles("fast_path", appConfig)[0];
-    const clusterConfig = resolveComponentProfiles("recording_cluster", appConfig)[0];
-    const triageConfig = resolveComponentProfiles("recording_triage", appConfig)[0];
+    const fastPathConfigs = resolveComponentProfiles("fast_path", appConfig);
+    const clusterConfigs = resolveComponentProfiles("recording_cluster", appConfig);
+    const triageConfigs = resolveComponentProfiles("recording_triage", appConfig);
     const compactConfig = resolveComponentProfiles("compact", appConfig)[0];
-    const memoryConfig = resolveComponentProfiles("memory", appConfig)[0];
-    const reflectionConfig = resolveComponentProfiles("reflection", appConfig)[0];
+    const memoryConfigs = resolveComponentProfiles("memory", appConfig);
+    const reflectionConfigs = resolveComponentProfiles("reflection", appConfig);
     const visionConfigs = resolveComponentProfiles("vision", appConfig);
 
     // ─── 全局时区初始化 ───
@@ -209,7 +209,7 @@ async function main(): Promise<void> {
                     case "memory.browseHistory":
                         return memory.browseHistory(args[0] as any);
                     case "memory.reflect":
-                        return memory.reflect(String(args[0]), reflectionConfig, appConfig.reflection);
+                        return memory.reflect(String(args[0]), reflectionConfigs, appConfig.reflection);
                     case "actions.getTopicContext": {
                         // 在所有 per-group topicRegistries 中查找
                         const topicId = String(args[0]);
@@ -273,7 +273,7 @@ async function main(): Promise<void> {
         },
     });
     const memory = new MemoryStoreV2(join(DATA_DIR, "memory.db"), {
-        cheapLlmConfig: memoryConfig,
+        cheapLlmConfigs: memoryConfigs,
     });
     const { createInterface: createRL } = await import("node:readline");
     const hostRL = createRL({ input: process.stdin, output: process.stdout });
@@ -329,8 +329,8 @@ async function main(): Promise<void> {
             mentionKeywords: appConfig.notification?.mentionKeywords ?? [],
         },
         recordingDeps: {
-            clusterLlmConfig: clusterConfig,
-            triageLlmConfig: triageConfig,
+            clusterLlmConfigs: clusterConfigs,
+            triageLlmConfigs: triageConfigs,
             personaName: appConfig.persona?.name ?? "赛博群友",
             personaDescription: appConfig.persona?.description ?? "赛博群友",
             memory,
@@ -695,7 +695,7 @@ async function main(): Promise<void> {
                 const reason = silenceTriggered ? "冷场触发" : maxIntervalTriggered ? "最大间隔触发" : "作息触发";
                 log.info(`${reason} Reflection`, { chatId });
                 try {
-                    const result = await memory.reflect(chatId, reflectionConfig, reflCfg);
+                    const result = await memory.reflect(chatId, reflectionConfigs, reflCfg);
                     lastReflectedAtMap.set(chatId, Date.now());
 
                     // Stickiness 重评估（architecture_v2.md §2.2）
@@ -764,7 +764,7 @@ async function main(): Promise<void> {
         q3,
         q5,
         llmConfigs: sessionConfigs,
-        fastPathConfig,
+        fastPathConfigs,
         persona: appConfig.persona,
         appConfig,
         adapters,

@@ -1021,7 +1021,7 @@ export class CodeActExecutor {
                     messageCount: chatMessages.length,
                 });
                 try {
-                    const compacted = await contextManagerCompact(chatMessages, this.llmConfigs[0]);
+                    const compacted = await contextManagerCompact(chatMessages, this.llmConfigs);
                     this.session = compacted.map(m => ({
                         role: m.role as SessionMessage["role"],
                         content: m.content,

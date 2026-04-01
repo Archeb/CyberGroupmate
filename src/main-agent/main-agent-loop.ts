@@ -88,7 +88,7 @@ export class MainAgentLoop {
     private conversationHistory: ChatMessage[] = [];
 
     /** LLM 配置（用于对话历史 compact） */
-    private llmConfig: LLMConfig | null = null;
+    private llmConfigs: LLMConfig[] = [];
 
     /** 外部 attend handler（由 main.ts 集成注入） */
     private attendHandler: ((entry: AttentionQueueEntry) => Promise<AttendResult | null>) | null = null;
@@ -399,8 +399,8 @@ export class MainAgentLoop {
     /**
      * 设置 LLM 配置（用于对话历史 compact）
      */
-    setLLMConfig(config: LLMConfig): void {
-        this.llmConfig = config;
+    setLLMConfig(config: LLMConfig | LLMConfig[]): void {
+        this.llmConfigs = Array.isArray(config) ? config : [config];
     }
 
     // ─── 对话历史管理 ───
@@ -423,14 +423,14 @@ export class MainAgentLoop {
         }
 
         // Layer 2: token-budget LLM compact
-        if (this.llmConfig && shouldCompact(this.conversationHistory, undefined, this.llmConfig)) {
+        if (this.llmConfigs.length > 0 && shouldCompact(this.conversationHistory, undefined, this.llmConfigs[0])) {
             try {
                 log.info("主 Agent 对话历史 compact: token 超预算", {
                     messageCount: this.conversationHistory.length,
                 });
                 this.conversationHistory = await contextManagerCompact(
                     this.conversationHistory,
-                    this.llmConfig,
+                    this.llmConfigs,
                 );
                 log.info("主 Agent 对话历史 compact 完成", {
                     afterCount: this.conversationHistory.length,

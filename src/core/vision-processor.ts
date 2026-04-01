@@ -10,7 +10,7 @@
  * Sticker 支持 emoji_only / vision_cache / vision_each 三种模式。
  */
 
-import { callLLM, type ChatMessage } from "./llm.js";
+import { callLLMWithFallback, type ChatMessage } from "./llm.js";
 import { resolveComponentTimeout, type LLMConfig, type VisionConfig } from "./config.js";
 import { createLogger } from "./logger.js";
 import type { MediaDownloader } from "./media-downloader.js";
@@ -119,7 +119,7 @@ export async function processMediaBatch(
     attachments: MediaAttachment[],
     config: VisionConfig | undefined,
     llmConfig: LLMConfig,
-    visionLlmConfig?: LLMConfig,
+    visionLlmConfigs?: LLMConfig[],
     downloadFn?: DownloadFn,
     stickerCache?: StickerCache,
     mediaDownloader?: MediaDownloader,
@@ -145,7 +145,7 @@ export async function processMediaBatch(
 
     // 确定处理路径
     const isPathA = llmConfig.vision === true;
-    const isPathB = !isPathA && !!visionLlmConfig;
+    const isPathB = !isPathA && !!visionLlmConfigs?.length;
     // 如果既不是 A 也不是 B，就是 C
 
     // ─── 处理 Sticker ───
@@ -154,7 +154,7 @@ export async function processMediaBatch(
             sticker,
             config,
             isPathA || isPathB,
-            isPathA ? llmConfig : visionLlmConfig,
+            isPathA ? [llmConfig] : visionLlmConfigs,
             downloadFn,
             stickerCache,
             mediaDownloader,
@@ -173,7 +173,7 @@ export async function processMediaBatch(
         const canDescribe = (isPathA || isPathB) && downloadFn;
 
         /** 带缓存的图片描述：先查缓存，miss 时下载+LLM 描述并写入缓存 */
-        const describeWithCache = async (visionCfg: LLMConfig): Promise<ProcessedMedia> => {
+        const describeWithCache = async (visionCfgs: LLMConfig[]): Promise<ProcessedMedia> => {
             // 缓存命中
             const cached = photoDescriptionCache.get(photo.uniqueFileId);
             if (cached) {
@@ -183,7 +183,7 @@ export async function processMediaBatch(
             // 缓存未命中：下载 + 转码 + LLM 描述
             const rawBuffer = await downloadFn!(photo.fileId, photo.chatId, photo.messageId, photo.uniqueFileId);
             const { buffer, mimeType } = await ensureSupportedFormat(rawBuffer, photo.mimeType ?? "image/jpeg");
-            const desc = await describeImage(buffer, mimeType, visionCfg);
+            const desc = await describeImage(buffer, mimeType, visionCfgs);
             photoDescriptionCache.set(photo.uniqueFileId, desc);
             // 暂存原始 buffer 供后续保存到磁盘
             pathBBuffers.set(photo.uniqueFileId, { buffer: rawBuffer, mimeType: photo.mimeType ?? "image/jpeg" });
@@ -202,8 +202,8 @@ export async function processMediaBatch(
                 .catch(err => {
                     log.warn("路径 A 下载/转码失败，降级为描述", { fileId: photo.fileId, error: String(err) });
                     if (canDescribe) {
-                        const visionCfg = isPathA ? llmConfig : visionLlmConfig!;
-                        return describeWithCache(visionCfg).catch(err2 => {
+                        const visionCfgs = isPathA ? [llmConfig] : visionLlmConfigs!;
+                        return describeWithCache(visionCfgs).catch(err2 => {
                             log.warn("降级描述也失败", { fileId: photo.fileId, error: String(err2) });
                             return { index: photo.messageIndex, description: "[📷 图片（加载失败）]" } as ProcessedMedia;
                         });
@@ -214,8 +214,8 @@ export async function processMediaBatch(
 
         if (canDescribe) {
             // 路径 A 溢出 或 路径 B: 调用 vision LLM 描述（带缓存）
-            const visionCfg = isPathA ? llmConfig : visionLlmConfig!;
-            return describeWithCache(visionCfg).catch(err => {
+            const visionCfgs = isPathA ? [llmConfig] : visionLlmConfigs!;
+            return describeWithCache(visionCfgs).catch(err => {
                 log.warn("Vision 描述失败，使用占位符", { fileId: photo.fileId, error: String(err) });
                 return { index: photo.messageIndex, description: "[📷 图片（加载失败）]" } as ProcessedMedia;
             });
@@ -352,7 +352,7 @@ async function processSingleSticker(
     sticker: MediaAttachment,
     config: VisionConfig | undefined,
     hasVision: boolean,
-    visionLlmConfig?: LLMConfig,
+    visionLlmConfigs?: LLMConfig[],
     downloadFn?: DownloadFn,
     stickerCache?: StickerCache,
     mediaDownloader?: MediaDownloader,
@@ -360,7 +360,7 @@ async function processSingleSticker(
     const mode = config?.stickerMode ?? "emoji_only";
 
     // emoji_only 或无 vision 能力
-    if (mode === "emoji_only" || !hasVision || !downloadFn || !visionLlmConfig) {
+    if (mode === "emoji_only" || !hasVision || !downloadFn || !visionLlmConfigs?.length) {
         return {
             index: sticker.messageIndex,
             description: sticker.emoji
@@ -398,7 +398,7 @@ async function processSingleSticker(
         }
 
         const { buffer: stickerBuf, mimeType: mime } = await ensureSupportedFormat(rawBuffer, sticker.mimeType ?? "image/webp");
-        const result = await describeSticker(stickerBuf, mime, visionLlmConfig, sticker.emoji);
+        const result = await describeSticker(stickerBuf, mime, visionLlmConfigs, sticker.emoji);
 
         // 写入缓存 (vision_cache mode)
         if (mode === "vision_cache" && stickerCache) {
@@ -427,7 +427,7 @@ async function processSingleSticker(
 async function describeImage(
     imageBuffer: Buffer,
     mimeType: string,
-    visionConfig: LLMConfig,
+    visionConfigs: LLMConfig[],
 ): Promise<string> {
     const b64 = imageBuffer.toString("base64");
     const dataUri = `data:${mimeType};base64,${b64}`;
@@ -440,7 +440,7 @@ async function describeImage(
         },
     ];
 
-    const response = await callLLM(messages, visionConfig, { caller: "vision", timeoutMs: resolveComponentTimeout("vision") });
+    const response = await callLLMWithFallback(messages, visionConfigs, { caller: "vision", timeoutMs: resolveComponentTimeout("vision") });
     return response.content.trim();
 }
 
@@ -450,7 +450,7 @@ async function describeImage(
 async function describeSticker(
     stickerBuffer: Buffer,
     mimeType: string,
-    visionConfig: LLMConfig,
+    visionConfigs: LLMConfig[],
     emoji?: string,
 ): Promise<{ description: string; emoji?: string }> {
     const b64 = stickerBuffer.toString("base64");
@@ -472,7 +472,7 @@ async function describeSticker(
         },
     ];
 
-    const response = await callLLM(messages, visionConfig, { caller: "vision" });
+    const response = await callLLMWithFallback(messages, visionConfigs, { caller: "vision" });
     const raw = response.content.trim();
 
     // 尝试解析 JSON

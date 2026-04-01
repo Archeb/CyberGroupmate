@@ -16,7 +16,7 @@
 
 import { EventEmitter } from "node:events";
 import { createLogger } from "../core/logger.js";
-import { callLLM, type LLMConfig, type ChatMessage } from "../core/llm.js";
+import { callLLMWithFallback, type LLMConfig, type ChatMessage } from "../core/llm.js";
 import { renderPrompt } from "../main-agent/prompt-renderer.js";
 import type { MemoryStoreV2 } from "../memory-v2/index.js";
 import { embed } from "../memory-v2/embedding.js";
@@ -77,8 +77,8 @@ export class RecordingPipeline extends EventEmitter {
 
     constructor(
         private registry: TopicRegistry,
-        private clusterLlmConfig: LLMConfig,
-        private triageLlmConfig: LLMConfig,
+        private clusterLlmConfigs: LLMConfig[],
+        private triageLlmConfigs: LLMConfig[],
         private personaName: string = "赛博群友",
         private personaDescription: string = "赛博群友",
         private memory?: MemoryStoreV2,
@@ -385,7 +385,7 @@ export class RecordingPipeline extends EventEmitter {
             { role: "user", content: prompt },
         ];
 
-        const response = await callLLM(llmMessages, this.clusterLlmConfig, { caller: "recording-cluster", timeoutMs: this.clusterTimeoutMs });
+        const response = await callLLMWithFallback(llmMessages, this.clusterLlmConfigs, { caller: "recording-cluster", timeoutMs: this.clusterTimeoutMs });
 
         try {
             // 提取 JSON（处理可能的 markdown 包裹）
@@ -448,7 +448,7 @@ export class RecordingPipeline extends EventEmitter {
             { role: "user", content: userMessage },
         ];
 
-        const response = await callLLM(llmMessages, this.triageLlmConfig, { caller: "recording-triage", timeoutMs: this.triageTimeoutMs });
+        const response = await callLLMWithFallback(llmMessages, this.triageLlmConfigs, { caller: "recording-triage", timeoutMs: this.triageTimeoutMs });
 
         let result: TopicSummaryTriageResult;
         try {
@@ -486,7 +486,7 @@ export class RecordingPipeline extends EventEmitter {
             ];
 
             try {
-                const retryResponse = await callLLM(retryMessages, this.triageLlmConfig, { caller: "recording-triage", timeoutMs: this.triageTimeoutMs });
+                const retryResponse = await callLLMWithFallback(retryMessages, this.triageLlmConfigs, { caller: "recording-triage", timeoutMs: this.triageTimeoutMs });
                 const retryJson = retryResponse.content
                     .replace(/```json\s*/g, "")
                     .replace(/```\s*/g, "")

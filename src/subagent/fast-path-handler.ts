@@ -16,7 +16,7 @@ import type {
     SubagentCallback,
 } from "./types.js";
 import { DEFAULT_SUBAGENT_CONFIG } from "./types.js";
-import { callLLM, type ChatMessage } from "../core/llm.js";
+import { callLLMWithFallback, type ChatMessage } from "../core/llm.js";
 import { renderPrompt, buildFastPathTaskVariables, buildFastPathTurnContent } from "../main-agent/prompt-renderer.js";
 import { resolveComponentTimeout, type LLMConfig } from "../core/config.js";
 import { createLogger } from "../core/logger.js";
@@ -50,7 +50,7 @@ export class FastPathHandler {
     private sentMessages: Array<{ text: string; timestamp: string }> = [];
 
     /** LLM 配置（用于生成回复） */
-    private llmConfig: LLMConfig | null = null;
+    private llmConfigs: LLMConfig[] = [];
     private personaName: string = "赛博群友";
     private personaDescription: string = "";
     private chatTitle: string = "";
@@ -93,8 +93,8 @@ export class FastPathHandler {
     /**
      * 注入 LLM 配置和 persona
      */
-    setLLMConfig(llmConfig: LLMConfig, persona: { name: string; description: string }, chatTitle?: string, isDirectMessage?: boolean): void {
-        this.llmConfig = llmConfig;
+    setLLMConfig(llmConfigs: LLMConfig[], persona: { name: string; description: string }, chatTitle?: string, isDirectMessage?: boolean): void {
+        this.llmConfigs = llmConfigs;
         this.personaName = persona.name;
         this.personaDescription = persona.description;
         if (chatTitle) this.chatTitle = chatTitle;
@@ -277,7 +277,7 @@ export class FastPathHandler {
     private async generateReply(event: FastPathEvent, auth: FastPathConfig): Promise<string> {
         // 尝试使用 LLM 生成回复 (subagent.md §12.2 ➆)
         // 3-layer prompt: system (静态 persona) → task (授权范围) → per-turn (触发消息 + 剩余额度)
-        if (this.llmConfig) {
+        if (this.llmConfigs.length > 0) {
             try {
                 // Layer 1: System prompt — 复用 sandbox 的 EXECUTION 模板
                 const systemPrompt = renderPrompt("EXECUTION", {
@@ -303,9 +303,9 @@ export class FastPathHandler {
                     { role: "user", content: turnContent },
                 ];
 
-                const response = await callLLM(
+                const response = await callLLMWithFallback(
                     messages,
-                    this.llmConfig,
+                    this.llmConfigs,
                     { caller: "fast-path", timeoutMs: resolveComponentTimeout("fast_path") },
                 );
 
