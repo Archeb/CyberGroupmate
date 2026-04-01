@@ -272,12 +272,12 @@ interface TelegramClient {
     getChatMembers(chatId: number | string, opts?: { limit?: number }): Promise<Peer[]>;
     getHistory(chatId: number | string, opts?: { limit?: number }): Promise<Message[]>;
     /**
-     * 按消息 ID 精确获取一条或多条消息。
+     * 按消息 ID 精确获取一条或多条消息。（在别人回复或者提及某消息但是你看不见的时候，善用该函数爬楼获取上下文）
      * @example const msgs = await ctx.tg.getMessages(chatId, [100, 101, 102]);
      */
     getMessages(chatId: number | string, messageIds: number[]): Promise<(Message | null)[]>;
     /**
-     * 在群组内搜索消息。
+     * 在群组内搜索消息。（可主动利用该函数获取视野外上下文信息）
      * @example const results = await ctx.tg.searchMessages(chatId, '关键词', { limit: 20 });
      */
     searchMessages(chatId: number | string, query: string, opts?: { limit?: number }): Promise<Message[]>;

@@ -32,8 +32,8 @@ discord.d.ts — Discord 场景类型定义
 - `tg.getFullChat`: 获取群组/频道的完整资料（包含群描述 about、成员数等）。
 - `tg.getChatMembers`: getChatMembers(chatId: number | string, opts?: { limit?: number }): Promise<Peer[]>
 - `tg.getHistory`: getHistory(chatId: number | string, opts?: { limit?: number }): Promise<Message[]>
-- `tg.getMessages`: 按消息 ID 精确获取一条或多条消息。
-- `tg.searchMessages`: 在群组内搜索消息。
+- `tg.getMessages`: 按消息 ID 精确获取一条或多条消息。（在别人回复或者提及某消息但是你看不见的时候，善用该函数爬楼获取上下文）
+- `tg.searchMessages`: 在群组内搜索消息。（可主动利用该函数获取视野外上下文信息）
 - `tg.getForumTopics`: 获取指定群组的论坛板块（话题）列表。要求该群组已开启 Forum 模式。
 - `tg.getPollResults`: 主动拉取某条投票消息的最新计票结果。
 - `tg.getMessageReactions`: 主动拉取某条消息的表态（Reaction）汇总数据。
