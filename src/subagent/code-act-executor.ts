@@ -46,8 +46,8 @@ let _moduleRegistryCache: ModuleEntry[] | null = null;
 
 /** 平台专属模块名映射（用于过滤非当前平台的 adapter 模块） */
 const PLATFORM_MODULES: Record<string, string> = {
-    telegram: "ctx.tg",
-    discord: "ctx.discord",
+    telegram: "telegram",
+    discord: "discord",
 };
 
 /**
@@ -486,9 +486,9 @@ export class CodeActExecutor {
         const sentCollector = new SentMessageCollector();
         const sandbox = await this.sandboxPool!.acquire(this.chatId);
 
-        // 设置 sandbox worker 中的 ctx._platform，供 scene.current 动态读取
+        // 设置平台标识，供 capability-registry 和 scene.current 使用
         const platform = getPlatform(this.chatId);
-        await sandbox.execute(`ctx._platform = ${JSON.stringify(platform)}`, 5000);
+        await sandbox.execute(`__setPlatform(${JSON.stringify(platform)})`, 5000);
         // 注册 notify 监听器收集已发消息
         const rawChatId = getRawId(this.chatId);
         const notifyListener = (event: Record<string, unknown>) => {

@@ -172,7 +172,7 @@ describe("Sandbox", () => {
         assert.equal(parsed.id, "sent_1");
     });
 
-    it("should expose host-backed ctx.tg proxy without bootstrap wiring", async () => {
+    it("should expose host-backed telegram proxy as top-level variable", async () => {
         const sb = await makeSandbox();
         sb.setHostCallHandler(async (method, args) => {
             if (method === "telegram.getMe") {
@@ -192,8 +192,8 @@ describe("Sandbox", () => {
         });
 
         const result = await sb.execute(`
-          const me = await ctx.tg.getMe();
-          const sent = await ctx.tg.sendText("100", "ping");
+          const me = await telegram.getMe();
+          const sent = await telegram.sendText("100", "ping");
           console.log(JSON.stringify({ me, sent }));
         `);
 

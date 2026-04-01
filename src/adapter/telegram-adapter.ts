@@ -4,7 +4,7 @@
  * 宿主侧负责：
  * - 建立 mtcute 连接
  * - 监听 Telegram 消息并标准化后推入 NotificationCenter
- * - 通过 host-call 为 sandbox 提供 ctx.tg 代码接口
+ * - 通过 host-call 为 sandbox 提供 telegram 代码接口
  */
 
 import type { NotificationCenter } from "../event/notification-center.js";
@@ -488,7 +488,7 @@ export class TelegramAdapter implements PlatformAdapter {
                     if (errMsg.includes("inputPeer") || errMsg.includes("PEER") || errMsg.includes("resolve")) {
                         throw new Error(
                             `getHistory 失败 (peer 未解析): ${errMsg}. ` +
-                            `请直接使用 ctx.tg.sendText(chatId, text) 发送消息，不需要先获取历史消息。`
+                            `请直接使用 telegram.sendText(chatId, text) 发送消息，不需要先获取历史消息。`
                         );
                     }
                     throw err;

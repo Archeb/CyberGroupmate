@@ -19,7 +19,7 @@
 ```typescript
 github.listIssues: 列出指定仓库的 Issue 列表
 github.createIssue: 在指定仓库创建新的 Issue
-ctx.tg.sendText: 发送文本消息到指定频道
+telegram.sendText: 发送文本消息到指定频道
 ```
 由于这些定义极其轻量，它即便挂载了几十个 Skills，也不会占用系统太多的 Token，保证了 LLM 依然保持敏锐的核心逻辑思考能力。
 

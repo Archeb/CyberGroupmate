@@ -2,7 +2,7 @@
  * skill-loader.ts — 动态 Skill 加载器
  *
  * 扫描 workspace/skills/ 目录，动态加载用户定义的纯 Worker 端 Skills，
- * 并将其导出的对象挂载到 Sandbox ctx 上。
+ * 并将其导出的对象作为顶层变量注入 Sandbox 环境。
  *
  * 约定：
  * - workspace/skills/<name>/index.ts  — 入口文件，default export 或命名 export
@@ -27,7 +27,7 @@ const SKILLS_DIR = resolve("workspace/skills");
 export interface LoadedSkill {
     /** Skill 名称（目录名） */
     name: string;
-    /** 挂载到 ctx 上的对象 */
+    /** 作为顶层变量注入 sandbox 的对象 */
     exports: Record<string, unknown>;
     /** d.ts 文件路径（如有） */
     dtsPath?: string;
@@ -127,18 +127,6 @@ export async function loadAllSkills(): Promise<LoadedSkill[]> {
     }
 
     return loaded;
-}
-
-/**
- * 将加载好的 Skills 挂载到 ctx 上
- *
- * @param ctx Sandbox 运行时上下文
- * @param skills 已加载的 Skill 列表
- */
-export function mountSkillsToCtx(ctx: Record<string, unknown>, skills: LoadedSkill[]): void {
-    for (const skill of skills) {
-        ctx[skill.name] = skill.exports;
-    }
 }
 
 /**

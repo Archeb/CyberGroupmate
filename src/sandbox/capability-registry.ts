@@ -27,28 +27,47 @@ export interface CapabilityRegistryEnv {
     callHost: (method: string, args?: unknown[]) => Promise<unknown>;
 }
 
+// ─── 内部状态（跨 executeCode 持久化，不暴露给 LLM） ───
+
+/** 全局重复消息去重 Map（per-worker 生命周期） */
+let sentHistory: Map<string, Set<string>> | null = null;
+
+/** 当前平台标识（由 host 在执行前设置） */
+let currentPlatform: string = "telegram";
+
+/** 设置当前平台（由 sandbox-worker 调用） */
+export function setPlatform(platform: string): void {
+    currentPlatform = platform;
+}
+
+/** 获取当前平台（供 scene.ts 等内部模块使用） */
+export function getPlatformValue(): string {
+    return currentPlatform;
+}
+
 // ─── 注册入口 ───
 
 export function installCapabilityRegistry(env: CapabilityRegistryEnv): Record<string, unknown> {
-    // sentHistory 持久化到 ctx 上，跨 executeCode 调用保留。
+    // sentHistory 在 worker 生命周期内持久化（跨 executeCode 调用保留）。
     // 原因：LLM 生成的 unawaited async 函数可能在 executeCode 返回后
     // 继续执行 sendText（"逃逸"），导致 tracker.flush() 之后的消息无法追踪。
     // 持久化 sentHistory 可以保证下一个 turn 的 isDuplicate() 检测到
     // 这些逃逸消息已发送过，从而拦截 LLM 的重复发送。
-    if (!env.ctx._sentHistory) {
-        env.ctx._sentHistory = new Map<string, Set<string>>();
+    if (!sentHistory) {
+        sentHistory = new Map<string, Set<string>>();
     }
-    const sentHistory = env.ctx._sentHistory as Map<string, Set<string>>;
 
     // 每次 executeCode 都重建平台 proxy，确保使用当前 turn 的 env 闭包
     // （emitOutput、notifyHost 等是 per-executeCode 的局部变量）
-    // 根据 ctx._platform 条件性注入对应平台的 API proxy
-    const platform = String(env.ctx._platform ?? "telegram");
+    const platform = currentPlatform;
+    let telegram: unknown = undefined;
+    let discord: unknown = undefined;
+
     if (platform === "discord") {
-        env.ctx.discord = createDiscordClientProxy(env, sentHistory);
+        discord = createDiscordClientProxy(env, sentHistory);
     } else {
         // 默认 telegram（向后兼容）
-        env.ctx.tg = createTelegramClientProxy(env, sentHistory);
+        telegram = createTelegramClientProxy(env, sentHistory);
     }
 
     return {
@@ -57,5 +76,7 @@ export function installCapabilityRegistry(env: CapabilityRegistryEnv): Record<st
         actions: installActions(env),
         skills: installSkills(env, sentHistory),
         scene: installScene(env),
+        telegram,
+        discord,
     };
 }

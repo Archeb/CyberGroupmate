@@ -14,9 +14,9 @@ describe("TS Skills Two-Pass Architecture (Context & Deduplication)", () => {
     it("Phase 1: loadApiTypeDefs should only expose brief overviews, not full docs", () => {
         const briefDocsTelegram = loadApiTypeDefs("telegram");
 
-        // 验证 1: 包含内建的简短概览 (例如 runtime, ctx.tg)
+        // 验证 1: 包含内建的简短概览 (例如 runtime, telegram)
         assert.ok(briefDocsTelegram.includes("## runtime"), "Should contain runtime brief");
-        assert.ok(briefDocsTelegram.includes("## ctx.tg"), "Should contain ctx.tg brief");
+        assert.ok(briefDocsTelegram.includes("## telegram"), "Should contain telegram brief");
         
         // 验证 2: 包含用户自定义的 Skill (github)
         assert.ok(briefDocsTelegram.includes("## github"), "Should contain user skill github brief");
@@ -27,18 +27,18 @@ describe("TS Skills Two-Pass Architecture (Context & Deduplication)", () => {
         assert.equal(briefDocsTelegram.includes("@param"), false, "Should not contain heavy JSDoc @param in Phase 1");
 
         // 验证 4: 环境过滤，telegram 环境不应该看到 discord 模块
-        assert.equal(briefDocsTelegram.includes("## ctx.discord"), false, "Should filter out discord from telegram system prompt");
+        assert.equal(briefDocsTelegram.includes("## discord"), false, "Should filter out discord from telegram system prompt");
     });
 
     it("Phase 2: Intent extraction and Full Doc Injection", () => {
         const pass1Code = `
-            await ctx.tg.sendText(123, "hello");
+            await telegram.sendText(123, "hello");
             const repo = await github.getRepo("owner", "repo");
             console.log(repo.title);
         `;
 
         const calledMethods = extractApiCalls(pass1Code, prefixMap);
-        assert.ok(calledMethods.includes("ctx.tg.sendText"));
+        assert.ok(calledMethods.includes("telegram.sendText"));
         assert.ok(calledMethods.includes("github.getRepo"));
 
         assert.equal(needsDocLookup(calledMethods), true);
@@ -47,7 +47,7 @@ describe("TS Skills Two-Pass Architecture (Context & Deduplication)", () => {
         const fullDocs = lookupFullDocs(registry, calledMethods);
         
         // 验证 1: fullDocs 应该包含 "### module.method" 标记
-        assert.ok(fullDocs.includes("### ctx.tg.sendText"));
+        assert.ok(fullDocs.includes("### telegram.sendText"));
         assert.ok(fullDocs.includes("### github.getRepo"));
 
         // 验证 2: fullDocs 应该包含原本从 brief 中被抠掉的详细 JSDoc（例如被 parse 后的“参数：”特征）
@@ -64,11 +64,11 @@ describe("TS Skills Two-Pass Architecture (Context & Deduplication)", () => {
 
         // 模拟第一轮 (Turn 0) 生成的代码
         const pass1Code = `
-            await ctx.tg.sendText(123, "hello");
+            await telegram.sendText(123, "hello");
             const issues = await github.listIssues("owner", "repo");
         `;
         const calledMethodsRound1 = extractApiCalls(pass1Code, prefixMap);
-        assert.deepEqual(calledMethodsRound1.sort(), ["ctx.tg.sendText", "github.listIssues"].sort());
+        assert.deepEqual(calledMethodsRound1.sort(), ["telegram.sendText", "github.listIssues"].sort());
 
         // 执行无状态去重过滤 (首次：全部 Missing)
         const missingMethodsRound1 = calledMethodsRound1.filter(method => {
@@ -90,13 +90,13 @@ describe("TS Skills Two-Pass Architecture (Context & Deduplication)", () => {
         // ==========================================
         const subsequentCode = `
             // Agent 又调用了一次 sendText
-            await ctx.tg.sendText(456, "Another message");
+            await telegram.sendText(456, "Another message");
             // 同时调用了一个新模块方法
             const ps = await runtime.ps();
         `;
 
         const calledMethodsRound2 = extractApiCalls(subsequentCode, prefixMap);
-        assert.ok(calledMethodsRound2.includes("ctx.tg.sendText"));
+        assert.ok(calledMethodsRound2.includes("telegram.sendText"));
         assert.ok(calledMethodsRound2.includes("runtime.ps"));
 
         // 第二轮执行无状态去重过滤
@@ -105,8 +105,8 @@ describe("TS Skills Two-Pass Architecture (Context & Deduplication)", () => {
             return !messages.some(m => typeof m.content === "string" && m.content.includes(marker));
         });
 
-        // 验证 1: 已存在于上下文的 "ctx.tg.sendText" 被剔除，不再触发重复注入
-        assert.equal(missingMethodsRound2.includes("ctx.tg.sendText"), false);
+        // 验证 1: 已存在于上下文的 "telegram.sendText" 被剔除，不再触发重复注入
+        assert.equal(missingMethodsRound2.includes("telegram.sendText"), false);
         
         // 验证 2: 只有新出现的 "runtime.ps" 且非 Trivial 的才继续后续动作
         // 注意：runtime.ps 在 TRIVIAL_CALLS 中，所以最终需要经过 needsDocLookup 判断
@@ -125,7 +125,7 @@ describe("TS Skills Two-Pass Architecture (Context & Deduplication)", () => {
 
         const subsequentCode = `
             // Agent 在被 compact 后再次凭借记忆使用了
-            await ctx.tg.sendText(999, "Compact later");
+            await telegram.sendText(999, "Compact later");
         `;
 
         const calledMethods = extractApiCalls(subsequentCode, prefixMap);
@@ -138,6 +138,6 @@ describe("TS Skills Two-Pass Architecture (Context & Deduplication)", () => {
 
         // 验证: 尽管之前注入过，但无状态设计发现窗口里没了，就会老老实实地重新判定需要注入
         assert.equal(missingMethodsRound3.length, 1);
-        assert.equal(missingMethodsRound3[0], "ctx.tg.sendText");
+        assert.equal(missingMethodsRound3[0], "telegram.sendText");
     });
 });

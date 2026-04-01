@@ -10,14 +10,17 @@
  */
 
 import { createInterface } from "node:readline";
-import { installCapabilityRegistry } from "./capability-registry.js";
+import { installCapabilityRegistry, setPlatform } from "./capability-registry.js";
 import { createPromiseTracker } from "./promise-tracker.js";
 import { docs } from "./modules/docs.js";
-import { loadAllSkills, mountSkillsToCtx, type LoadedSkill } from "./skill-loader.js";
+import { loadAllSkills, type LoadedSkill } from "./skill-loader.js";
 import { configureLogger } from "../core/logger.js";
 
 // ─── 全局 Skills 缓存（Worker 启动时加载一次） ───
 let loadedSkills: LoadedSkill[] = [];
+
+// ─── 暴露 setPlatform 到全局，供 host 通过 sandbox.execute 调用 ───
+(globalThis as Record<string, unknown>).__setPlatform = setPlatform;
 
 // ─── 顶层安全网：防止未捕获的异常导致 worker 进程崩溃 ───
 
@@ -233,7 +236,7 @@ async function executeCode(id: string, code: string): Promise<void> {
             notifyHost(event);
         };
 
-        const { runtime, memory, scene, actions, skills } = installCapabilityRegistry({
+        const { runtime, memory, scene, actions, skills, telegram, discord } = installCapabilityRegistry({
             ctx,
             emitOutput: (line) => {
                 outputLines.push(line);
@@ -251,6 +254,8 @@ async function executeCode(id: string, code: string): Promise<void> {
             scene: unknown;
             actions: unknown;
             skills: unknown;
+            telegram: unknown;
+            discord: unknown;
         };
 
         // 用 PromiseTracker 包装注入的 API，追踪所有返回的 Promise
@@ -260,22 +265,11 @@ async function executeCode(id: string, code: string): Promise<void> {
         const act = tracker.wrap(actions as Record<string, unknown>);
         const sk = tracker.wrap(skills as Record<string, unknown>);
 
-        // 也包装 ctx.tg（LLM 可能直接调用 ctx.tg.sendText() 而不 await）
-        // 使用 Proxy 而非浅拷贝，保证对 ctx 的写入仍然持久化
-        const wrappedTg = ctx.tg ? tracker.wrap(ctx.tg as Record<string, unknown>) : undefined;
-        const trackedCtx = wrappedTg
-            ? new Proxy(ctx, {
-                get(target, prop, receiver) {
-                    if (prop === "tg") return wrappedTg;
-                    return Reflect.get(target, prop, receiver);
-                },
-            })
-            : ctx;
+        // 包装平台 API（互斥：telegram 或 discord 有一个是 undefined）
+        const tg = telegram ? tracker.wrap(telegram as Record<string, unknown>) : undefined;
+        const dc = discord ? tracker.wrap(discord as Record<string, unknown>) : undefined;
 
-        // 构造 async wrapper，注入 ctx, runtime, memory, scene, docs, actions, skills
         // ─── 动态注入 TS Skills ───
-        // 将 loadedSkills 挂载到 ctx 并 tracker.wrap，然后作为额外参数注入
-        mountSkillsToCtx(ctx, loadedSkills);
         const skillArgNames: string[] = [];
         const skillArgValues: unknown[] = [];
         for (const skill of loadedSkills) {
@@ -283,13 +277,12 @@ async function executeCode(id: string, code: string): Promise<void> {
             // wrap skill exports 以追踪未 await 的 Promise
             const wrapped = tracker.wrap(skill.exports as Record<string, unknown>);
             skillArgValues.push(wrapped);
-            // 同时更新 ctx 上的引用为 wrapped 版本
-            (trackedCtx as Record<string, unknown>)[skill.name] = wrapped;
         }
 
-        // 构造参数列表：固定参数 + 动态 Skill 参数
-        const fixedArgNames = ["ctx", "runtime", "memory", "scene", "docs", "actions", "skills"];
-        const fixedArgValues = [trackedCtx, rt, mem, scene, docs, act, sk];
+        // 构造参数列表：固定参数 + 平台 API + 动态 Skill 参数
+        // ctx 保留为纯用户 state bag（LLM 可跨 turn 存取任意属性）
+        const fixedArgNames = ["ctx", "runtime", "memory", "scene", "docs", "actions", "skills", "telegram", "discord"];
+        const fixedArgValues = [ctx, rt, mem, scene, docs, act, sk, tg, dc];
         const allArgNames = [...fixedArgNames, ...skillArgNames];
         const allArgValues = [...fixedArgValues, ...skillArgValues];
 

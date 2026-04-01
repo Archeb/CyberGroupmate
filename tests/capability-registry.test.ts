@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { installCapabilityRegistry } from "../src/sandbox/capability-registry.js";
 
 describe("installCapabilityRegistry", () => {
-    it("should install runtime, memory, actions, skills, scene and ctx.tg", async () => {
+    it("should install runtime, memory, actions, skills, scene and telegram", async () => {
         const outputs: string[] = [];
         const notifications: Array<Record<string, unknown>> = [];
         const hostCalls: Array<{ method: string; args?: unknown[] }> = [];
@@ -41,26 +41,23 @@ describe("installCapabilityRegistry", () => {
                         return null;
                 }
             },
-            getSceneState: () => currentScene,
-            setSceneState: (name) => {
-                currentScene = name;
-            },
         }) as {
             runtime: Record<string, unknown>;
             memory: Record<string, unknown>;
             actions: Record<string, unknown>;
             skills: Record<string, unknown>;
             scene: Record<string, unknown>;
+            telegram: Record<string, unknown>;
         };
 
-        assert.ok(ctx.tg);
+        assert.ok(capabilities.telegram);
         assert.equal(typeof capabilities.runtime.notify, "function");
         assert.equal(typeof capabilities.memory.recall, "function");
         assert.equal(typeof capabilities.actions.getTopicContext, "function");
         assert.equal(typeof capabilities.skills.social, "object");
         assert.equal(typeof capabilities.scene.enter, "function");
 
-        const tg = ctx.tg as { sendText: (chatId: string, text: string) => Promise<unknown>; sendTyping: (chatId: string) => Promise<void> };
+        const tg = capabilities.telegram as { sendText: (chatId: string, text: string) => Promise<unknown>; sendTyping: (chatId: string) => Promise<void> };
         await tg.sendTyping("100");
         const sent = await tg.sendText("100", "hello");
         assert.equal((sent as { id: string }).id, "msg_1");

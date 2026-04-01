@@ -7,7 +7,7 @@
 CyberGroupmate 的 Sandbox 模块系统被划分为两大阵营：
 
 1. **Host-coupled Modules（框架核心能力）**
-   - **特点**：与主框架、数据库通信或平台协议强绑定（如 `memory`, `actions`, `ctx.tg`）。
+   - **特点**：与主框架、数据库通信或平台协议强绑定（如 `memory`, `actions`, `telegram`）。
    - **机制**：由主框架硬编码实现，通过 IPC (`callHost`) 穿透沙盒边界，与主进程通信。
    - **位置**：代码存在于 `src/sandbox/modules/` 中。
 

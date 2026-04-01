@@ -25,7 +25,7 @@ export interface MethodDoc {
 
 /** 单个模块的注册条目 */
 export interface ModuleEntry {
-    /** 模块名（sandbox 中的全局变量名，如 "runtime", "memory", "ctx.tg"） */
+    /** 模块名（sandbox 中的全局变量名，如 "runtime", "memory", "telegram"） */
     name: string;
     /** 模块一句话描述 */
     description: string;
@@ -68,7 +68,7 @@ export function loadModuleRegistry(): ModuleEntry[] {
  * - notify(event): 推送事件到通知中心
  * - input(prompt): 请求用户输入
  * ...
- * ## ctx.tg (TelegramClient)
+ * ## telegram (TelegramClient)
  * - sendText(chatId, text, opts?): 发送文本消息
  * ...
  * ```
@@ -88,7 +88,7 @@ export function generateBriefOverview(registry: ModuleEntry[]): string {
  * 根据方法调用列表检索完整文档
  *
  * @param registry 模块注册表
- * @param calledMethods 从代码中提取的方法调用列表，格式如 ["ctx.tg.sendText", "memory.recall"]
+ * @param calledMethods 从代码中提取的方法调用列表，格式如 ["telegram.sendText", "memory.recall"]
  * @returns 拼接好的完整 TypeDoc 文档字符串
  */
 export function lookupFullDocs(registry: ModuleEntry[], calledMethods: string[]): string {
@@ -98,7 +98,7 @@ export function lookupFullDocs(registry: ModuleEntry[], calledMethods: string[])
     const referencedModules = new Set<string>();
 
     for (const call of calledMethods) {
-        // 解析 "ctx.tg.sendText" → moduleName="ctx.tg", methodName="sendText"
+        // 解析 "telegram.sendText" → moduleName="telegram", methodName="sendText"
         // 解析 "memory.recall" → moduleName="memory", methodName="recall"
         const lastDot = call.lastIndexOf(".");
         if (lastDot === -1) continue;

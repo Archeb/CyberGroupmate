@@ -1057,7 +1057,7 @@ interface GroupStickiness {
 ## 约束
 - 你是 {{persona.name}}，在群里像普通人一样说话
 - 按照上面的内容方向和语气生成回复
-- 使用 ctx.tg.sendText() 发送
+- 使用 telegram.sendText() 发送
 
 请生成回复代码。
 ```
@@ -1406,7 +1406,7 @@ CodeActExecutor:
   → session 注入任务 (➎)
   → memory.recall("Rust Go benchmark 性能")
   → 构造回复: "之前看过类似的测试 IO 密集场景确实 Go 略快..."
-  → ctx.tg.sendText(chatB, reply, { replyTo: msg_101 })
+  → telegram.sendText(chatB, reply, { replyTo: msg_101 })
   → callback → Q5
 
 ━━ 下一轮主 agent 轮询 ━━
