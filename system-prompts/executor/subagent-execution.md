@@ -85,7 +85,7 @@ console.log("跑分数据:", JSON.stringify(benchmarks, null, 2));
 
 ```javascript
 await telegram.sendMessage(chatId, "上次给你推的4070现在跑分又涨了...", {
-  replyToMessageId: 12345 // 可选，只有第一条回复需要明确指定回复；如果上下文中互动不复杂，可不明确回复。
+  replyTo: 12345 // 可选，只有第一条回复需要明确指定回复；如果上下文中互动不复杂，可不明确回复。
 });
 await telegram.sendMessage(chatId, "现在市场价格大概...");
 console.log("回复已发送");
