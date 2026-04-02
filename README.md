@@ -22,7 +22,7 @@ Join our discussion on Telegram! [https://t.me/cybergroupmate](https://t.me/cybe
 * **Main Agent/Sub Agent 架构** — 双层架构，Main Agent 负责宏观决策，Sub Agent 负责具体任务。→ 即将进化为三层架构，通过 Background Agent，让ta能处理更复杂的任务。 
 * **反馈循环** — 追踪每次回复后群组的反应，并据此调整未来的行为模式。
 * **CodeAct 执行机制** — Agent 会在沙盒环境中编写真实的 TypeScript 代码，从而实现灵活的多步推理与自我调试。
-* **模块系统** — 通过模块，只需要引入新 Node 软件包，选择你想要暴露的 API，编写少量示例代码，并加上你所需的安全策略，把 d.ts 塞进去就可以快速接入新的平台和技能。
+* **NPM As Skills** — 通过我们创新性的 [渐进式披露 in CodeAct 和 TS Skills 机制](docs/progressive-disclosure-in-codeact.md)，只需要引入新 NPM 包，选择你想要暴露的 API，编写少量示例代码，并加上你所需的安全策略，把 d.ts 塞进去就可以快速接入新的平台和技能。
 * **反思引擎** — 由 LLM 周期性驱动的自我反思机制，用于巩固情景记忆、更新人物画像并提取核心事实。
 * **原生多模态能力** — 支持图片、贴纸、视频、动图等媒体的识别与理解，根据模型能力，自动选择使用 Vision Agent 或直接使用主模型进行处理。
 * **完善的可视化面板** — 我们始终将行为可视化与框架能力视为同等重要的开发事项，通过面板你能够实现几乎所有操作，实时看到并理解 Agent 如何决策、如何行动、执行了什么代码
