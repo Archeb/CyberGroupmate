@@ -54,13 +54,10 @@ export interface Message {
 /** 话题状态机的所有可能状态 */
 export type TopicState =
     | "ACTIVE"             // Recording Pipeline 持续有消息流入
-    | "TRIAGING"           // 正在被 Triage LLM 评估
-    | "PRELOADING"         // Triage 通过，预热缓存中
     | "ENGAGED"            // Agent 已介入，对话模式
     | "EXITING"            // 退出中，可能还有最后一条消息
     | "COOLDOWN"           // 冷却期，不主动介入
     | "IGNORED"            // Triage 判定不介入
-    | "IGNORED_LOW_VALUE"  // Triage 判定低价值不介入
     | "STALE"              // 15 分钟无新消息
     | "ARCHIVED";          // 2 小时无新消息，归入长期记忆
 

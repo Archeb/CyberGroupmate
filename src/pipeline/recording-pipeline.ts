@@ -730,6 +730,11 @@ export class RecordingPipeline extends EventEmitter {
 
                 if (triage.should_intervene) {
                     triagePassedTopics.push({ topic, decision });
+                } else if (topic.state === "ACTIVE") {
+                    // Triage 判定不介入 → 转入 IGNORED 状态
+                    // IGNORED 话题在 cleanup TTL(10min) 后自动转 STALE，不会被反复 triage
+                    this.registry.transition(topic.id, "IGNORED");
+                    topic.ignoreReason = triage.reason;
                 }
             }
 

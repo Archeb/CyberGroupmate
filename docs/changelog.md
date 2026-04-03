@@ -1,5 +1,36 @@
 # Changelog
 
+## 2026-04-03: Sticker 并行化 + triageReason 持续残留修复 + 话题状态机清理
+
+三项修复：(1) Vision Sticker 处理从串行改为并行+去重；(2) `✅ 建议介入` 标记在 attend 决策后不清除的逻辑 bug；(3) 移除重构后不再使用的幽灵状态，恢复 IGNORED 状态的实际使用。
+
+### Fix 1: Sticker 并行处理 + uniqueFileId 去重
+
+`processMediaBatch()` 中 sticker 使用串行 `for...await` 逐个处理，N 个 sticker 需要 N×(2~5s)。改为 `Promise.all` 并行处理，同时按 `uniqueFileId` 去重，相同贴纸只调用一次 Vision LLM。
+
+### Fix 2: triageReason (`✅ 建议介入`) 持续残留
+
+`topic.decision` 在 `setDecision()` 写入后永远不被清除，导致已处理过的话题在后续 attend 的「话题注册表」中持续显示 `✅ 建议介入`，干扰 LLM 决策。
+
+修复：在 `transition()` 进入 ENGAGED / COOLDOWN / IGNORED 时清除 `topic.decision`，以及 COOLDOWN→ACTIVE 重置时清除。
+
+### Fix 3: 话题状态机清理
+
+移除重构后不再被任何代码使用的 3 个幽灵状态（`TRIAGING`、`PRELOADING`、`IGNORED_LOW_VALUE`）。恢复 `IGNORED` 状态的实际使用：triage 判定 `should_intervene=false` 时，将 ACTIVE 话题转入 IGNORED 状态（10min TTL 后自动转 STALE→ARCHIVED）。
+
+简化后的状态机：`ACTIVE → ENGAGED → EXITING → COOLDOWN → ACTIVE` / `ACTIVE → IGNORED → STALE → ARCHIVED`
+
+### 改动
+
+| 文件 | 改动 |
+|------|------|
+| `src/core/vision-processor.ts` | Sticker 处理从串行 `for await` 改为 `Promise.all` 并行 + `uniqueFileId` 去重 |
+| `src/pipeline/types.ts` | `TopicState` 移除 `TRIAGING`/`PRELOADING`/`IGNORED_LOW_VALUE` |
+| `src/pipeline/topic-registry.ts` | `VALID_TRANSITIONS` 简化为 7 状态；`transition()` 新增 ENGAGED/COOLDOWN/IGNORED 时清除 `decision`；`activeStates` 移除幽灵状态；`cleanup()` 移除 `IGNORED_LOW_VALUE` 分支；COOLDOWN→ACTIVE 重置时清除 `decision`；`inheritDecision` 移除 `IGNORED_LOW_VALUE` case |
+| `src/pipeline/recording-pipeline.ts` | `updateRegistry()` 中 `should_intervene=false` 时调用 `transition(topicId, "IGNORED")` |
+| `src/main-agent/dispatch-handler.ts` | 更新过时的 TRIAGING 注释 |
+
+---
 ## 2026-04-01: Sandbox 平台 API 统一 — `ctx.tg`/`ctx.discord` → 顶层 `telegram`/`discord`
 
 将 Telegram 和 Discord 平台 API 从 `ctx` 对象上摘出，变为与 `runtime`、`memory`、`scene` 等平级的顶层注入变量。同时清理 `ctx` 上的所有框架内部状态，使其回归为纯用户 state bag。

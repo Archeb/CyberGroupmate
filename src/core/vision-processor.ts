@@ -148,10 +148,19 @@ export async function processMediaBatch(
     const isPathB = !isPathA && !!visionLlmConfigs?.length;
     // 如果既不是 A 也不是 B，就是 C
 
-    // ─── 处理 Sticker ───
+    // ─── 处理 Sticker（并行 + dedup） ───
+    // 按 uniqueFileId 去重：相同贴纸只调用一次 Vision LLM，结果复用到所有同 ID 条目
+    const stickerByUniqueId = new Map<string, MediaAttachment[]>();
     for (const sticker of stickers) {
+        const key = sticker.uniqueFileId;
+        const group = stickerByUniqueId.get(key) ?? [];
+        group.push(sticker);
+        stickerByUniqueId.set(key, group);
+    }
+    const stickerTasks = [...stickerByUniqueId.values()].map(async (group) => {
+        const representative = group[0];
         const processed = await processSingleSticker(
-            sticker,
+            representative,
             config,
             isPathA || isPathB,
             isPathA ? [llmConfig] : visionLlmConfigs,
@@ -159,8 +168,14 @@ export async function processMediaBatch(
             stickerCache,
             mediaDownloader,
         );
-        results.push(processed);
-    }
+        // 复用结果到同 uniqueFileId 的所有条目（修正 messageIndex）
+        return group.map(s => s === representative
+            ? processed
+            : { ...processed, index: s.messageIndex },
+        );
+    });
+    const stickerResults = (await Promise.all(stickerTasks)).flat();
+    results.push(...stickerResults);
 
     // ─── 处理 Photo（并行） ───
     // 先分类：前 maxImages 张走路径 A（内联），其余走路径 B（描述）或 C（占位）

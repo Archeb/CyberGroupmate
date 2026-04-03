@@ -55,16 +55,13 @@ function generateTopicId(): string {
 // ─── 合法状态转换表 ───
 
 const VALID_TRANSITIONS: Record<TopicState, TopicState[]> = {
-    ACTIVE:            ["TRIAGING", "STALE"],
-    TRIAGING:          ["PRELOADING", "IGNORED", "IGNORED_LOW_VALUE", "ACTIVE"],
-    PRELOADING:        ["ENGAGED", "ACTIVE"],
-    ENGAGED:           ["EXITING", "COOLDOWN"],
-    EXITING:           ["COOLDOWN"],
-    COOLDOWN:          ["ACTIVE"],
-    IGNORED:           ["ACTIVE", "STALE"],
-    IGNORED_LOW_VALUE: ["STALE"],
-    STALE:             ["ACTIVE", "ARCHIVED"],
-    ARCHIVED:          [],
+    ACTIVE:    ["ENGAGED", "IGNORED", "STALE"],
+    ENGAGED:   ["EXITING", "COOLDOWN"],
+    EXITING:   ["COOLDOWN"],
+    COOLDOWN:  ["ACTIVE"],
+    IGNORED:   ["ACTIVE", "STALE"],
+    STALE:     ["ACTIVE", "ARCHIVED"],
+    ARCHIVED:  [],
 };
 
 // ─── TopicRegistry ───
@@ -183,6 +180,12 @@ export class TopicRegistry extends EventEmitter {
         log.debug("状态转换", { topicId: topic.id, label: topic.label, from, to: newState });
         this.emit("topic:stateChanged", topic, from, newState);
 
+        // 清除 triage decision：进入这些状态说明 agent 已对此话题做出决策，
+        // 避免 "✅ 建议介入" 标记在后续 attend 中持续残留
+        if (newState === "ENGAGED" || newState === "COOLDOWN" || newState === "IGNORED") {
+            topic.decision = undefined;
+        }
+
         if (newState === "ENGAGED") {
             this.emit("topic:engaged", topic);
         }
@@ -206,7 +209,7 @@ export class TopicRegistry extends EventEmitter {
 
         // 只对活跃状态的话题刷新 lastActivityAt，
         // STALE/IGNORED/ARCHIVED 状态不应因新消息聚类到此而重置超时计时器
-        const activeStates: TopicState[] = ["ACTIVE", "TRIAGING", "PRELOADING", "ENGAGED", "EXITING", "COOLDOWN"];
+        const activeStates: TopicState[] = ["ACTIVE", "ENGAGED", "EXITING", "COOLDOWN"];
         if (activeStates.includes(topic.state)) {
             topic.lastActivityAt = Date.now();
         }
@@ -247,7 +250,6 @@ export class TopicRegistry extends EventEmitter {
                 break;
 
             case "IGNORED":
-            case "IGNORED_LOW_VALUE":
                 // 之前不介入 → 传递原因供参考
                 child.ignoreReason = parent.ignoreReason ?? parent.decision?.reason;
                 break;
@@ -276,9 +278,9 @@ export class TopicRegistry extends EventEmitter {
         for (const topic of this.topics.values()) {
             const elapsed = now - topic.lastActivityAt;
 
-            // ACTIVE/TRIAGING/PRELOADING → STALE（15min 不活跃）
+            // ACTIVE → STALE（15min 不活跃）
             if (
-                ["ACTIVE", "TRIAGING", "PRELOADING"].includes(topic.state) &&
+                topic.state === "ACTIVE" &&
                 elapsed > STALE_TIMEOUT
             ) {
                 this.transition(topic.id, "STALE");
@@ -296,17 +298,6 @@ export class TopicRegistry extends EventEmitter {
             // IGNORED → STALE（TTL 过期，渐渐淡出而非循环回 ACTIVE 重 triage）
             if (
                 topic.state === "IGNORED" &&
-                topic.lastTriagedAt &&
-                now - topic.lastTriagedAt > IGNORED_TTL
-            ) {
-                this.transition(topic.id, "STALE");
-                cleaned++;
-                continue;
-            }
-
-            // IGNORED_LOW_VALUE → STALE
-            if (
-                topic.state === "IGNORED_LOW_VALUE" &&
                 topic.lastTriagedAt &&
                 now - topic.lastTriagedAt > IGNORED_TTL
             ) {
@@ -333,6 +324,7 @@ export class TopicRegistry extends EventEmitter {
                     topic.irrelevantStreak = 0;
                     topic.nextReplyInstruction = undefined;
                     topic.exitAfterNextReply = undefined;
+                    topic.decision = undefined;  // 清除旧的 triage decision
                     cleaned++;
                 }
             }

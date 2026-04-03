@@ -98,8 +98,8 @@ export function createDispatchHandler(
             if (decision.action === "REPLY") {
                 // Fix 3: 构建符合 subagent.md §13.2 B1 规格的 contextSnapshot
                 // 获取话题摘要
-                // Fix: getActive() 只返回 ACTIVE 状态话题，但 triage 通过后话题进入 ENGAGED 状态。
-                // 使用 getByChat() 获取所有非归档话题，确保 ENGAGED/TRIAGING 话题也可见。
+                // Fix: getActive() 只返回 ACTIVE 状态话题，但 triage 通过后话题可能进入 ENGAGED 或 IGNORED 状态。
+                // 使用 getByChat() 获取所有非归档话题，确保各状态话题都可见。
                 const allTopics = subagent?.topicRegistry.getByChat(result.chatId) ?? [];
                 const topicForDecision = decision.topicId
                     ? allTopics.find((t: any) => String(t.id) === decision.topicId)
