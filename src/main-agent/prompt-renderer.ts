@@ -40,7 +40,6 @@ export function deriveChatType(isDirectMessage?: boolean): string {
 /** Prompt 类型 → 文件名映射 */
 const PROMPT_FILE_MAP: Record<string, string> = {
     ATTENTION: "main-agent/mainagent-attention.md",
-    DECISION: "main-agent/mainagent-decision.md",
     EXECUTION: "executor/subagent-execution.md",
     EXECUTION_TASK: "executor/subagent-execution-task.md",
     FAST_PATH_TASK: "fast-path/subagent-fast-path-task.md",
