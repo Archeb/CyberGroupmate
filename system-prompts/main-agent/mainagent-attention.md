@@ -25,9 +25,6 @@
 ## 新消息 (自上次关注以来, 共 {{newMessageCount}} 条)
 {{messages}}
 
-## Engagement
-分数: {{engagementScore}}/100
-
 {{#hasCallbacks}}
 ## 上次 Subagent 执行结果
 {{callbacks}}
