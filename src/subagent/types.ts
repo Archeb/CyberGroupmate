@@ -42,7 +42,7 @@ export interface AttentionQueueEntry {
     /** 群组 chatId */
     chatId: string;
     /** 来源标记 (subagent.md §2.2) */
-    source: 'DIGEST_UPDATE' | 'OBSERVER_ALERT' | 'FAST_PATH_REQUEST' | 'DEFERRED_RE_ENTRY' | 'DIRECT_ADDRESS';
+    source: 'DIGEST_UPDATE' | 'OBSERVER_ALERT' | 'FAST_PATH_REQUEST' | 'DEFERRED_RE_ENTRY' | 'DIRECT_ADDRESS' | 'SCHEDULED_REVISIT' | 'MINICODEACT_BOOST' | 'SCHEDULER_TRIGGER';
     /** 当前优先级分数 (0-100) */
     priority: number;
     /** 基础优先级（不含时间衰减） */
@@ -168,6 +168,14 @@ export interface SubagentCallback {
     // ─── subagent.md §2.2 C1/C2 补齐字段 ───
     /** Session 摘要（CodeAct session 的结构化摘要） */
     sessionSummary?: string;
+
+    // ─── MiniCodeAct 修正 ───
+    /** MiniCodeAct 修正建议（Subagent 审查后返回） */
+    corrections?: Array<{
+        originalCall: string;
+        issue: string;
+        suggestedFix: MiniCodeActCall;
+    }>;
 }
 
 // ─── FastPath ───
@@ -286,6 +294,10 @@ export interface GroupContextPackage {
     contentDirection?: string;
     /** 可用贴纸目录（emoji + 描述 + 本地文件路径） */
     availableStickers?: Array<{ emoji: string; description: string; uniqueFileId: string }>;
+    /** MiniCodeAct 执行报告（dispatch 注入） */
+    miniCodeActReport?: string;
+    /** 是否包含 MiniCodeAct 报告 */
+    hasMiniCodeActReport?: boolean;
 }
 
 /** 主 Agent attend 后的决策结果 */
@@ -299,6 +311,8 @@ export interface AttendResult {
     fastPathAuth?: FastPathConfig;
     /** 决策理由 */
     reasoning: string;
+    /** MiniCodeAct 执行结果（Phase 5.5 附加） */
+    miniCodeActResults?: MiniCodeActResult[];
 }
 
 /** 单条决策 */
@@ -319,6 +333,64 @@ export interface Decision {
     confidence: number;
     /** 理由 */
     reason: string;
+    /** MiniCodeAct 即时操作列表（可选） */
+    miniCodeActs?: MiniCodeActCall[];
+}
+
+// ─── MiniCodeAct ───
+
+/** MiniCodeAct 调用描述 */
+export interface MiniCodeActCall {
+    /** 调用目标，格式 "namespace.method" */
+    call: string;
+    /** 调用参数 */
+    args: Record<string, unknown>;
+}
+
+/** MiniCodeAct 执行结果 */
+export interface MiniCodeActResult {
+    call: string;
+    success: boolean;
+    result?: unknown;
+    error?: string;
+    /** 人类可读的一句话结果 */
+    summary: string;
+}
+
+/** Agent 工作笔记 */
+export interface AgentNote {
+    id: string;
+    content: string;
+    tags: string[];
+    relatedChatId?: string;
+    expiresAt?: string;
+    createdAt: string;
+}
+
+/** 调度事件（scheduler 命名空间） */
+export interface SchedulerEvent {
+    /** 任务 ID */
+    id: string;
+    /** 类型：一次性提醒 or 周期 cron */
+    type: "reminder" | "cron";
+    /** 关联群组 */
+    chatId: string;
+    /** 描述（注入 ATTENTION prompt 用） */
+    description: string;
+    /** 触发时间 ISO 8601（reminder） */
+    triggerAt?: string;
+    /** cron 表达式（cron） */
+    cronExpr?: string;
+    /** 每次触发时创建的任务方向（cron） */
+    taskTemplate?: string;
+    /** 请求人 userId */
+    requestedBy?: string;
+    /** 创建时间 */
+    createdAt: string;
+    /** 是否已触发（reminder 触发后标记） */
+    triggered?: boolean;
+    /** 上次触发时间（cron） */
+    lastTriggeredAt?: string;
 }
 
 // ─── 全局状态 ───
@@ -347,6 +419,10 @@ export interface MainAgentGlobalState {
     }>;
     /** 当前的注意力总结 */
     attentionSummary: string;
+    /** Agent 工作笔记 */
+    notes: AgentNote[];
+    /** 调度事件（定时提醒 + cron 任务） */
+    schedulerEvents: SchedulerEvent[];
 }
 
 /** Agent 任务 */

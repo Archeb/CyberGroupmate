@@ -14,7 +14,7 @@
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import type { MainAgentGlobalState, AgentTask } from "../subagent/types.js";
+import type { MainAgentGlobalState, AgentTask, AgentNote, SchedulerEvent } from "../subagent/types.js";
 import { createLogger } from "../core/logger.js";
 import { randomUUID } from "node:crypto";
 
@@ -167,6 +167,123 @@ export class GlobalState {
         return true;
     }
 
+    // ─── 笔记 ───
+
+    /** 添加工作笔记 */
+    addNote(content: string, tags: string[] = [], relatedChatId?: string, expiresAt?: string): AgentNote {
+        const note: AgentNote = {
+            id: randomUUID(),
+            content,
+            tags,
+            relatedChatId,
+            expiresAt,
+            createdAt: new Date().toISOString(),
+        };
+        this.state.notes.push(note);
+        this.markDirty();
+        log.debug("addNote", { noteId: note.id, content: content.slice(0, 50) });
+        return note;
+    }
+
+    /** 删除工作笔记 */
+    removeNote(noteId: string): boolean {
+        const idx = this.state.notes.findIndex(n => n.id === noteId);
+        if (idx === -1) return false;
+        this.state.notes.splice(idx, 1);
+        this.markDirty();
+        return true;
+    }
+
+    /** 获取笔记（可按 chatId 过滤） */
+    getNotes(chatId?: string): AgentNote[] {
+        if (chatId) {
+            return this.state.notes.filter(n => !n.relatedChatId || n.relatedChatId === chatId);
+        }
+        return [...this.state.notes];
+    }
+
+    /** 清理过期笔记，返回清理数量 */
+    cleanExpiredNotes(): number {
+        const now = new Date().toISOString();
+        const before = this.state.notes.length;
+        this.state.notes = this.state.notes.filter(n => !n.expiresAt || n.expiresAt > now);
+        const removed = before - this.state.notes.length;
+        if (removed > 0) this.markDirty();
+        return removed;
+    }
+
+    // ─── 调度 (scheduler) ───
+
+    /** 添加定时提醒 */
+    addReminder(chatId: string, description: string, triggerAt: string, requestedBy?: string): SchedulerEvent {
+        const event: SchedulerEvent = {
+            id: randomUUID(),
+            type: "reminder",
+            chatId,
+            description,
+            triggerAt,
+            requestedBy,
+            createdAt: new Date().toISOString(),
+            triggered: false,
+        };
+        this.state.schedulerEvents.push(event);
+        this.markDirty();
+        log.debug("addReminder", { id: event.id, chatId, triggerAt });
+        return event;
+    }
+
+    /** 添加周期 cron 任务 */
+    addCron(chatId: string, description: string, cronExpr: string, taskTemplate: string): SchedulerEvent {
+        const event: SchedulerEvent = {
+            id: randomUUID(),
+            type: "cron",
+            chatId,
+            description,
+            cronExpr,
+            taskTemplate,
+            createdAt: new Date().toISOString(),
+        };
+        this.state.schedulerEvents.push(event);
+        this.markDirty();
+        log.debug("addCron", { id: event.id, chatId, cronExpr });
+        return event;
+    }
+
+    /** 取消调度事件 */
+    cancelSchedulerEvent(id: string): boolean {
+        const idx = this.state.schedulerEvents.findIndex(e => e.id === id);
+        if (idx === -1) return false;
+        this.state.schedulerEvents.splice(idx, 1);
+        this.markDirty();
+        log.debug("cancelSchedulerEvent", { id });
+        return true;
+    }
+
+    /** 获取所有调度事件（可按 chatId 过滤） */
+    getSchedulerEvents(chatId?: string): SchedulerEvent[] {
+        if (chatId) {
+            return this.state.schedulerEvents.filter(e => e.chatId === chatId);
+        }
+        return [...this.state.schedulerEvents];
+    }
+
+    /** 获取已到期的提醒（未触发的，triggerAt <= now） */
+    getDueReminders(): SchedulerEvent[] {
+        const now = new Date().toISOString();
+        return this.state.schedulerEvents.filter(
+            e => e.type === "reminder" && !e.triggered && e.triggerAt && e.triggerAt <= now
+        );
+    }
+
+    /** 标记提醒为已触发 */
+    markReminderTriggered(id: string): boolean {
+        const event = this.state.schedulerEvents.find(e => e.id === id && e.type === "reminder");
+        if (!event) return false;
+        event.triggered = true;
+        this.markDirty();
+        return true;
+    }
+
     // ─── 持久化 ───
 
     /** 立即保存 */
@@ -225,6 +342,8 @@ export class GlobalState {
             recentDecisions: Array.isArray(obj.recentDecisions) ? obj.recentDecisions : def.recentDecisions,
             pendingFollowups: Array.isArray(obj.pendingFollowups) ? obj.pendingFollowups : def.pendingFollowups,
             attentionSummary: typeof obj.attentionSummary === "string" ? obj.attentionSummary : def.attentionSummary,
+            notes: Array.isArray(obj.notes) ? obj.notes : def.notes,
+            schedulerEvents: Array.isArray(obj.schedulerEvents) ? obj.schedulerEvents : def.schedulerEvents,
         };
     }
 
@@ -235,6 +354,8 @@ export class GlobalState {
             recentDecisions: [],
             pendingFollowups: [],
             attentionSummary: "",
+            notes: [],
+            schedulerEvents: [],
         };
     }
 }

@@ -682,13 +682,14 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
     }
 
     /** 写入核心事实到 core_facts 表 */
-    storeFact(subject: string, content: string, category: FactCategory, source?: string, expiresAt?: string, embedding?: Float32Array): string {
+    storeFact(subject: string, content: string, category: FactCategory, source?: string, expiresAt?: string, embedding?: Float32Array, confidence?: number): string {
         const id = randomUUID();
         const ts = now();
+        const conf = confidence ?? 1.0;
         this.db.prepare(`
             INSERT INTO core_facts (id, subject, content, category, confidence, source, embedding, created_at, updated_at, expires_at)
-            VALUES (?, ?, ?, ?, 1.0, ?, ?, ?, ?, ?)
-        `).run(id, subject, content, category, source ?? null, embedding ? embeddingToBuffer(embedding) : null, ts, ts, expiresAt ?? null);
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(id, subject, content, category, conf, source ?? null, embedding ? embeddingToBuffer(embedding) : null, ts, ts, expiresAt ?? null);
 
         // 同步 FTS5
         try {
@@ -957,6 +958,22 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
             firstSeenAt: row.first_seen_at as string,
             updatedAt: row.updated_at as string,
         };
+    }
+
+    searchByAlias(query: string, limit: number = 10): PersonIdentity[] {
+        const rows = this.db.prepare(
+            `SELECT * FROM person_identities WHERE display_name LIKE '%' || ? || '%' OR aliases LIKE '%' || ? || '%' LIMIT ?`
+        ).all(query, query, limit) as Record<string, unknown>[];
+        return rows.map(row => ({
+            userId: row.user_id as string,
+            displayName: row.display_name as string,
+            username: (row.username as string) ?? undefined,
+            aliases: fromJSON(row.aliases as string, []),
+            totalMessageCount: row.total_message_count as number,
+            lastSeenAt: row.last_seen_at as string,
+            firstSeenAt: row.first_seen_at as string,
+            updatedAt: row.updated_at as string,
+        }));
     }
 
     storeInteraction(episode: Omit<InteractionEpisode, "id">): string {

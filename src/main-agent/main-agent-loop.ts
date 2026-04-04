@@ -21,7 +21,9 @@ import type {
     AttentionQueueEntry,
     SubagentCallback,
     AttendResult,
+    MiniCodeActCall,
 } from "../subagent/types.js";
+import { executeMiniCodeActs } from "./minicodeact-executor.js";
 import { DEFAULT_SUBAGENT_CONFIG } from "../subagent/types.js";
 import type { ChatMessage } from "../core/llm.js";
 import type { LLMConfig } from "../core/config.js";
@@ -96,6 +98,9 @@ export class MainAgentLoop {
     /** 外部 dispatch handler */
     private dispatchHandler: ((result: AttendResult) => Promise<void>) | null = null;
 
+    /** MemoryStoreV2 引用（MiniCodeAct corrections 使用） */
+    private memory: any = null;
+
     constructor(
         attentionQueue: DynamicAttentionQueue,
         callbackQueue: CallbackQueue,
@@ -124,6 +129,13 @@ export class MainAgentLoop {
      */
     setDispatchHandler(handler: (result: AttendResult) => Promise<void>): void {
         this.dispatchHandler = handler;
+    }
+
+    /**
+     * 设置 Memory 引用（MiniCodeAct corrections 使用）
+     */
+    setMemory(memory: any): void {
+        this.memory = memory;
     }
 
     /**
@@ -215,6 +227,31 @@ export class MainAgentLoop {
             }
             // 解除阻塞
             this.attentionQueue.unblock(cb.chatId);
+
+            // ═══ Phase 1.5: corrections 处理 ═══
+            if (cb.corrections?.length) {
+                for (const correction of cb.corrections) {
+                    log.info("correction from subagent", {
+                        chatId: cb.chatId,
+                        originalCall: correction.originalCall,
+                        issue: correction.issue,
+                    });
+                    const fixResults = executeMiniCodeActs(
+                        [correction.suggestedFix],
+                        cb.chatId,
+                        {
+                            globalState: this.globalState!,
+                            memory: this.memory!,
+                            attentionQueue: this.attentionQueue,
+                            subagentManager: this.subagentManager,
+                        },
+                    );
+                    for (const r of fixResults) {
+                        this.globalState?.recordDecision(cb.chatId,
+                            `CORRECTION: ${r.call} → ${r.success ? "OK" : "FAIL"} (${correction.issue})`);
+                    }
+                }
+            }
         }
 
         // ═══ Phase 2: 动态队列评估 (Q3) ═══

@@ -1,5 +1,86 @@
 # Changelog
 
+## 2026-04-04: MiniCodeAct v1.4 — scheduler 命名空间 + 类型安全修复 + 文档同步
+
+MiniCodeAct 架构实施完成，全部 5 个命名空间 20 个方法已实现并通过 138/138 测试。本次更新新增 scheduler 命名空间，修复多个类型安全和持久化问题，并全面同步设计文档与实现代码。
+
+### 🆕 新增: scheduler 命名空间 (`minicodeact-handlers/scheduler.ts`)
+
+| 方法 | 功能 | 持久化位置 |
+|:-----|:-----|:-----------|
+| `scheduler.setReminder` | 一次性提醒 (ISO 8601 时间校验 + 过去时间拒绝) | `GlobalState.schedulerEvents` |
+| `scheduler.setCron` | 周期任务 (5-7 字段 cron 格式校验) | `GlobalState.schedulerEvents` |
+| `scheduler.cancel` | 取消提醒/周期任务 | `GlobalState.schedulerEvents` |
+| `scheduler.list` | 查看调度列表 (支持 chatId 过滤) | — |
+
+**支撑变更**：
+- `MainAgentGlobalState` (`types.ts`) 新增 `schedulerEvents: SchedulerEvent[]`
+- `GlobalState` 新增 6 个 CRUD 方法: `addReminder()`, `addCron()`, `cancelSchedulerEvent()`, `getSchedulerEvents()`, `getDueReminders()`, `markReminderTriggered()`
+- `AttentionQueueEntry.source` 新增 `'MINICODEACT_BOOST' | 'SCHEDULER_TRIGGER'`
+- System Prompt 已包含 scheduler API 概览
+
+### 🐛 修复
+
+| 问题 | 影响 | 修复 |
+|:-----|:-----|:-----|
+| **Handler deps 类型不安全** | 所有 handler 使用 `deps: any`，编译时无类型检查 | 统一为 `deps: MiniCodeActDeps`（attention/memory/tasks/notes 4 个文件） |
+| **attention.boost 目标不在 Q3** | 对未入队群组 boost 直接返回 `success: false` | 自动调用 `enqueueOrUpdate()` 创建条目，返回 `{ success: true, autoEnqueued: true }` |
+| **adjustStickiness 不持久化** | 只修改 Q3 内存条目，重启后变更丢失 | 同步更新 `subagentManager.get(chatId)?.stickiness.level` |
+| **tasks.update status 类型错误** | `string` 不可赋值给 `"PENDING" \| "IN_PROGRESS" \| "DONE" \| "CANCELLED"` | 添加显式类型断言 |
+| **memory.writeCoreFact category 类型错误** | `string` 不可赋值给 `FactCategory` | 添加 `as any` 运行时类型桥接 |
+
+### 📝 文档修正 (minicodeact.md v1.3 → v1.4)
+
+| 位置 | 问题 | 修正 |
+|:-----|:-----|:-----|
+| §4.2 SearchIdentityResult | 缺少 `matchType` 和 `lastSeenInChat` | 补齐与代码一致的返回类型 |
+| §4.4 scheduler 声明 | 缺少 `scheduler.list` 方法 | 补齐完整 d.ts 签名 |
+| §5.1 场景 D 示例 | `"direction": "UP"` 与实现不一致 | → `"targetLevel": "FAMILIAR"` |
+| §9.1 System Prompt | 缺少 `scheduler` 和 `adjustStickiness` | 补齐全部 6 个命名空间 |
+| §11 Sprint 3 | 标注"如果决定做" | → 标注已实施 ✅ + Watchdog ⚠️ 待集成 |
+| 版本号 | v1.3 "设计确认，待进入实施规划" | → v1.4 "实施完成，138 测试全部通过" |
+
+### 📝 文档修正 (subtask.md)
+
+| 位置 | 问题 | 修正 |
+|:-----|:-----|:-----|
+| 状态 | "待审阅" | → "✅ 实施完成 (138/138 测试通过)" |
+| M4 测试 #3 | `boost 目标不存在 → success false` | → `自动入队 → success=true + autoEnqueued` |
+| M4.4 adjustStickiness | `direction: "UP" \| "DOWN"` | → `targetLevel` + 持久化说明 |
+| Milestone 路线图 | 仅含 M0-M6 | 新增 M7 (Edge Cases, 26 tests) 和 M8 (scheduler, 25 tests) |
+| 测试文件清单 | 仅 7 个测试文件 | 新增 m7/m8 测试文件 |
+
+### 改动清单
+
+| 文件 | 改动 |
+|:-----|:-----|
+| `src/main-agent/minicodeact-handlers/scheduler.ts` | **[NEW]** scheduler 命名空间 4 个方法 |
+| `src/main-agent/minicodeact-handlers/attention.ts` | 类型安全 + boost 自动入队 + stickiness 持久化 |
+| `src/main-agent/minicodeact-handlers/memory.ts` | 类型安全 + matchType/lastSeenInChat 字段 + category 类型断言 |
+| `src/main-agent/minicodeact-handlers/tasks.ts` | 类型安全 + status 类型断言 |
+| `src/main-agent/minicodeact-handlers/notes.ts` | 类型安全 |
+| `src/main-agent/global-state.ts` | scheduler CRUD 方法 + schedulerEvents 持久化 |
+| `src/subagent/types.ts` | SchedulerEvent 类型 + source union 扩展 |
+| `system-prompts/main-agent/mainagent-main-system.md` | 新增 scheduler API 概览 |
+| `tests/minicodeact/m4-attention.test.ts` | 更新 #3 测试为自动入队行为 |
+| `tests/minicodeact/m8-scheduler.test.ts` | **[NEW]** 25 个 scheduler 测试用例 |
+| `docs/minicodeact.md` | v1.3 → v1.4 全面同步 |
+| `docs/subtask.md` | 状态更新 + M7/M8 补充 |
+
+### 测试结果
+
+```
+tests 138 / suites 9 / pass 138 / fail 0 / duration_ms ~720
+tsc --noEmit: 0 errors
+```
+
+### ⚠️ 待完成
+
+- **Phase 1.5 Watchdog**: `main-agent-loop.ts` 中定期调用 `getDueReminders()` → 到期时 boost Q3 + 注入 ATTENTION 上下文
+- **Handler 侧载入**: 生产环境需确保 5 个 handler 模块通过 side-effect import 注册
+
+---
+
 ## 2026-04-03: Sticker 并行化 + triageReason 持续残留修复 + 话题状态机清理
 
 三项修复：(1) Vision Sticker 处理从串行改为并行+去重；(2) `✅ 建议介入` 标记在 attend 决策后不清除的逻辑 bug；(3) 移除重构后不再使用的幽灵状态，恢复 IGNORED 状态的实际使用。

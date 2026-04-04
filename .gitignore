@@ -16,6 +16,8 @@ src/dashboard/ui/node_modules/
 # Environment
 .env
 .env.*
+.omc
+.claude
 
 # OS
 .DS_Store

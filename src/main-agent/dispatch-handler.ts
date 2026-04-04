@@ -10,7 +10,8 @@
  * 参考设计：subagent.md §13.2 B1/B2, subtask.md S3/S4
  */
 
-import type { AttendResult, CodeActReplyTask, SubagentCallback } from "../subagent/types.js";
+import type { AttendResult, CodeActReplyTask, SubagentCallback, MiniCodeActResult } from "../subagent/types.js";
+import { formatMiniCodeActReport } from "./minicodeact-formatter.js";
 import type { SubagentManager } from "../subagent/subagent-manager.js";
 import type { MemoryStoreV2 } from "../memory-v2/index.js";
 import type { LLMConfig } from "../core/config.js";
@@ -205,6 +206,12 @@ export function createDispatchHandler(
                 contextSnapshot.toneGuidance = decision.toneGuidance
                     ?? (subagent.stickiness.level === "CORE" ? "随意友好" : "礼貌得体");
                 contextSnapshot.contentDirection = decision.contentDirection ?? "";
+
+                // MiniCodeAct Report 注入
+                if (result.miniCodeActResults?.length) {
+                    contextSnapshot.miniCodeActReport = formatMiniCodeActReport(result.miniCodeActResults);
+                    contextSnapshot.hasMiniCodeActReport = true;
+                }
 
                 // 贴纸查找：根据 suggestedEmojis 查找可发送的贴纸
                 if (decision.suggestedEmojis && decision.suggestedEmojis.length > 0) {

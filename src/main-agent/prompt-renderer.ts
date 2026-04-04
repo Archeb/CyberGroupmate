@@ -47,6 +47,7 @@ const PROMPT_FILE_MAP: Record<string, string> = {
     MAIN_SYSTEM: "main-agent/mainagent-main-system.md",
     TOPIC_CLUSTERING: "recording/recording-topic-clustering.md",
     TOPIC_TRIAGE: "recording/recording-topic-triage.md",
+    MINI_CODE_ACT_REPORT: "main-agent/mainagent-minicodeact-report.md",
 };
 
 export type PromptType = keyof typeof PROMPT_FILE_MAP;

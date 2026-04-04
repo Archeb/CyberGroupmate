@@ -49,6 +49,11 @@
 {{activePersons}}
 {{/activePersons}}
 
+{{#hasNotes}}
+## 工作笔记
+{{notes}}
+{{/hasNotes}}
+
 {{#hasDispatchedTopics}}
 ## ⚠️ 已分派回复任务的话题
 以下话题已有进行中或已完成的回复任务，请勿重复分派: {{dispatchedTopicIds}}

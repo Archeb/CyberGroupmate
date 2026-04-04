@@ -8,8 +8,11 @@
  * 参考设计：subagent.md §12.2 ➋➌➍
  */
 
-import type { AttentionQueueEntry, AttendResult } from "../subagent/types.js";
+import type { AttentionQueueEntry, AttendResult, MiniCodeActCall } from "../subagent/types.js";
+import { executeMiniCodeActs } from "./minicodeact-executor.js";
+import { formatMiniCodeActReport } from "./minicodeact-formatter.js";
 import type { SubagentManager } from "../subagent/subagent-manager.js";
+import type { DynamicAttentionQueue } from "../subagent/attention-queue.js";
 import type { FastPathHandler } from "../subagent/fast-path-handler.js";
 import type { MemoryStoreV2 } from "../memory-v2/index.js";
 import type { LLMConfig, AppConfig } from "../core/config.js";
@@ -53,6 +56,8 @@ export interface AttendHandlerDeps {
     adapters?: PlatformAdapter[];
     /** 共享的媒体下载管理器 */
     mediaDownloader?: MediaDownloader;
+    /** 注意力队列（MiniCodeAct 依赖） */
+    attentionQueue?: DynamicAttentionQueue;
 }
 
 /**
@@ -63,7 +68,7 @@ export interface AttendHandlerDeps {
 export function createAttendHandler(
     deps: AttendHandlerDeps,
 ): (entry: AttentionQueueEntry) => Promise<AttendResult | null> {
-    const { memory, globalState, subagentManager, mainLoop, sotaConfigs, adapters: adapterList, mediaDownloader } = deps;
+    const { memory, globalState, subagentManager, mainLoop, sotaConfigs, adapters: adapterList, mediaDownloader, attentionQueue } = deps;
 
     // 构建下载函数（用于 vision 处理 sticker/photo）
     // 从 adapters 数组中按 chatId 平台路由到对应 adapter 的 downloadMedia
@@ -279,6 +284,16 @@ export function createAttendHandler(
                 activeTasks,
             });
 
+            // ═══ 笔记注入 (MiniCodeAct notes) ═══
+            globalState.cleanExpiredNotes();
+            const chatNotes = globalState.getNotes(entry.chatId);
+            if (chatNotes.length > 0) {
+                promptVars.hasNotes = true;
+                promptVars.notes = chatNotes
+                    .map(n => `- [${n.id}] ${n.content} (${n.tags.join(", ")})`)
+                    .join("\n");
+            }
+
             const attentionPrompt = renderPrompt("ATTENTION", promptVars);
 
             // ➋ 主 Agent 系统 Prompt — 纯静态，确保前缀缓存命中 (subagent.md §12.2 ➋)
@@ -338,6 +353,7 @@ export function createAttendHandler(
                     suggestedEmojis: Array.isArray(d.suggestedEmojis) ? d.suggestedEmojis : undefined,
                     confidence: d.confidence ?? 0.5,
                     reason: d.reason ?? "",
+                    miniCodeActs: Array.isArray(d.miniCodeActs) ? d.miniCodeActs : undefined,
                 })) : [{ action: "OBSERVE", confidence: 0.3, reason: "LLM 返回格式异常" }],
                 reasoning: parsed.reasoning ?? "",
             };
@@ -345,6 +361,43 @@ export function createAttendHandler(
             // ═══ 追加本轮对话到历史（下轮 LLM 可见） ═══
             await mainLoop.appendToHistory({ role: "user", content: currentTurnPrompt });
             await mainLoop.appendToHistory({ role: "assistant", content: jsonContent });
+
+            // ═══ Phase 5.5: MiniCodeAct 即时执行 ═══
+            const allMiniCodeActs: MiniCodeActCall[] = [];
+            for (const decision of llmResult.decisions) {
+                if (decision.miniCodeActs?.length) {
+                    allMiniCodeActs.push(...decision.miniCodeActs);
+                }
+            }
+
+            if (allMiniCodeActs.length > 0) {
+                const miniResults = executeMiniCodeActs(allMiniCodeActs, entry.chatId, {
+                    globalState,
+                    memory,
+                    attentionQueue: attentionQueue as any,
+                    subagentManager,
+                });
+
+                const reportPrompt = renderPrompt("MINI_CODE_ACT_REPORT", {
+                    chatId: entry.chatId,
+                    results: formatMiniCodeActReport(miniResults),
+                    timestamp: new Date().toISOString(),
+                });
+                await mainLoop.appendToHistory({ role: "user", content: reportPrompt });
+
+                for (const r of miniResults) {
+                    globalState.recordDecision(entry.chatId,
+                        `MINI_ACT: ${r.call} → ${r.success ? "OK" : "FAIL"} ${r.summary}`);
+                }
+
+                llmResult.miniCodeActResults = miniResults;
+                log.info("MiniCodeAct 执行完成", {
+                    chatId: entry.chatId,
+                    count: miniResults.length,
+                    successes: miniResults.filter(r => r.success).length,
+                    failures: miniResults.filter(r => !r.success).length,
+                });
+            }
 
             globalState.recordDecision(entry.chatId,
                 `LLM_DECISION: ${llmResult.replyMode} (${llmResult.decisions.length} decisions, engagement=${Math.round(entry.priority)}, depth=L${depth})`);
