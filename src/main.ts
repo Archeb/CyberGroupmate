@@ -825,12 +825,10 @@ async function main(): Promise<void> {
         });
 
         // Hook 2: attend 决策后更新 group_attends_total
-        // MainAgentLoop 在 attend 完成后 emit "attend" 事件，
-        // 若 mainLoop 不支持此事件则通过 DashboardDeps 所有的 globalState 追踪。
-        // 实际实现：科二幻读取 mainAgentLoop 的 "decision" 事件。
-        // 因 MainAgentLoop 目前没有公开 attend 事件，最简单的方式是 hook 主循环 event emitter。
-        (mainLoop as any).on?.("attend", (chatId: string, decision: string) => {
-            metricsInstance!.groupCollector.onAttend(chatId, decision);
+        mainLoop.setOnAttendComplete((chatId, result) => {
+            for (const d of result.decisions) {
+                metricsInstance!.groupCollector.onAttend(chatId, d.action);
+            }
         });
 
         // Hook 3: FastPath 快回复发送时更新 fast_path_replies_total
@@ -839,8 +837,8 @@ async function main(): Promise<void> {
         nc.onPush(event => {
             if (String(event.type ?? "") !== "system.agent_message_sent") return;
             const chatId = String(event.chatId ?? "");
-            // 如果事件中标记了 via_fast_path（FastPathHandler 设置）则计数
-            if ((event as any).viaFastPath && chatId) {
+            // FastPathHandler 在 dispatch-handler 中设置 scene: "fastpath"
+            if (event.scene === "fastpath" && chatId) {
                 metricsInstance!.groupCollector.onFastPathReply(chatId);
             }
         });

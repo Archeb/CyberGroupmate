@@ -101,6 +101,9 @@ export class MainAgentLoop {
     /** MemoryStoreV2 引用（MiniCodeAct corrections 使用） */
     private memory: any = null;
 
+    /** attend 完成后的回调（metrics 使用） */
+    private onAttendCompleteCallback: ((chatId: string, decisions: AttendResult) => void) | null = null;
+
     constructor(
         attentionQueue: DynamicAttentionQueue,
         callbackQueue: CallbackQueue,
@@ -136,6 +139,13 @@ export class MainAgentLoop {
      */
     setMemory(memory: any): void {
         this.memory = memory;
+    }
+
+    /**
+     * 设置 attend 完成回调（metrics 使用）
+     */
+    setOnAttendComplete(fn: (chatId: string, result: AttendResult) => void): void {
+        this.onAttendCompleteCallback = fn;
     }
 
     /**
@@ -357,6 +367,13 @@ export class MainAgentLoop {
 
             if (result) {
                 decisions.push(result);
+
+                // ─── attend 完成回调（metrics hook）───
+                try {
+                    this.onAttendCompleteCallback?.(entry.chatId, result);
+                } catch (e) {
+                    log.debug("onAttendComplete callback error", { error: String(e) });
+                }
 
                 // ─── Phase 6: dispatch ───
                 if (this.dispatchHandler) {

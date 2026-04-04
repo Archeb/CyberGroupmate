@@ -51,47 +51,51 @@ export class GroupCollector {
         groupsTotal.set({}, subagents.length);
 
         for (const sub of subagents) {
-            const chatId = sub.chatId;
-            const labels = { chat_id: chatId };
+            try {
+                const chatId = sub.chatId;
+                const labels = { chat_id: chatId };
 
-            // engagement score
-            groupEngagementScore.set(labels, sub.observer.getEngagementScore());
+                // engagement score
+                groupEngagementScore.set(labels, sub.observer.getEngagementScore());
 
-            // buffer size (Q2)
-            groupBufferSize.set(labels, sub.observer.getBufferSize());
+                // buffer size (Q2)
+                groupBufferSize.set(labels, sub.observer.getBufferSize());
 
-            // CodeActExecutor queue size
-            const executor = sub.codeActExecutor as any;
-            groupCodeActQueueSize.set(labels, executor?.getQueueSize?.() ?? 0);
+                // CodeActExecutor queue size
+                const executor = sub.codeActExecutor as any;
+                groupCodeActQueueSize.set(labels, executor?.getQueueSize?.() ?? 0);
 
-            // last attend age (seconds since lastAttendedAt)
-            if (sub.lastAttendedAt) {
-                const ageMs = Date.now() - new Date(sub.lastAttendedAt).getTime();
-                groupLastAttendAgeSeconds.set(labels, Math.round(ageMs / 1000));
-            } else {
-                groupLastAttendAgeSeconds.set(labels, -1); // -1 = never attended
-            }
-
-            // stickiness level indicators
-            const currentLevel = sub.stickiness.level;
-            for (const level of STICKINESS_LEVELS) {
-                groupStickiness.set({ ...labels, level }, level === currentLevel ? 1 : 0);
-            }
-
-            // topic count by state
-            const allTopics = sub.topicRegistry.getAll();
-            const countByState = new Map<string, number>();
-            for (const state of TOPIC_STATES) {
-                countByState.set(state, 0);
-            }
-            for (const topic of allTopics) {
-                const state = topic.state as string;
-                if (TOPIC_STATES.includes(state as any)) {
-                    countByState.set(state, (countByState.get(state) ?? 0) + 1);
+                // last attend age (seconds since lastAttendedAt)
+                if (sub.lastAttendedAt) {
+                    const ageMs = Date.now() - new Date(sub.lastAttendedAt).getTime();
+                    groupLastAttendAgeSeconds.set(labels, Math.round(ageMs / 1000));
+                } else {
+                    groupLastAttendAgeSeconds.set(labels, -1); // -1 = never attended
                 }
-            }
-            for (const [state, count] of countByState) {
-                groupTopicCount.set({ ...labels, state }, count);
+
+                // stickiness level indicators
+                const currentLevel = sub.stickiness.level;
+                for (const level of STICKINESS_LEVELS) {
+                    groupStickiness.set({ ...labels, level }, level === currentLevel ? 1 : 0);
+                }
+
+                // topic count by state
+                const allTopics = sub.topicRegistry.getAll();
+                const countByState = new Map<string, number>();
+                for (const state of TOPIC_STATES) {
+                    countByState.set(state, 0);
+                }
+                for (const topic of allTopics) {
+                    const state = topic.state as string;
+                    if (TOPIC_STATES.includes(state as any)) {
+                        countByState.set(state, (countByState.get(state) ?? 0) + 1);
+                    }
+                }
+                for (const [state, count] of countByState) {
+                    groupTopicCount.set({ ...labels, state }, count);
+                }
+            } catch (err) {
+                log.warn("collect: subagent 指标收集失败，跳过", { chatId: sub.chatId, error: String(err).slice(0, 100) });
             }
         }
     }
