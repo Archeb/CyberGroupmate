@@ -93,9 +93,11 @@ export class DashboardServer {
     }
 
     async start(): Promise<void> {
+        const host = this.config.host ?? "127.0.0.1";
         return new Promise((resolve) => {
-            this.server.listen(this.config.port, () => {
-                log.info(`Dashboard 已启动: http://localhost:${this.config.port}`);
+            this.server.listen(this.config.port, host, () => {
+                const displayHost = host === "0.0.0.0" || host === "::" ? "localhost" : host;
+                log.info(`Dashboard 已启动: http://${displayHost}:${this.config.port} (listen ${host}:${this.config.port})`);
                 resolve();
             });
         });

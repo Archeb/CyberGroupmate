@@ -171,6 +171,13 @@ telegram:
   api_hash: ""
   # 手机号 (userbot 模式下使用；首次登录时会在终端提示输入 OTP / 2FA)
   phone: ""
+  # 入站白名单（可选）：enabled 为 true 时仅处理下列群组或私聊
+  # whitelist:
+  #   enabled: false
+  #   # 群组 / 超级群 / 频道 chat ID，每行一个（如 -1001234567890）
+  #   groups: []
+  #   # 私聊：对方用户 ID，每行一个
+  #   users: []
   # 拟人化发送延迟（多条消息连续发送时模拟打字速度）
   # humanized_delay:
   #   enabled: true
@@ -295,6 +302,9 @@ embedding:
 dashboard:
   # 是否启用（默认 true）
   enabled: true
+  # HTTP 监听地址。默认 127.0.0.1（仅本机可访问）。
+  # 若需从公网或其他机器访问，可设为 0.0.0.0 监听所有网卡；此时必须设置非空的 token，否则进程会拒绝启动。
+  host: "127.0.0.1"
   # HTTP 端口（默认 6767）
   port: 6767
   # 认证 Token（访问时需携带 ?token=xxx）

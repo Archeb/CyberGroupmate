@@ -490,5 +490,146 @@ interface TelegramClient {
         await adapter.stop();
         nc.dispose();
     });
+
+    it("should drop group messages when whitelist enabled and group not listed", async () => {
+        const nc = makeNC();
+        let newMessageHandler: ((msg: unknown) => void | Promise<void>) | null = null;
+
+        const fakeClient = {
+            async start() {
+                return { id: 99, displayName: "Userbot", isBot: false };
+            },
+            onNewMessage: {
+                add(handler: (msg: unknown) => void | Promise<void>) {
+                    newMessageHandler = handler;
+                },
+                remove() {
+                    newMessageHandler = null;
+                },
+            },
+            async destroy() {},
+        };
+
+        const adapter = new TelegramAdapter(
+            makeConfig({
+                whitelist: { enabled: true, groups: ["-999"], users: [] },
+            }),
+            nc,
+            async () => "",
+            () => {},
+            async () => fakeClient,
+        );
+
+        await adapter.start();
+        assert.ok(newMessageHandler);
+
+        await newMessageHandler!({
+            id: 556,
+            text: "blocked",
+            date: new Date("2026-03-08T12:00:00.000Z"),
+            isMention: false,
+            chat: { id: -100123, title: "Test Group", type: "supergroup" },
+            sender: { id: 777, displayName: "Alice", isBot: false },
+        });
+
+        const events = await nc.drain(0, 10);
+        assert.equal(events.length, 0);
+
+        await adapter.stop();
+        nc.dispose();
+    });
+
+    it("should allow group messages when whitelist lists the group id", async () => {
+        const nc = makeNC();
+        let newMessageHandler: ((msg: unknown) => void | Promise<void>) | null = null;
+
+        const fakeClient = {
+            async start() {
+                return { id: 99, displayName: "Userbot", isBot: false };
+            },
+            onNewMessage: {
+                add(handler: (msg: unknown) => void | Promise<void>) {
+                    newMessageHandler = handler;
+                },
+                remove() {
+                    newMessageHandler = null;
+                },
+            },
+            async destroy() {},
+        };
+
+        const adapter = new TelegramAdapter(
+            makeConfig({
+                whitelist: { enabled: true, groups: ["-100123"], users: [] },
+            }),
+            nc,
+            async () => "",
+            () => {},
+            async () => fakeClient,
+        );
+
+        await adapter.start();
+        await newMessageHandler!({
+            id: 557,
+            text: "allowed",
+            date: new Date("2026-03-08T12:00:00.000Z"),
+            isMention: false,
+            chat: { id: -100123, title: "Test Group", type: "supergroup" },
+            sender: { id: 777, displayName: "Alice", isBot: false },
+        });
+
+        const events = await nc.drain(0, 10);
+        assert.equal(events.length, 1);
+        assert.equal(events[0].type, "nc.message");
+
+        await adapter.stop();
+        nc.dispose();
+    });
+
+    it("should allow private chat when whitelist lists user id", async () => {
+        const nc = makeNC();
+        let newMessageHandler: ((msg: unknown) => void | Promise<void>) | null = null;
+
+        const fakeClient = {
+            async start() {
+                return { id: 99, displayName: "Userbot", isBot: false };
+            },
+            onNewMessage: {
+                add(handler: (msg: unknown) => void | Promise<void>) {
+                    newMessageHandler = handler;
+                },
+                remove() {
+                    newMessageHandler = null;
+                },
+            },
+            async destroy() {},
+        };
+
+        const adapter = new TelegramAdapter(
+            makeConfig({
+                whitelist: { enabled: true, groups: [], users: ["888888"] },
+            }),
+            nc,
+            async () => "",
+            () => {},
+            async () => fakeClient,
+        );
+
+        await adapter.start();
+        await newMessageHandler!({
+            id: 558,
+            text: "dm",
+            date: new Date("2026-03-08T12:00:00.000Z"),
+            isMention: false,
+            chat: { id: 888888, type: "private" },
+            sender: { id: 888888, displayName: "Bob", isBot: false },
+        });
+
+        const events = await nc.drain(0, 10);
+        assert.equal(events.length, 1);
+
+        await adapter.stop();
+        nc.dispose();
+    });
 });
 
