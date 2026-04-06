@@ -34,7 +34,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync } from 
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { shouldCompact, compact as contextManagerCompact } from "../memory-v2/context-manager.js";
-import { formatTsForDisplay } from "../core/timezone.js";
+import { formatTsForDisplay, formatNowForAgent } from "../core/timezone.js";
 
 const log = createLogger("code-act-executor");
 
@@ -437,6 +437,7 @@ export class CodeActExecutor {
             personaName: this.personaName,
             personaDescription: this.personaDescription,
             apiTypeDefs: loadApiTypeDefs(getPlatform(this.chatId)),
+            currentTime: formatNowForAgent(),
         };
         const systemPrompt = renderPrompt("EXECUTION", systemVars);
 
@@ -453,6 +454,8 @@ export class CodeActExecutor {
             contentDirection,
             toneGuidance,
             decisions: formattedDecisions,
+            hasMiniCodeActReport: !!ctx.hasMiniCodeActReport && !!ctx.miniCodeActReport,
+            miniCodeActReport: ctx.miniCodeActReport ?? "",
             availableStickers: ctx.availableStickers && ctx.availableStickers.length > 0
                 ? ctx.availableStickers.map(s => `- ${s.description} (uniqueFileId: ${s.uniqueFileId})`).join("\n")
                 : "",

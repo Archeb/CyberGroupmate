@@ -103,3 +103,14 @@ function getUtcOffset(date: Date, tz?: string): string {
         return "+00:00";
     }
 }
+
+/**
+ * Single line for LLM system prompts: local wall-clock in configured timezone + UTC ISO.
+ */
+export function formatNowForAgent(): string {
+    const iso = new Date().toISOString();
+    const display = formatTsForDisplay(iso);
+    const tz = getGlobalTimezone();
+    const tzPart = tz ? ` (IANA: ${tz})` : "";
+    return `Local: ${display}${tzPart} | UTC: ${iso}`;
+}

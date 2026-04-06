@@ -1,47 +1,11 @@
-## 任务
+**Current time:** {{currentTime}}
 
-将 {{count}} 条已有的记忆摘要进行级联合并，生成更高层级的综合摘要。
+**Task:** Cascade-merge **{{count}}** memory summary rows into one higher-level summary.
 
-## 输入数据格式
+**Input line format:** `- [<start>~<end>] granularity:week|month|quarter, sentiment:positive|neutral|negative|mixed, interactions:<N>, highlights:[<h1>; <h2>], trend:<text or "(none)">`
 
-以下每行是一条已合并的记忆摘要，格式为：
-```
-- [<开始日期>~<结束日期>] 粒度:<week|month|quarter>, 情感:<positive|neutral|negative|mixed>, 交互:<N>次, 亮点:[<亮点1>; <亮点2>], 趋势:<关系趋势 或 "(无)">
-```
+**Rows:** {{lines}}
 
-### 记忆摘要列表
+**Output:** Strict JSON only, no fences. Schema: `{"overallSentiment":"positive|neutral|negative|mixed","highlights":["…"],"relationshipTrend":"…"}`
 
-{{lines}}
-
-## 输出 JSON Schema
-
-输出一个**严格的 JSON 对象**，不要包含 markdown 代码块或额外文本：
-
-```json
-{
-  "overallSentiment": "positive|neutral|negative|mixed",
-  "highlights": ["string (经过再筛选的重要事件摘要)"],
-  "relationshipTrend": "string (跨越整个时段的关系演变叙事)"
-}
-```
-
-## 字段分析指南
-
-### overallSentiment
-综合所有子时段的情感倾向：
-- 如果整体趋势从负面转为正面（或反之），使用 `mixed` 并在 relationshipTrend 中说明变化轨迹
-- 如果多个子时段情感一致，直接使用对应值
-
-### highlights
-从所有子时段的亮点中**再次筛选和提炼**，只保留在更长时间跨度中仍然重要的事件（通常 2-5 条）：
-1. 合并重复或相似的亮点为一条
-2. 保留关系里程碑事件（如"第一次主动找我聊天"）
-3. 保留有趣的轶事——这些永远不应被丢弃
-4. 如果某个亮点在更大时间尺度下显得琐碎，可以删除
-
-### relationshipTrend
-将多个子时段的趋势综合为一条**弧线叙事**，描述关系在整个合并时段内的演变：
-- ✅ "从2月初的偶尔互动，到月末已经变成群里最活跃的聊天搭档"
-- ✅ "上月关系升温后本月趋于稳定，形成固定的日常互动模式"
-- ❌ "上周积极，这周也积极"
-- ❌ "关系良好"
+**Fields:** `overallSentiment` — aggregate sub-periods; use `mixed` if tone shifts, explain arc in `relationshipTrend`. `highlights` — 2–5 items that still matter: dedupe, keep milestones & anecdotes, drop trivia at this scale. `relationshipTrend` — one arc sentence (good: evolving story; bad: “still positive” / “relationship good”).

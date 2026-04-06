@@ -290,23 +290,18 @@ export function ensureCompositeId(platform: PlatformName, id: string): string {
 
 // ─── Dunbar Tier 标签 ───
 
-/** 全局统一的 Dunbar Tier 中文标签映射 */
+/** Dunbar tier labels (English, for LLM prompts) */
 export const DUNBAR_TIER_LABELS: Record<number, string> = {
-    1: "好友",
-    2: "认识",
-    3: "生疏",
-    4: "陌生",
+    1: "close friend",
+    2: "acquaintance",
+    3: "distant",
+    4: "stranger",
 };
 
 /**
- * 获取 Dunbar Tier 的中文显示标签。
- *
- * @example
- * getDunbarTierLabel(1)         → "亲密程度: 好友"
- * getDunbarTierLabel(undefined) → "不熟"
- * getDunbarTierLabel(99)        → "亲密程度: Tier99"
+ * Human-readable Dunbar tier for prompts.
  */
 export function getDunbarTierLabel(tier: number | undefined | null): string {
-    if (!tier) return "不熟";
-    return `亲密程度: ${DUNBAR_TIER_LABELS[tier] ?? `Tier${tier}`}`;
+    if (!tier) return "unfamiliar";
+    return `closeness: ${DUNBAR_TIER_LABELS[tier] ?? `Tier${tier}`}`;
 }

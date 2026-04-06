@@ -1,63 +1,65 @@
-═══ 注意力切换: {{chatTitle}} ({{chatId}}) [{{chatType}}] ═══
+═══ Attention switch: {{chatTitle}} ({{chatId}}) [{{chatType}}] ═══
 
-## 全局状态快照
+## Global snapshot
 {{attentionSummary}}
 
-## 最近决策记录
+## Recent decisions
 {{recentDecisions}}
 
-## 当前任务列表
+## Active tasks
 {{activeTasks}}
 
-## 本次决策上下文
-当前粘性级别: {{stickinessLevel}}
-当前时间: {{snapshotTimestamp}}
-上次关注: {{lastAttendedAt}} ({{timeSinceLastAttend}} 前)
-上下文深度: L{{depth}}
-优先级乘数: {{priorityMultiplier}}
+## Decision context
+Configured timezone: {{timezone}}
+**Current time:** {{currentTime}}
+Context snapshot (ingest time): {{snapshotTimestamp}}
+Last focus: {{lastAttendedAt}} ({{timeSinceLastAttend}} ago)
+Stickiness: {{stickinessLevel}}
+Depth: L{{depth}}
+Priority multiplier: {{priorityMultiplier}}
 {{#recentFeedback}}
-最近观察：{{recentFeedback}}
+Recent observation: {{recentFeedback}}
 {{/recentFeedback}}
 
-## 话题注册表
+## Topic registry
 {{topicDigests}}
 
-## 新消息 (自上次关注以来, 共 {{newMessageCount}} 条)
+## New messages (since last focus, {{newMessageCount}} total)
 {{messages}}
 
 {{#hasCallbacks}}
-## 上次 Subagent 执行结果
+## Last subagent execution
 {{callbacks}}
 {{/hasCallbacks}}
 
 {{#hasFastPathHistory}}
-## FastPath 回复历史
+## FastPath reply history
 {{fastPathHistory}}
 {{/hasFastPathHistory}}
 
 {{#groupModel}}
-## 聊天画像
-- 标题: {{chatTitle}}
-- 描述: {{description}}
-- 日均消息: {{avgMessagesPerDay}}
-- 参与度: {{engagementLevel}}
-- 语气预设: {{tonePreset}}
+## Chat profile
+- Title: {{chatTitle}}
+- Description: {{description}}
+- Msgs/day: {{avgMessagesPerDay}}
+- Engagement: {{engagementLevel}}
+- Tone preset: {{tonePreset}}
 {{/groupModel}}
 
 {{#activePersons}}
-## 活跃参与者
+## Active participants
 {{activePersons}}
 {{/activePersons}}
 
 {{#hasNotes}}
-## 工作笔记
+## Notes
 {{notes}}
 {{/hasNotes}}
 
 {{#hasDispatchedTopics}}
-## ⚠️ 已分派回复任务的话题
-以下话题已有进行中或已完成的回复任务，请勿重复分派: {{dispatchedTopicIds}}
+## ⚠ Topics already dispatched
+These topics already have in-flight or completed replies—do not dispatch again: {{dispatchedTopicIds}}
 {{/hasDispatchedTopics}}
 
-## 请决策
-基于以上信息，输出你的决策（JSON 格式的 AttendResult）。
+## Your decision
+Based on the above, output your decision (JSON `AttendResult`).

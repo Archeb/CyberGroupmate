@@ -32,6 +32,7 @@ import type {
     TriageDecision,
 } from "./types.js";
 import type { RecordingPipelineConfig } from "../core/config.js";
+import { formatNowForAgent } from "../core/timezone.js";
 
 const log = createLogger("recording-pipeline");
 
@@ -362,14 +363,14 @@ export class RecordingPipeline extends EventEmitter {
 
         const existingTopicsStr = recentTopics.length > 0
             ? recentTopics.map(t => {
-                const parts = [`- ${t.id}: "${t.label}" [${t.state}] (关键词: ${t.keywords.join(", ")})`];
-                parts.push(`  消息数: ${t.messageCount}, 参与人数: ${t.participantIds.size}`);
+                const parts = [`- ${t.id}: "${t.label}" [${t.state}] (keywords: ${t.keywords.join(", ")})`];
+                parts.push(`  messages: ${t.messageCount}, participants: ${t.participantIds.size}`);
                 if (t.recentContext) {
-                    parts.push(`  最近消息:\n${t.recentContext.split("\n").map(l => `    ${l}`).join("\n")}`);
+                    parts.push(`  recent:\n${t.recentContext.split("\n").map(l => `    ${l}`).join("\n")}`);
                 }
                 return parts.join("\n");
             }).join("\n")
-            : "（暂无已有话题）";
+            : "(no existing topics)";
 
         const messagesStr = messages.map(m =>
             `[${m.id}] ${m.senderName} (${new Date(m.timestamp).toLocaleTimeString()}): ${m.text}`
@@ -378,10 +379,11 @@ export class RecordingPipeline extends EventEmitter {
         const prompt = renderPrompt("TOPIC_CLUSTERING", {
             existingTopics: existingTopicsStr,
             messages: messagesStr,
+            currentTime: formatNowForAgent(),
         });
 
         const llmMessages: ChatMessage[] = [
-            { role: "system", content: "你是一个话题聚类助手。只输出合法 JSON，不要任何其他内容。" },
+            { role: "system", content: "You are a topic clustering assistant. Output only valid JSON, nothing else." },
             { role: "user", content: prompt },
         ];
 
@@ -401,7 +403,7 @@ export class RecordingPipeline extends EventEmitter {
                 assignments: messages.map(m => ({
                     messageId: m.id,
                     topicId: "NEW_1",
-                    topicLabel: "对话讨论",
+                    topicLabel: "Discussion",
                     keywords: [],
                 })),
                 evolutions: [],
@@ -434,13 +436,14 @@ export class RecordingPipeline extends EventEmitter {
         const prompt = renderPrompt("TOPIC_TRIAGE", {
             personaName: this.personaName,
             persona: this.personaDescription,
+            currentTime: formatNowForAgent(),
         });
 
         // 构建富化的 user message：群组信息 + 参与者画像 + 话题上下文
         const contextSections: string[] = [];
         contextSections.push(...this.buildTriageContext(chatId, messages));
         contextSections.push(topicMessagesStr);
-        contextSections.push("请根据以上信息，对每个话题进行摘要和 triage，严格遵循格式输出 JSON.");
+        contextSections.push("Using the information above, summarize and triage each topic. Output JSON strictly following the schema.");
         const userMessage = contextSections.join("\n\n");
 
         const llmMessages: ChatMessage[] = [
@@ -478,11 +481,12 @@ export class RecordingPipeline extends EventEmitter {
             const retryPrompt = renderPrompt("TOPIC_TRIAGE", {
                 personaName: this.personaName,
                 persona: this.personaDescription,
+                currentTime: formatNowForAgent(),
             });
 
             const retryMessages: ChatMessage[] = [
                 { role: "system", content: retryPrompt },
-                { role: "user", content: retryStr + "\n\n请根据以上信息，对每个话题进行摘要和 triage，严格遵循格式输出 JSON." },
+                { role: "user", content: retryStr + "\n\nUsing the information above, summarize and triage each topic. Output JSON strictly following the schema." },
             ];
 
             try {
@@ -529,31 +533,31 @@ export class RecordingPipeline extends EventEmitter {
             if (!topic) {
                 // 新话题（或者是 LLM 编造的临时 ID，不在 registry 中）
                 const label = clustering.assignments.find(a => a.topicId === topicId)?.topicLabel ?? topicId;
-                return `### 话题: ${label} (ID: ${topicId})\n${newMsgLines}`;
+                return `### Topic: ${label} (ID: ${topicId})\n${newMsgLines}`;
             }
 
             // 旧话题：从 registry 取完整上下文
             const label = topic?.label ?? topicId;
-            const parts: string[] = [`### 话题: ${label} (ID: ${topicId}) [持续话题]`];
+            const parts: string[] = [`### Topic: ${label} (ID: ${topicId}) [ongoing]`];
 
             // 上一轮的摘要信息
             if (topic?.lastSummary) {
-                parts.push(`  上一轮摘要: ${topic.lastSummary}`);
+                parts.push(`  last summary: ${topic.lastSummary}`);
             }
             if (topic?.decision?.reason) {
-                parts.push(`  上一轮判断: ${topic.decision.reason}`);
+                parts.push(`  last decision: ${topic.decision.reason}`);
             }
 
             // 历史消息上下文
             if (topic?.recentContext) {
-                parts.push(`  历史消息:`);
+                parts.push(`  history:`);
                 for (const line of topic.recentContext.split("\n")) {
                     parts.push(`    ${line}`);
                 }
             }
 
             // 本轮新消息
-            parts.push(`  本轮新消息:`);
+            parts.push(`  new messages:`);
             parts.push(newMsgLines);
 
             return parts.join("\n");
@@ -576,16 +580,16 @@ export class RecordingPipeline extends EventEmitter {
         if (groupModel) {
             const isDirectMessage = !!groupModel.isDirectMessage;
             if (isDirectMessage) {
-                sections.push(`## 私聊信息\n` +
-                    `- 对话对象: ${groupModel.chatTitle}\n` +
-                    `- 我的角色: ${groupModel.agentRole || "(未定义)"}\n` +
-                    `- 聊天类型: 一对一私聊`);
+                sections.push(`## Direct message context\n` +
+                    `- peer: ${groupModel.chatTitle}\n` +
+                    `- agent role: ${groupModel.agentRole || "(undefined)"}\n` +
+                    `- type: one-to-one DM`);
             } else {
-                sections.push(`## 群组信息\n` +
-                    `- 群名: ${groupModel.chatTitle}\n` +
-                    `- 我的角色: ${groupModel.agentRole || "(未定义)"}\n` +
-                    `- 活跃度: ${groupModel.engagementLevel || "(未知)"}\n` +
-                    (groupModel.hotTopics?.length ? `- 热点话题: ${groupModel.hotTopics.join(", ")}` : ""));
+                sections.push(`## Group context\n` +
+                    `- title: ${groupModel.chatTitle}\n` +
+                    `- agent role: ${groupModel.agentRole || "(undefined)"}\n` +
+                    `- engagement: ${groupModel.engagementLevel || "(unknown)"}\n` +
+                    (groupModel.hotTopics?.length ? `- hot topics: ${groupModel.hotTopics.join(", ")}` : ""));
             }
         }
 
@@ -602,20 +606,20 @@ export class RecordingPipeline extends EventEmitter {
             const profileLines = relevantProfiles.map(p => {
                 const identity = this.memory!.getPersonIdentity(p.userId);
                 const namePart = identity?.displayName
-                    ? ` (显示名: ${identity.displayName}` +
+                    ? ` (display: ${identity.displayName}` +
                     (identity.username ? `, @${identity.username}` : "") +
                     `)`
                     : "";
                 const parts = [
                     `- **${getRawId(p.userId)}**${namePart}`,
-                    "关系：" + getDunbarTierLabel(p.dunbarTier),
+                    "relation tier: " + getDunbarTierLabel(p.dunbarTier),
                     p.traits.length ? `traits=[${p.traits.join(", ")}]` : null,
                     p.interests.length ? `interests=[${p.interests.join(", ")}]` : null,
                     p.relationToAgent ? `relation="${p.relationToAgent}"` : null,
                 ].filter(Boolean).join(", ");
                 return parts;
             }).join("\n");
-            sections.push(`## 本批消息参与者画像 (${relevantProfiles.length} 人)\n\n${profileLines}`);
+            sections.push(`## Participant profiles in this batch (${relevantProfiles.length})\n\n${profileLines}`);
         }
 
         // --- 核心事实（只取本批参与者的） ---
@@ -628,7 +632,7 @@ export class RecordingPipeline extends EventEmitter {
                 }
             }
             if (factLines.length > 0) {
-                sections.push(`## 相关事实 (${factLines.length} 条)\n\n${factLines.join("\n")}`);
+                sections.push(`## Related facts (${factLines.length})\n\n${factLines.join("\n")}`);
             }
         }
 

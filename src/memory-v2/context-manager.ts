@@ -1,6 +1,7 @@
 import { createLogger } from "../core/logger.js";
 import { callLLMWithFallback, type ChatMessage } from "../core/llm.js";
 import { loadConfig, resolveComponentTimeout, type LLMConfig } from "../core/config.js";
+import { formatNowForAgent } from "../core/timezone.js";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { encodingForModel } from "js-tiktoken";
@@ -338,33 +339,27 @@ export function identifyProtectedMessages(
 // ─── Compaction Prompt ───
 
 const PROMPTS_DIR = join(process.cwd(), "system-prompts", "memory");
-let _compactionContextPrompt: string | null = null;
+let _compactionContextPromptTpl: string | null = null;
 
-function getContextCompactionPrompt(): string {
-    if (!_compactionContextPrompt) {
+function getContextCompactionPromptTpl(): string {
+    if (!_compactionContextPromptTpl) {
         try {
-            _compactionContextPrompt = readFileSync(
+            _compactionContextPromptTpl = readFileSync(
                 join(PROMPTS_DIR, "context-compaction.md"), "utf-8",
             ).trim();
         } catch {
-            _compactionContextPrompt = `你是一个上下文压缩助手。请将以下对话历史压缩为结构化的 Context Briefing。
+            _compactionContextPromptTpl = `**Current time:** {{currentTime}}
 
-要求：
-1. 按话题分段总结，保留关键信息和结论
-2. 标注每个话题的参与者
-3. 提取重要的事实和待续话题
-4. 使用中文输出
+You are a context compaction assistant. Compress the conversation into a structured Context Briefing in English.
 
-输出格式：
-## 之前的对话摘要
-- [话题标签] 参与者讨论了什么，结论是什么
-## 关键事实
-- 具体的事实信息
-## 活跃待续话题
-- 正在进行的讨论`;
+Sections: prior summary by topic, key facts, open threads, code status if any.`;
         }
     }
-    return _compactionContextPrompt;
+    return _compactionContextPromptTpl;
+}
+
+function getContextCompactionPrompt(): string {
+    return getContextCompactionPromptTpl().replace(/\{\{currentTime\}\}/g, formatNowForAgent());
 }
 
 // ─── Compaction 执行 (M3.3) ───
@@ -512,8 +507,8 @@ async function generateBriefing(
     const prompt = getContextCompactionPrompt();
 
     const userContent = existingBriefing
-        ? `以下是之前的 Context Briefing（请在此基础上更新）：\n\n${existingBriefing}\n\n---\n\n以下是新的对话记录，请整合到 Briefing 中：\n\n${conversationText}`
-        : `请将以下对话记录压缩为 Context Briefing：\n\n${conversationText}`;
+        ? `Below is the previous Context Briefing (update and merge on top of it):\n\n${existingBriefing}\n\n---\n\nNew conversation to merge into the briefing:\n\n${conversationText}`
+        : `Compress the following conversation into a Context Briefing:\n\n${conversationText}`;
 
     const briefingMessages: ChatMessage[] = [
         { role: "system", content: prompt },

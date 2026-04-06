@@ -1,3 +1,4 @@
-═══ [MiniCodeAct 执行报告] {{chatId}} ({{timestamp}}) ═══
+═══ [MiniCodeAct report] {{chatId}} ({{timestamp}}) ═══
+Current time: {{currentTime}}
 
 {{results}}

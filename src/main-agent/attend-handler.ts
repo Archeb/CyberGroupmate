@@ -26,7 +26,7 @@ import { renderPrompt, buildAttentionVariables, buildMainSystemVariables } from 
 import { callLLMWithFallback } from "../core/llm.js";
 import { getRawId, getGroupModelKey } from "../core/chat-id.js";
 import { createLogger } from "../core/logger.js";
-import { formatTsForDisplay } from "../core/timezone.js";
+import { formatNowForAgent, formatTsForDisplay } from "../core/timezone.js";
 import { enrichMessages, formatMessageLine, resolveReplyText, type RawMessage } from "../core/message-enricher.js";
 import { loadConfig, resolveComponentProfiles } from "../core/config.js";
 import type { PlatformAdapter } from "../adapter/platform-adapter.js";
@@ -270,8 +270,8 @@ export function createAttendHandler(
                 timeSinceLastAttend,
                 stickinessLevel: entry.stickinessLevel,
                 priorityMultiplier: subagent.stickiness.priorityMultiplier,
-                tonePreset: subagent.stickiness.level === "CORE" ? "随意友好" :
-                    subagent.stickiness.level === "FAMILIAR" ? "轻松" : "礼貌得体",
+                tonePreset: subagent.stickiness.level === "CORE" ? "casual friendly" :
+                    subagent.stickiness.level === "FAMILIAR" ? "relaxed" : "polite",
                 callbacks: subagent.lastCallbacks.length > 0
                     ? subagent.lastCallbacks.slice(-3)
                     : undefined,
@@ -313,7 +313,7 @@ export function createAttendHandler(
                 sotaConfigs,
                 {
                     caller: "attend-handler",
-                    prefill: `让${persona.name}看看，`,
+                    prefill: `Have ${persona.name} take a look — `,
                 },
             );
 
@@ -332,7 +332,7 @@ export function createAttendHandler(
                 fastPathAuth: parsed.fastPathAuth ? {
                     preauthorizedActions: parsed.fastPathAuth.preauthorizedActions ?? [],
                     blockedActions: parsed.fastPathAuth.blockedActions ?? [],
-                    tonePreset: parsed.fastPathAuth.tonePreset ?? "礼貌得体",
+                    tonePreset: parsed.fastPathAuth.tonePreset ?? "polite",
                     maxRepliesBeforeReauth: parsed.fastPathAuth.maxRepliesBeforeReauth ?? 3,
                     expiresAt: parsed.fastPathAuth.expiresInMinutes
                         ? new Date(Date.now() + parsed.fastPathAuth.expiresInMinutes * 60_000).toISOString()
@@ -382,6 +382,7 @@ export function createAttendHandler(
                     chatId: entry.chatId,
                     results: formatMiniCodeActReport(miniResults),
                     timestamp: new Date().toISOString(),
+                    currentTime: formatNowForAgent(),
                 });
                 await mainLoop.appendToHistory({ role: "user", content: reportPrompt });
 

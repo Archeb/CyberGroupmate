@@ -17,6 +17,7 @@ import { join } from "node:path";
 import { createLogger } from "../core/logger.js";
 import { createRequire } from "node:module";
 import { resolveComponentTimeout, type LLMConfig, type ReflectionExternalConfig, type EmbeddingConfig } from "../core/config.js";
+import { formatNowForAgent } from "../core/timezone.js";
 import {
     cosineSimilarity,
     bufferToEmbedding,
@@ -70,54 +71,62 @@ function now(): string {
 
 const PROMPTS_DIR = join(process.cwd(), "system-prompts", "memory");
 
-let _recallDeepSummaryPrompt: string | null = null;
-function getRecallDeepSummaryPrompt(): string {
-    if (!_recallDeepSummaryPrompt) {
+let _recallDeepSummaryPromptTpl: string | null = null;
+function getRecallDeepSummaryPromptTpl(): string {
+    if (!_recallDeepSummaryPromptTpl) {
         try {
-            _recallDeepSummaryPrompt = readFileSync(
+            _recallDeepSummaryPromptTpl = readFileSync(
                 join(PROMPTS_DIR, "recall-deep-summary.md"), "utf-8",
             ).trim();
         } catch {
-            _recallDeepSummaryPrompt = "你是一组聊天记忆系统中的深度总结助手。请根据以下记忆片段（话题摘要和事实），针对用户查询生成简洁的中文总结（2-3 句话）。只输出总结，不要其他内容。";
+            _recallDeepSummaryPromptTpl = "You are a deep summary assistant for chat memory. Given topic and fact snippets below, answer the query in 2–3 English sentences. Output only the summary. Current time: {{currentTime}}";
             log.warn("recall-deep-summary.md 未找到，使用内联 fallback");
         }
     }
-    return _recallDeepSummaryPrompt;
+    return _recallDeepSummaryPromptTpl;
 }
 
-let _browseIntentParsePrompt: string | null = null;
-function getBrowseIntentParsePrompt(): string {
-    if (!_browseIntentParsePrompt) {
+function getRecallDeepSummaryPrompt(): string {
+    return getRecallDeepSummaryPromptTpl().replace(/\{\{currentTime\}\}/g, formatNowForAgent());
+}
+
+let _browseIntentParsePromptTpl: string | null = null;
+function getBrowseIntentParsePromptTpl(): string {
+    if (!_browseIntentParsePromptTpl) {
         try {
-            _browseIntentParsePrompt = readFileSync(
+            _browseIntentParsePromptTpl = readFileSync(
                 join(PROMPTS_DIR, "browse-intent-parse.md"), "utf-8",
             ).trim();
         } catch {
-            _browseIntentParsePrompt = `你是一个意图解析助手。请分析用户的搜索意图，提取关键词和时间范围。
-输出严格 JSON 格式：{"keywords": ["关键词1", "关键词2"], "daysBack": 数字或null, "userId": "用户ID或null"}
-- keywords：搜索关键词（中文分词后的重要词汇，至少1个）
-- daysBack：如果用户提到了时间范围（如"上周"=7，"昨天"=1，"上个月"=30），否则 null
-- userId：如果用户提到了具体的人名或ID，否则 null
-只输出 JSON。`;
+            _browseIntentParsePromptTpl = `You parse search intents for chat history. Output strict JSON only: {"keywords":["..."],"daysBack":number|null,"userId":string|null}
+Keywords: at least one content word. daysBack: e.g. last week=7, yesterday=1. Current time: {{currentTime}}`;
             log.warn("browse-intent-parse.md 未找到，使用内联 fallback");
         }
     }
-    return _browseIntentParsePrompt;
+    return _browseIntentParsePromptTpl;
 }
 
-let _browseDeepReadPrompt: string | null = null;
-function getBrowseDeepReadPrompt(): string {
-    if (!_browseDeepReadPrompt) {
+function getBrowseIntentParsePrompt(): string {
+    return getBrowseIntentParsePromptTpl().replace(/\{\{currentTime\}\}/g, formatNowForAgent());
+}
+
+let _browseDeepReadPromptTpl: string | null = null;
+function getBrowseDeepReadPromptTpl(): string {
+    if (!_browseDeepReadPromptTpl) {
         try {
-            _browseDeepReadPrompt = readFileSync(
+            _browseDeepReadPromptTpl = readFileSync(
                 join(PROMPTS_DIR, "browse-deep-read.md"), "utf-8",
             ).trim();
         } catch {
-            _browseDeepReadPrompt = "你是一个消息历史阅读助手。请根据以下对话记录，回答用户的问题。用中文简洁回答（2-4 句话）。只输出回答，不要其他内容。";
+            _browseDeepReadPromptTpl = "You read chat excerpts and answer in 2–4 English sentences. Output only the answer. Current time: {{currentTime}}";
             log.warn("browse-deep-read.md 未找到，使用内联 fallback");
         }
     }
-    return _browseDeepReadPrompt;
+    return _browseDeepReadPromptTpl;
+}
+
+function getBrowseDeepReadPrompt(): string {
+    return getBrowseDeepReadPromptTpl().replace(/\{\{currentTime\}\}/g, formatNowForAgent());
 }
 
 // ─── MemoryStoreV2 实现 ───
@@ -1424,15 +1433,15 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
         if (!this.cheapLlmConfigs?.length) throw new Error("No cheap LLM config");
 
         const topicSummaries = topics.slice(0, 5).map(t =>
-            `- [话题] ${t.label}: ${t.summary}`
+            `- [Topic] ${t.label}: ${t.summary}`
         ).join("\n");
         const factSummaries = facts.slice(0, 10).map(f =>
-            `- [事实] (${f.subject}) ${f.content}`
+            `- [Fact] (${f.subject}) ${f.content}`
         ).join("\n");
 
         const messages: ChatMessage[] = [
             { role: "system", content: getRecallDeepSummaryPrompt() },
-            { role: "user", content: `查询：${query}\n\n相关记忆：\n${topicSummaries}\n${factSummaries}` },
+            { role: "user", content: `Query: ${query}\n\nRelated memories:\n${topicSummaries}\n${factSummaries}` },
         ];
 
         const response = await callLLMWithFallback(messages, this.cheapLlmConfigs!, { caller: "memory", timeoutMs: resolveComponentTimeout("memory") });
@@ -1626,7 +1635,7 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
         // 拼接消息上下文（限制长度）
         const contextParts: string[] = [];
         for (const seg of segments.slice(0, 3)) {
-            const header = `【话题：${seg.topicLabel}】(${seg.timeRange.from} ~ ${seg.timeRange.to})`;
+            const header = `[Topic: ${seg.topicLabel}] (${seg.timeRange.from} ~ ${seg.timeRange.to})`;
             const msgTexts = seg.messages.slice(0, 20).map(m =>
                 `${m.displayName}: ${m.text}`
             ).join("\n");
@@ -1635,7 +1644,7 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
 
         const messages: ChatMessage[] = [
             { role: "system", content: getBrowseDeepReadPrompt() },
-            { role: "user", content: `问题：${intent}\n\n对话记录：\n${contextParts.join("\n\n---\n\n")}` },
+            { role: "user", content: `Question: ${intent}\n\nConversation:\n${contextParts.join("\n\n---\n\n")}` },
         ];
 
         const response = await callLLMWithFallback(messages, this.cheapLlmConfigs!, { caller: "memory", timeoutMs: resolveComponentTimeout("memory") });

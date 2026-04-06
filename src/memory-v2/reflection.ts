@@ -17,6 +17,7 @@ import { createLogger } from "../core/logger.js";
 import { getPlatform, ensureCompositeId, getRawId } from "../core/chat-id.js";
 import { callLLMWithFallback, type LLMConfig, type ChatMessage } from "../core/llm.js";
 import { resolveComponentTimeout } from "../core/config.js";
+import { formatNowForAgent } from "../core/timezone.js";
 import { formatMessages, type RawMessage } from "../core/message-enricher.js";
 
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
@@ -170,7 +171,7 @@ export async function runReflection(
             groupUpdates: "",
             newCoreFacts: [],
             mergedEpisodes: 0,
-            insights: "无新话题或交互，跳过反思。",
+            insights: "No new topics or interactions; reflection skipped.",
         };
     }
 
@@ -222,7 +223,7 @@ export async function runReflection(
             groupUpdates: "",
             newCoreFacts: [],
             mergedEpisodes: 0,
-            insights: `Reflection LLM 调用失败: ${String(err)}`,
+            insights: `Reflection LLM call failed: ${String(err)}`,
         };
     }
 
@@ -733,38 +734,46 @@ function computeAffinityScores(
 
 const PROMPTS_DIR = join(process.cwd(), "system-prompts", "memory");
 
-let _reflectionSystemPrompt: string | null = null;
+let _reflectionSystemPromptTpl: string | null = null;
 
-function getReflectionSystemPrompt(): string {
-    if (!_reflectionSystemPrompt) {
+function getReflectionSystemPromptTpl(): string {
+    if (!_reflectionSystemPromptTpl) {
         try {
-            _reflectionSystemPrompt = readFileSync(
+            _reflectionSystemPromptTpl = readFileSync(
                 join(PROMPTS_DIR, "reflection-system.md"), "utf-8"
             ).trim();
-            log.debug("Reflection system prompt 已加载", { length: _reflectionSystemPrompt.length });
+            log.debug("Reflection system prompt 已加载", { length: _reflectionSystemPromptTpl.length });
         } catch {
             log.warn("Reflection system prompt 文件未找到，使用内置默认值");
-            _reflectionSystemPrompt = "你是一个聊天观察员 AI。请根据话题和交互数据，输出一个严格的 JSON 对象。";
+            _reflectionSystemPromptTpl = "You are a chat observer AI. Follow the user message and output strict JSON. Current time: {{currentTime}}";
         }
     }
-    return _reflectionSystemPrompt;
+    return _reflectionSystemPromptTpl;
 }
 
-let _mergeSystemPrompt: string | null = null;
+function getReflectionSystemPrompt(): string {
+    return applyTemplate(getReflectionSystemPromptTpl(), { currentTime: formatNowForAgent() });
+}
 
-function getMergeSystemPrompt(): string {
-    if (!_mergeSystemPrompt) {
+let _mergeSystemPromptTpl: string | null = null;
+
+function getMergeSystemPromptTpl(): string {
+    if (!_mergeSystemPromptTpl) {
         try {
-            _mergeSystemPrompt = readFileSync(
+            _mergeSystemPromptTpl = readFileSync(
                 join(PROMPTS_DIR, "merge-episodes-system.md"), "utf-8"
             ).trim();
-            log.debug("Merge system prompt 已加载", { length: _mergeSystemPrompt.length });
+            log.debug("Merge system prompt 已加载", { length: _mergeSystemPromptTpl.length });
         } catch {
             log.warn("Merge system prompt 文件未找到，使用内置默认值");
-            _mergeSystemPrompt = "你是一个记忆合并助手。请分析交互事件，输出 JSON 格式的 overallSentiment、highlights、relationshipTrend。";
+            _mergeSystemPromptTpl = "You merge interaction memories into JSON: overallSentiment, highlights, relationshipTrend. Current time: {{currentTime}}";
         }
     }
-    return _mergeSystemPrompt;
+    return _mergeSystemPromptTpl;
+}
+
+function getMergeSystemPrompt(): string {
+    return applyTemplate(getMergeSystemPromptTpl(), { currentTime: formatNowForAgent() });
 }
 
 let _reflectionUserInstruction: string | null = null;
@@ -778,7 +787,7 @@ function getReflectionUserInstruction(): string {
             log.debug("Reflection user instruction 已加载", { length: _reflectionUserInstruction.length });
         } catch {
             log.warn("Reflection user instruction 文件未找到，使用内置默认值");
-            _reflectionUserInstruction = "请根据以上数据，输出 JSON 格式的反思结果。";
+            _reflectionUserInstruction = "Using the data above, output the reflection JSON per schema.";
         }
     }
     return _reflectionUserInstruction;
@@ -812,7 +821,7 @@ function getMergeEpisodesUserTpl(): string {
             log.debug("Merge episodes user prompt 已加载", { length: _mergeEpisodesUserTpl.length });
         } catch {
             log.warn("Merge episodes user prompt 文件未找到，使用内置默认值");
-            _mergeEpisodesUserTpl = "用户: {{userId}}\n交互事件 ({{count}} 条):\n\n{{eventLines}}\n\n请分析以上事件，输出 JSON。";
+            _mergeEpisodesUserTpl = "Current time: {{currentTime}}\n\nUser: {{userId}}\nEvents ({{count}}):\n\n{{eventLines}}\n\nAnalyze and output JSON.";
         }
     }
     return _mergeEpisodesUserTpl;
@@ -829,7 +838,7 @@ function getMergeCascadeUserTpl(): string {
             log.debug("Merge cascade user prompt 已加载", { length: _mergeCascadeUserTpl.length });
         } catch {
             log.warn("Merge cascade user prompt 文件未找到，使用内置默认值");
-            _mergeCascadeUserTpl = "已有的记忆摘要 ({{count}} 条):\n\n{{lines}}\n\n请综合分析这些记忆，生成更高层级的合并摘要。";
+            _mergeCascadeUserTpl = "Current time: {{currentTime}}\n\nPrior summaries ({{count}}):\n\n{{lines}}\n\nProduce a higher-level merged summary as JSON.";
         }
     }
     return _mergeCascadeUserTpl;
@@ -854,43 +863,43 @@ function buildReflectionPrompt(
 ): string {
     const sections: string[] = [];
 
-    // 基本信息（私聊 vs 群聊）
+    sections.push(`## Current time\n${formatNowForAgent()}`);
+
+    // Group vs DM header
     if (groupModel) {
         if (isDirectMessage) {
-            sections.push(`## 私聊信息
-- 对话对象: ${groupModel.chatTitle}
-- 当前 agent 角色: ${groupModel.agentRole || "(未定义)"}
-- 活跃度: ${groupModel.engagementLevel || "(未知)"}
-- 上次反思: ${groupModel.lastReflectedAt ?? "从未"}
-- 聊天类型: 一对一私聊`);
+            sections.push(`## Direct message context
+- Counterpart: ${groupModel.chatTitle}
+- Agent role: ${groupModel.agentRole || "(undefined)"}
+- Engagement: ${groupModel.engagementLevel || "(unknown)"}
+- Last reflection: ${groupModel.lastReflectedAt ?? "never"}
+- Chat type: one-to-one DM`);
         } else {
-            sections.push(`## 群组信息
-- 群名: ${groupModel.chatTitle}
-- 当前 agent 角色: ${groupModel.agentRole}
-- 活跃度: ${groupModel.engagementLevel}
-- 热点话题: ${groupModel.hotTopics?.join(", ") || "无"}
-- 上次反思: ${groupModel.lastReflectedAt ?? "从未"}`);
+            sections.push(`## Group context
+- Title: ${groupModel.chatTitle}
+- Agent role: ${groupModel.agentRole}
+- Engagement: ${groupModel.engagementLevel}
+- Hot topics: ${groupModel.hotTopics?.join(", ") || "none"}
+- Last reflection: ${groupModel.lastReflectedAt ?? "never"}`);
         }
     }
 
-    // 近期话题与对话（合并）—— 获取每个话题的实际消息并格式化
+    // Recent topics + transcript when memory is available
     if (topics.length > 0 && memory) {
         const chatId = topics[0].chatId;
         const topicBlocks: string[] = [];
 
         for (let i = 0; i < topics.length; i++) {
             const t = topics[i];
-            const header = `### 话题 ${i + 1}: ${t.label} (${t.startedAt?.substring(0, 10) ?? "?"})\n` +
-                `参与者: ${t.participants.join(", ")} | 情感: ${t.sentiment} | 消息数: ${t.messageRange.count}\n` +
-                `摘要: ${t.summary || "(无)"}\n` +
-                `关键词: ${t.keywords.join(", ")}`;
+            const header = `### Topic ${i + 1}: ${t.label} (${t.startedAt?.substring(0, 10) ?? "?"})\n` +
+                `Participants: ${t.participants.join(", ")} | Sentiment: ${t.sentiment} | Messages: ${t.messageRange.count}\n` +
+                `Summary: ${t.summary || "(none)"}\n` +
+                `Keywords: ${t.keywords.join(", ")}`;
 
-            // 获取话题关联的实际消息
             let conversationText = "";
             if (t.messageRange.messageIds.length > 0) {
                 const msgs = memory.getMessagesByIds(chatId, t.messageRange.messageIds);
                 if (msgs.length > 0) {
-                    // RecentMessageEntry → RawMessage
                     const rawMsgs: RawMessage[] = msgs.map(m => ({
                         id: m.messageId,
                         sender: m.displayName || getRawId(m.userId),
@@ -905,51 +914,46 @@ function buildReflectionPrompt(
             }
 
             if (conversationText) {
-                topicBlocks.push(`${header}\n\n对话内容:\n${conversationText}`);
+                topicBlocks.push(`${header}\n\nTranscript:\n${conversationText}`);
             } else {
                 topicBlocks.push(header);
             }
         }
 
-        sections.push(`## 近期话题与对话 (${topics.length} 个)\n\n${topicBlocks.join("\n\n---\n\n")}`);
+        sections.push(`## Recent topics and transcripts (${topics.length})\n\n${topicBlocks.join("\n\n---\n\n")}`);
     } else if (topics.length > 0) {
-        // fallback: 无 memory 时仅显示话题摘要
         const topicLines = topics.map((t, i) =>
             `${i + 1}. **${t.label}** (${t.startedAt?.substring(0, 10) ?? "?"})\n` +
-            `   摘要: ${t.summary || "(无)"}\n` +
-            `   参与者: ${t.participants.join(", ")}\n` +
-            `   关键词: ${t.keywords.join(", ")}\n` +
-            `   情感: ${t.sentiment}\n` +
-            `   消息数: ${t.messageRange.count}`
+            `   Summary: ${t.summary || "(none)"}\n` +
+            `   Participants: ${t.participants.join(", ")}\n` +
+            `   Keywords: ${t.keywords.join(", ")}\n` +
+            `   Sentiment: ${t.sentiment}\n` +
+            `   Message count: ${t.messageRange.count}`
         ).join("\n\n");
-        sections.push(`## 近期话题 (${topics.length} 个)\n\n${topicLines}`);
+        sections.push(`## Recent topics (${topics.length})\n\n${topicLines}`);
     }
 
-    // 参与者量化数据
     if (stats.size > 0) {
         const statLines = Array.from(stats.values()).map(s =>
-            `- ${getRawId(s.userId)}: ${s.messageCount} 条消息, ${s.topicsParticipated} 个话题, ${s.activeDays.size} 天活跃`
+            `- ${getRawId(s.userId)}: ${s.messageCount} messages, ${s.topicsParticipated} topics, ${s.activeDays.size} active day(s)`
         ).join("\n");
-        sections.push(`## 参与者统计\n\n${statLines}`);
+        sections.push(`## Participant stats\n\n${statLines}`);
     }
 
-    // 现有画像
     if (profiles.length > 0) {
         const profileLines = profiles.map(p => {
-            // Issue 6: 查询 PersonIdentity 获取 displayName/aliases
             const identity = memory?.getPersonIdentity(p.userId);
-            const namePart = identity?.displayName ? ` (显示名: ${identity.displayName}` +
+            const namePart = identity?.displayName ? ` (display: ${identity.displayName}` +
                 (identity.username ? `, @${identity.username}` : "") +
-                (identity.aliases?.length ? `, 别名: [${identity.aliases.join(", ")}]` : "") +
+                (identity.aliases?.length ? `, aliases: [${identity.aliases.join(", ")}]` : "") +
                 `)` : "";
             return `- **${getRawId(p.userId)}**${namePart} (Tier ${p.dunbarTier}): ` +
                 `traits=[${p.traits.join(", ")}], interests=[${p.interests.join(", ")}], ` +
                 `style="${p.communicationStyle}", relation="${p.relationToAgent}"`;
         }).join("\n");
-        sections.push(`## 现有画像 (${profiles.length} 人)\n\n${profileLines}`);
+        sections.push(`## Existing profiles (${profiles.length})\n\n${profileLines}`);
     }
 
-    // Issue 7: 已有事实（让 LLM 看到已有 facts 以便更新/删除）
     if (memory && profiles.length > 0) {
         const factLines: string[] = [];
         for (const p of profiles) {
@@ -962,15 +966,14 @@ function buildReflectionPrompt(
             }
         }
         if (factLines.length > 0) {
-            sections.push(`## 已有事实 (${factLines.length} 条)\n\n${factLines.join("\n")}`);
+            sections.push(`## Existing facts (${factLines.length})\n\n${factLines.join("\n")}`);
         }
     }
 
-    // 请求（私聊用专用 instruction，群聊用通用 instruction）
     const userInstruction = isDirectMessage
         ? getReflectionDmUserInstruction()
         : getReflectionUserInstruction();
-    sections.push(`## 请求\n\n${userInstruction}`);
+    sections.push(`## Task\n\n${userInstruction}`);
 
     return sections.join("\n\n---\n\n");
 }
@@ -1273,13 +1276,14 @@ async function analyzeMergeWithLLM(
     if (items.length === 0) return null;
 
     const eventLines = items.map(i =>
-        `- [${i.date}] (情感:${i.sentiment}, 重要度:${i.significance}) ${i.summary}`
+        `- [${i.date}] (sentiment:${i.sentiment}, significance:${i.significance}) ${i.summary}`
     ).join("\n");
 
     const userPrompt = applyTemplate(getMergeEpisodesUserTpl(), {
         userId,
         count: String(items.length),
         eventLines,
+        currentTime: formatNowForAgent(),
     });
 
     try {
@@ -1320,14 +1324,15 @@ async function analyzeCascadeMergeWithLLM(
     if (items.length === 0) return null;
 
     const lines = items.map(i =>
-        `- [${i.periodStart}~${i.periodEnd}] 粒度:${i.granularity}, ` +
-        `情感:${i.overallSentiment}, 交互:${i.interactionCount}次, ` +
-        `亮点:[${i.highlights.join("; ")}], 趋势:${i.relationshipTrend || "(无)"}`
+        `- [${i.periodStart}~${i.periodEnd}] granularity:${i.granularity}, ` +
+        `sentiment:${i.overallSentiment}, interactions:${i.interactionCount}, ` +
+        `highlights:[${i.highlights.join("; ")}], trend:${i.relationshipTrend || "(none)"}`
     ).join("\n");
 
     const userPrompt = applyTemplate(getMergeCascadeUserTpl(), {
         count: String(items.length),
         lines,
+        currentTime: formatNowForAgent(),
     });
 
     try {

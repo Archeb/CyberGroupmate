@@ -1,17 +1,18 @@
-═══ 消息回复结果 ═══
-群组: {{chatTitle}} ({{chatId}}) [{{chatType}}]
-任务: {{taskId}} ({{executionType}})
-状态: {{status}}
-耗时: {{durationMs}}ms
+═══ Reply result ═══
+Chat: {{chatTitle}} ({{chatId}}) [{{chatType}}]
+Current time: {{currentTime}}
+Task: {{taskId}} ({{executionType}})
+Status: {{status}}
+Duration: {{durationMs}}ms
 
 {{#isCompleted}}
-已发送消息:
+Sent messages:
 {{sentMessages}}
-Session 摘要: {{summary}}
+Session summary: {{summary}}
 {{/isCompleted}}
 
 {{#hasError}}
-错误: {{error}}
+Error: {{error}}
 {{/hasError}}
 
-请根据已发送消息分析：刚才的行为是否OOC、违背自己的准则或设定，是否达成目标，并且在下一次决策时纠正。
+Assess whether the behavior was out-of-character, violated your rules, or missed the goal; correct in the next decision.

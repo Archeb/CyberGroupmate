@@ -1,50 +1,11 @@
-## 任务
+**Current time:** {{currentTime}}
 
-对用户 **{{userId}}** 的 {{count}} 条交互事件进行综合分析，生成合并后的记忆摘要。
+**Task:** Synthesize **{{count}}** events for user **{{userId}}** into one merged memory summary.
 
-## 输入数据格式
+**Input line format:** `- [<ISO date>] (sentiment:positive|neutral|negative, significance:0-1) <summary>`
 
-以下每行是一条交互事件，格式为：
-```
-- [<ISO日期>] (情感:<positive|neutral|negative>, 重要度:<0-1>) <事件摘要>
-```
+**Events:** {{eventLines}}
 
-### 事件列表
+**Output:** Strict JSON only, no fences. Schema: `{"overallSentiment":"positive|neutral|negative|mixed","highlights":["…"],"relationshipTrend":"…"}`
 
-{{eventLines}}
-
-## 输出 JSON Schema
-
-输出一个**严格的 JSON 对象**，不要包含 markdown 代码块或额外文本：
-
-```json
-{
-  "overallSentiment": "positive|neutral|negative|mixed",
-  "highlights": ["string (提炼后的重要事件摘要，1-3条)"],
-  "relationshipTrend": "string (一句话描述关系变化趋势)"
-}
-```
-
-## 字段分析指南
-
-### overallSentiment
-综合所有事件的情感和重要度权重进行判断：
-- 高重要度事件的情感权重更大
-- 正面和负面事件数量接近时使用 `mixed`
-- 所有事件都偏向同一方向时直接使用对应值
-
-### highlights
-从所有事件中提炼最值得长期记住的 1-3 件事，优先级为：
-1. 关系转折点（如首次主动交流、发生冲突）
-2. 有趣/独特的互动（如教了一个冷笑话、分享了个人经历）
-3. 重要度 > 0.7 的事件
-- 不要简单复制原文，要**提炼概括**，使其脱离上下文后仍可理解
-- 如果事件很少或很平淡，返回空数组 `[]`
-
-### relationshipTrend
-用一句话描述关系的**变化方向**，要具体、有画面感：
-- ✅ "从以前只看不说话，到开始主动分享技术问题"
-- ✅ "互动增多，从话题讨论扩展到开玩笑"
-- ❌ "关系正常"
-- ❌ "保持互动"
-- 如果事件平淡无明显变化，写 "互动平淡，无明显变化"
+**Fields:** `overallSentiment` — weight by significance; `mixed` if conflicted. `highlights` — 1–3 distilled items: (1) turning points (2) unique/funny (3) significance>0.7; standalone wording; `[]` if thin. `relationshipTrend` — one sentence on change (good: concrete shift; bad: “normal” / “still chatting”); if flat: `"Flat interaction; no clear change."`

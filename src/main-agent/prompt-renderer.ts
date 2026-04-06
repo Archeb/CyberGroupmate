@@ -21,6 +21,7 @@ import type { GroupContextPackage, TopicDigest, SubagentCallback, FastPathConfig
 import type { GroupModel } from "../memory-v2/types.js";
 import { createLogger } from "../core/logger.js";
 import { getRawId, getDunbarTierLabel } from "../core/chat-id.js";
+import { formatNowForAgent, getGlobalTimezone } from "../core/timezone.js";
 import { readFileSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -31,8 +32,8 @@ const log = createLogger("prompt-renderer");
  * 根据 isDirectMessage 推断聊天类型（平台无关）
  */
 export function deriveChatType(isDirectMessage?: boolean): string {
-    if (isDirectMessage === true) return "私聊";
-    return "群聊";
+    if (isDirectMessage === true) return "Direct message";
+    return "Group chat";
 }
 
 // ─── 模板文件映射 ───
@@ -191,18 +192,20 @@ export function buildAttentionVariables(
         persona: opts.persona ?? "",
 
         // Timing
-        lastAttendedAt: opts.lastAttendedAt ?? "无记录",
-        timeSinceLastAttend: opts.timeSinceLastAttend ?? "未知",
+        lastAttendedAt: opts.lastAttendedAt ?? "none",
+        timeSinceLastAttend: opts.timeSinceLastAttend ?? "unknown",
 
         // Stickiness
         stickinessLevel: opts.stickinessLevel ?? "STRANGER",
         priorityMultiplier: opts.priorityMultiplier ?? 0.2,
-        tonePreset: opts.tonePreset ?? "礼貌得体",
+        tonePreset: opts.tonePreset ?? "polite",
 
         // Global state (从 system prompt 迁移到 user message)
-        attentionSummary: opts.attentionSummary ?? "（无）",
-        recentDecisions: opts.recentDecisions ?? "（无）",
-        activeTasks: opts.activeTasks ?? "（无待办任务）",
+        attentionSummary: opts.attentionSummary ?? "(none)",
+        recentDecisions: opts.recentDecisions ?? "(none)",
+        activeTasks: opts.activeTasks ?? "(no tasks)",
+        currentTime: formatNowForAgent(),
+        timezone: getGlobalTimezone() ?? "not set",
 
         // Group model
         groupModel: !!pkg.groupModel,
@@ -232,9 +235,9 @@ export function buildAttentionVariables(
         activePersons: pkg.activePersons?.length
             ? pkg.activePersons.map((p: any) => {
                 const tier = getDunbarTierLabel(p.dunbarTier);
-                const rel = p.relationToAgent ? `, 关系: ${p.relationToAgent}` : "";
-                const mentionStr = p.mention ? ` (提及方式: ${p.mention})` : "";
-                const aka = p.aliases?.length ? ` (又名: ${p.aliases.join(", ")})` : "";
+                const rel = p.relationToAgent ? `, relation: ${p.relationToAgent}` : "";
+                const mentionStr = p.mention ? ` (mention: ${p.mention})` : "";
+                const aka = p.aliases?.length ? ` (aka: ${p.aliases.join(", ")})` : "";
                 return `${p.displayName}${mentionStr}${aka} (${tier}${rel})`;
             }).join("\n")
             : "",
@@ -253,6 +256,8 @@ export function buildMainSystemVariables(
     return {
         personaName: persona.name,
         personaDescription: persona.description,
+        currentTime: formatNowForAgent(),
+        timezone: getGlobalTimezone() ?? "not set",
     };
 }
 
@@ -285,6 +290,7 @@ export function buildCallbackVariables(
         summary: cb.summary,
         hasError: !!cb.error,
         error: cb.error ?? "",
+        currentTime: formatNowForAgent(),
     };
 }
 
@@ -301,6 +307,7 @@ export function buildFastPathSystemVariables(
         personaDescription: persona.description,
         chatTitle,
         chatType: deriveChatType(isDirectMessage),
+        currentTime: formatNowForAgent(),
     };
 }
 
@@ -323,10 +330,11 @@ export function buildFastPathTaskVariables(
         chatId: getRawId(chatId),
         chatTitle,
         chatType: deriveChatType(isDirectMessage),
+        currentTime: formatNowForAgent(),
         preauthorizedActions: auth.preauthorizedActions.map(a => `- ${a}`).join("\n"),
         blockedActions: auth.blockedActions.length > 0
             ? auth.blockedActions.map(a => `- ❌ ${a}`).join("\n")
-            : "(无)",
+            : "(none)",
         maxReplyLength: auth.maxReplyLength ?? 150,
         tonePreset: context?.toneGuidance ?? auth.tonePreset,
         maxReplies: auth.maxRepliesBeforeReauth,
@@ -352,27 +360,25 @@ export function buildFastPathTurnContent(
 
     // 已发送消息确认（如果有历史）
     if (sentMessages && sentMessages.length > 0) {
-        parts.push(`[📤 已发送消息确认]`);
+        parts.push(`[📤 Sent message confirmation]`);
         for (const m of sentMessages) {
             parts.push(`- "${m.text.length > 100 ? m.text.slice(0, 100) + '...' : m.text}"`);
         }
         parts.push("");
     }
 
-    // 剩余额度状态
     const remaining = maxReplies - repliesSent;
-    parts.push(`[📊 额度状态: 已用 ${repliesSent}/${maxReplies}，剩余 ${remaining} 次回复机会]`);
+    parts.push(`[📊 Quota: used ${repliesSent}/${maxReplies}, ${remaining} reply slot(s) left]`);
     if (remaining <= 1) {
-        parts.push(`[⚠ 这是最后的回复机会，请谨慎使用]`);
+        parts.push(`[⚠ Last reply opportunity — use it carefully]`);
     }
     parts.push("");
 
-    // 触发消息
-    parts.push(`## 触发消息`);
-    parts.push(`发送者: ${event.userId}`);
-    parts.push(`内容: ${event.text}`);
+    parts.push(`## Trigger message`);
+    parts.push(`Sender: ${event.userId}`);
+    parts.push(`Text: ${event.text}`);
     parts.push("");
-    parts.push(`请直接输出回复内容（纯文本，不含其他格式）。如果不应回复，输出 "__SKIP__"。`);
+    parts.push(`Reply with plain text only. If you should not reply, output "__SKIP__".`);
 
     return parts.join("\n");
 }
@@ -398,14 +404,14 @@ export function formatRelativeTime(timestamp: string | number | null | undefined
     const ms = typeof timestamp === "number" ? timestamp : new Date(timestamp).getTime();
     if (isNaN(ms)) return "";
     const diffMs = Date.now() - ms;
-    if (diffMs < 0) return "刚刚";
+    if (diffMs < 0) return "just now";
     const minutes = Math.floor(diffMs / 60000);
-    if (minutes < 1) return "刚刚";
-    if (minutes < 60) return `${minutes}分钟前`;
+    if (minutes < 1) return "just now";
+    if (minutes < 60) return `${minutes} min ago`;
     const hours = Math.floor(minutes / 60);
-    if (hours < 24) return `${hours}小时前`;
+    if (hours < 24) return `${hours} h ago`;
     const days = Math.floor(hours / 24);
-    return `${days}天前`;
+    return `${days} d ago`;
 }
 
 /**
@@ -417,7 +423,7 @@ export function formatRelativeTime(timestamp: string | number | null | undefined
  * 如无摘要则 fallback 到 recentContext 最后 2 行。
  * 调用方负责筛选（时间范围、状态）和排序，此函数只负责渲染。
  */
-export function formatTopicList(topics: FormattableTopic[], emptyText = "(无活跃话题)"): string {
+export function formatTopicList(topics: FormattableTopic[], emptyText = "(no active topics)"): string {
     if (topics.length === 0) return emptyText;
 
     return topics.map(t => {
@@ -429,7 +435,7 @@ export function formatTopicList(topics: FormattableTopic[], emptyText = "(无活
             : (t.recentContext
                 ? `: ${t.recentContext.split("\n").slice(-2).join("; ")}`
                 : "");
-        const reason = t.triageReason ? ` │ ✅ 建议介入，原因及方向: ${t.triageReason}` : "";
+        const reason = t.triageReason ? ` │ ✅ suggested engagement: ${t.triageReason}` : "";
         return `${time} ${t.label}${people}${detail}${reason}${id}`.trim();
     }).join("\n");
 }
