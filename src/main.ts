@@ -154,6 +154,7 @@ async function main(): Promise<void> {
             apiId: appConfig.telegram.apiId ? "✓" : "✗",
             apiHash: appConfig.telegram.apiHash ? "✓" : "✗",
             botToken: appConfig.telegram.botToken ? "✓" : "✗",
+            whitelist: appConfig.telegram.whitelist?.enabled ? "on" : "off",
         });
     }
     if (appConfig.discord) {
@@ -787,8 +788,12 @@ async function main(): Promise<void> {
     if (dashboardEnabled) {
         const { DashboardServer } = await import("./dashboard/dashboard-server.js");
         const { TokenStatsCollector } = await import("./dashboard/token-stats.js");
+        const dashboardHost = appConfig.dashboard?.host ?? "127.0.0.1";
         const dashboardToken = appConfig.dashboard?.token ?? "cybergroupmate";
         const dashboardPort = appConfig.dashboard?.port ?? 6767;
+        if ((dashboardHost === "0.0.0.0" || dashboardHost === "::") && !String(dashboardToken).trim()) {
+            throw new Error("Dashboard 绑定 0.0.0.0 或 :: 时 token 不能为空（请设置 dashboard.token）");
+        }
 
         const tokenStats = new TokenStatsCollector(
             join(DATA_DIR, "token-stats.json"),
@@ -800,10 +805,11 @@ async function main(): Promise<void> {
 
         const dashboard = new DashboardServer(
             { nc, subagentManager, q3, q5, mainLoop, globalState, sandboxPool, memory, feedbackLoop, tokenStats, mediaDownloader: sharedMediaDownloader, adapters },
-            { port: dashboardPort, token: dashboardToken, enabled: true },
+            { host: dashboardHost, port: dashboardPort, token: dashboardToken, enabled: true },
         );
         await dashboard.start();
-        log.info("Dashboard 已启动", { port: dashboardPort, url: `http://localhost:${dashboardPort}?token=${dashboardToken}` });
+        const displayHost = dashboardHost === "0.0.0.0" || dashboardHost === "::" ? "localhost" : dashboardHost;
+        log.info("Dashboard 已启动", { listen: `${dashboardHost}:${dashboardPort}`, url: `http://${displayHost}:${dashboardPort}?token=${dashboardToken}` });
     }
 
     // ─── Prometheus Metrics Exporter ───

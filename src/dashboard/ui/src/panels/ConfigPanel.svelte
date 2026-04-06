@@ -72,6 +72,9 @@
       if (!config.contextBudget) config.contextBudget = {};
       if (!config.vision) config.vision = {};
       if (!config.dashboard) config.dashboard = {};
+      if (config.dashboard.host == null || config.dashboard.host === "") {
+        config.dashboard.host = "127.0.0.1";
+      }
       if (!config.subagent) config.subagent = {};
       if (!config.llmRouting) config.llmRouting = {};
       if (!config.llmRouting.timeouts) config.llmRouting.timeouts = {};
@@ -86,6 +89,9 @@
       discordEnabled = !!config.discord?.botToken;
       // 始终确保 UI 有空对象可绑定
       if (!config.telegram) config.telegram = { mode: 'bot', botToken: '', apiId: '', apiHash: '', phone: '' };
+      if (!config.telegram.whitelist) {
+        config.telegram.whitelist = { enabled: false, groups: [], users: [] };
+      }
       if (!config.discord) config.discord = { botToken: "", applicationId: "" };
       if (config.telegram && !config.telegram.humanizedDelay) {
         config.telegram.humanizedDelay = {
@@ -117,6 +123,11 @@
       }
     }
     if (JSON.stringify(config.envVars) !== JSON.stringify(originalConfig.envVars)) return true;
+    if (
+      JSON.stringify(config.telegram?.whitelist) !==
+      JSON.stringify(originalConfig.telegram?.whitelist)
+    )
+      return true;
     return false;
   }
 
@@ -880,6 +891,50 @@
                 >
               </div>
             {/if}
+            <div class="divider text-xs opacity-50 my-3">
+              入站白名单 <span class="restart-hint"
+                ><i class="fa-solid fa-rotate-right"></i> 修改需重启</span
+              >
+            </div>
+            <p class="text-xs opacity-50 mb-2">
+              启用后仅处理列表中的群组或私聊；私聊按对方用户 ID 匹配。
+            </p>
+            <label class="cfg-check mb-2">
+              <input
+                type="checkbox"
+                class="toggle toggle-xs"
+                bind:checked={config.telegram.whitelist.enabled}
+              />
+              <span>启用白名单</span>
+            </label>
+            <div class="cfg-grid-2">
+              <label class="cfg-field col-span-2"
+                ><span class="cfg-label">群组 ID（每行一个，如 -1001234567890）</span>
+                <textarea
+                  class="textarea textarea-bordered textarea-xs w-full font-mono min-h-[4rem]"
+                  value={config.telegram.whitelist.groups.join("\n")}
+                  on:input={(e) => {
+                    config.telegram.whitelist.groups = e.target.value
+                      .split(/\r?\n/)
+                      .map((s) => s.trim())
+                      .filter(Boolean);
+                  }}
+                ></textarea></label
+              >
+              <label class="cfg-field col-span-2"
+                ><span class="cfg-label">私聊用户 ID（每行一个）</span>
+                <textarea
+                  class="textarea textarea-bordered textarea-xs w-full font-mono min-h-[4rem]"
+                  value={config.telegram.whitelist.users.join("\n")}
+                  on:input={(e) => {
+                    config.telegram.whitelist.users = e.target.value
+                      .split(/\r?\n/)
+                      .map((s) => s.trim())
+                      .filter(Boolean);
+                  }}
+                ></textarea></label
+              >
+            </div>
             </div>
           {/if}
 
@@ -1272,7 +1327,10 @@
                 ><i class="fa-solid fa-rotate-right"></i> 修改需重启</span
               >
             </h3>
-            <p class="text-xs opacity-50 mb-3">Dashboard 端口和访问 token。</p>
+            <p class="text-xs opacity-50 mb-3">
+              监听地址、端口与访问 token。默认仅本机；公网请谨慎并务必设置强
+              token。
+            </p>
             <div class="cfg-grid-3">
               <label class="cfg-check"
                 ><input
@@ -1280,6 +1338,15 @@
                   class="toggle toggle-xs"
                   bind:checked={config.dashboard.enabled}
                 /><span>启用</span></label
+              >
+              <label class="cfg-field"
+                ><span class="cfg-label">主机名 / IP</span>
+                <input
+                  type="text"
+                  class="input input-xs input-bordered w-full"
+                  bind:value={config.dashboard.host}
+                  placeholder="127.0.0.1"
+                /></label
               >
               <label class="cfg-field"
                 ><span class="cfg-label">端口</span>
@@ -1290,17 +1357,17 @@
                   placeholder="6767"
                 /></label
               >
-              <label class="cfg-field"
-                ><span class="cfg-label">Token</span>
-                <input
-                  type="password"
-                  class="input input-xs input-bordered w-full"
-                  bind:value={config.dashboard.token}
-                  on:focus={pwFocus}
-                  on:blur={pwBlur}
-                /></label
-              >
             </div>
+            <label class="cfg-field mt-2"
+              ><span class="cfg-label">Token</span>
+              <input
+                type="password"
+                class="input input-xs input-bordered w-full"
+                bind:value={config.dashboard.token}
+                on:focus={pwFocus}
+                on:blur={pwBlur}
+              /></label
+            >
           {/if}
 
           <!-- ══ Subagent ══ -->

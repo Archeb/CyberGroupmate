@@ -18,6 +18,13 @@ import * as path from "node:path";
 
 const log = createLogger("telegram-adapter");
 
+/** 白名单条目：去掉 `telegram:` 前缀并 trim，便于与 composite chatId 比对 */
+function normalizeWhitelistId(raw: string): string {
+    let s = raw.trim();
+    if (s.startsWith("telegram:")) s = s.slice("telegram:".length);
+    return s;
+}
+
 // ─── 常量 ───
 
 const DEFAULT_MEDIA_CACHE_DIR = "workspace/media-cache";
@@ -190,6 +197,10 @@ export class TelegramAdapter implements PlatformAdapter {
     private invisibleUsers: Set<string> = loadInvisibleUsers();
     private mutedChats: Map<string, number> = new Map();  // chatId → expiry timestamp (ms)
 
+    /** 白名单 ID 集合（配置加载时构建，与 rawId 比对） */
+    private readonly whitelistGroupIds: Set<string>;
+    private readonly whitelistUserIds: Set<string>;
+
     constructor(
         private config: TelegramConfig,
         private nc: NotificationCenter,
@@ -197,7 +208,11 @@ export class TelegramAdapter implements PlatformAdapter {
         private print: PrintHandler = console.log,
         private createClient: TelegramClientFactory = defaultTelegramClientFactory,
         private mediaDownloader?: MediaDownloader,
-    ) { }
+    ) {
+        const wl = config.whitelist;
+        this.whitelistGroupIds = new Set((wl?.groups ?? []).map(normalizeWhitelistId));
+        this.whitelistUserIds = new Set((wl?.users ?? []).map(normalizeWhitelistId));
+    }
 
     async start(): Promise<void> {
         if (this.client) return;
@@ -223,6 +238,12 @@ export class TelegramAdapter implements PlatformAdapter {
         this.messageHandler = async (msg: any) => {
             const normalized = this.normalizeIncomingMessage(msg);
             if (!normalized || !normalized.messageId || !normalized.text) return;
+
+            // ─── 入站白名单（开启时仅处理列出的群组或私聊） ───
+            if (!this.passesTelegramWhitelist(normalized)) {
+                log.debug("白名单拒绝", { chatId: normalized.chatId, isDirectMessage: normalized.isDirectMessage });
+                return;
+            }
 
             // ─── /invisible & /mute 命令拦截 ───
             const cmdHandled = await this.handleBotCommand(normalized, msg);
@@ -906,6 +927,27 @@ export class TelegramAdapter implements PlatformAdapter {
             result.push({ chatId, expiry, remaining: this.getMuteRemainingHours(chatId) });
         }
         return result;
+    }
+
+    /**
+     * 入站白名单：enabled 时，群组消息仅当 chat rawId 在 groups 中通过；
+     * 私聊仅当 rawId 在 users 中通过。
+     */
+    private passesTelegramWhitelist(
+        normalized: NonNullable<ReturnType<TelegramAdapter["normalizeIncomingMessage"]>>,
+    ): boolean {
+        const wl = this.config.whitelist;
+        if (!wl?.enabled) return true;
+        let rawId: string;
+        try {
+            rawId = parseChatId(normalized.chatId).rawId;
+        } catch {
+            rawId = normalizeWhitelistId(normalized.chatId);
+        }
+        if (normalized.isDirectMessage) {
+            return this.whitelistUserIds.has(rawId);
+        }
+        return this.whitelistGroupIds.has(rawId);
     }
 
     /** 将指定聊天标记为已读（通过 Telegram readHistory） */

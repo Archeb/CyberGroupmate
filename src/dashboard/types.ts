@@ -35,6 +35,8 @@ export interface DashboardDeps {
 
 /** Dashboard 配置 */
 export interface DashboardConfig {
+    /** 监听地址，默认 127.0.0.1 */
+    host?: string;
     port: number;
     token: string;
     enabled: boolean;

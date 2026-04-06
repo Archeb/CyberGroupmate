@@ -129,12 +129,24 @@ export interface NotificationConfig {
     mentionKeywords: string[];
 }
 
+/** Telegram 入站白名单：仅当 enabled 为 true 时按群组 / 私聊 ID 过滤 */
+export interface TelegramWhitelistConfig {
+    /** 是否启用白名单。false 时不拒绝任何聊天 */
+    enabled: boolean;
+    /** 允许的群组/超级群/频道 chat ID（纯数字字符串，如 "-1001234567890"） */
+    groups: string[];
+    /** 允许的私聊对方用户 ID（纯数字字符串） */
+    users: string[];
+}
+
 export interface TelegramConfig {
     mode: "bot" | "userbot";
     botToken: string;
     apiId: string;
     apiHash: string;
     phone: string;
+    /** 入站白名单（可选） */
+    whitelist?: TelegramWhitelistConfig;
     /** 拟人化发送延迟配置 */
     humanizedDelay?: {
         /** 是否启用 */
@@ -283,6 +295,11 @@ export interface RecordingPipelineConfig {
 export interface DashboardExternalConfig {
     /** 是否启用。默认 true */
     enabled?: boolean;
+    /**
+     * HTTP 监听地址。默认 "127.0.0.1"（仅本机）。
+     * 若需公网访问可设为 "0.0.0.0"，此时必须设置非空 token（见 config 注释）。
+     */
+    host?: string;
     /** HTTP 端口。默认 6767 */
     port?: number;
     /** 认证 Token */
@@ -467,6 +484,7 @@ export function loadConfig(configPath?: string, forceReload?: boolean): AppConfi
             apiId: str(fileTG.api_id) ?? "",
             apiHash: str(fileTG.api_hash) ?? "",
             phone: str(fileTG.phone) ?? "",
+            whitelist: parseTelegramWhitelist(fileTG),
             humanizedDelay: parseHumanizedDelay(fileTG),
         } : undefined,
         discord: Object.keys(fileDC).length > 0 ? {
@@ -592,6 +610,7 @@ function parseDashboardConfig(fileConfig: Record<string, unknown>): DashboardExt
     if (!raw || typeof raw !== "object") return undefined;
     return {
         enabled: raw.enabled != null ? Boolean(raw.enabled) : undefined,
+        host: str(raw.host),
         port: raw.port != null ? num(raw.port, 6767) : undefined,
         token: str(raw.token),
     };
@@ -840,6 +859,22 @@ function parseHumanizedDelay(fileTG: Record<string, unknown>): TelegramConfig["h
     };
 }
 
+function parseTelegramWhitelist(fileTG: Record<string, unknown>): TelegramWhitelistConfig | undefined {
+    const raw = fileTG.whitelist as Record<string, unknown> | undefined;
+    if (!raw || typeof raw !== "object") return undefined;
+    const groups = Array.isArray(raw.groups)
+        ? (raw.groups as unknown[]).map(x => String(x).trim()).filter(Boolean)
+        : [];
+    const users = Array.isArray(raw.users)
+        ? (raw.users as unknown[]).map(x => String(x).trim()).filter(Boolean)
+        : [];
+    return {
+        enabled: raw.enabled === true,
+        groups,
+        users,
+    };
+}
+
 // ─── 序列化 + 验证（Dashboard Config Editor 用） ───
 
 /** 将 AppConfig 序列化为 YAML 格式的对象（snake_case keys） */
@@ -924,6 +959,13 @@ export function serializeConfigToObject(config: AppConfig): Record<string, unkno
                 ms_per_char: config.telegram.humanizedDelay.msPerChar,
                 min_delay: config.telegram.humanizedDelay.minDelay,
                 max_delay: config.telegram.humanizedDelay.maxDelay,
+            };
+        }
+        if (config.telegram.whitelist) {
+            tg.whitelist = {
+                enabled: config.telegram.whitelist.enabled,
+                groups: config.telegram.whitelist.groups,
+                users: config.telegram.whitelist.users,
             };
         }
         obj.telegram = tg;
@@ -1018,6 +1060,7 @@ export function serializeConfigToObject(config: AppConfig): Record<string, unkno
     if (config.dashboard) {
         const d: Record<string, unknown> = {};
         if (config.dashboard.enabled != null) d.enabled = config.dashboard.enabled;
+        if (config.dashboard.host != null) d.host = config.dashboard.host;
         if (config.dashboard.port != null) d.port = config.dashboard.port;
         if (config.dashboard.token != null) d.token = config.dashboard.token;
         obj.dashboard = d;
@@ -1190,6 +1233,24 @@ export function validateConfig(config: unknown): { valid: boolean; errors: strin
     if (tg) {
         if (!tg.mode || (tg.mode !== "bot" && tg.mode !== "userbot")) {
             errors.push("telegram.mode 必须是 \"bot\" 或 \"userbot\"");
+        }
+        const wl = tg.whitelist as Record<string, unknown> | undefined;
+        if (wl && typeof wl === "object" && wl.enabled === true) {
+            const g = Array.isArray(wl.groups) ? wl.groups.length : 0;
+            const u = Array.isArray(wl.users) ? wl.users.length : 0;
+            if (g === 0 && u === 0) {
+                errors.push("telegram.whitelist.enabled 为 true 时，groups 与 users 至少填写一项");
+            }
+        }
+    }
+
+    // dashboard (optional)
+    const dash = c.dashboard as Record<string, unknown> | undefined;
+    if (dash && typeof dash === "object") {
+        const host = (dash.host as string | undefined) ?? "127.0.0.1";
+        const token = dash.token != null ? String(dash.token) : "";
+        if ((host === "0.0.0.0" || host === "::") && !token.trim()) {
+            errors.push("dashboard.host 为 0.0.0.0 或 :: 时 token 不能为空");
         }
     }
 
