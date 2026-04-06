@@ -364,6 +364,8 @@ async function main(): Promise<void> {
         maxSize: appConfig.subagent?.attentionQueue?.maxSize ?? 100,
     });
     const q5 = new CallbackQueue();
+    /** 供 NC 消息路径在 MainAgentLoop 创建前持有引用，用于私聊/@ 等紧急唤醒 */
+    const mainLoopWake: { current: MainAgentLoop | null } = { current: null };
     const globalState = new GlobalState({
         filePath: join(DATA_DIR, "global-state.json"),
         autoSaveInterval: 30000,
@@ -568,6 +570,7 @@ async function main(): Promise<void> {
                     memory.upsertPersonIdentity(compositeUid, { displayName });
                 }
             } catch { /* 非关键路径 */ }
+            mainLoopWake.current?.requestImmediateTick();
         }
 
         // 层 2 消息前送：如果该 chatId 的 CodeActExecutor 正在执行，推入 pending buffer
@@ -741,6 +744,7 @@ async function main(): Promise<void> {
         maxAttendsPerTick: 3,
         cosineDecayCyclePeriod: appConfig.subagent?.cosineDecay?.defaultCyclePeriod ?? 20,
     }, globalState);
+    mainLoopWake.current = mainLoop;
     mainLoop.setLLMConfig(compactConfig);  // 对话历史 compact
     mainLoop.setMemory(memory);  // MiniCodeAct corrections
 

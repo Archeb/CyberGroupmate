@@ -104,6 +104,10 @@ export class MainAgentLoop {
     /** attend 完成后的回调（metrics 使用） */
     private onAttendCompleteCallback: ((chatId: string, decisions: AttendResult) => void) | null = null;
 
+    /** 防止并发 tick；紧急唤醒时在同一轮内链式多跑几次 */
+    private tickRunning = false;
+    private chainAnotherTick = false;
+
     constructor(
         attentionQueue: DynamicAttentionQueue,
         callbackQueue: CallbackQueue,
@@ -163,11 +167,30 @@ export class MainAgentLoop {
      */
     stop(): void {
         this.running = false;
+        this.chainAnotherTick = false;
         if (this.timer) {
             clearTimeout(this.timer);
             this.timer = null;
         }
         log.info("stop: 主循环停止", { tickCount: this.tickCount });
+    }
+
+    /**
+     * 紧急入队（私聊 / @ / 文本唤醒）后立即处理，不必再等一轮 pollInterval。
+     * 若当前正在执行 tick，则在本次 tick 结束后立刻再跑一轮。
+     */
+    requestImmediateTick(): void {
+        if (!this.running) return;
+        if (this.tickRunning) {
+            this.chainAnotherTick = true;
+            log.debug("requestImmediateTick: tick 进行中，链式补跑");
+            return;
+        }
+        if (this.timer) {
+            clearTimeout(this.timer);
+            this.timer = null;
+        }
+        void this.runScheduledTick();
     }
 
     /**
@@ -527,15 +550,37 @@ export class MainAgentLoop {
 
     private scheduleNext(): void {
         if (!this.running) return;
-        this.timer = setTimeout(async () => {
-            try {
-                await this.tick();
-            } catch (err) {
-                log.error("tick 异常", { error: String(err) });
-            }
-            this.scheduleNext();
+        this.timer = setTimeout(() => {
+            void this.runScheduledTick();
         }, this.config.pollInterval);
         if (this.timer.unref) this.timer.unref();
+    }
+
+    private async runScheduledTick(): Promise<void> {
+        await this.runTickLoop();
+        if (this.running) {
+            this.scheduleNext();
+        }
+    }
+
+    private async runTickLoop(): Promise<void> {
+        if (this.tickRunning) {
+            this.chainAnotherTick = true;
+            return;
+        }
+        this.tickRunning = true;
+        try {
+            do {
+                this.chainAnotherTick = false;
+                try {
+                    await this.tick();
+                } catch (err) {
+                    log.error("tick 异常", { error: String(err) });
+                }
+            } while (this.chainAnotherTick);
+        } finally {
+            this.tickRunning = false;
+        }
     }
 }
 
