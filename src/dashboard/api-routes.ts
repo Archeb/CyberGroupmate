@@ -136,7 +136,7 @@ export function createApiRouter(deps: DashboardDeps, bridge: EventBridge): Route
                             messageIds: fromJSONSafe(row.message_ids as string),
                             sentiment: row.sentiment, startedAt: row.started_at, endedAt: row.ended_at,
                             source: "history",
-                            });
+                        });
                     }
                 } catch { /* LIKE fallback */ }
             }
@@ -174,11 +174,11 @@ export function createApiRouter(deps: DashboardDeps, bridge: EventBridge): Route
                     messageRange: { messageIds: fromJSONSafe(row.message_ids as string) },
                     sentiment: row.sentiment, startedAt: row.started_at, endedAt: row.ended_at,
                 }));
-            } catch {}
+            } catch { }
         } else {
             // Fallback to getTopicsSince if db not directly accessible
             const since = new Date(Date.now() - 365 * 24 * 3600 * 1000).toISOString();
-            try { historyTopics = deps.memory.getTopicsSince(chatId, since); } catch {}
+            try { historyTopics = deps.memory.getTopicsSince(chatId, since); } catch { }
         }
 
         // Merge: pipeline topics first, then history topics not already in pipeline
@@ -256,7 +256,7 @@ export function createApiRouter(deps: DashboardDeps, bridge: EventBridge): Route
             let messageIds: string[] = [];
             try {
                 messageIds = JSON.parse(String(topicRow.message_ids || "[]"));
-            } catch {}
+            } catch { }
 
             // Fetch related messages
             let messages: Record<string, unknown>[] = [];
