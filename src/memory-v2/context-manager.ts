@@ -1,7 +1,7 @@
 import { createLogger } from "../core/logger.js";
 import { callLLMWithFallback, type ChatMessage } from "../core/llm.js";
 import { loadConfig, resolveComponentTimeout, type LLMConfig } from "../core/config.js";
-import { readFileSync } from "node:fs";
+import { loadPromptFile, registerCacheClear } from "../core/prompt-loader.js";
 import { join } from "node:path";
 import { encodingForModel } from "js-tiktoken";
 
@@ -337,16 +337,17 @@ export function identifyProtectedMessages(
 
 // ─── Compaction Prompt ───
 
-const PROMPTS_DIR = join(process.cwd(), "system-prompts", "memory");
 let _compactionContextPrompt: string | null = null;
+
+// 注册缓存清除回调
+registerCacheClear(() => { _compactionContextPrompt = null; });
 
 function getContextCompactionPrompt(): string {
     if (!_compactionContextPrompt) {
-        try {
-            _compactionContextPrompt = readFileSync(
-                join(PROMPTS_DIR, "context-compaction.md"), "utf-8",
-            ).trim();
-        } catch {
+        const content = loadPromptFile("memory/context-compaction.md");
+        if (content) {
+            _compactionContextPrompt = content.trim();
+        } else {
             _compactionContextPrompt = `你是一个上下文压缩助手。请将以下对话历史压缩为结构化的 Context Briefing。
 
 要求：

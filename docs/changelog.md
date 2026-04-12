@@ -1,5 +1,67 @@
 # Changelog
 
+## 2026-04-12: System Prompts Override — Dashboard 可视化编辑 + 运行时热重载
+
+新增 System Prompts Override 功能：在 Dashboard 配置面板中直接编辑 system prompt，覆盖版保存到 `workspace/system-prompts-overrides/`（保持原始目录结构），读取时优先使用 override 版本。保存后自动清除所有模块的 prompt 缓存，即时生效。
+
+### 🆕 新增: `src/core/prompt-loader.ts` — 统一 Prompt 加载器
+
+集中管理 override 优先读取逻辑，替代各模块分散的 `readFileSync` + `PROMPTS_DIR` 硬编码：
+
+| API | 功能 |
+|:----|:-----|
+| `loadPromptFile(relativePath)` | 先查 `workspace/system-prompts-overrides/{path}`，不存在 fallback 到 `system-prompts/{path}` |
+| `listAllPrompts()` | 递归扫描 `system-prompts/`，返回所有 `.md` 文件及 override 状态 |
+| `saveOverride(path, content)` | 写入 override 文件（自动创建目录） |
+| `deleteOverride(path)` | 删除 override 文件（恢复原始版本） |
+| `registerCacheClear(fn)` | 注册缓存清除回调（各模块初始化时调用） |
+| `reloadAllPrompts()` | 触发所有已注册的缓存清除回调 |
+
+### 🔄 重构: 4 个模块统一使用 prompt-loader
+
+| 文件 | 涉及 prompt 数 | 变更 |
+|:-----|:--------------|:-----|
+| `src/main-agent/prompt-renderer.ts` | 9 个模板 | `loadTemplate()` 改用 `loadPromptFile()`；注册 `_templateCache` 清除回调 |
+| `src/memory-v2/memory-v2.ts` | 3 个 | recall-deep-summary / browse-intent-parse / browse-deep-read 改用 `loadPromptFile()` |
+| `src/memory-v2/context-manager.ts` | 1 个 | context-compaction 改用 `loadPromptFile()` |
+| `src/memory-v2/reflection.ts` | 6 个 | reflection-system / merge-system / 4 个 user instruction 改用 `loadPromptFile()` |
+
+所有模块均注册了 `registerCacheClear()` 回调，`reloadAllPrompts()` 可一键清除全部 lazy-loaded 变量。
+
+### 🌐 Dashboard API
+
+| 方法 | 路径 | 功能 |
+|:-----|:-----|:-----|
+| `GET` | `/api/system-prompts` | 列出所有 prompt 文件及 override 状态 |
+| `GET` | `/api/system-prompts/:path` | 获取指定 prompt 的原始内容和 override 内容 |
+| `PUT` | `/api/system-prompts/:path` | 保存 override（自动清缓存） |
+| `DELETE` | `/api/system-prompts/:path` | 删除 override（自动清缓存，恢复原始版本） |
+| `POST` | `/api/system-prompts-reload` | 手动重载所有 prompt 缓存 |
+
+### 🖥️ Dashboard UI
+
+ConfigPanel 新增「System Prompts」区段：
+
+- **树形文件浏览器**：按目录结构展示所有 prompt 文件（executor / fast-path / main-agent / memory / recording），已覆盖文件显示 `override` 标记
+- **Monospace 编辑器**：以原始 prompt 为模板，编辑后保存为 override
+- **操作按钮**：保存 Override / 重置为原始 / 删除 Override
+- **原始版本对照**：override 存在时可展开查看原始版本
+- **响应式布局**：小屏幕下树形面板堆叠于编辑器上方
+
+### 改动清单
+
+| 文件 | 改动 |
+|:-----|:-----|
+| `src/core/prompt-loader.ts` | **[NEW]** 统一 prompt 加载器（override 优先 + 缓存清除回调） |
+| `src/main-agent/prompt-renderer.ts` | `loadTemplate()` 改用 `loadPromptFile()`；注册缓存清除回调 |
+| `src/memory-v2/memory-v2.ts` | 3 个 prompt getter 改用 `loadPromptFile()`；移除 `PROMPTS_DIR`；注册缓存清除 |
+| `src/memory-v2/context-manager.ts` | `getContextCompactionPrompt()` 改用 `loadPromptFile()`；移除 `PROMPTS_DIR` + `readFileSync` |
+| `src/memory-v2/reflection.ts` | 6 个 prompt getter 改用 `loadPromptFile()`；移除 `PROMPTS_DIR`；注册缓存清除 |
+| `src/dashboard/api-routes.ts` | 新增 5 个 system-prompts API 端点 |
+| `src/dashboard/ui/src/panels/ConfigPanel.svelte` | 新增 System Prompts 区段（树形文件列表 + 编辑器 + 保存/重置/删除 + CSS） |
+
+---
+
 ## 2026-04-04: MiniCodeAct v1.4 — scheduler 命名空间 + 类型安全修复 + 文档同步
 
 MiniCodeAct 架构实施完成，全部 5 个命名空间 20 个方法已实现并通过 138/138 测试。本次更新新增 scheduler 命名空间，修复多个类型安全和持久化问题，并全面同步设计文档与实现代码。

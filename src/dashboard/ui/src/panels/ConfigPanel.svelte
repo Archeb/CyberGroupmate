@@ -38,6 +38,7 @@
     { id: "dashboard", label: "Dashboard", icon: "fa-gauge-high" },
     { id: "subagent", label: "Subagent", icon: "fa-robot" },
     { id: "recordingPipeline", label: "Recording", icon: "fa-tape" },
+    { id: "systemPrompts", label: "System Prompts", icon: "fa-file-lines" },
     { id: "envVars", label: "环境变量", icon: "fa-key" },
   ];
 
@@ -290,6 +291,116 @@
     config.llmRouting[compKey] =
       arr.length === 0 ? undefined : arr.length === 1 ? arr[0] : [...arr];
     config = config;
+  }
+
+  // ── System Prompts state ──
+  let promptList = [];
+  let promptTree = {};
+  let promptsLoading = false;
+  let expandedDirs = new Set();
+  let selectedPrompt = null;
+  let promptOriginal = "";
+  let promptOverride = "";
+  let promptHasOverride = false;
+  let promptEditorContent = "";
+  let promptSaving = false;
+  let promptDetailLoading = false;
+
+  $: if (currentSection === "systemPrompts" && promptList.length === 0 && !promptsLoading) loadPromptList();
+
+  function buildTree(files) {
+    const tree = {};
+    for (const f of files) {
+      const parts = f.relativePath.split("/");
+      let node = tree;
+      for (let i = 0; i < parts.length - 1; i++) {
+        if (!node[parts[i]]) node[parts[i]] = { __children: {} };
+        node = node[parts[i]].__children;
+      }
+      node[parts[parts.length - 1]] = { __file: f };
+    }
+    return tree;
+  }
+
+  async function loadPromptList() {
+    promptsLoading = true;
+    try {
+      const res = await api("/system-prompts");
+      promptList = res.prompts || [];
+      promptTree = buildTree(promptList);
+      // auto-expand all dirs
+      for (const f of promptList) {
+        const parts = f.relativePath.split("/");
+        for (let i = 0; i < parts.length - 1; i++) {
+          expandedDirs.add(parts.slice(0, i + 1).join("/"));
+        }
+      }
+      expandedDirs = expandedDirs;
+    } catch (err) {
+      showToast("加载 prompt 列表失败: " + err, "error");
+    }
+    promptsLoading = false;
+  }
+
+  async function selectPrompt(relativePath) {
+    selectedPrompt = relativePath;
+    promptDetailLoading = true;
+    try {
+      const res = await api("/system-prompts/" + encodeURIComponent(relativePath));
+      promptOriginal = res.original || "";
+      promptOverride = res.override || "";
+      promptHasOverride = res.hasOverride;
+      promptEditorContent = promptHasOverride ? promptOverride : promptOriginal;
+    } catch (err) {
+      showToast("加载 prompt 详情失败: " + err, "error");
+    }
+    promptDetailLoading = false;
+  }
+
+  async function savePromptOverride() {
+    if (!selectedPrompt) return;
+    promptSaving = true;
+    try {
+      const res = await api("/system-prompts/" + encodeURIComponent(selectedPrompt), {
+        method: "PUT",
+        body: { content: promptEditorContent },
+      });
+      if (res.ok) {
+        promptHasOverride = true;
+        promptOverride = promptEditorContent;
+        // refresh list to update override status marker
+        await loadPromptList();
+        showToast("✅ Override 已保存并即时生效", "success");
+      } else {
+        showToast("❌ 保存失败: " + (res.error || "未知错误"), "error");
+      }
+    } catch (err) {
+      showToast("❌ 保存失败: " + err, "error");
+    }
+    promptSaving = false;
+  }
+
+  async function deletePromptOverride() {
+    if (!selectedPrompt) return;
+    if (!confirm("确定删除此 override，恢复到原始版本？")) return;
+    try {
+      const res = await api("/system-prompts/" + encodeURIComponent(selectedPrompt), {
+        method: "DELETE",
+      });
+      if (res.ok) {
+        promptHasOverride = false;
+        promptOverride = "";
+        promptEditorContent = promptOriginal;
+        await loadPromptList();
+        showToast("✅ Override 已删除，已恢复原始版本", "success");
+      }
+    } catch (err) {
+      showToast("❌ 删除失败: " + err, "error");
+    }
+  }
+
+  function resetPromptEditor() {
+    promptEditorContent = promptOriginal;
   }
 </script>
 
@@ -1623,6 +1734,125 @@
               <p><strong>Both</strong>：同时注入主进程和沙盒。适用于共享配置（如 Tavily API Key）。</p>
             </div>
           {/if}
+
+          <!-- ══ System Prompts ══ -->
+          {#if currentSection === "systemPrompts"}
+            <h3 class="card-title text-sm">
+              <i class="fa-solid fa-file-lines opacity-50 mr-1"></i> System Prompts Override
+            </h3>
+            <p class="text-xs opacity-50 mb-3">
+              编辑 system prompt 的 override 版本。Override 保存到 <code>workspace/system-prompts-overrides/</code>，读取时优先使用。
+            </p>
+
+            {#if promptsLoading}
+              <div class="flex justify-center py-8">
+                <span class="loading loading-spinner loading-md"></span>
+              </div>
+            {:else}
+              <div class="flex gap-3 prompt-editor-layout">
+                <!-- Tree View -->
+                <div class="prompt-tree-panel">
+                  {#each Object.entries(promptTree) as [dirName, dirNode]}
+                    {@const dirPath = dirName}
+                    <!-- svelte-ignore a11y-click-events-have-key-events -->
+                    <div
+                      class="prompt-dir"
+                      on:click={() => { expandedDirs.has(dirPath) ? expandedDirs.delete(dirPath) : expandedDirs.add(dirPath); expandedDirs = expandedDirs; }}
+                    >
+                      <i class="fa-solid fa-chevron-right text-[10px] opacity-40 transition-transform" style:transform={expandedDirs.has(dirPath) ? "rotate(90deg)" : ""}></i>
+                      <i class="fa-solid fa-folder text-xs opacity-60"></i>
+                      <span class="text-xs font-semibold">{dirName}</span>
+                    </div>
+                    {#if expandedDirs.has(dirPath) && dirNode.__children}
+                      {#each Object.entries(dirNode.__children) as [fileName, fileNode]}
+                        {#if fileNode.__file}
+                          {@const fp = fileNode.__file}
+                          <!-- svelte-ignore a11y-click-events-have-key-events -->
+                          <div
+                            class="prompt-file"
+                            class:active={selectedPrompt === fp.relativePath}
+                            on:click={() => selectPrompt(fp.relativePath)}
+                          >
+                            <i class="fa-solid fa-file-lines text-xs opacity-40"></i>
+                            <span class="text-xs truncate">{fileName}</span>
+                            {#if fp.hasOverride}
+                              <span class="badge badge-xs badge-warning ml-auto">override</span>
+                            {/if}
+                          </div>
+                        {/if}
+                      {/each}
+                    {/if}
+                  {/each}
+                </div>
+
+                <!-- Editor -->
+                <div class="flex-1 min-w-0">
+                  {#if !selectedPrompt}
+                    <div class="flex items-center justify-center h-40 opacity-30 text-sm">
+                      <i class="fa-solid fa-arrow-left mr-2"></i>选择一个 prompt 文件进行编辑
+                    </div>
+                  {:else if promptDetailLoading}
+                    <div class="flex justify-center py-8">
+                      <span class="loading loading-spinner loading-md"></span>
+                    </div>
+                  {:else}
+                    <div class="flex items-center gap-2 mb-2">
+                      <span class="font-mono text-xs font-bold truncate">{selectedPrompt}</span>
+                      {#if promptHasOverride}
+                        <span class="badge badge-xs badge-warning">已覆盖</span>
+                      {:else}
+                        <span class="badge badge-xs badge-ghost">原始</span>
+                      {/if}
+                    </div>
+                    <textarea
+                      class="textarea textarea-bordered w-full font-mono text-xs prompt-textarea"
+                      rows="20"
+                      bind:value={promptEditorContent}
+                      spellcheck="false"
+                    ></textarea>
+                    <div class="flex gap-2 mt-2">
+                      <button
+                        class="btn btn-sm btn-primary"
+                        on:click={savePromptOverride}
+                        disabled={promptSaving}
+                      >
+                        <i class="fa-solid fa-floppy-disk"></i>
+                        {promptSaving ? "保存中..." : "保存 Override"}
+                      </button>
+                      <button
+                        class="btn btn-sm btn-ghost"
+                        on:click={resetPromptEditor}
+                        title="恢复编辑器内容为原始版本"
+                      >
+                        <i class="fa-solid fa-arrow-rotate-left"></i> 重置为原始
+                      </button>
+                      {#if promptHasOverride}
+                        <button
+                          class="btn btn-sm btn-outline btn-error"
+                          on:click={deletePromptOverride}
+                          title="删除 override 文件，恢复到原始版本"
+                        >
+                          <i class="fa-solid fa-trash-can"></i> 删除 Override
+                        </button>
+                      {/if}
+                    </div>
+                    {#if promptHasOverride}
+                      <div class="mt-3">
+                        <details class="collapse collapse-arrow bg-base-200 rounded-lg">
+                          <summary class="collapse-title text-xs font-medium py-2 min-h-0">
+                            <i class="fa-solid fa-eye mr-1 opacity-50"></i>查看原始版本
+                          </summary>
+                          <div class="collapse-content">
+                            <pre class="text-xs opacity-60 whitespace-pre-wrap mt-1">{promptOriginal}</pre>
+                          </div>
+                        </details>
+                      </div>
+                    {/if}
+                  {/if}
+                </div>
+              </div>
+            {/if}
+          {/if}
         </div>
       </div>
 
@@ -1830,5 +2060,60 @@
     .profile-card .cfg-grid-2 {
       grid-template-columns: 1fr !important;
     }
+    .prompt-editor-layout {
+      flex-direction: column;
+    }
+    .prompt-tree-panel {
+      width: 100% !important;
+      max-height: 200px;
+    }
+  }
+
+  /* ── Prompt Editor ── */
+  .prompt-editor-layout {
+    min-height: 300px;
+  }
+  .prompt-tree-panel {
+    width: 220px;
+    flex-shrink: 0;
+    max-height: 600px;
+    overflow-y: auto;
+    border: 1px solid color-mix(in srgb, currentColor 10%, transparent);
+    border-radius: 0.5rem;
+    padding: 0.5rem;
+  }
+  .prompt-dir {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.3rem 0.4rem;
+    border-radius: 0.25rem;
+    cursor: pointer;
+    user-select: none;
+  }
+  .prompt-dir:hover {
+    background: var(--color-base-200);
+  }
+  .prompt-file {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.25rem 0.4rem 0.25rem 1.6rem;
+    border-radius: 0.25rem;
+    cursor: pointer;
+    transition: background 0.1s;
+  }
+  .prompt-file:hover {
+    background: var(--color-base-200);
+  }
+  .prompt-file.active {
+    background: color-mix(in srgb, var(--color-primary) 15%, transparent);
+    color: var(--color-primary);
+  }
+  .prompt-textarea {
+    font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+    line-height: 1.5;
+    tab-size: 2;
+    resize: vertical;
   }
 </style>

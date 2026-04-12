@@ -25,6 +25,7 @@ import {
     getSimilarityFn,
 } from "./embedding.js";
 import { callLLMWithFallback, type ChatMessage, type LLMConfig as LlmCallConfig } from "../core/llm.js";
+import { loadPromptFile, registerCacheClear } from "../core/prompt-loader.js";
 import { SafeUpdateBuilder, SafeSelectBuilder } from "./query-builder.js";
 import type {
     IMemoryStoreV2,
@@ -66,18 +67,15 @@ function now(): string {
     return new Date().toISOString();
 }
 
-// ─── System Prompt 加载（外部模版 + 内联 fallback）───
-
-const PROMPTS_DIR = join(process.cwd(), "system-prompts", "memory");
+// ─── System Prompt 加载（统一使用 prompt-loader 支持 override）───
 
 let _recallDeepSummaryPrompt: string | null = null;
 function getRecallDeepSummaryPrompt(): string {
     if (!_recallDeepSummaryPrompt) {
-        try {
-            _recallDeepSummaryPrompt = readFileSync(
-                join(PROMPTS_DIR, "recall-deep-summary.md"), "utf-8",
-            ).trim();
-        } catch {
+        const content = loadPromptFile("memory/recall-deep-summary.md");
+        if (content) {
+            _recallDeepSummaryPrompt = content.trim();
+        } else {
             _recallDeepSummaryPrompt = "你是一组聊天记忆系统中的深度总结助手。请根据以下记忆片段（话题摘要和事实），针对用户查询生成简洁的中文总结（2-3 句话）。只输出总结，不要其他内容。";
             log.warn("recall-deep-summary.md 未找到，使用内联 fallback");
         }
@@ -88,11 +86,10 @@ function getRecallDeepSummaryPrompt(): string {
 let _browseIntentParsePrompt: string | null = null;
 function getBrowseIntentParsePrompt(): string {
     if (!_browseIntentParsePrompt) {
-        try {
-            _browseIntentParsePrompt = readFileSync(
-                join(PROMPTS_DIR, "browse-intent-parse.md"), "utf-8",
-            ).trim();
-        } catch {
+        const content = loadPromptFile("memory/browse-intent-parse.md");
+        if (content) {
+            _browseIntentParsePrompt = content.trim();
+        } else {
             _browseIntentParsePrompt = `你是一个意图解析助手。请分析用户的搜索意图，提取关键词和时间范围。
 输出严格 JSON 格式：{"keywords": ["关键词1", "关键词2"], "daysBack": 数字或null, "userId": "用户ID或null"}
 - keywords：搜索关键词（中文分词后的重要词汇，至少1个）
@@ -108,17 +105,23 @@ function getBrowseIntentParsePrompt(): string {
 let _browseDeepReadPrompt: string | null = null;
 function getBrowseDeepReadPrompt(): string {
     if (!_browseDeepReadPrompt) {
-        try {
-            _browseDeepReadPrompt = readFileSync(
-                join(PROMPTS_DIR, "browse-deep-read.md"), "utf-8",
-            ).trim();
-        } catch {
+        const content = loadPromptFile("memory/browse-deep-read.md");
+        if (content) {
+            _browseDeepReadPrompt = content.trim();
+        } else {
             _browseDeepReadPrompt = "你是一个消息历史阅读助手。请根据以下对话记录，回答用户的问题。用中文简洁回答（2-4 句话）。只输出回答，不要其他内容。";
             log.warn("browse-deep-read.md 未找到，使用内联 fallback");
         }
     }
     return _browseDeepReadPrompt;
 }
+
+// 注册缓存清除回调
+registerCacheClear(() => {
+    _recallDeepSummaryPrompt = null;
+    _browseIntentParsePrompt = null;
+    _browseDeepReadPrompt = null;
+});
 
 // ─── MemoryStoreV2 实现 ───
 

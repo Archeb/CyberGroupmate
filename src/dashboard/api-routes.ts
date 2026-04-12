@@ -12,6 +12,14 @@ import type { FastPathHandler } from "../subagent/fast-path-handler.js";
 import type { CodeActExecutor } from "../subagent/code-act-executor.js";
 import { createLogger } from "../core/logger.js";
 import { loadConfig, validateConfig, saveConfig } from "../core/config.js";
+import {
+    listAllPrompts,
+    loadOriginalPrompt,
+    loadOverridePrompt,
+    saveOverride,
+    deleteOverride,
+    reloadAllPrompts,
+} from "../core/prompt-loader.js";
 
 const log = createLogger("dashboard-api");
 
@@ -960,6 +968,80 @@ export function createApiRouter(deps: DashboardDeps, bridge: EventBridge): Route
         }
         log.info("Dashboard unmute all", { count });
         res.json({ ok: true, unmutedCount: count });
+    });
+
+    // ─── System Prompts Override ───
+
+    // 列出所有 prompt 文件（含 override 状态）
+    router.get("/system-prompts", (_req, res) => {
+        try {
+            const prompts = listAllPrompts();
+            res.json({ prompts });
+        } catch (err) {
+            res.status(500).json({ error: String(err) });
+        }
+    });
+
+    // 获取指定 prompt 的原始和 override 内容
+    router.get("/system-prompts/*", (req, res) => {
+        try {
+            const relativePath = (req.params as any)[0];
+            if (!relativePath) { res.status(400).json({ error: "path required" }); return; }
+            const original = loadOriginalPrompt(relativePath);
+            if (original === null) { res.status(404).json({ error: "prompt not found" }); return; }
+            const override = loadOverridePrompt(relativePath);
+            res.json({
+                relativePath,
+                original,
+                override,
+                hasOverride: override !== null,
+            });
+        } catch (err) {
+            res.status(500).json({ error: String(err) });
+        }
+    });
+
+    // 保存 override
+    router.put("/system-prompts/*", (req, res) => {
+        try {
+            const relativePath = (req.params as any)[0];
+            if (!relativePath) { res.status(400).json({ error: "path required" }); return; }
+            const { content } = req.body;
+            if (typeof content !== "string") { res.status(400).json({ error: "content (string) required" }); return; }
+            // 验证原始文件存在
+            const original = loadOriginalPrompt(relativePath);
+            if (original === null) { res.status(404).json({ error: "original prompt not found" }); return; }
+            saveOverride(relativePath, content);
+            // 自动清除缓存使更改即时生效
+            reloadAllPrompts();
+            log.info("System prompt override 已保存", { relativePath, length: content.length });
+            res.json({ ok: true });
+        } catch (err) {
+            res.status(500).json({ error: String(err) });
+        }
+    });
+
+    // 删除 override（恢复原始版本）
+    router.delete("/system-prompts/*", (req, res) => {
+        try {
+            const relativePath = (req.params as any)[0];
+            if (!relativePath) { res.status(400).json({ error: "path required" }); return; }
+            const deleted = deleteOverride(relativePath);
+            if (deleted) {
+                reloadAllPrompts();
+                log.info("System prompt override 已删除", { relativePath });
+            }
+            res.json({ ok: true, deleted });
+        } catch (err) {
+            res.status(500).json({ error: String(err) });
+        }
+    });
+
+    // 手动重载所有 prompt 缓存
+    router.post("/system-prompts-reload", (_req, res) => {
+        reloadAllPrompts();
+        log.info("System prompts 缓存已手动清除");
+        res.json({ ok: true });
     });
 
     router.post("/restart", (_req, res) => {

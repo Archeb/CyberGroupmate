@@ -21,6 +21,7 @@ import { formatMessages, type RawMessage } from "../core/message-enricher.js";
 
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
+import { loadPromptFile, registerCacheClear } from "../core/prompt-loader.js";
 import type {
     TopicNode,
     PersonGroupProfile,
@@ -729,20 +730,17 @@ function computeAffinityScores(
     return result;
 }
 
-// ─── Prompt 加载 ───
-
-const PROMPTS_DIR = join(process.cwd(), "system-prompts", "memory");
+// ─── Prompt 加载（统一使用 prompt-loader 支持 override）───
 
 let _reflectionSystemPrompt: string | null = null;
 
 function getReflectionSystemPrompt(): string {
     if (!_reflectionSystemPrompt) {
-        try {
-            _reflectionSystemPrompt = readFileSync(
-                join(PROMPTS_DIR, "reflection-system.md"), "utf-8"
-            ).trim();
+        const content = loadPromptFile("memory/reflection-system.md");
+        if (content) {
+            _reflectionSystemPrompt = content.trim();
             log.debug("Reflection system prompt 已加载", { length: _reflectionSystemPrompt.length });
-        } catch {
+        } else {
             log.warn("Reflection system prompt 文件未找到，使用内置默认值");
             _reflectionSystemPrompt = "你是一个聊天观察员 AI。请根据话题和交互数据，输出一个严格的 JSON 对象。";
         }
@@ -754,12 +752,11 @@ let _mergeSystemPrompt: string | null = null;
 
 function getMergeSystemPrompt(): string {
     if (!_mergeSystemPrompt) {
-        try {
-            _mergeSystemPrompt = readFileSync(
-                join(PROMPTS_DIR, "merge-episodes-system.md"), "utf-8"
-            ).trim();
+        const content = loadPromptFile("memory/merge-episodes-system.md");
+        if (content) {
+            _mergeSystemPrompt = content.trim();
             log.debug("Merge system prompt 已加载", { length: _mergeSystemPrompt.length });
-        } catch {
+        } else {
             log.warn("Merge system prompt 文件未找到，使用内置默认值");
             _mergeSystemPrompt = "你是一个记忆合并助手。请分析交互事件，输出 JSON 格式的 overallSentiment、highlights、relationshipTrend。";
         }
@@ -771,12 +768,11 @@ let _reflectionUserInstruction: string | null = null;
 
 function getReflectionUserInstruction(): string {
     if (!_reflectionUserInstruction) {
-        try {
-            _reflectionUserInstruction = readFileSync(
-                join(PROMPTS_DIR, "reflection-user-instruction.md"), "utf-8"
-            ).trim();
+        const content = loadPromptFile("memory/reflection-user-instruction.md");
+        if (content) {
+            _reflectionUserInstruction = content.trim();
             log.debug("Reflection user instruction 已加载", { length: _reflectionUserInstruction.length });
-        } catch {
+        } else {
             log.warn("Reflection user instruction 文件未找到，使用内置默认值");
             _reflectionUserInstruction = "请根据以上数据，输出 JSON 格式的反思结果。";
         }
@@ -788,12 +784,11 @@ let _reflectionDmUserInstruction: string | null = null;
 
 function getReflectionDmUserInstruction(): string {
     if (!_reflectionDmUserInstruction) {
-        try {
-            _reflectionDmUserInstruction = readFileSync(
-                join(PROMPTS_DIR, "reflection-dm-user-instruction.md"), "utf-8"
-            ).trim();
+        const content = loadPromptFile("memory/reflection-dm-user-instruction.md");
+        if (content) {
+            _reflectionDmUserInstruction = content.trim();
             log.debug("Reflection DM user instruction 已加载", { length: _reflectionDmUserInstruction.length });
-        } catch {
+        } else {
             log.warn("Reflection DM user instruction 文件未找到，回退到群聊版本");
             _reflectionDmUserInstruction = getReflectionUserInstruction();
         }
@@ -805,12 +800,11 @@ let _mergeEpisodesUserTpl: string | null = null;
 
 function getMergeEpisodesUserTpl(): string {
     if (!_mergeEpisodesUserTpl) {
-        try {
-            _mergeEpisodesUserTpl = readFileSync(
-                join(PROMPTS_DIR, "merge-episodes-user.md"), "utf-8"
-            ).trim();
+        const content = loadPromptFile("memory/merge-episodes-user.md");
+        if (content) {
+            _mergeEpisodesUserTpl = content.trim();
             log.debug("Merge episodes user prompt 已加载", { length: _mergeEpisodesUserTpl.length });
-        } catch {
+        } else {
             log.warn("Merge episodes user prompt 文件未找到，使用内置默认值");
             _mergeEpisodesUserTpl = "用户: {{userId}}\n交互事件 ({{count}} 条):\n\n{{eventLines}}\n\n请分析以上事件，输出 JSON。";
         }
@@ -822,18 +816,27 @@ let _mergeCascadeUserTpl: string | null = null;
 
 function getMergeCascadeUserTpl(): string {
     if (!_mergeCascadeUserTpl) {
-        try {
-            _mergeCascadeUserTpl = readFileSync(
-                join(PROMPTS_DIR, "merge-cascade-user.md"), "utf-8"
-            ).trim();
+        const content = loadPromptFile("memory/merge-cascade-user.md");
+        if (content) {
+            _mergeCascadeUserTpl = content.trim();
             log.debug("Merge cascade user prompt 已加载", { length: _mergeCascadeUserTpl.length });
-        } catch {
+        } else {
             log.warn("Merge cascade user prompt 文件未找到，使用内置默认值");
             _mergeCascadeUserTpl = "已有的记忆摘要 ({{count}} 条):\n\n{{lines}}\n\n请综合分析这些记忆，生成更高层级的合并摘要。";
         }
     }
     return _mergeCascadeUserTpl;
 }
+
+// 注册缓存清除回调
+registerCacheClear(() => {
+    _reflectionSystemPrompt = null;
+    _mergeSystemPrompt = null;
+    _reflectionUserInstruction = null;
+    _reflectionDmUserInstruction = null;
+    _mergeEpisodesUserTpl = null;
+    _mergeCascadeUserTpl = null;
+});
 
 /** 简单模板替换：将 {{key}} 替换为对应值 */
 function applyTemplate(tpl: string, vars: Record<string, string>): string {

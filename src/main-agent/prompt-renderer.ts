@@ -21,6 +21,7 @@ import type { GroupContextPackage, TopicDigest, SubagentCallback, FastPathConfig
 import type { GroupModel } from "../memory-v2/types.js";
 import { createLogger } from "../core/logger.js";
 import { getRawId, getDunbarTierLabel } from "../core/chat-id.js";
+import { loadPromptFile, registerCacheClear } from "../core/prompt-loader.js";
 import { readFileSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -57,6 +58,9 @@ export type PromptType = keyof typeof PROMPT_FILE_MAP;
 const _templateCache = new Map<string, string>();
 let _promptDir: string | null = null;
 
+// 注册缓存清除回调，供 prompt-loader 热重载使用
+registerCacheClear(() => _templateCache.clear());
+
 /**
  * 设置 prompt 模板目录（用于测试或自定义路径）
  */
@@ -84,7 +88,7 @@ function getPromptDir(): string {
 }
 
 /**
- * 读取 prompt 模板文件（带缓存）
+ * 读取 prompt 模板文件（带缓存，支持 override）
  */
 export function loadTemplate(type: PromptType): string {
     const cached = _templateCache.get(type);
@@ -95,16 +99,27 @@ export function loadTemplate(type: PromptType): string {
         throw new Error(`Unknown prompt type: ${type}`);
     }
 
-    const filePath = join(getPromptDir(), filename);
+    // 如果设置了自定义目录（测试），直接从该目录读取
+    if (_promptDir) {
+        const filePath = join(_promptDir, filename);
+        if (!existsSync(filePath)) {
+            log.warn("loadTemplate: 文件不存在, 使用空模板", { type, filePath });
+            return "";
+        }
+        const content = readFileSync(filePath, "utf-8");
+        _templateCache.set(type, content);
+        return content;
+    }
 
-    if (!existsSync(filePath)) {
-        log.warn("loadTemplate: 文件不存在, 使用空模板", { type, filePath });
+    // 使用 prompt-loader（支持 override）
+    const content = loadPromptFile(filename);
+    if (content === null) {
+        log.warn("loadTemplate: 文件不存在, 使用空模板", { type, filename });
         return "";
     }
 
-    const content = readFileSync(filePath, "utf-8");
     _templateCache.set(type, content);
-    log.debug("loadTemplate: 已加载", { type, filePath, length: content.length });
+    log.debug("loadTemplate: 已加载", { type, filename, length: content.length });
     return content;
 }
 
