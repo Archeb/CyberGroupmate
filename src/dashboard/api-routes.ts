@@ -983,9 +983,10 @@ export function createApiRouter(deps: DashboardDeps, bridge: EventBridge): Route
     });
 
     // 获取指定 prompt 的原始和 override 内容
-    router.get("/system-prompts/*", (req, res) => {
+    router.get("/system-prompts/{*promptPath}", (req, res) => {
         try {
-            const relativePath = (req.params as any)[0];
+            const raw = (req.params as Record<string, string | string[]>)["promptPath"];
+            const relativePath = Array.isArray(raw) ? raw.join("/") : raw;
             if (!relativePath) { res.status(400).json({ error: "path required" }); return; }
             const original = loadOriginalPrompt(relativePath);
             if (original === null) { res.status(404).json({ error: "prompt not found" }); return; }
@@ -1002,9 +1003,10 @@ export function createApiRouter(deps: DashboardDeps, bridge: EventBridge): Route
     });
 
     // 保存 override
-    router.put("/system-prompts/*", (req, res) => {
+    router.put("/system-prompts/{*promptPath}", (req, res) => {
         try {
-            const relativePath = (req.params as any)[0];
+            const raw = (req.params as Record<string, string | string[]>)["promptPath"];
+            const relativePath = Array.isArray(raw) ? raw.join("/") : raw;
             if (!relativePath) { res.status(400).json({ error: "path required" }); return; }
             const { content } = req.body;
             if (typeof content !== "string") { res.status(400).json({ error: "content (string) required" }); return; }
@@ -1022,9 +1024,10 @@ export function createApiRouter(deps: DashboardDeps, bridge: EventBridge): Route
     });
 
     // 删除 override（恢复原始版本）
-    router.delete("/system-prompts/*", (req, res) => {
+    router.delete("/system-prompts/{*promptPath}", (req, res) => {
         try {
-            const relativePath = (req.params as any)[0];
+            const raw = (req.params as Record<string, string | string[]>)["promptPath"];
+            const relativePath = Array.isArray(raw) ? raw.join("/") : raw;
             if (!relativePath) { res.status(400).json({ error: "path required" }); return; }
             const deleted = deleteOverride(relativePath);
             if (deleted) {

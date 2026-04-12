@@ -346,7 +346,7 @@
     selectedPrompt = relativePath;
     promptDetailLoading = true;
     try {
-      const res = await api("/system-prompts/" + encodeURIComponent(relativePath));
+      const res = await api("/system-prompts/" + relativePath);
       promptOriginal = res.original || "";
       promptOverride = res.override || "";
       promptHasOverride = res.hasOverride;
@@ -361,7 +361,7 @@
     if (!selectedPrompt) return;
     promptSaving = true;
     try {
-      const res = await api("/system-prompts/" + encodeURIComponent(selectedPrompt), {
+      const res = await api("/system-prompts/" + selectedPrompt, {
         method: "PUT",
         body: { content: promptEditorContent },
       });
@@ -384,7 +384,7 @@
     if (!selectedPrompt) return;
     if (!confirm("确定删除此 override，恢复到原始版本？")) return;
     try {
-      const res = await api("/system-prompts/" + encodeURIComponent(selectedPrompt), {
+      const res = await api("/system-prompts/" + selectedPrompt, {
         method: "DELETE",
       });
       if (res.ok) {
