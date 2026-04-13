@@ -289,8 +289,7 @@ export class Sandbox extends EventEmitter {
         ].join("\n") + "\n";
         writeFileSync(bashrcPath, bashrcContent, "utf-8");
 
-        const shellCmd = process.platform === "win32" ? "bash" : "/bin/bash";
-        this.ptyProcess = pty.spawn(shellCmd, ["--rcfile", bashrcPath], {
+        this.ptyProcess = pty.spawn("/bin/bash", ["--rcfile", bashrcPath], {
             name: "xterm-256color",
             cols: 200,
             rows: 50,
