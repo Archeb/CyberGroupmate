@@ -510,14 +510,25 @@ async function initWorker(): Promise<void> {
         try {
             const servers = JSON.parse(mcpServersRaw) as Array<{
                 name: string;
-                command: string;
+                transport?: "stdio" | "streamable-http";
+                command?: string;
                 args?: string[];
                 env?: Record<string, string>;
+                url?: string;
+                headers?: Record<string, string>;
                 autoConnect?: boolean;
             }>;
             for (const srv of servers) {
                 if (srv.autoConnect === false) continue;
-                mcpBridge.connect({ name: srv.name, command: srv.command, args: srv.args, env: srv.env })
+                mcpBridge.connect({
+                    name: srv.name,
+                    transport: srv.transport,
+                    command: srv.command,
+                    args: srv.args,
+                    env: srv.env,
+                    url: srv.url,
+                    headers: srv.headers,
+                })
                     .then(() => printToHost(`[MCP] 预配置服务器 "${srv.name}" 已连接`))
                     .catch(err => {
                         process.stderr.write(`[sandbox-worker] MCP 预配置连接失败 "${srv.name}": ${err}\n`);

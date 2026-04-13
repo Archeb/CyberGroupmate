@@ -2,13 +2,13 @@
  * mcp-bridge.d.ts — MCP Server 连接器类型定义
  *
  * 连接外部 MCP (Model Context Protocol) Server，自动发现并代理其工具。
- * MCP Server 通过 stdio 通信，启动后自动扫描可用 tools。
+ * 支持 stdio 和 Streamable HTTP 两种传输。
  */
 
 declare const mcp: {
     /**
      * 连接到一个 MCP Server。
-     * 启动子进程并通过 stdio 通信，自动发现所有 tools。
+    * 根据配置使用 stdio 或 Streamable HTTP 建立连接，自动发现所有 tools。
      *
      * @param config - Server 配置
      * @returns 包含 tools 列表和 call 方法的代理对象
@@ -17,9 +17,9 @@ declare const mcp: {
      * // 连接 GitHub MCP Server
      * const github = await mcp.connect({
      *   name: "github",
-     *   command: "npx",
-     *   args: ["-y", "@modelcontextprotocol/server-github"],
-     *   env: { GITHUB_TOKEN: "ghp_xxx" }
+    *   transport: "streamable-http",
+    *   url: "https://example.com/mcp",
+    *   headers: { Authorization: "Bearer xxx" }
      * });
      * console.log("可用工具:", github.tools);
      *
@@ -30,12 +30,18 @@ declare const mcp: {
     connect(config: {
         /** 显示名称，也用作 tool 命名空间 */
         name: string;
-        /** 启动命令 */
-        command: string;
-        /** 命令参数 */
+        /** 传输方式。省略时：有 url 则视为 streamable-http，否则视为 stdio */
+        transport?: "stdio" | "streamable-http";
+        /** stdio 启动命令 */
+        command?: string;
+        /** stdio 命令参数 */
         args?: string[];
-        /** 环境变量（如 API keys） */
+        /** stdio 环境变量（如 API keys） */
         env?: Record<string, string>;
+        /** Streamable HTTP endpoint */
+        url?: string;
+        /** Streamable HTTP 附加请求头（如 Authorization） */
+        headers?: Record<string, string>;
     }): Promise<{
         name: string;
         tools: Array<{ name: string; description: string }>;
@@ -60,6 +66,8 @@ declare const mcp: {
      */
     list(): Array<{
         name: string;
+        transport: "stdio" | "streamable-http";
+        url?: string;
         tools: string[];
         running: boolean;
     }>;

@@ -11,9 +11,12 @@ let toastType = 'success';
 
 // Connect form state
 let connectName = '';
+let connectTransport = 'stdio';
 let connectCommand = '';
 let connectArgs = '';
 let connectEnv = '';
+let connectUrl = '';
+let connectHeaders = '';
 let connecting = false;
 
 // Auto-load when tab becomes active + sandbox pool available
@@ -54,12 +57,23 @@ async function loadServers() {
 }
 
 async function connectServer() {
-    if (!connectName || !connectCommand) return;
+    if (!connectName) return;
     connecting = true;
     error = '';
     try {
+        if (connectTransport === 'stdio' && !connectCommand.trim()) {
+            error = 'stdio 模式需要填写启动命令';
+            connecting = false;
+            return;
+        }
+        if (connectTransport === 'streamable-http' && !connectUrl.trim()) {
+            error = 'Streamable HTTP 模式需要填写 URL';
+            connecting = false;
+            return;
+        }
+
         let args;
-        if (connectArgs.trim()) {
+        if (connectTransport === 'stdio' && connectArgs.trim()) {
             try {
                 args = JSON.parse(connectArgs.trim());
             } catch {
@@ -67,7 +81,7 @@ async function connectServer() {
             }
         }
         let env;
-        if (connectEnv.trim()) {
+        if (connectTransport === 'stdio' && connectEnv.trim()) {
             try {
                 env = JSON.parse(connectEnv.trim());
             } catch {
@@ -76,18 +90,39 @@ async function connectServer() {
                 return;
             }
         }
+        let headers;
+        if (connectTransport === 'streamable-http' && connectHeaders.trim()) {
+            try {
+                headers = JSON.parse(connectHeaders.trim());
+            } catch {
+                error = 'headers 格式错误，需要 JSON 对象';
+                connecting = false;
+                return;
+            }
+        }
         const res = await api(`/sandbox/${encodeURIComponent(chatId)}/mcp/connect`, {
             method: 'POST',
-            body: { name: connectName, command: connectCommand, args, env },
+            body: {
+                name: connectName,
+                transport: connectTransport,
+                command: connectTransport === 'stdio' ? connectCommand.trim() : undefined,
+                args,
+                env,
+                url: connectTransport === 'streamable-http' ? connectUrl.trim() : undefined,
+                headers,
+            },
         });
         if (res.error) {
             error = res.error;
         } else {
             showToast(`${connectName} 已连接 (${res.tools?.length ?? 0} tools)`);
             connectName = '';
+            connectTransport = 'stdio';
             connectCommand = '';
             connectArgs = '';
             connectEnv = '';
+            connectUrl = '';
+            connectHeaders = '';
             await loadServers();
         }
     } catch (e) {
@@ -111,6 +146,12 @@ async function disconnectServer(name) {
         showToast(String(e), 'error');
     }
 }
+
+$: connectActionDisabled =
+    !chatId ||
+    connecting ||
+    !connectName.trim() ||
+    (connectTransport === 'stdio' ? !connectCommand.trim() : !connectUrl.trim());
 </script>
 
 <div class="p-4 space-y-4">
@@ -166,8 +207,12 @@ async function disconnectServer(name) {
                                             {srv.running ? '●' : '○'}
                                         </span>
                                         <span class="font-mono font-semibold">{srv.name}</span>
+                                        <span class="badge badge-secondary badge-sm">{srv.transport ?? 'stdio'}</span>
                                         <span class="badge badge-outline badge-sm">{srv.tools?.length ?? 0} tools</span>
                                     </div>
+                                    {#if srv.url}
+                                        <div class="mt-1 text-xs text-base-content/60 break-all">{srv.url}</div>
+                                    {/if}
                                     {#if srv.tools?.length > 0}
                                         <div class="mt-1 flex flex-wrap gap-1">
                                             {#each srv.tools as tool}
@@ -206,48 +251,98 @@ async function disconnectServer(name) {
                     </div>
 
                     <div class="form-control">
-                        <label class="label" for="connect-command">
-                            <span class="label-text">启动命令</span>
+                        <label class="label" for="connect-transport">
+                            <span class="label-text">传输方式</span>
                         </label>
-                        <input 
-                            id="connect-command"
-                            type="text" 
-                            placeholder="e.g. npx"
-                            class="input input-bordered input-sm" 
-                            bind:value={connectCommand} 
-                        />
+                        <select
+                            id="connect-transport"
+                            class="select select-bordered select-sm"
+                            bind:value={connectTransport}
+                        >
+                            <option value="stdio">stdio</option>
+                            <option value="streamable-http">streamable-http</option>
+                        </select>
                     </div>
 
-                    <div class="form-control">
-                        <label class="label" for="connect-args">
-                            <span class="label-text">参数 (空格分隔或 JSON 数组)</span>
-                        </label>
-                        <input 
-                            id="connect-args"
-                            type="text" 
-                            placeholder='-y @anthropic/mcp-filesystem /workspace'
-                            class="input input-bordered input-sm" 
-                            bind:value={connectArgs} 
-                        />
-                    </div>
+                    {#if connectTransport === 'stdio'}
+                        <div class="form-control">
+                            <label class="label" for="connect-command">
+                                <span class="label-text">启动命令</span>
+                            </label>
+                            <input 
+                                id="connect-command"
+                                type="text" 
+                                placeholder="e.g. npx"
+                                class="input input-bordered input-sm" 
+                                bind:value={connectCommand} 
+                            />
+                        </div>
 
-                    <div class="form-control">
-                        <label class="label" for="connect-env">
-                            <span class="label-text">环境变量 (JSON, 可选)</span>
-                        </label>
-                        <input 
-                            id="connect-env"
-                            type="text" 
-                            placeholder={'{"API_KEY": "..."}'}
-                            class="input input-bordered input-sm" 
-                            bind:value={connectEnv} 
-                        />
+                        <div class="form-control">
+                            <label class="label" for="connect-args">
+                                <span class="label-text">参数 (空格分隔或 JSON 数组)</span>
+                            </label>
+                            <input 
+                                id="connect-args"
+                                type="text" 
+                                placeholder='-y @anthropic/mcp-filesystem /workspace'
+                                class="input input-bordered input-sm" 
+                                bind:value={connectArgs} 
+                            />
+                        </div>
+
+                        <div class="form-control">
+                            <label class="label" for="connect-env">
+                                <span class="label-text">环境变量 (JSON, 可选)</span>
+                            </label>
+                            <textarea
+                                id="connect-env"
+                                rows="3"
+                                placeholder={'{"API_KEY": "..."}'}
+                                class="textarea textarea-bordered textarea-sm"
+                                bind:value={connectEnv}
+                            ></textarea>
+                        </div>
+                    {:else}
+                        <div class="form-control">
+                            <label class="label" for="connect-url">
+                                <span class="label-text">Streamable HTTP URL</span>
+                            </label>
+                            <input
+                                id="connect-url"
+                                type="url"
+                                placeholder="https://example.com/mcp"
+                                class="input input-bordered input-sm"
+                                bind:value={connectUrl}
+                            />
+                        </div>
+
+                        <div class="form-control">
+                            <label class="label" for="connect-headers">
+                                <span class="label-text">请求头 (JSON, 可选)</span>
+                            </label>
+                            <textarea
+                                id="connect-headers"
+                                rows="4"
+                                placeholder={'{"Authorization": "Bearer ..."}'}
+                                class="textarea textarea-bordered textarea-sm"
+                                bind:value={connectHeaders}
+                            ></textarea>
+                        </div>
+                    {/if}
+
+                    <div class="text-xs text-base-content/60">
+                        {#if connectTransport === 'stdio'}
+                            适用于本地 MCP 进程，通过 command/args/env 启动。
+                        {:else}
+                            适用于远端 MCP endpoint，通过 URL 和可选 headers 建立 Streamable HTTP 会话。
+                        {/if}
                     </div>
 
                     <button
                         class="btn btn-primary btn-sm w-full mt-2"
                         on:click={connectServer}
-                        disabled={!connectName || !connectCommand || !chatId || connecting}
+                        disabled={connectActionDisabled}
                     >
                         {connecting ? '连接中...' : '连接'}
                     </button>
