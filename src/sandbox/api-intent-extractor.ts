@@ -31,6 +31,14 @@ const TRIVIAL_CALLS = new Set([
     "skills.list",
     // mcp
     "mcp.list",
+    // cron
+    "cron.list",
+    // events
+    "events.list",
+    // kv
+    "kv.get",
+    "kv.del",
+    "kv.keys",
 ]);
 
 /**

@@ -88,6 +88,13 @@ telegram.d.ts — Telegram 平台 API
 - `readHistory`: readHistory(chatId: number | string): Promise<void>
 - `sendTyping`: sendTyping(chatId: number | string): Promise<void>
 
+## events
+shared/events.d.ts — 事件监听器模块类型定义
+
+- `on`: 注册事件监听器。匹配 type 前缀的事件会触发 handlerCode 在 sandbox 中执行。
+- `off`: 移除监听器
+- `list`: 列出当前所有监听器
+
 ## fs
 filesystem.d.ts — 文件系统操作模块类型定义
 
@@ -99,6 +106,14 @@ filesystem.d.ts — 文件系统操作模块类型定义
 - `unlink`: 删除文件。
 - `mkdir`: 创建目录（递归创建，类似 mkdir -p）。
 - `stat`: 获取文件或目录的状态信息。
+
+## kv
+shared/kv.d.ts — 持久化键值存储模块类型定义
+
+- `get`: 读取键值
+- `set`: 写入键值
+- `del`: 删除键
+- `keys`: 列出键名（可按前缀过滤）
 
 ## mcp
 mcp-bridge.d.ts — MCP Server 连接器类型定义

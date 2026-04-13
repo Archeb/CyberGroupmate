@@ -44,6 +44,28 @@ const _apiBriefCache = new Map<string, string>();
 /** 模块注册表缓存（Two-pass 用） */
 let _moduleRegistryCache: ModuleEntry[] | null = null;
 
+/**
+ * 刷新模块注册表缓存（合并内置模块 + TS Skills + MCP 动态模块）。
+ * 当 MCP 连接变更或 Skills 热重载后调用。
+ */
+export function refreshModuleRegistryCache(): void {
+    const builtin = loadModuleRegistry() || [];
+    const skills = parseAllSkillDocs() || [];
+    _moduleRegistryCache = [...builtin, ...skills];
+    _apiBriefCache.clear(); // 清除 brief 缓存，强制重新生成
+}
+
+/**
+ * 获取当前模块注册表缓存（懒加载）。
+ * 供外部（如 session-runner Two-pass）使用。
+ */
+export function getModuleRegistryCache(): ModuleEntry[] {
+    if (!_moduleRegistryCache) {
+        refreshModuleRegistryCache();
+    }
+    return _moduleRegistryCache!;
+}
+
 /** 平台专属模块名映射（用于过滤非当前平台的 adapter 模块） */
 const PLATFORM_MODULES: Record<string, string> = {
     telegram: "telegram",
@@ -64,13 +86,9 @@ export function loadApiTypeDefs(platform: string = "telegram"): string {
 
     try {
         // 确保 registry 已加载（合并内置模块与动态 TS Skills）
-        if (!_moduleRegistryCache) {
-            const builtin = loadModuleRegistry() || [];
-            const skills = parseAllSkillDocs() || [];
-            _moduleRegistryCache = [...builtin, ...skills];
-        }
+        const registry = getModuleRegistryCache();
 
-        if (_moduleRegistryCache.length === 0) {
+        if (registry.length === 0) {
             // 降级：如果 modules-docs.json 不存在且无 Skills，返回空提示
             const fallback = "// API type definitions not available. Run `npm run gen:module-docs` to generate host APIs.";
             _apiBriefCache.set(platform, fallback);
@@ -86,7 +104,7 @@ export function loadApiTypeDefs(platform: string = "telegram"): string {
         }
 
         // 按平台过滤模块
-        const filteredRegistry = _moduleRegistryCache.filter(mod => !excludedModules.has(mod.name));
+        const filteredRegistry = registry.filter(mod => !excludedModules.has(mod.name));
 
         // 生成轻量概览
         const result = generateBriefOverview(filteredRegistry);
@@ -535,18 +553,14 @@ export class CodeActExecutor {
                 ["[Execution Output]"],  // stop sequences
                 this.chatId,  // 关联 chatId，用于 codeActEvents 进度广播
                 this.config.maxTurns,  // 最大交互轮次
-                // Two-pass: 按需加载完整 API 文档
+                // Two-pass: 按需加载完整 API 文档（每个 turn 动态获取最新 registry）
                 (() => {
-                    if (!_moduleRegistryCache) {
-                        const builtin = loadModuleRegistry() || [];
-                        const skills = parseAllSkillDocs() || [];
-                        _moduleRegistryCache = [...builtin, ...skills];
-                    }
-                    if (_moduleRegistryCache.length === 0) return undefined;
+                    const registry = getModuleRegistryCache();
+                    if (registry.length === 0) return undefined;
                     return {
-                        prefixMap: buildPrefixMap(_moduleRegistryCache),
+                        prefixMap: buildPrefixMap(registry),
                         lookupDocs: (calledMethods: string[]) =>
-                            lookupFullDocs(_moduleRegistryCache!, calledMethods),
+                            lookupFullDocs(getModuleRegistryCache(), calledMethods),
                     };
                 })(),
             );
