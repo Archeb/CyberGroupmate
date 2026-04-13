@@ -99,3 +99,11 @@ filesystem.d.ts — 文件系统操作模块类型定义
 - `unlink`: 删除文件。
 - `mkdir`: 创建目录（递归创建，类似 mkdir -p）。
 - `stat`: 获取文件或目录的状态信息。
+
+## mcp
+mcp-bridge.d.ts — MCP Server 连接器类型定义
+
+- `connect`: 连接到一个 MCP Server。
+- `disconnect`: 断开连接并清理 MCP Server 子进程
+- `list`: 列出所有已连接的 MCP Servers 及其工具
+- `call`: 直接调用指定 server 的 tool（无需先调用 connect 返回的代理对象）

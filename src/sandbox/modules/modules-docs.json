@@ -375,5 +375,31 @@
         "fullDoc": "```typescript\nstat(path: string): {\n        /** 文件大小（字节） */\n        size: number;\n        /** 是否是目录 */\n        isDirectory: boolean;\n        /** 是否是文件 */\n        isFile: boolean;\n        /** 最后修改时间（ISO 字符串） */\n        mtime: string;\n    }\n```\n\n\n获取文件或目录的状态信息。\n\n**参数：**\n- `path`: 路径\n- **返回值**: 状态对象\n\n**示例：**\n```typescript\nconst info = fs.stat(\"skills/tavily/index.ts\");\nconsole.log(`文件大小: ${info.size} bytes, 最后修改: ${info.mtime}`);\n```"
       }
     ]
+  },
+  {
+    "name": "mcp",
+    "description": "mcp-bridge.d.ts — MCP Server 连接器类型定义",
+    "methods": [
+      {
+        "name": "connect",
+        "brief": "连接到一个 MCP Server。",
+        "fullDoc": "```typescript\nconnect(config: {\n        /** 显示名称，也用作 tool 命名空间 */\n        name: string;\n        /** 启动命令 */\n        command: string;\n        /** 命令参数 */\n        args?: string[];\n        /** 环境变量（如 API keys） */\n        env?: Record<string, string>;\n    }): Promise<{\n        name: string;\n        tools: Array<{ name: string; description: string }>;\n        /** 调用指定 tool */\n        call(toolName: string, args?: Record<string, unknown>): Promise<unknown>;\n    }>\n```\n\n\n连接到一个 MCP Server。\n启动子进程并通过 stdio 通信，自动发现所有 tools。\n\n**参数：**\n- `config`: Server 配置\n- **返回值**: 包含 tools 列表和 call 方法的代理对象\n\n**示例：**\n```typescript\n// 连接 GitHub MCP Server\nconst github = await mcp.connect({\n  name: \"github\",\n  command: \"npx\",\n  args: [\"-y\", \"@modelcontextprotocol/server-github\"],\n  env: { GITHUB_TOKEN: \"ghp_xxx\" }\n});\nconsole.log(\"可用工具:\", github.tools);\n\n// 调用 tool\nconst repos = await github.call(\"search_repositories\", { query: \"mcp typescript\" });\nconsole.log(repos);\n```"
+      },
+      {
+        "name": "disconnect",
+        "brief": "断开连接并清理 MCP Server 子进程",
+        "fullDoc": "```typescript\ndisconnect(name: string): Promise<void>\n```\n\n\n断开连接并清理 MCP Server 子进程\n\n**参数：**\n- `name`: 连接时指定的 name"
+      },
+      {
+        "name": "list",
+        "brief": "列出所有已连接的 MCP Servers 及其工具",
+        "fullDoc": "```typescript\nlist(): Array<{\n        name: string;\n        tools: string[];\n        running: boolean;\n    }>\n```\n\n\n列出所有已连接的 MCP Servers 及其工具\n\n**示例：**\n```typescript\nconst servers = mcp.list();\nfor (const s of servers) {\n  console.log(`${s.name}: ${s.tools.join(\", \")} (running: ${s.running})`);\n}\n```"
+      },
+      {
+        "name": "call",
+        "brief": "直接调用指定 server 的 tool（无需先调用 connect 返回的代理对象）",
+        "fullDoc": "```typescript\ncall(serverName: string, toolName: string, args?: Record<string, unknown>): Promise<unknown>\n```\n\n\n直接调用指定 server 的 tool（无需先调用 connect 返回的代理对象）\n\n**参数：**\n- `serverName`: MCP Server 名称\n- `toolName`: 工具名称\n- `args`: 工具参数"
+      }
+    ]
   }
 ]

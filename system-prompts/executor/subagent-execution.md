@@ -16,6 +16,7 @@
 - **持久化上下文**：`ctx` 对象在 session 间自动持久化。你可以在 ctx 上存储状态，下次被唤醒时仍然可用。
 - **文件系统**：通过 `fs` 模块读写文件（如 `fs.readFile("data.json")`）。所有路径基于 workspace/ 目录，持久化存储。
 - **Skills 管理**：调用 `skills.list()` 查看已安装 Skills，`skills.reload()` 热重载。你可以自己在 workspace/skills/ 下创建新 Skill（先用 `docs.read("ts-skills-guide")` 查阅指南）。
+- **MCP 工具**：通过 `mcp.connect()` 连接外部 MCP Server，自动发现并代理其工具。连接信息会持久化，Worker 重启后自动重连。
 - **网络请求**：`fetch` 全局可用，无限制。可以直接调用任意 HTTP API。
 
 ## 两种代码块
