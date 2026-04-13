@@ -1,11 +1,10 @@
 /**
  * modules/mcp-bridge.ts — MCP Server 连接器
  *
- * 在 Sandbox Worker 内管理 MCP Server 子进程。
- * 通过 @modelcontextprotocol/sdk 的 Client 类与 MCP Server 通信：
- * - stdio transport 启动本地 MCP Server 进程
- * - 自动发现所有 tools（通过 tools/list）
- * - 将 tool schemas 动态注入 module-registry 供 Two-pass 使用
+ * 在 Sandbox Worker 内管理 MCP Server 连接。
+ * 当前支持两种传输：
+ * - stdio：启动本地 MCP Server 子进程，通过 stdin/stdout 进行 JSON-RPC
+ * - Streamable HTTP：对远端 MCP endpoint 发起 HTTP POST，请求结果可为 JSON 或 SSE
  *
  * 连接信息持久化到 workspace/<chatId>/mcp-connections.json，
  * Worker 重建时自动重连。
@@ -13,20 +12,28 @@
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { dirname } from "node:path";
 import type { ModuleEntry, MethodDoc } from "./module-registry.js";
 
 // ─── 类型定义 ───
 
+export type McpTransportKind = "stdio" | "streamable-http";
+
 export interface McpServerConfig {
     /** 显示名称（用于 LLM 上下文，也是 tool 命名空间） */
     name: string;
-    /** 启动命令 */
-    command: string;
-    /** 命令参数 */
+    /** 传输方式。未指定时：有 url 则视为 streamable-http，否则视为 stdio */
+    transport?: McpTransportKind;
+    /** stdio 启动命令 */
+    command?: string;
+    /** stdio 命令参数 */
     args?: string[];
-    /** 环境变量（如 API keys） */
+    /** stdio 环境变量（如 API keys） */
     env?: Record<string, string>;
+    /** Streamable HTTP endpoint */
+    url?: string;
+    /** Streamable HTTP 附加请求头（如 Authorization） */
+    headers?: Record<string, string>;
 }
 
 interface McpToolSchema {
@@ -35,17 +42,43 @@ interface McpToolSchema {
     inputSchema?: Record<string, unknown>;
 }
 
+interface JsonRpcErrorObject {
+    code?: number;
+    message?: string;
+    data?: unknown;
+}
+
+interface JsonRpcMessage {
+    jsonrpc?: string;
+    id?: number | string | null;
+    method?: string;
+    params?: unknown;
+    result?: unknown;
+    error?: JsonRpcErrorObject;
+}
+
 interface McpConnection {
     config: McpServerConfig;
+    transportKind: McpTransportKind;
     tools: McpToolSchema[];
-    /** child process（非持久化，运行时重建） */
+    /** stdio child process（仅 stdio transport 使用） */
     process?: ChildProcess;
     /** JSON-RPC 请求计数器 */
-    requestId?: number;
-    /** 待处理的 JSON-RPC 响应 */
+    requestId: number;
+    /** stdio 待处理的 JSON-RPC 响应 */
     pendingRequests?: Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>;
-    /** readline 输出缓冲 */
+    /** stdio 输出缓冲 */
     outputBuffer?: string;
+    /** Streamable HTTP 会话 ID */
+    sessionId?: string;
+    /** SSE 最后一个 event id（用于后续可恢复扩展） */
+    lastEventId?: string;
+}
+
+interface ParsedSseEvent {
+    event: string;
+    data: string;
+    id?: string;
 }
 
 // ─── 全局状态 ───
@@ -57,6 +90,10 @@ let persistPath = "";
 
 /** registry 变更回调（通知 code-act-executor 刷新缓存） */
 let onRegistryChange: (() => void) | null = null;
+
+const MCP_PROTOCOL_VERSION = "2024-11-05";
+const HTTP_ACCEPT = "application/json, text/event-stream";
+const SSE_CONTENT_TYPE = "text/event-stream";
 
 // ─── 持久化 ───
 
@@ -71,7 +108,7 @@ function loadPersistedConnections(): McpServerConfig[] {
 
 function saveConnectionConfigs(): void {
     if (!persistPath) return;
-    const configs = Array.from(connections.values()).map(c => c.config);
+    const configs = Array.from(connections.values()).map((connection) => connection.config);
     try {
         const dir = dirname(persistPath);
         if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
@@ -81,31 +118,72 @@ function saveConnectionConfigs(): void {
     }
 }
 
+// ─── 配置 / transport 判定 ───
+
+function getTransportKind(config: McpServerConfig): McpTransportKind {
+    if (config.transport) return config.transport;
+    return config.url ? "streamable-http" : "stdio";
+}
+
+function validateConfig(config: McpServerConfig): void {
+    const transportKind = getTransportKind(config);
+    if (!config.name?.trim()) {
+        throw new Error("MCP Server 配置缺少 name");
+    }
+    if (transportKind === "stdio" && !config.command) {
+        throw new Error(`MCP Server "${config.name}" 使用 stdio transport 时必须提供 command`);
+    }
+    if (transportKind === "streamable-http" && !config.url) {
+        throw new Error(`MCP Server "${config.name}" 使用 Streamable HTTP transport 时必须提供 url`);
+    }
+}
+
+function createConnection(config: McpServerConfig): McpConnection {
+    validateConfig(config);
+    return {
+        config,
+        transportKind: getTransportKind(config),
+        tools: [],
+        requestId: 0,
+        pendingRequests: new Map(),
+    };
+}
+
+function nextRequestId(conn: McpConnection): number {
+    conn.requestId += 1;
+    return conn.requestId;
+}
+
+function initializeParams(): Record<string, unknown> {
+    return {
+        protocolVersion: MCP_PROTOCOL_VERSION,
+        capabilities: {},
+        clientInfo: { name: "CyberGroupmate", version: "1.0.0" },
+    };
+}
+
 // ─── JSON-RPC over stdio ───
 
-function sendJsonRpc(conn: McpConnection, method: string, params?: unknown): Promise<unknown> {
+function sendJsonRpcStdioRequest(conn: McpConnection, method: string, params?: unknown): Promise<unknown> {
     return new Promise((resolve, reject) => {
         if (!conn.process?.stdin?.writable) {
             reject(new Error(`MCP Server "${conn.config.name}" is not running`));
             return;
         }
 
-        conn.requestId = (conn.requestId ?? 0) + 1;
-        const id = conn.requestId;
-
-        if (!conn.pendingRequests) conn.pendingRequests = new Map();
+        const id = nextRequestId(conn);
+        conn.pendingRequests ??= new Map();
         conn.pendingRequests.set(id, { resolve, reject });
 
-        const message = JSON.stringify({
-            jsonrpc: "2.0",
-            id,
-            method,
-            params: params ?? {},
-        });
+        conn.process.stdin.write(
+            JSON.stringify({
+                jsonrpc: "2.0",
+                id,
+                method,
+                params: params ?? {},
+            }) + "\n"
+        );
 
-        conn.process.stdin.write(message + "\n");
-
-        // Timeout after 30s
         setTimeout(() => {
             if (conn.pendingRequests?.has(id)) {
                 conn.pendingRequests.delete(id);
@@ -115,21 +193,33 @@ function sendJsonRpc(conn: McpConnection, method: string, params?: unknown): Pro
     });
 }
 
+function sendJsonRpcStdioNotification(conn: McpConnection, method: string, params?: unknown): void {
+    if (!conn.process?.stdin?.writable) {
+        throw new Error(`MCP Server "${conn.config.name}" is not running`);
+    }
+    conn.process.stdin.write(
+        JSON.stringify({
+            jsonrpc: "2.0",
+            method,
+            ...(params !== undefined ? { params } : {}),
+        }) + "\n"
+    );
+}
+
 function setupStdoutHandler(conn: McpConnection): void {
     if (!conn.process?.stdout) return;
     conn.outputBuffer = "";
 
     conn.process.stdout.on("data", (data: Buffer) => {
         conn.outputBuffer += data.toString();
-        // Process complete JSON lines
-        const lines = conn.outputBuffer!.split("\n");
-        conn.outputBuffer = lines.pop() ?? ""; // Keep incomplete line in buffer
+        const lines = conn.outputBuffer.split("\n");
+        conn.outputBuffer = lines.pop() ?? "";
 
         for (const line of lines) {
             if (!line.trim()) continue;
             try {
-                const msg = JSON.parse(line);
-                if (msg.id && conn.pendingRequests?.has(msg.id)) {
+                const msg = JSON.parse(line) as JsonRpcMessage;
+                if (typeof msg.id === "number" && conn.pendingRequests?.has(msg.id)) {
                     const pending = conn.pendingRequests.get(msg.id)!;
                     conn.pendingRequests.delete(msg.id);
                     if (msg.error) {
@@ -138,82 +228,342 @@ function setupStdoutHandler(conn: McpConnection): void {
                         pending.resolve(msg.result);
                     }
                 }
-                // Notifications (no id) are silently ignored for now
             } catch {
-                // Non-JSON output, ignore
+                // 非 JSON 行忽略
             }
         }
     });
+}
+
+// ─── Streamable HTTP ───
+
+function buildHttpHeaders(
+    conn: McpConnection,
+    options?: { includeContentType?: boolean; skipSessionId?: boolean; accept?: string }
+): Record<string, string> {
+    const headers: Record<string, string> = {
+        Accept: options?.accept ?? HTTP_ACCEPT,
+        ...(conn.config.headers ?? {}),
+    };
+    if (options?.includeContentType !== false) {
+        headers["Content-Type"] = "application/json";
+    }
+    if (!options?.skipSessionId && conn.sessionId) {
+        headers["Mcp-Session-Id"] = conn.sessionId;
+    }
+    return headers;
+}
+
+async function buildHttpError(response: Response): Promise<Error> {
+    let details = "";
+    try {
+        const text = await response.text();
+        details = text.trim();
+    } catch {
+        details = "";
+    }
+    return new Error(`HTTP ${response.status} ${response.statusText}${details ? `: ${details}` : ""}`);
+}
+
+function extractJsonRpcResult(payload: unknown, expectedId: number): { found: boolean; value?: unknown } {
+    const messages = Array.isArray(payload) ? payload : [payload];
+    for (const message of messages) {
+        if (!message || typeof message !== "object") continue;
+        const rpc = message as JsonRpcMessage;
+        if (rpc.id !== expectedId) continue;
+        if (rpc.error) {
+            throw new Error(rpc.error.message ?? JSON.stringify(rpc.error));
+        }
+        return { found: true, value: rpc.result };
+    }
+    return { found: false };
+}
+
+async function parseSseStream(response: Response, onEvent: (event: ParsedSseEvent) => void): Promise<void> {
+    if (!response.body) {
+        throw new Error("SSE response body is empty");
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let eventName = "message";
+    let eventId: string | undefined;
+    let dataLines: string[] = [];
+
+    const flushEvent = () => {
+        if (dataLines.length === 0 && !eventId) {
+            eventName = "message";
+            eventId = undefined;
+            return;
+        }
+        onEvent({
+            event: eventName,
+            data: dataLines.join("\n"),
+            id: eventId,
+        });
+        eventName = "message";
+        eventId = undefined;
+        dataLines = [];
+    };
+
+    while (true) {
+        const { done, value } = await reader.read();
+        buffer += decoder.decode(value ?? new Uint8Array(), { stream: !done });
+
+        let lineBreakIndex = buffer.search(/\r?\n/);
+        while (lineBreakIndex >= 0) {
+            const rawLine = buffer.slice(0, lineBreakIndex);
+            const delimiterLength = buffer[lineBreakIndex] === "\r" && buffer[lineBreakIndex + 1] === "\n" ? 2 : 1;
+            buffer = buffer.slice(lineBreakIndex + delimiterLength);
+
+            if (rawLine === "") {
+                flushEvent();
+            } else if (!rawLine.startsWith(":")) {
+                const colonIndex = rawLine.indexOf(":");
+                const field = colonIndex >= 0 ? rawLine.slice(0, colonIndex) : rawLine;
+                const rawValue = colonIndex >= 0 ? rawLine.slice(colonIndex + 1) : "";
+                const fieldValue = rawValue.startsWith(" ") ? rawValue.slice(1) : rawValue;
+
+                if (field === "event") eventName = fieldValue || "message";
+                if (field === "data") dataLines.push(fieldValue);
+                if (field === "id") eventId = fieldValue;
+            }
+
+            lineBreakIndex = buffer.search(/\r?\n/);
+        }
+
+        if (done) {
+            if (buffer.length > 0) {
+                if (buffer.startsWith("data:")) {
+                    dataLines.push(buffer.slice(5).trimStart());
+                }
+                buffer = "";
+            }
+            flushEvent();
+            return;
+        }
+    }
+}
+
+async function extractHttpResponseResult(conn: McpConnection, response: Response, expectedId: number): Promise<unknown> {
+    const contentType = response.headers.get("content-type") ?? "";
+    const maybeSessionId = response.headers.get("Mcp-Session-Id");
+    if (maybeSessionId) conn.sessionId = maybeSessionId;
+
+    if (contentType.includes(SSE_CONTENT_TYPE)) {
+        let matched = false;
+        let matchedValue: unknown;
+
+        await parseSseStream(response, (event) => {
+            if (event.id) conn.lastEventId = event.id;
+            if (!event.data) return;
+            try {
+                const parsed = JSON.parse(event.data);
+                const result = extractJsonRpcResult(parsed, expectedId);
+                if (result.found) {
+                    matched = true;
+                    matchedValue = result.value;
+                }
+            } catch {
+                // 忽略非 JSON 事件，例如兼容模式 endpoint event
+            }
+        });
+
+        if (!matched) {
+            throw new Error(`MCP Server "${conn.config.name}" 未在 SSE 流中返回请求 ${expectedId} 的响应`);
+        }
+        return matchedValue;
+    }
+
+    const text = await response.text();
+    if (!text.trim()) {
+        throw new Error(`MCP Server "${conn.config.name}" 返回了空响应`);
+    }
+
+    let parsed: unknown;
+    try {
+        parsed = JSON.parse(text);
+    } catch {
+        throw new Error(`MCP Server "${conn.config.name}" 返回了非 JSON 响应: ${text}`);
+    }
+
+    const result = extractJsonRpcResult(parsed, expectedId);
+    if (!result.found) {
+        throw new Error(`MCP Server "${conn.config.name}" 返回中缺少请求 ${expectedId} 的响应`);
+    }
+    return result.value;
+}
+
+async function postHttpMessage(conn: McpConnection, payload: JsonRpcMessage, options?: { skipSessionId?: boolean }): Promise<Response> {
+    return fetch(conn.config.url!, {
+        method: "POST",
+        headers: buildHttpHeaders(conn, { skipSessionId: options?.skipSessionId }),
+        body: JSON.stringify(payload),
+    });
+}
+
+async function sendJsonRpcHttpRequest(
+    conn: McpConnection,
+    method: string,
+    params?: unknown,
+    options?: { skipSessionId?: boolean; retryOnSessionReset?: boolean }
+): Promise<unknown> {
+    const id = nextRequestId(conn);
+    const response = await postHttpMessage(
+        conn,
+        {
+            jsonrpc: "2.0",
+            id,
+            method,
+            params: params ?? {},
+        },
+        { skipSessionId: options?.skipSessionId }
+    );
+
+    if (response.status === 404 && conn.sessionId && options?.skipSessionId !== true && options?.retryOnSessionReset !== false) {
+        conn.sessionId = undefined;
+        await initializeHttpConnection(conn);
+        return sendJsonRpcHttpRequest(conn, method, params, { retryOnSessionReset: false });
+    }
+
+    if (!response.ok) {
+        throw await buildHttpError(response);
+    }
+
+    return extractHttpResponseResult(conn, response, id);
+}
+
+async function sendJsonRpcHttpNotification(
+    conn: McpConnection,
+    method: string,
+    params?: unknown,
+    options?: { skipSessionId?: boolean; retryOnSessionReset?: boolean }
+): Promise<void> {
+    const response = await postHttpMessage(
+        conn,
+        {
+            jsonrpc: "2.0",
+            method,
+            ...(params !== undefined ? { params } : {}),
+        },
+        { skipSessionId: options?.skipSessionId }
+    );
+
+    if (response.status === 404 && conn.sessionId && options?.skipSessionId !== true && options?.retryOnSessionReset !== false) {
+        conn.sessionId = undefined;
+        await initializeHttpConnection(conn);
+        await sendJsonRpcHttpNotification(conn, method, params, { retryOnSessionReset: false });
+        return;
+    }
+
+    if (response.status === 202 || response.status === 204) return;
+    if (!response.ok) {
+        throw await buildHttpError(response);
+    }
+    await response.text().catch(() => {});
+}
+
+async function initializeHttpConnection(conn: McpConnection): Promise<void> {
+    conn.sessionId = undefined;
+    const initializeResult = await sendJsonRpcHttpRequest(conn, "initialize", initializeParams(), {
+        skipSessionId: true,
+        retryOnSessionReset: false,
+    });
+    if (!initializeResult || typeof initializeResult !== "object") {
+        throw new Error(`MCP Server "${conn.config.name}" initialize 返回了无效结果`);
+    }
+    await sendJsonRpcHttpNotification(conn, "notifications/initialized");
+}
+
+async function closeHttpConnection(conn: McpConnection): Promise<void> {
+    if (!conn.sessionId) return;
+    try {
+        const response = await fetch(conn.config.url!, {
+            method: "DELETE",
+            headers: buildHttpHeaders(conn, { includeContentType: false, accept: "application/json" }),
+        });
+        if (!response.ok && response.status !== 404 && response.status !== 405) {
+            throw await buildHttpError(response);
+        }
+    } finally {
+        conn.sessionId = undefined;
+    }
+}
+
+// ─── transport 抽象 ───
+
+async function sendJsonRpc(conn: McpConnection, method: string, params?: unknown): Promise<unknown> {
+    if (conn.transportKind === "streamable-http") {
+        return sendJsonRpcHttpRequest(conn, method, params);
+    }
+    return sendJsonRpcStdioRequest(conn, method, params);
+}
+
+async function sendJsonRpcNotification(conn: McpConnection, method: string, params?: unknown): Promise<void> {
+    if (conn.transportKind === "streamable-http") {
+        await sendJsonRpcHttpNotification(conn, method, params);
+        return;
+    }
+    sendJsonRpcStdioNotification(conn, method, params);
+}
+
+async function initializeConnection(conn: McpConnection): Promise<void> {
+    if (conn.transportKind === "streamable-http") {
+        await initializeHttpConnection(conn);
+        return;
+    }
+
+    await sendJsonRpc(conn, "initialize", initializeParams());
+    await sendJsonRpcNotification(conn, "notifications/initialized");
 }
 
 // ─── 核心功能 ───
 
 async function connectServer(config: McpServerConfig): Promise<McpConnection> {
     if (connections.has(config.name)) {
-        // Already connected, disconnect first
         await disconnectServer(config.name);
     }
 
-    // Spawn MCP Server process
-    const env: Record<string, string> = { ...process.env as Record<string, string> };
-    if (config.env) {
-        Object.assign(env, config.env);
-    }
+    const conn = createConnection(config);
 
-    const child = spawn(config.command, config.args ?? [], {
-        stdio: ["pipe", "pipe", "pipe"],
-        env,
-    });
+    if (conn.transportKind === "stdio") {
+        const env: Record<string, string> = { ...(process.env as Record<string, string>) };
+        if (config.env) Object.assign(env, config.env);
 
-    const conn: McpConnection = {
-        config,
-        tools: [],
-        process: child,
-        requestId: 0,
-        pendingRequests: new Map(),
-    };
-
-    setupStdoutHandler(conn);
-
-    // Handle process exit
-    child.on("exit", (code) => {
-        process.stderr.write(`[mcp-bridge] MCP Server "${config.name}" exited (code ${code})\n`);
-        conn.process = undefined;
-    });
-
-    child.stderr?.on("data", (data: Buffer) => {
-        // MCP server stderr → our stderr (for debugging)
-        process.stderr.write(`[mcp:${config.name}] ${data.toString()}`);
-    });
-
-    // Wait a bit for process to start
-    await new Promise(resolve => setTimeout(resolve, 500));
-
-    if (child.exitCode !== null) {
-        throw new Error(`MCP Server "${config.name}" failed to start (exit code ${child.exitCode})`);
-    }
-
-    // Initialize MCP protocol
-    try {
-        await sendJsonRpc(conn, "initialize", {
-            protocolVersion: "2024-11-05",
-            capabilities: {},
-            clientInfo: { name: "CyberGroupmate", version: "1.0.0" },
+        const child = spawn(config.command!, config.args ?? [], {
+            stdio: ["pipe", "pipe", "pipe"],
+            env,
         });
 
-        // Send initialized notification (no id, no response expected)
-        conn.process?.stdin?.write(JSON.stringify({
-            jsonrpc: "2.0",
-            method: "notifications/initialized",
-        }) + "\n");
+        conn.process = child;
+        setupStdoutHandler(conn);
+
+        child.on("exit", (code) => {
+            process.stderr.write(`[mcp-bridge] MCP Server "${config.name}" exited (code ${code})\n`);
+            conn.process = undefined;
+        });
+
+        child.stderr?.on("data", (data: Buffer) => {
+            process.stderr.write(`[mcp:${config.name}] ${data.toString()}`);
+        });
+
+        await new Promise((resolve) => setTimeout(resolve, 500));
+
+        if (child.exitCode !== null) {
+            throw new Error(`MCP Server "${config.name}" failed to start (exit code ${child.exitCode})`);
+        }
+    }
+
+    try {
+        await initializeConnection(conn);
     } catch (err) {
-        child.kill();
+        if (conn.process) conn.process.kill();
         throw new Error(`MCP initialize failed for "${config.name}": ${err}`);
     }
 
-    // Discover tools
     try {
-        const result = await sendJsonRpc(conn, "tools/list", {}) as { tools?: McpToolSchema[] };
+        const result = (await sendJsonRpc(conn, "tools/list", {})) as { tools?: McpToolSchema[] };
         conn.tools = result?.tools ?? [];
     } catch (err) {
         process.stderr.write(`[mcp-bridge] tools/list failed for "${config.name}": ${err}\n`);
@@ -222,8 +572,6 @@ async function connectServer(config: McpServerConfig): Promise<McpConnection> {
 
     connections.set(config.name, conn);
     saveConnectionConfigs();
-
-    // Notify registry change
     onRegistryChange?.();
 
     return conn;
@@ -233,12 +581,17 @@ async function disconnectServer(name: string): Promise<void> {
     const conn = connections.get(name);
     if (!conn) return;
 
+    if (conn.transportKind === "streamable-http") {
+        await closeHttpConnection(conn).catch((err) => {
+            process.stderr.write(`[mcp-bridge] Streamable HTTP 关闭失败 "${name}": ${err}\n`);
+        });
+    }
+
     if (conn.process) {
         conn.process.kill();
         conn.process = undefined;
     }
 
-    // Reject all pending requests
     if (conn.pendingRequests) {
         for (const [, pending] of conn.pendingRequests) {
             pending.reject(new Error("MCP Server disconnected"));
@@ -254,18 +607,19 @@ async function disconnectServer(name: string): Promise<void> {
 async function callTool(serverName: string, toolName: string, args: Record<string, unknown>): Promise<unknown> {
     const conn = connections.get(serverName);
     if (!conn) throw new Error(`MCP Server "${serverName}" is not connected`);
-    if (!conn.process) throw new Error(`MCP Server "${serverName}" process is not running`);
+    if (conn.transportKind === "stdio" && !conn.process) {
+        throw new Error(`MCP Server "${serverName}" process is not running`);
+    }
 
-    const result = await sendJsonRpc(conn, "tools/call", {
+    const result = (await sendJsonRpc(conn, "tools/call", {
         name: toolName,
         arguments: args,
-    }) as { content?: Array<{ type: string; text?: string }> };
+    })) as { content?: Array<{ type: string; text?: string }> };
 
-    // 简化返回值：text content 合并为字符串
     if (result?.content) {
         const texts = result.content
-            .filter(c => c.type === "text" && c.text)
-            .map(c => c.text);
+            .filter((content) => content.type === "text" && content.text)
+            .map((content) => content.text);
         return texts.length === 1 ? texts[0] : texts.length > 1 ? texts.join("\n") : result;
     }
     return result;
@@ -273,17 +627,13 @@ async function callTool(serverName: string, toolName: string, args: Record<strin
 
 // ─── 动态注入 Module Registry ───
 
-/**
- * 将所有已连接 MCP Server 的 tools 转换为 ModuleEntry[]
- * 用于注入 _moduleRegistryCache，驱动 Two-pass 文档系统
- */
 export function getMcpModuleEntries(): ModuleEntry[] {
     const entries: ModuleEntry[] = [];
 
     for (const [name, conn] of connections) {
         if (conn.tools.length === 0) continue;
 
-        const methods: MethodDoc[] = conn.tools.map(tool => ({
+        const methods: MethodDoc[] = conn.tools.map((tool) => ({
             name: tool.name,
             brief: tool.description ?? tool.name,
             fullDoc: tool.inputSchema
@@ -293,7 +643,8 @@ export function getMcpModuleEntries(): ModuleEntry[] {
 
         entries.push({
             name,
-            description: `MCP Server: ${name} (${conn.tools.length} tools)`,
+            description: `MCP Server: ${name} (${conn.tools.length} tools)` +
+                (conn.transportKind === "streamable-http" ? " via Streamable HTTP" : " via stdio"),
             methods,
         });
     }
@@ -301,7 +652,6 @@ export function getMcpModuleEntries(): ModuleEntry[] {
     return entries;
 }
 
-/** 简单的 JSON Schema → TypeScript 类型字符串转换 */
 function formatSchemaAsType(schema: Record<string, unknown>): string {
     if (!schema || schema.type !== "object" || !schema.properties) {
         return "Record<string, unknown>";
@@ -313,11 +663,15 @@ function formatSchemaAsType(schema: Record<string, unknown>): string {
 
     for (const [key, prop] of Object.entries(props)) {
         const opt = required.has(key) ? "" : "?";
-        const tsType = prop.type === "string" ? "string"
-            : prop.type === "number" || prop.type === "integer" ? "number"
-            : prop.type === "boolean" ? "boolean"
-            : prop.type === "array" ? "unknown[]"
-            : "unknown";
+        const tsType = prop.type === "string"
+            ? "string"
+            : prop.type === "number" || prop.type === "integer"
+                ? "number"
+                : prop.type === "boolean"
+                    ? "boolean"
+                    : prop.type === "array"
+                        ? "unknown[]"
+                        : "unknown";
         const comment = prop.description ? ` /** ${prop.description} */` : "";
         lines.push(`  ${comment}`);
         lines.push(`  ${key}${opt}: ${tsType};`);
@@ -330,44 +684,35 @@ function formatSchemaAsType(schema: Record<string, unknown>): string {
 // ─── 公共 API（暴露给 LLM） ───
 
 export const mcpBridge = {
-    /**
-     * 连接到 MCP Server。
-     * 启动子进程并通过 stdio 通信，自动发现所有 tools。
-     */
     connect: async (config: McpServerConfig) => {
         const conn = await connectServer(config);
         return {
             name: conn.config.name,
-            tools: conn.tools.map(t => ({
-                name: t.name,
-                description: t.description ?? "",
+            tools: conn.tools.map((tool) => ({
+                name: tool.name,
+                description: tool.description ?? "",
             })),
-            /** 调用指定 tool */
             call: (toolName: string, args: Record<string, unknown> = {}) =>
                 callTool(conn.config.name, toolName, args),
         };
     },
 
-    /** 断开连接并清理子进程 */
     disconnect: async (name: string) => disconnectServer(name),
 
-    /** 列出已连接的 MCP Servers */
     list: () => Array.from(connections.entries()).map(([name, conn]) => ({
         name,
-        tools: conn.tools.map(t => t.name),
-        running: !!conn.process,
+        transport: conn.transportKind,
+        url: conn.config.url,
+        tools: conn.tools.map((tool) => tool.name),
+        running: conn.transportKind === "streamable-http" ? true : !!conn.process,
     })),
 
-    /** 调用指定 server 的 tool */
     call: (serverName: string, toolName: string, args: Record<string, unknown> = {}) =>
         callTool(serverName, toolName, args),
 };
 
 // ─── 初始化 ───
 
-/**
- * 设置持久化路径和 registry 变更回调
- */
 export function initMcpBridge(options: {
     persistPath: string;
     onRegistryChange?: () => void;
@@ -376,9 +721,6 @@ export function initMcpBridge(options: {
     onRegistryChange = options.onRegistryChange ?? null;
 }
 
-/**
- * 自动重连持久化的 MCP Servers
- */
 export async function autoReconnect(): Promise<void> {
     const configs = loadPersistedConnections();
     for (const config of configs) {
@@ -391,11 +733,8 @@ export async function autoReconnect(): Promise<void> {
     }
 }
 
-/**
- * 断开所有连接（cleanup）
- */
 export async function disconnectAll(): Promise<void> {
-    for (const name of connections.keys()) {
+    for (const name of Array.from(connections.keys())) {
         await disconnectServer(name);
     }
 }

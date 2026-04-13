@@ -343,12 +343,18 @@ export interface EnvironmentVariable {
 export interface McpServerPreConfig {
     /** 显示名称（也是 tool 命名空间） */
     name: string;
-    /** 启动命令 */
-    command: string;
-    /** 命令参数 */
+    /** 传输方式。未指定时：有 url 则视为 streamable-http，否则视为 stdio */
+    transport?: "stdio" | "streamable-http";
+    /** stdio 启动命令 */
+    command?: string;
+    /** stdio 命令参数 */
     args?: string[];
-    /** 环境变量（如 API keys） */
+    /** stdio 环境变量（如 API keys） */
     env?: Record<string, string>;
+    /** Streamable HTTP endpoint */
+    url?: string;
+    /** Streamable HTTP 附加请求头（如 Authorization） */
+    headers?: Record<string, string>;
     /** 是否在 Sandbox 启动时自动连接（默认 true） */
     autoConnect?: boolean;
 }
@@ -661,7 +667,8 @@ function parseMcpServersConfig(fileConfig: Record<string, unknown>): McpServerPr
         .map((item) => {
             const cfg: McpServerPreConfig = {
                 name: str(item.name) ?? "unnamed",
-                command: str(item.command) ?? "",
+                transport: (str(item.transport) as "stdio" | "streamable-http" | undefined),
+                command: str(item.command) ?? undefined,
                 args: Array.isArray(item.args)
                     ? (item.args as unknown[]).map(String)
                     : undefined,
@@ -670,11 +677,17 @@ function parseMcpServersConfig(fileConfig: Record<string, unknown>): McpServerPr
                           Object.entries(item.env as Record<string, unknown>).map(([k, v]) => [k, String(v)])
                       )
                     : undefined,
+                url: str(item.url) ?? undefined,
+                headers: item.headers != null && typeof item.headers === "object"
+                    ? Object.fromEntries(
+                          Object.entries(item.headers as Record<string, unknown>).map(([k, v]) => [k, String(v)])
+                      )
+                    : undefined,
                 autoConnect: item.auto_connect != null ? Boolean(item.auto_connect) : undefined,
             };
             return cfg;
         })
-        .filter((cfg) => cfg.command !== "");
+        .filter((cfg) => Boolean(cfg.url || cfg.command));
 }
 
 // ─── Subagent 配置解析 ───

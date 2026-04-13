@@ -1117,12 +1117,12 @@ export function createApiRouter(deps: DashboardDeps, bridge: EventBridge): Route
                 res.status(404).json({ error: "Sandbox 未运行" });
                 return;
             }
-            const { name, command, args, env } = req.body ?? {};
-            if (!name || !command) {
-                res.status(400).json({ error: "name 和 command 字段必填" });
+            const { name, transport, command, args, env, url, headers } = req.body ?? {};
+            if (!name || (!command && !url)) {
+                res.status(400).json({ error: "name 必填，且必须提供 command（stdio）或 url（Streamable HTTP）" });
                 return;
             }
-            const config = JSON.stringify({ name, command, args, env });
+            const config = JSON.stringify({ name, transport, command, args, env, url, headers });
             const result = await sandbox.execute(
                 `const server = await mcp.connect(${config});
                  JSON.stringify({ name: server.name, tools: server.tools })`,
