@@ -20,7 +20,7 @@ export interface DocEntry {
     kind: "doc" | "agent-skill";
 }
 
-interface AgentSkillEntry {
+export interface AgentSkillEntry {
     slug: string;
     title: string;
     content: string;
@@ -63,7 +63,7 @@ function loadMarkdownDocs(): DocEntry[] {
         });
 }
 
-function loadAgentSkillDocs(projectRoot: string = process.cwd()): AgentSkillEntry[] {
+export function loadAgentSkillDocs(projectRoot: string = process.cwd()): AgentSkillEntry[] {
     const skillsDir = resolve(projectRoot, AGENT_SKILLS_DIR);
     if (!existsSync(skillsDir)) return [];
 
@@ -100,6 +100,22 @@ function loadAgentSkillDocs(projectRoot: string = process.cwd()): AgentSkillEntr
 
 function loadAllDocs(): DocEntry[] {
     return [...loadMarkdownDocs(), ...loadAgentSkillDocs()];
+}
+
+export function getAgentSkillsApiBriefs(projectRoot: string = process.cwd()): string {
+    const skills = loadAgentSkillDocs(projectRoot);
+    if (skills.length === 0) return "";
+
+    const lines = [
+        "## agent-skills",
+        "Standard Agent Skills from workspace/skills/*/SKILL.md. These are not JS APIs: inspect details with docs.read(\"skill-name\") and run their scripts in bash when needed.",
+        ...skills.map((skill) => {
+            const scriptHint = skill.scriptsDir ? ` scripts=${skill.scriptsDir}` : "";
+            return `- ${skill.name}: ${skill.description}. docs.read(\"${skill.name}\")${scriptHint}`;
+        }),
+    ];
+
+    return lines.join("\n");
 }
 
 export function getAgentSkillsBriefs(): string {

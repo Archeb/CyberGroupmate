@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
-import { docs, getAgentSkillScriptDirs, getAgentSkillsBriefs } from "../src/sandbox/modules/docs.js";
+import { docs, getAgentSkillScriptDirs, getAgentSkillsApiBriefs, getAgentSkillsBriefs } from "../src/sandbox/modules/docs.js";
+import { loadApiTypeDefs } from "../src/subagent/code-act-executor.js";
 import { buildEnhancedShellPath } from "../src/sandbox/sandbox.js";
 
 const createdPaths = new Set<string>();
@@ -82,11 +83,41 @@ describe("Agent Skills native support", () => {
         assert.ok(briefs.includes('- kube-deploy: Deploy to Kubernetes.'));
         assert.ok(briefs.includes('docs.read("kube-deploy")'));
 
+        const apiBriefs = getAgentSkillsApiBriefs();
+        assert.ok(apiBriefs.includes('## agent-skills'));
+        assert.ok(apiBriefs.includes('- kube-deploy: Deploy to Kubernetes.'));
+        assert.ok(apiBriefs.includes('docs.read("kube-deploy")'));
+
         const scriptDirs = getAgentSkillScriptDirs(process.cwd());
         assert.ok(scriptDirs.includes(resolve(scriptsDir)));
 
         const enhancedPath = buildEnhancedShellPath(process.cwd(), "/usr/bin");
         assert.ok(enhancedPath.includes(resolve(scriptsDir)));
         assert.ok(enhancedPath.includes("/usr/bin"));
+    });
+
+    it("includes standard Agent Skills in available API overview", () => {
+        const skillDir = join(process.cwd(), "workspace", "skills", "x-search");
+        const skillMdPath = join(skillDir, "SKILL.md");
+        const scriptsDir = join(skillDir, "scripts");
+
+        ensureDir(scriptsDir);
+        writeFile(skillMdPath, [
+            "---",
+            "name: x-search",
+            "description: Search X (Twitter) posts using the xAI API.",
+            "---",
+            "",
+            "# X Search",
+            "",
+            "Use python3 {baseDir}/scripts/search.py to search X.",
+            "",
+        ].join("\n"));
+        writeFile(join(scriptsDir, "search.py"), "print('ok')\n");
+
+        const api = loadApiTypeDefs("telegram");
+        assert.ok(api.includes("## agent-skills"));
+        assert.ok(api.includes("x-search: Search X (Twitter) posts using the xAI API."));
+        assert.ok(api.includes('docs.read("x-search")'));
     });
 });
