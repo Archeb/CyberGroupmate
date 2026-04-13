@@ -105,14 +105,29 @@
         "fullDoc": "```typescript\nspawn(name: string, fn: (signal: AbortSignal) => Promise<void>): void\n```\n\n\n启动一个命名后台任务"
       },
       {
+        "name": "spawnPersistent",
+        "brief": "启动持久化后台任务（Worker 重启后自动恢复）。",
+        "fullDoc": "```typescript\nspawnPersistent(name: string, code: string): void\n```\n\n\n启动持久化后台任务（Worker 重启后自动恢复）。\n代码以字符串形式存储，触发时在 sandbox 中执行。\n代码中可通过 `signal` 变量访问 AbortSignal。\n\n**参数：**\n- `name`: 任务名称（唯一标识，同名会替换）\n- `code`: JavaScript 代码字符串\n\n**示例：**\n```typescript\nruntime.spawnPersistent(\"monitor\", `\n  while (!signal.aborted) {\n    console.log(\"heartbeat at \" + new Date().toISOString());\n    await new Promise(r => setTimeout(r, 60000));\n  }\n`);\n```"
+      },
+      {
         "name": "kill",
-        "brief": "停止一个后台任务",
-        "fullDoc": "```typescript\nkill(name: string): void\n```\n\n\n停止一个后台任务"
+        "brief": "停止一个后台任务（同时清除持久化记录）",
+        "fullDoc": "```typescript\nkill(name: string): void\n```\n\n\n停止一个后台任务（同时清除持久化记录）"
       },
       {
         "name": "ps",
         "brief": "列出后台任务",
         "fullDoc": "```typescript\nps(): string[]\n```\n\n\n列出后台任务"
+      },
+      {
+        "name": "home",
+        "brief": "返回当前 sandbox 的 home 目录路径（per-chat 隔离）",
+        "fullDoc": "```typescript\nhome(): string\n```\n\n\n返回当前 sandbox 的 home 目录路径（per-chat 隔离）"
+      },
+      {
+        "name": "workspace",
+        "brief": "返回 workspace 根目录路径",
+        "fullDoc": "```typescript\nworkspace(): string\n```\n\n\n返回 workspace 根目录路径"
       }
     ]
   },

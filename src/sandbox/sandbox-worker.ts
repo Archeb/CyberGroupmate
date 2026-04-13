@@ -11,7 +11,7 @@
 
 import { createInterface } from "node:readline";
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 import { installCapabilityRegistry, setPlatform } from "./capability-registry.js";
 import { createPromiseTracker } from "./promise-tracker.js";
 import { docs } from "./modules/docs.js";
@@ -21,6 +21,7 @@ import { cronModule, setCronCallbacks } from "./modules/cron.js";
 import { eventsModule, setEventsCallbacks } from "./modules/events.js";
 import { kvModule, setKvCallbacks } from "./modules/kv.js";
 import { setSkillManagerCallbacks } from "./modules/skills.js";
+import { setRuntimeCallbacks } from "./modules/runtime.js";
 import { loadAllSkills, reloadAllSkills, installDepsRuntime, type LoadedSkill } from "./skill-loader.js";
 import { configureLogger } from "../core/logger.js";
 
@@ -238,6 +239,17 @@ function callHost(method: string, args: unknown[] = []): Promise<unknown> {
 
 const backgroundTasks = new Map<string, AbortController>();
 
+/** 持久化任务存储路径 */
+const PERSISTENT_TASKS_PATH = CTX_PERSIST_PATH
+    ? CTX_PERSIST_PATH.replace(/ctx\.json$/, "persistent-tasks.json")
+    : "";
+
+/** 持久化任务记录 */
+interface PersistentTaskRecord {
+    name: string;
+    code: string;
+}
+
 function spawnTask(name: string, fn: (signal: AbortSignal) => Promise<void>): void {
     if (backgroundTasks.has(name)) {
         backgroundTasks.get(name)!.abort();
@@ -256,16 +268,95 @@ function spawnTask(name: string, fn: (signal: AbortSignal) => Promise<void>): vo
     });
 }
 
+/**
+ * 启动持久化后台任务（代码字符串形式，Worker 重启后自动恢复）
+ * 代码中可通过 signal 变量访问 AbortSignal。
+ */
+function spawnPersistent(name: string, code: string): void {
+    // 存入持久化后台任务列表
+    savePersistentTask(name, code);
+
+    // 执行代码字符串（注入 signal）
+    runPersistentTaskCode(name, code);
+}
+
+function runPersistentTaskCode(name: string, code: string): void {
+    if (backgroundTasks.has(name)) {
+        backgroundTasks.get(name)!.abort();
+    }
+    const controller = new AbortController();
+    backgroundTasks.set(name, controller);
+
+    const fn = new Function("signal", `return (async () => { ${code} })()`);
+    (fn(controller.signal) as Promise<void>).catch(err => {
+        const msg = err instanceof Error ? err.stack : String(err);
+        printToHost(`[Persistent Task Error] ${name}: ${msg}`);
+    }).finally(() => {
+        if (backgroundTasks.get(name) === controller) {
+            backgroundTasks.delete(name);
+        }
+    });
+}
+
+function savePersistentTask(name: string, code: string): void {
+    if (!PERSISTENT_TASKS_PATH) return;
+    try {
+        let tasks: PersistentTaskRecord[] = [];
+        if (existsSync(PERSISTENT_TASKS_PATH)) {
+            tasks = JSON.parse(readFileSync(PERSISTENT_TASKS_PATH, "utf-8"));
+        }
+        tasks = tasks.filter(t => t.name !== name);
+        tasks.push({ name, code });
+        const dir = dirname(PERSISTENT_TASKS_PATH);
+        if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+        writeFileSync(PERSISTENT_TASKS_PATH, JSON.stringify(tasks, null, 2), "utf-8");
+    } catch { /* ignore */ }
+}
+
+function removePersistentTask(name: string): void {
+    if (!PERSISTENT_TASKS_PATH) return;
+    try {
+        if (!existsSync(PERSISTENT_TASKS_PATH)) return;
+        let tasks: PersistentTaskRecord[] = JSON.parse(readFileSync(PERSISTENT_TASKS_PATH, "utf-8"));
+        tasks = tasks.filter(t => t.name !== name);
+        writeFileSync(PERSISTENT_TASKS_PATH, JSON.stringify(tasks, null, 2), "utf-8");
+    } catch { /* ignore */ }
+}
+
+function restorePersistentTasks(): void {
+    if (!PERSISTENT_TASKS_PATH || !existsSync(PERSISTENT_TASKS_PATH)) return;
+    try {
+        const tasks: PersistentTaskRecord[] = JSON.parse(readFileSync(PERSISTENT_TASKS_PATH, "utf-8"));
+        for (const task of tasks) {
+            runPersistentTaskCode(task.name, task.code);
+        }
+        if (tasks.length > 0) {
+            printToHost(`[Persistent Tasks] 已恢复 ${tasks.length} 个持久化任务`);
+        }
+    } catch { /* ignore */ }
+}
+
 function killTask(name: string): void {
     if (backgroundTasks.has(name)) {
         backgroundTasks.get(name)!.abort();
         backgroundTasks.delete(name);
+        removePersistentTask(name);
         printToHost(`[Task Killed] ${name}`);
     }
 }
 
 function listTasks(): string[] {
     return Array.from(backgroundTasks.keys());
+}
+
+/** 返回当前 sandbox 的 home 目录路径 */
+function getHome(): string {
+    return CTX_PERSIST_PATH ? dirname(CTX_PERSIST_PATH) : process.cwd();
+}
+
+/** 返回 workspace 根目录路径 */
+function getWorkspace(): string {
+    return CTX_PERSIST_PATH ? dirname(dirname(CTX_PERSIST_PATH)) : join(process.cwd(), "workspace");
 }
 
 // ─── 代码执行 ───
@@ -490,6 +581,16 @@ async function initWorker(): Promise<void> {
     setCronCallbacks({ callHost });
     setEventsCallbacks({ callHost });
     setKvCallbacks({ callHost });
+
+    // 注入 Runtime 扩展回调（spawnPersistent, home, workspace）
+    setRuntimeCallbacks({
+        spawnPersistent,
+        getHome,
+        getWorkspace,
+    });
+
+    // 恢复持久化后台任务
+    restorePersistentTasks();
 
     // 初始化 MCP 桥接（持久化 + 自动重连）
     const mcpPersistPath = CTX_PERSIST_PATH

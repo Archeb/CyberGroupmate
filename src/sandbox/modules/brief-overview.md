@@ -34,8 +34,11 @@ shared/runtime.d.ts — 所有 scene 共享的 runtime 能力
 - `input`: 请求用户输入
 - `print`: 直接打印到宿主
 - `spawn`: 启动一个命名后台任务
-- `kill`: 停止一个后台任务
+- `spawnPersistent`: 启动持久化后台任务（Worker 重启后自动恢复）。
+- `kill`: 停止一个后台任务（同时清除持久化记录）
 - `ps`: 列出后台任务
+- `home`: 返回当前 sandbox 的 home 目录路径（per-chat 隔离）
+- `workspace`: 返回 workspace 根目录路径
 
 ## scene
 shared/scene.d.ts — 所有 scene 共享的场景信息能力
