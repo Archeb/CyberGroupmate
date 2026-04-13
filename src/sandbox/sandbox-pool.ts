@@ -181,6 +181,15 @@ export class SandboxPool {
     }
 
     /**
+     * 遍历所有活跃 sandbox 实例（用于事件广播、cron 触发等）
+     */
+    entries(): Array<{ chatId: string; sandbox: Sandbox }> {
+        return Array.from(this.pool.values())
+            .filter(e => e.sandbox.isAlive())
+            .map(e => ({ chatId: e.chatId, sandbox: e.sandbox }));
+    }
+
+    /**
      * 获取池状态
      */
     getStats(): { total: number; inUse: number; idle: number; instances: Array<{ chatId: string; inUse: boolean; lastUsedAt: number }> } {

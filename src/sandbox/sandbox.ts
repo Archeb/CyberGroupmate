@@ -14,7 +14,7 @@ import { createInterface, Interface } from "node:readline";
 import { EventEmitter } from "node:events";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { createLogger } from "../core/logger.js";
 import * as pty from "node-pty";
 
@@ -549,5 +549,103 @@ export class Sandbox extends EventEmitter {
                 }
             }, 3000);
         });
+    }
+
+    // ─── 事件监听器管理 ───
+
+    /** 事件监听器 Map: listenerId → { typePrefix, handlerCode } */
+    private eventListeners = new Map<string, { typePrefix: string; handlerCode: string }>();
+    /** 最大监听器数量（防滥用） */
+    private static MAX_EVENT_LISTENERS = 50;
+    private eventListenerCounter = 0;
+
+    /**
+     * 注册事件监听器
+     * @returns listenerId
+     */
+    registerEventListener(typePrefix: string, handlerCode: string): string {
+        if (this.eventListeners.size >= Sandbox.MAX_EVENT_LISTENERS) {
+            throw new Error(`已达到最大事件监听器数量 (${Sandbox.MAX_EVENT_LISTENERS})`);
+        }
+        const id = `evt_${++this.eventListenerCounter}`;
+        this.eventListeners.set(id, { typePrefix, handlerCode });
+        this.saveEventListeners();
+        return id;
+    }
+
+    /**
+     * 移除事件监听器
+     */
+    removeEventListener(listenerId: string): void {
+        this.eventListeners.delete(listenerId);
+        this.saveEventListeners();
+    }
+
+    /**
+     * 列出所有事件监听器
+     */
+    listEventListeners(): Array<{ id: string; typePrefix: string }> {
+        return Array.from(this.eventListeners.entries()).map(([id, { typePrefix }]) => ({
+            id,
+            typePrefix,
+        }));
+    }
+
+    /**
+     * 推送事件到匹配的监听器（由 Host 调用）
+     * 匹配 typePrefix 前缀后，在 sandbox 中执行 handlerCode
+     */
+    async pushEvent(event: Record<string, unknown>): Promise<void> {
+        const eventType = String(event.type ?? "");
+        for (const [, { typePrefix, handlerCode }] of this.eventListeners) {
+            if (eventType.startsWith(typePrefix)) {
+                try {
+                    // 执行 handler，注入 event 变量
+                    const wrappedCode = `const event = ${JSON.stringify(event)};\n${handlerCode}`;
+                    await this.execute(wrappedCode, 10000);
+                } catch (err) {
+                    // 事件处理错误不抛，仅记录
+                    this.emit("stderr", `[event handler error] ${typePrefix}: ${err}\n`);
+                }
+            }
+        }
+    }
+
+    /**
+     * 持久化事件监听器到磁盘
+     */
+    private saveEventListeners(): void {
+        try {
+            const safeChatId = this.chatId.replace(/[^a-zA-Z0-9_\-\.]/g, "_");
+            const filePath = join(this.projectRoot, "workspace", safeChatId, "event-listeners.json");
+            const dir = dirname(filePath);
+            if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+            const data = Array.from(this.eventListeners.entries()).map(([id, v]) => ({
+                id, ...v,
+            }));
+            writeFileSync(filePath, JSON.stringify(data, null, 2), "utf-8");
+        } catch { /* ignore */ }
+    }
+
+    /**
+     * 从磁盘恢复事件监听器
+     */
+    loadEventListeners(): void {
+        try {
+            const safeChatId = this.chatId.replace(/[^a-zA-Z0-9_\-\.]/g, "_");
+            const filePath = join(this.projectRoot, "workspace", safeChatId, "event-listeners.json");
+            if (existsSync(filePath)) {
+                const data = JSON.parse(readFileSync(filePath, "utf-8")) as Array<{
+                    id: string; typePrefix: string; handlerCode: string;
+                }>;
+                for (const item of data) {
+                    this.eventListeners.set(item.id, {
+                        typePrefix: item.typePrefix,
+                        handlerCode: item.handlerCode,
+                    });
+                    this.eventListenerCounter++;
+                }
+            }
+        } catch { /* ignore */ }
     }
 }

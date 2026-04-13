@@ -412,6 +412,20 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
 
         // person_identities 新增 username 列（兼容旧数据库）
         try { this.db.exec(`ALTER TABLE person_identities ADD COLUMN username TEXT`); } catch { /* 列已存在 */ }
+
+        // ── KV Store 表 ──
+        this.db.exec(`
+            CREATE TABLE IF NOT EXISTS kv_store (
+                chat_id TEXT NOT NULL,
+                key TEXT NOT NULL,
+                value TEXT NOT NULL,
+                expires_at TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (chat_id, key)
+            );
+            CREATE INDEX IF NOT EXISTS idx_kv_expires ON kv_store(expires_at);
+        `);
     }
 
     // ─── 写入方法 ───
@@ -2183,6 +2197,70 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
     ): Promise<ReflectionResult> {
         const { runReflection } = await import("./reflection.js");
         return runReflection(chatId, this, llmConfigs, reflectionConfig);
+    }
+
+    // ─── KV Store ───
+
+    /**
+     * 读取键值（per-chat 隔离）
+     */
+    kvGet(chatId: string, key: string): string | null {
+        const row = this.db.prepare(
+            "SELECT value, expires_at FROM kv_store WHERE chat_id = ? AND key = ?"
+        ).get(chatId, key) as { value: string; expires_at: string | null } | undefined;
+
+        if (!row) return null;
+
+        // 检查 TTL 过期
+        if (row.expires_at && row.expires_at <= new Date().toISOString()) {
+            this.db.prepare("DELETE FROM kv_store WHERE chat_id = ? AND key = ?").run(chatId, key);
+            return null;
+        }
+
+        return row.value;
+    }
+
+    /**
+     * 写入键值（per-chat 隔离，支持 TTL）
+     */
+    kvSet(chatId: string, key: string, value: string, ttlSeconds?: number): void {
+        const now = new Date().toISOString();
+        const expiresAt = ttlSeconds
+            ? new Date(Date.now() + ttlSeconds * 1000).toISOString()
+            : null;
+
+        this.db.prepare(`
+            INSERT INTO kv_store (chat_id, key, value, expires_at, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(chat_id, key) DO UPDATE SET
+                value = excluded.value,
+                expires_at = excluded.expires_at,
+                updated_at = excluded.updated_at
+        `).run(chatId, key, value, expiresAt, now, now);
+    }
+
+    /**
+     * 删除键（per-chat 隔离）
+     */
+    kvDel(chatId: string, key: string): void {
+        this.db.prepare("DELETE FROM kv_store WHERE chat_id = ? AND key = ?").run(chatId, key);
+    }
+
+    /**
+     * 列出键名（per-chat 隔离，可选前缀过滤）
+     */
+    kvKeys(chatId: string, prefix?: string): string[] {
+        let rows: Array<{ key: string }>;
+        if (prefix) {
+            rows = this.db.prepare(
+                "SELECT key FROM kv_store WHERE chat_id = ? AND key LIKE ? AND (expires_at IS NULL OR expires_at > ?)"
+            ).all(chatId, `${prefix}%`, new Date().toISOString()) as Array<{ key: string }>;
+        } else {
+            rows = this.db.prepare(
+                "SELECT key FROM kv_store WHERE chat_id = ? AND (expires_at IS NULL OR expires_at > ?)"
+            ).all(chatId, new Date().toISOString()) as Array<{ key: string }>;
+        }
+        return rows.map(r => r.key);
     }
 
     // ─── 生命周期 ───

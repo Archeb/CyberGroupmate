@@ -371,25 +371,27 @@ export interface AgentNote {
 export interface SchedulerEvent {
     /** 任务 ID */
     id: string;
-    /** 类型：一次性提醒 or 周期 cron */
-    type: "reminder" | "cron";
+    /** 类型：一次性提醒 or 周期 cron or sandbox 定时执行 */
+    type: "reminder" | "cron" | "sandbox-cron";
     /** 关联群组 */
     chatId: string;
     /** 描述（注入 ATTENTION prompt 用） */
     description: string;
     /** 触发时间 ISO 8601（reminder） */
     triggerAt?: string;
-    /** cron 表达式（cron） */
+    /** cron 表达式（cron / sandbox-cron） */
     cronExpr?: string;
     /** 每次触发时创建的任务方向（cron） */
     taskTemplate?: string;
+    /** sandbox-cron: 触发时在 sandbox 中执行的 JS 代码 */
+    code?: string;
     /** 请求人 userId */
     requestedBy?: string;
     /** 创建时间 */
     createdAt: string;
     /** 是否已触发（reminder 触发后标记） */
     triggered?: boolean;
-    /** 上次触发时间（cron） */
+    /** 上次触发时间（cron / sandbox-cron） */
     lastTriggeredAt?: string;
 }
 

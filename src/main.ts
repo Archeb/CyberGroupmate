@@ -43,6 +43,7 @@ import { createDispatchHandler } from "./main-agent/dispatch-handler.js";
 import type { FastPathEvent } from "./subagent/fast-path-handler.js";
 import { FastPathHandler } from "./subagent/fast-path-handler.js";
 import { evaluateStickiness, createStickiness, updateStickiness } from "./subagent/stickiness.js";
+import { matchesCron } from "./core/cron-matcher.js";
 
 const log = createLogger("main");
 
@@ -186,6 +187,8 @@ async function main(): Promise<void> {
             sandbox.on("notify", (event: Record<string, unknown>) => {
                 nc.push(event as { type: string;[key: string]: unknown });
             });
+            // 恢复持久化的事件监听器
+            sandbox.loadEventListeners();
             sandbox.setHostCallHandler(async (method, args) => {
                 // ── Platform adapter routing: 按 method 前缀路由到对应 adapter ──
                 const adapter = adapters.find(a => a.canHandle(method));
@@ -246,6 +249,60 @@ async function main(): Promise<void> {
                         } as any);
                     }
                     default: {
+                        // ── Cron API host calls ──
+                        if (method === "cron.add") {
+                            const [name, cronExpr, code] = args as [string, string, string];
+                            const event = globalState.addSandboxCron(chatId, name, cronExpr, code);
+                            return { id: event.id };
+                        }
+                        if (method === "cron.remove") {
+                            const id = String(args[0]);
+                            globalState.cancelSchedulerEvent(id);
+                            return;
+                        }
+                        if (method === "cron.list") {
+                            const events = globalState.getSchedulerEvents(chatId)
+                                .filter(e => e.type === "sandbox-cron")
+                                .map(e => ({
+                                    id: e.id,
+                                    name: e.description,
+                                    cronExpr: e.cronExpr,
+                                }));
+                            return events;
+                        }
+
+                        // ── Events API host calls ──
+                        if (method === "events.on") {
+                            const [typePrefix, handlerCode] = args as [string, string];
+                            const listenerId = sandbox.registerEventListener(typePrefix, handlerCode);
+                            return listenerId;
+                        }
+                        if (method === "events.off") {
+                            const listenerId = String(args[0]);
+                            sandbox.removeEventListener(listenerId);
+                            return;
+                        }
+                        if (method === "events.list") {
+                            return sandbox.listEventListeners();
+                        }
+
+                        // ── KV Store host calls ──
+                        if (method === "kv.get") {
+                            return memory.kvGet(chatId, String(args[0]));
+                        }
+                        if (method === "kv.set") {
+                            const [key, value, ttl] = args as [string, string, number | undefined];
+                            memory.kvSet(chatId, key, value, ttl);
+                            return;
+                        }
+                        if (method === "kv.del") {
+                            memory.kvDel(chatId, String(args[0]));
+                            return;
+                        }
+                        if (method === "kv.keys") {
+                            return memory.kvKeys(chatId, args[0] as string | undefined);
+                        }
+
                         // skills.taskList.* host calls
                         const taskListSkill = createTaskListSkill(globalState);
                         const taskListCalls = buildTaskListHostCalls(taskListSkill);
@@ -864,6 +921,50 @@ async function main(): Promise<void> {
         maxInstances: appConfig.subagent?.maxSandboxInstances ?? 5,
         idleTimeout: appConfig.subagent?.sandboxIdleTimeout ?? 600_000,
     });
+
+    // ─── NC → Sandbox Event Forwarding ───
+    // 将 NC 事件转发到所有活跃 sandbox 的事件监听器
+    nc.onPush(event => {
+        for (const { sandbox } of sandboxPool.entries()) {
+            sandbox.pushEvent(event as Record<string, unknown>).catch(() => {});
+        }
+    });
+
+    // ─── Sandbox Cron 调度器 ───
+    // 每 60 秒检查一次 sandbox-cron 事件，匹配则在对应 sandbox 中执行代码
+    const cronCheckInterval = setInterval(async () => {
+        const now = new Date();
+        const allEvents = globalState.getSchedulerEvents();
+        for (const evt of allEvents) {
+            if (evt.type !== "sandbox-cron" || !evt.cronExpr || !evt.code) continue;
+
+            // 防止同一分钟内重复触发
+            if (evt.lastTriggeredAt) {
+                const lastTrig = new Date(evt.lastTriggeredAt);
+                if (
+                    lastTrig.getFullYear() === now.getFullYear() &&
+                    lastTrig.getMonth() === now.getMonth() &&
+                    lastTrig.getDate() === now.getDate() &&
+                    lastTrig.getHours() === now.getHours() &&
+                    lastTrig.getMinutes() === now.getMinutes()
+                ) continue;
+            }
+
+            if (!matchesCron(evt.cronExpr, now)) continue;
+
+            globalState.markCronTriggered(evt.id);
+            log.info("Sandbox cron 触发", { id: evt.id, name: evt.description, chatId: evt.chatId });
+
+            try {
+                const sandbox = await sandboxPool.acquire(evt.chatId);
+                await sandbox.execute(evt.code, 30000);
+                sandboxPool.release(evt.chatId);
+            } catch (err) {
+                log.error("Sandbox cron 执行失败", { id: evt.id, error: String(err) });
+            }
+        }
+    }, 60_000);
+    if (cronCheckInterval.unref) cronCheckInterval.unref();
 
     // ─── 启动 ───
     for (const adapter of adapters) {
