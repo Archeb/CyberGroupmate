@@ -16,6 +16,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { createLogger } from "../core/logger.js";
+import { loadConfig } from "../core/config.js";
 import * as pty from "node-pty";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -139,6 +140,13 @@ export class Sandbox extends EventEmitter {
         // ctx 持久化路径：per-chat 状态文件
         const safeChatId = this.chatId.replace(/[^a-zA-Z0-9_\-\.]/g, "_");
         env.SANDBOX_CTX_PATH = join(this.projectRoot, "workspace", safeChatId, "ctx.json");
+
+        // MCP Server 预配置（config.yaml → 环境变量 → Worker）
+        const config = loadConfig();
+        if (config.mcpServers && config.mcpServers.length > 0) {
+            env.SANDBOX_MCP_SERVERS = JSON.stringify(config.mcpServers);
+        }
+
         return env;
     }
 
