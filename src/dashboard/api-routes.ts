@@ -1086,5 +1086,81 @@ export function createApiRouter(deps: DashboardDeps, bridge: EventBridge): Route
         setTimeout(() => process.exit(0), 1000);
     });
 
+    // ─── MCP Server 管理 ───
+
+    /** 列出指定 chatId sandbox 中已连接的 MCP Servers */
+    router.get("/sandbox/:chatId/mcp", async (req, res) => {
+        try {
+            const chatId = req.params.chatId;
+            const sandbox = deps.sandboxPool.get(chatId);
+            if (!sandbox) {
+                res.json({ ok: true, servers: [], message: "Sandbox 未运行" });
+                return;
+            }
+            const result = await sandbox.execute(`JSON.stringify(mcp.list())`, 5000);
+            if (result.error) {
+                res.status(500).json({ error: result.output });
+                return;
+            }
+            res.json({ ok: true, servers: JSON.parse(result.output || "[]") });
+        } catch (err) {
+            res.status(500).json({ error: String(err) });
+        }
+    });
+
+    /** 连接新的 MCP Server */
+    router.post("/sandbox/:chatId/mcp/connect", async (req, res) => {
+        try {
+            const chatId = req.params.chatId;
+            const sandbox = deps.sandboxPool.get(chatId);
+            if (!sandbox) {
+                res.status(404).json({ error: "Sandbox 未运行" });
+                return;
+            }
+            const { name, command, args, env } = req.body ?? {};
+            if (!name || !command) {
+                res.status(400).json({ error: "name 和 command 字段必填" });
+                return;
+            }
+            const config = JSON.stringify({ name, command, args, env });
+            const result = await sandbox.execute(
+                `const server = await mcp.connect(${config});
+                 JSON.stringify({ name: server.name, tools: server.tools })`,
+                15000
+            );
+            if (result.error) {
+                res.status(500).json({ error: result.output });
+                return;
+            }
+            res.json({ ok: true, ...JSON.parse(result.output || "{}") });
+        } catch (err) {
+            res.status(500).json({ error: String(err) });
+        }
+    });
+
+    /** 断开指定 MCP Server */
+    router.delete("/sandbox/:chatId/mcp/:name", async (req, res) => {
+        try {
+            const chatId = req.params.chatId;
+            const serverName = req.params.name;
+            const sandbox = deps.sandboxPool.get(chatId);
+            if (!sandbox) {
+                res.status(404).json({ error: "Sandbox 未运行" });
+                return;
+            }
+            const result = await sandbox.execute(
+                `await mcp.disconnect(${JSON.stringify(serverName)}); "ok"`,
+                5000
+            );
+            if (result.error) {
+                res.status(500).json({ error: result.output });
+                return;
+            }
+            res.json({ ok: true });
+        } catch (err) {
+            res.status(500).json({ error: String(err) });
+        }
+    });
+
     return router;
 }
