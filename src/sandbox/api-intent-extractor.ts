@@ -29,6 +29,8 @@ const TRIVIAL_CALLS = new Set([
     "fs.mkdir",
     // skills 管理
     "skills.list",
+    // mcp
+    "mcp.list",
 ]);
 
 /**

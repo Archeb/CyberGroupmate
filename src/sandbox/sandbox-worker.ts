@@ -16,6 +16,7 @@ import { installCapabilityRegistry, setPlatform } from "./capability-registry.js
 import { createPromiseTracker } from "./promise-tracker.js";
 import { docs } from "./modules/docs.js";
 import { filesystem } from "./modules/filesystem.js";
+import { mcpBridge, initMcpBridge, autoReconnect as mcpAutoReconnect } from "./modules/mcp-bridge.js";
 import { setSkillManagerCallbacks } from "./modules/skills.js";
 import { loadAllSkills, reloadAllSkills, installDepsRuntime, type LoadedSkill } from "./skill-loader.js";
 import { configureLogger } from "../core/logger.js";
@@ -360,8 +361,8 @@ async function executeCode(id: string, code: string): Promise<void> {
 
         // 构造参数列表：固定参数 + 平台 API + 动态 Skill 参数
         // ctx 保留为纯用户 state bag（LLM 可跨 turn 存取任意属性）
-        const fixedArgNames = ["ctx", "runtime", "memory", "scene", "docs", "actions", "skills", "fs", "telegram", "discord"];
-        const fixedArgValues = [ctx, rt, mem, scene, docs, act, sk, filesystem, tg, dc];
+        const fixedArgNames = ["ctx", "runtime", "memory", "scene", "docs", "actions", "skills", "fs", "mcp", "telegram", "discord"];
+        const fixedArgValues = [ctx, rt, mem, scene, docs, act, sk, filesystem, mcpBridge, tg, dc];
         const allArgNames = [...fixedArgNames, ...skillArgNames];
         const allArgValues = [...fixedArgValues, ...skillArgValues];
 
@@ -480,6 +481,16 @@ async function initWorker(): Promise<void> {
             return loadedSkills.map(s => s.name);
         },
         npmInstall: async (packages: string[]) => installDepsRuntime(packages),
+    });
+
+    // 初始化 MCP 桥接（持久化 + 自动重连）
+    const mcpPersistPath = CTX_PERSIST_PATH
+        ? CTX_PERSIST_PATH.replace(/ctx\.json$/, "mcp-connections.json")
+        : "";
+    initMcpBridge({ persistPath: mcpPersistPath });
+    // 后台重连（不阻断 worker 启动）
+    mcpAutoReconnect().catch(err => {
+        process.stderr.write(`[sandbox-worker] MCP 自动重连失败: ${err}\n`);
     });
 
     // 发送 ready 信号
