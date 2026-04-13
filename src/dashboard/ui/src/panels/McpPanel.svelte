@@ -193,25 +193,57 @@ async function disconnectServer(name) {
                 <h3 class="card-title text-base">连接新 Server</h3>
                 <div class="space-y-2">
                     <div class="form-control">
-                        <label class="label"><span class="label-text">名称</span></label>
-                        <input type="text" placeholder="e.g. filesystem"
-                            class="input input-bordered input-sm" bind:value={connectName} />
+                        <label class="label" for="connect-name">
+                            <span class="label-text">名称</span>
+                        </label>
+                        <input 
+                            id="connect-name"
+                            type="text" 
+                            placeholder="e.g. filesystem"
+                            class="input input-bordered input-sm" 
+                            bind:value={connectName} 
+                        />
                     </div>
+
                     <div class="form-control">
-                        <label class="label"><span class="label-text">启动命令</span></label>
-                        <input type="text" placeholder="e.g. npx"
-                            class="input input-bordered input-sm" bind:value={connectCommand} />
+                        <label class="label" for="connect-command">
+                            <span class="label-text">启动命令</span>
+                        </label>
+                        <input 
+                            id="connect-command"
+                            type="text" 
+                            placeholder="e.g. npx"
+                            class="input input-bordered input-sm" 
+                            bind:value={connectCommand} 
+                        />
                     </div>
+
                     <div class="form-control">
-                        <label class="label"><span class="label-text">参数 (空格分隔或 JSON 数组)</span></label>
-                        <input type="text" placeholder='-y @anthropic/mcp-filesystem /workspace'
-                            class="input input-bordered input-sm" bind:value={connectArgs} />
+                        <label class="label" for="connect-args">
+                            <span class="label-text">参数 (空格分隔或 JSON 数组)</span>
+                        </label>
+                        <input 
+                            id="connect-args"
+                            type="text" 
+                            placeholder='-y @anthropic/mcp-filesystem /workspace'
+                            class="input input-bordered input-sm" 
+                            bind:value={connectArgs} 
+                        />
                     </div>
+
                     <div class="form-control">
-                        <label class="label"><span class="label-text">环境变量 (JSON, 可选)</span></label>
-                        <input type="text" placeholder='{"API_KEY": "..."}'
-                            class="input input-bordered input-sm" bind:value={connectEnv} />
+                        <label class="label" for="connect-env">
+                            <span class="label-text">环境变量 (JSON, 可选)</span>
+                        </label>
+                        <input 
+                            id="connect-env"
+                            type="text" 
+                            placeholder={'{"API_KEY": "..."}'}
+                            class="input input-bordered input-sm" 
+                            bind:value={connectEnv} 
+                        />
                     </div>
+
                     <button
                         class="btn btn-primary btn-sm w-full mt-2"
                         on:click={connectServer}
@@ -220,6 +252,7 @@ async function disconnectServer(name) {
                         {connecting ? '连接中...' : '连接'}
                     </button>
                 </div>
+
             </div>
         </div>
     </div>
