@@ -17,12 +17,24 @@ import { dirname, join } from "node:path";
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { createLogger } from "../core/logger.js";
 import { loadConfig } from "../core/config.js";
+import { getAgentSkillScriptDirs } from "./modules/docs.js";
 import * as pty from "node-pty";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 const log = createLogger("sandbox");
+
+export function buildEnhancedShellPath(projectRoot: string, existingPath: string): string {
+    const skillsBinDir = join(projectRoot, "workspace", "skills", "node_modules", ".bin");
+    const pathEntries = [
+        existsSync(skillsBinDir) ? skillsBinDir : "",
+        ...getAgentSkillScriptDirs(projectRoot),
+        existingPath,
+    ].filter(Boolean);
+
+    return [...new Set(pathEntries)].join(":");
+}
 
 /** 执行结果 */
 export interface ExecutionResult {
@@ -252,11 +264,8 @@ export class Sandbox extends EventEmitter {
         const workerEnv = this.buildWorkerEnv();
 
         // 构建增强的 PATH（包含 skills 依赖的可执行文件）
-        const skillsBinDir = join(this.projectRoot, "workspace", "skills", "node_modules", ".bin");
         const existingPath = workerEnv.PATH || process.env.PATH || "";
-        const enhancedPath = existsSync(skillsBinDir)
-            ? `${skillsBinDir}:${existingPath}`
-            : existingPath;
+        const enhancedPath = buildEnhancedShellPath(this.projectRoot, existingPath);
 
         // 生成 .bashrc（包含 PATH、aliases、提示符设置）
         const bashrcPath = join(this.shellHome, ".bashrc");

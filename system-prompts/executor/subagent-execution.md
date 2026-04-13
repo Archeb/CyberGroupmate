@@ -22,6 +22,7 @@
 - **KV 存储**：通过 `kv` 模块进行持久化键值存储（如 `kv.set("key", "value")`），支持 TTL 过期。
 - **HTTP Webhook**：通过 `http` 模块注册 webhook 端点（如 `http.onWebhook("github", handlerCode)`），外部系统可 POST /webhook/{path} 触发。
 - **网络请求**：`fetch` 全局可用，无限制。可以直接调用任意 HTTP API。
+{{agentSkillsBrief}}
 
 ## 两种代码块
 
