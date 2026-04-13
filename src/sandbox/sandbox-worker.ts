@@ -13,6 +13,7 @@ import { createInterface } from "node:readline";
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { installCapabilityRegistry, setPlatform } from "./capability-registry.js";
+import { BackgroundManager } from "./background-manager.js";
 import { createPromiseTracker } from "./promise-tracker.js";
 import { docs } from "./modules/docs.js";
 import { filesystem } from "./modules/filesystem.js";
@@ -236,119 +237,18 @@ function callHost(method: string, args: unknown[] = []): Promise<unknown> {
     });
 }
 
-// ─── 后台任务管理 ───
-
-const backgroundTasks = new Map<string, AbortController>();
+// ─── 后台任务管理（通过 BackgroundManager 统一管理） ───
 
 /** 持久化任务存储路径 */
 const PERSISTENT_TASKS_PATH = CTX_PERSIST_PATH
     ? CTX_PERSIST_PATH.replace(/ctx\.json$/, "persistent-tasks.json")
     : "";
 
-/** 持久化任务记录 */
-interface PersistentTaskRecord {
-    name: string;
-    code: string;
-}
-
-function spawnTask(name: string, fn: (signal: AbortSignal) => Promise<void>): void {
-    if (backgroundTasks.has(name)) {
-        backgroundTasks.get(name)!.abort();
-    }
-    const controller = new AbortController();
-    backgroundTasks.set(name, controller);
-
-    // 不 await，让其在后台运行
-    fn(controller.signal).catch(err => {
-        const msg = err instanceof Error ? err.stack : String(err);
-        printToHost(`[Task Error] ${name}: ${msg}`);
-    }).finally(() => {
-        if (backgroundTasks.get(name) === controller) {
-            backgroundTasks.delete(name);
-        }
-    });
-}
-
-/**
- * 启动持久化后台任务（代码字符串形式，Worker 重启后自动恢复）
- * 代码中可通过 signal 变量访问 AbortSignal。
- */
-function spawnPersistent(name: string, code: string): void {
-    // 存入持久化后台任务列表
-    savePersistentTask(name, code);
-
-    // 执行代码字符串（注入 signal）
-    runPersistentTaskCode(name, code);
-}
-
-function runPersistentTaskCode(name: string, code: string): void {
-    if (backgroundTasks.has(name)) {
-        backgroundTasks.get(name)!.abort();
-    }
-    const controller = new AbortController();
-    backgroundTasks.set(name, controller);
-
-    const fn = new Function("signal", `return (async () => { ${code} })()`);
-    (fn(controller.signal) as Promise<void>).catch(err => {
-        const msg = err instanceof Error ? err.stack : String(err);
-        printToHost(`[Persistent Task Error] ${name}: ${msg}`);
-    }).finally(() => {
-        if (backgroundTasks.get(name) === controller) {
-            backgroundTasks.delete(name);
-        }
-    });
-}
-
-function savePersistentTask(name: string, code: string): void {
-    if (!PERSISTENT_TASKS_PATH) return;
-    try {
-        let tasks: PersistentTaskRecord[] = [];
-        if (existsSync(PERSISTENT_TASKS_PATH)) {
-            tasks = JSON.parse(readFileSync(PERSISTENT_TASKS_PATH, "utf-8"));
-        }
-        tasks = tasks.filter(t => t.name !== name);
-        tasks.push({ name, code });
-        const dir = dirname(PERSISTENT_TASKS_PATH);
-        if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-        writeFileSync(PERSISTENT_TASKS_PATH, JSON.stringify(tasks, null, 2), "utf-8");
-    } catch { /* ignore */ }
-}
-
-function removePersistentTask(name: string): void {
-    if (!PERSISTENT_TASKS_PATH) return;
-    try {
-        if (!existsSync(PERSISTENT_TASKS_PATH)) return;
-        let tasks: PersistentTaskRecord[] = JSON.parse(readFileSync(PERSISTENT_TASKS_PATH, "utf-8"));
-        tasks = tasks.filter(t => t.name !== name);
-        writeFileSync(PERSISTENT_TASKS_PATH, JSON.stringify(tasks, null, 2), "utf-8");
-    } catch { /* ignore */ }
-}
-
-function restorePersistentTasks(): void {
-    if (!PERSISTENT_TASKS_PATH || !existsSync(PERSISTENT_TASKS_PATH)) return;
-    try {
-        const tasks: PersistentTaskRecord[] = JSON.parse(readFileSync(PERSISTENT_TASKS_PATH, "utf-8"));
-        for (const task of tasks) {
-            runPersistentTaskCode(task.name, task.code);
-        }
-        if (tasks.length > 0) {
-            printToHost(`[Persistent Tasks] 已恢复 ${tasks.length} 个持久化任务`);
-        }
-    } catch { /* ignore */ }
-}
-
-function killTask(name: string): void {
-    if (backgroundTasks.has(name)) {
-        backgroundTasks.get(name)!.abort();
-        backgroundTasks.delete(name);
-        removePersistentTask(name);
-        printToHost(`[Task Killed] ${name}`);
-    }
-}
-
-function listTasks(): string[] {
-    return Array.from(backgroundTasks.keys());
-}
+const bgManager = new BackgroundManager({
+    notifyCallback: notifyHost,
+    printCallback: printToHost,
+    persistPath: PERSISTENT_TASKS_PATH,
+});
 
 /** 返回当前 sandbox 的 home 目录路径 */
 function getHome(): string {
@@ -419,9 +319,9 @@ async function executeCode(id: string, code: string): Promise<void> {
             notifyHost: guardedNotifyHost,
             requestInput,
             printToHost,
-            spawnTask,
-            killTask,
-            listTasks,
+            spawnTask: (name, fn) => bgManager.spawn(name, fn),
+            killTask: (name) => bgManager.killTask(name),
+            listTasks: () => bgManager.listNames(),
             callHost: guardedCallHost,
         }) as {
             runtime: unknown;
@@ -586,13 +486,13 @@ async function initWorker(): Promise<void> {
 
     // 注入 Runtime 扩展回调（spawnPersistent, home, workspace）
     setRuntimeCallbacks({
-        spawnPersistent,
+        spawnPersistent: (name, code) => bgManager.spawnPersistent(name, code),
         getHome,
         getWorkspace,
     });
 
     // 恢复持久化后台任务
-    restorePersistentTasks();
+    bgManager.restorePersistentTasks();
 
     // 初始化 MCP 桥接（持久化 + 自动重连）
     const mcpPersistPath = CTX_PERSIST_PATH
