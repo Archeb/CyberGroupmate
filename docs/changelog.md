@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-04-13: Sandbox 能力升级 — 自主 Agent 运行环境
+
+大规模能力扩展，覆盖 MCP Bridge（stdio + Streamable HTTP）、agentskills.io SKILL.md 生态原生支持、Cron API（持久化定时任务）、Events API（NC 事件监听器）、KV Store（SQLite 键值存储）、后台任务持久化（spawnPersistent + Worker 重启恢复）、Shell 增强（自定义 .bashrc + PATH）、HTTP Webhook 模块、Two-pass prefixMap 动态化（MCP 运行时连接工具即时可见）。Dashboard 新增 MCP 管理面板，支持 stdio 和 Streamable HTTP 两种传输模式。
+
+详见 [docs/sandbox-upgrade.md](sandbox-upgrade.md)。
+
+---
+
 ## 2026-04-13: LLM Pricing 配置 + Sticker 发送策略控制
 
 ConfigPanel 新增 LLM Profile 级别的 Pricing 配置。StickersPanel 新增全局贴纸发送策略（允许全部 / 仅指定 / 全部禁止）和单个贴纸启用/禁用控制，dispatch-handler 联动过滤。
