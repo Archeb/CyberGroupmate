@@ -6,8 +6,8 @@
  */
 
 declare const docs: {
-    /** 列出所有可用文档（返回 slug 和标题） */
-    list(): Array<{ slug: string; title: string }>;
+    /** 列出所有可用文档（返回 slug、标题，以及是否为标准 Agent Skill） */
+    list(): Array<{ slug: string; title: string; kind: "doc" | "agent-skill" }>;
 
     /**
      * 读取指定文档的完整内容

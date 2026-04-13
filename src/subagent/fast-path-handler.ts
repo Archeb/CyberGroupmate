@@ -20,6 +20,7 @@ import { callLLMWithFallback, type ChatMessage } from "../core/llm.js";
 import { renderPrompt, buildFastPathTaskVariables, buildFastPathTurnContent } from "../main-agent/prompt-renderer.js";
 import { resolveComponentTimeout, type LLMConfig } from "../core/config.js";
 import { createLogger } from "../core/logger.js";
+import { getAgentSkillsBriefs } from "../sandbox/modules/docs.js";
 
 const log = createLogger("fast-path");
 
@@ -284,6 +285,7 @@ export class FastPathHandler {
                     personaName: this.personaName,
                     personaDescription: this.personaDescription,
                     apiTypeDefs: "",  // FastPath 不使用 sandbox API
+                    agentSkillsBrief: getAgentSkillsBriefs(),
                 });
 
                 // Layer 2: Task prompt — 在 authorize() 时已缓存（含群组信息、话题摘要、人物背景）

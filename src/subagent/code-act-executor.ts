@@ -21,6 +21,7 @@ import { SandboxPool } from "../sandbox/sandbox-pool.js";
 import { NotificationCenter } from "../event/notification-center.js";
 import { runCodeActSession, SentMessageCollector, type SessionResult, type SentMessageRecord } from "../sandbox/session-runner.js";
 import { loadModuleRegistry, lookupFullDocs, generateBriefOverview, type ModuleEntry } from "../sandbox/modules/module-registry.js";
+import { getAgentSkillsBriefs } from "../sandbox/modules/docs.js";
 import { parseAllSkillDocs } from "../sandbox/skill-loader.js";
 import { buildPrefixMap } from "../sandbox/api-intent-extractor.js";
 import { renderPrompt, deriveChatType } from "../main-agent/prompt-renderer.js";
@@ -455,6 +456,7 @@ export class CodeActExecutor {
             personaName: this.personaName,
             personaDescription: this.personaDescription,
             apiTypeDefs: loadApiTypeDefs(getPlatform(this.chatId)),
+            agentSkillsBrief: getAgentSkillsBriefs(),
         };
         const systemPrompt = renderPrompt("EXECUTION", systemVars);
 
