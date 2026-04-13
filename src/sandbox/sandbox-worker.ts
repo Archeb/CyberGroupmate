@@ -20,6 +20,7 @@ import { mcpBridge, initMcpBridge, autoReconnect as mcpAutoReconnect } from "./m
 import { cronModule, setCronCallbacks } from "./modules/cron.js";
 import { eventsModule, setEventsCallbacks } from "./modules/events.js";
 import { kvModule, setKvCallbacks } from "./modules/kv.js";
+import { httpModule, setHttpCallbacks } from "./modules/http.js";
 import { setSkillManagerCallbacks } from "./modules/skills.js";
 import { setRuntimeCallbacks } from "./modules/runtime.js";
 import { loadAllSkills, reloadAllSkills, installDepsRuntime, type LoadedSkill } from "./skill-loader.js";
@@ -455,8 +456,8 @@ async function executeCode(id: string, code: string): Promise<void> {
 
         // 构造参数列表：固定参数 + 平台 API + 动态 Skill 参数
         // ctx 保留为纯用户 state bag（LLM 可跨 turn 存取任意属性）
-        const fixedArgNames = ["ctx", "runtime", "memory", "scene", "docs", "actions", "skills", "fs", "mcp", "cron", "events", "kv", "telegram", "discord"];
-        const fixedArgValues = [ctx, rt, mem, scene, docs, act, sk, filesystem, mcpBridge, tracker.wrap(cronModule as unknown as Record<string, unknown>), eventsModule, tracker.wrap(kvModule as unknown as Record<string, unknown>), tg, dc];
+        const fixedArgNames = ["ctx", "runtime", "memory", "scene", "docs", "actions", "skills", "fs", "mcp", "cron", "events", "kv", "http", "telegram", "discord"];
+        const fixedArgValues = [ctx, rt, mem, scene, docs, act, sk, filesystem, mcpBridge, tracker.wrap(cronModule as unknown as Record<string, unknown>), eventsModule, tracker.wrap(kvModule as unknown as Record<string, unknown>), tracker.wrap(httpModule as unknown as Record<string, unknown>), tg, dc];
         const allArgNames = [...fixedArgNames, ...skillArgNames];
         const allArgValues = [...fixedArgValues, ...skillArgValues];
 
@@ -577,10 +578,11 @@ async function initWorker(): Promise<void> {
         npmInstall: async (packages: string[]) => installDepsRuntime(packages),
     });
 
-    // 注入 Cron/Events/KV 回调（通过 callHost 代理到 Host）
+    // 注入 Cron/Events/KV/HTTP 回调（通过 callHost 代理到 Host）
     setCronCallbacks({ callHost });
     setEventsCallbacks({ callHost });
     setKvCallbacks({ callHost });
+    setHttpCallbacks({ callHost });
 
     // 注入 Runtime 扩展回调（spawnPersistent, home, workspace）
     setRuntimeCallbacks({

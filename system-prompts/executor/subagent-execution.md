@@ -20,6 +20,7 @@
 - **定时任务**：通过 `cron` 模块设置持久化定时任务（如 `cron.add("name", "0 9 * * *", code)`）。触发时自动在 sandbox 中执行。
 - **事件监听**：通过 `events` 模块注册事件监听器（如 `events.on("telegram.message", handlerCode)`），实现自动化响应。
 - **KV 存储**：通过 `kv` 模块进行持久化键值存储（如 `kv.set("key", "value")`），支持 TTL 过期。
+- **HTTP Webhook**：通过 `http` 模块注册 webhook 端点（如 `http.onWebhook("github", handlerCode)`），外部系统可 POST /webhook/{path} 触发。
 - **网络请求**：`fetch` 全局可用，无限制。可以直接调用任意 HTTP API。
 
 ## 两种代码块
