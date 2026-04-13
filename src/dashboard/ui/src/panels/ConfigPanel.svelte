@@ -698,6 +698,79 @@
                     <div class="text-xs text-error mt-1"><i class="fa-solid fa-triangle-exclamation mr-1"></i>{p._extraBodyError}</div>
                   {/if}
                 {/if}
+                <!-- Pricing -->
+                <div class="divider text-xs opacity-50 my-2">
+                  <i class="fa-solid fa-coins mr-1"></i>Pricing（可选）
+                </div>
+                <p class="text-xs opacity-40 mb-2">
+                  每百万 token 的价格（美元），用于 token 消耗统计。留空则不计费。
+                </p>
+                <div class="cfg-grid-2">
+                  <label class="cfg-field"
+                    ><span class="cfg-label">Input ($/M)</span>
+                    <input
+                      type="number"
+                      class="input input-xs input-bordered w-full"
+                      value={p.pricing?.input ?? ""}
+                      on:input={(e) => {
+                        if (!p.pricing) p.pricing = {};
+                        p.pricing.input = e.target.value ? Number(e.target.value) : undefined;
+                        config = config;
+                      }}
+                      placeholder="0"
+                      min="0"
+                      step="0.01"
+                    /></label
+                  >
+                  <label class="cfg-field"
+                    ><span class="cfg-label">Output ($/M)</span>
+                    <input
+                      type="number"
+                      class="input input-xs input-bordered w-full"
+                      value={p.pricing?.output ?? ""}
+                      on:input={(e) => {
+                        if (!p.pricing) p.pricing = {};
+                        p.pricing.output = e.target.value ? Number(e.target.value) : undefined;
+                        config = config;
+                      }}
+                      placeholder="0"
+                      min="0"
+                      step="0.01"
+                    /></label
+                  >
+                  <label class="cfg-field"
+                    ><span class="cfg-label">Cached Input ($/M)</span>
+                    <input
+                      type="number"
+                      class="input input-xs input-bordered w-full"
+                      value={p.pricing?.cachedInput ?? ""}
+                      on:input={(e) => {
+                        if (!p.pricing) p.pricing = {};
+                        p.pricing.cachedInput = e.target.value ? Number(e.target.value) : undefined;
+                        config = config;
+                      }}
+                      placeholder="(可选)"
+                      min="0"
+                      step="0.01"
+                    /></label
+                  >
+                  <label class="cfg-field"
+                    ><span class="cfg-label">Cache Creation ($/M)</span>
+                    <input
+                      type="number"
+                      class="input input-xs input-bordered w-full"
+                      value={p.pricing?.cacheCreation ?? ""}
+                      on:input={(e) => {
+                        if (!p.pricing) p.pricing = {};
+                        p.pricing.cacheCreation = e.target.value ? Number(e.target.value) : undefined;
+                        config = config;
+                      }}
+                      placeholder="(可选)"
+                      min="0"
+                      step="0.01"
+                    /></label
+                  >
+                </div>
                 </div>
                 {/if}
               </div>
@@ -1426,6 +1499,18 @@
                   bind:value={config.vision.mediaRetentionDays}
                   placeholder="3"
                 /></label
+              >
+              <label class="cfg-field"
+                ><span class="cfg-label">Sticker 发送策略</span>
+                <select
+                  class="select select-xs select-bordered w-full"
+                  bind:value={config.vision.stickerSendingMode}
+                >
+                  <option value={undefined}>全部允许（默认）</option>
+                  <option value="allow_all">allow_all（全部允许）</option>
+                  <option value="allow_listed">allow_listed（仅指定）</option>
+                  <option value="disallow_all">disallow_all（全部禁止）</option>
+                </select></label
               >
             </div>
           {/if}

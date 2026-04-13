@@ -214,12 +214,16 @@ export function createDispatchHandler(
                 }
 
                 // 贴纸查找：根据 suggestedEmojis 查找可发送的贴纸
-                if (decision.suggestedEmojis && decision.suggestedEmojis.length > 0) {
+                // 按 stickerSendingMode 控制：disallow_all 跳过 / allow_listed 仅已启用 / allow_all（默认）全部
+                const stickerSendingMode = visionConfig?.stickerSendingMode ?? "allow_all";
+                if (stickerSendingMode !== "disallow_all" && decision.suggestedEmojis && decision.suggestedEmojis.length > 0) {
                     try {
                         const { existsSync } = await import("node:fs");
                         const stickerMatches = memory.searchStickersByEmoji(decision.suggestedEmojis);
                         const availableStickers: Array<{ emoji: string; description: string; uniqueFileId: string }> = [];
                         for (const s of stickerMatches) {
+                            // allow_listed 模式下仅包含已启用的贴纸
+                            if (stickerSendingMode === "allow_listed" && !s.enabled) continue;
                             const filePath = mediaDownloader.getExistingPath(s.uniqueFileId);
                             if (filePath && existsSync(filePath) && !filePath.toLowerCase().endsWith(".webm")) {
                                 availableStickers.push({
@@ -243,6 +247,7 @@ export function createDispatchHandler(
                                 suggestedEmojis: decision.suggestedEmojis,
                                 matched: stickerMatches.length,
                                 withFile: availableStickers.length,
+                                stickerSendingMode,
                             });
                         }
                     } catch (err) {

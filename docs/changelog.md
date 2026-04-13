@@ -1,5 +1,65 @@
 # Changelog
 
+## 2026-04-13: LLM Pricing 配置 + Sticker 发送策略控制
+
+ConfigPanel 新增 LLM Profile 级别的 Pricing 配置。StickersPanel 新增全局贴纸发送策略（允许全部 / 仅指定 / 全部禁止）和单个贴纸启用/禁用控制，dispatch-handler 联动过滤。
+
+### 🆕 LLM Pricing 配置
+
+每个 LLM Profile 展开后底部新增「Pricing」区块，支持设置每百万 token 的价格（美元）：
+
+| 字段 | 说明 |
+|:-----|:-----|
+| Input ($/M) | 输入 token 单价 |
+| Output ($/M) | 输出 token 单价 |
+| Cached Input ($/M) | 缓存命中输入 token 单价（可选） |
+| Cache Creation ($/M) | 缓存创建 token 单价（可选） |
+
+数据已有 `LLMConfig.pricing` 支持，本次仅补齐 Dashboard UI 绑定。
+
+### 🆕 Sticker 发送策略
+
+新增 `VisionConfig.stickerSendingMode` 配置项，控制 Agent 是否可以发送贴纸：
+
+| 模式 | 行为 |
+|:-----|:-----|
+| `allow_all`（默认） | 所有已知贴纸均可发送 |
+| `allow_listed` | 仅发送 Dashboard 中启用的贴纸 |
+| `disallow_all` | 完全禁止发送贴纸 |
+
+- StickersPanel 顶部新增策略选择器（radio group），切换后即时保存到 config
+- `allow_listed` 模式下每行贴纸显示启用 checkbox，禁用的贴纸半透明，显示已启用数统计
+- ConfigPanel Vision 区段同步新增 Sticker 发送策略 select
+
+### 数据层
+
+`sticker_descriptions` 表新增 `enabled` 列（`INTEGER DEFAULT 1`），兼容旧数据库自动迁移。
+
+| API | 方法 | 功能 |
+|:-----|:-----|:-----|
+| `/stickers/:id` | `PUT` | 更新描述/emoji/enabled |
+| `/stickers/:id/enabled` | `PATCH` | 快速切换启用/禁用 |
+
+### dispatch-handler 联动
+
+`dispatch-handler.ts` 中贴纸查找逻辑根据 `stickerSendingMode` 过滤：
+- `disallow_all`：跳过整个贴纸查找流程
+- `allow_listed`：仅包含 `enabled=true` 的贴纸
+- `allow_all`：不过滤（默认行为）
+
+### 改动清单
+
+| 文件 | 改动 |
+|:-----|:-----|
+| `src/core/config.ts` | `VisionConfig` 新增 `stickerSendingMode` 字段；parse/serialize 支持 `sticker_sending_mode` |
+| `src/memory-v2/memory-v2.ts` | `sticker_descriptions` 表新增 `enabled` 列；`getAllStickerDescriptions`/`searchStickersByEmoji` 返回 `enabled`；新增 `setStickerEnabled()` 方法 |
+| `src/dashboard/api-routes.ts` | `PUT /stickers/:id` 支持 `enabled` 参数；新增 `PATCH /stickers/:id/enabled` |
+| `src/main-agent/dispatch-handler.ts` | 贴纸查找逻辑根据 `stickerSendingMode` 和 `s.enabled` 过滤 |
+| `src/dashboard/ui/src/panels/ConfigPanel.svelte` | LLM Profile 新增 Pricing 区块（4 字段）；Vision 区段新增 Sticker 发送策略 select |
+| `src/dashboard/ui/src/panels/StickersPanel.svelte` | 新增全局策略选择器 + 单贴纸启用 checkbox + 统计提示 |
+
+---
+
 ## 2026-04-12: System Prompts Override — Dashboard 可视化编辑 + 运行时热重载
 
 新增 System Prompts Override 功能：在 Dashboard 配置面板中直接编辑 system prompt，覆盖版保存到 `workspace/system-prompts-overrides/`（保持原始目录结构），读取时优先使用 override 版本。保存后自动清除所有模块的 prompt 缓存，即时生效。

@@ -275,6 +275,8 @@ export interface VisionConfig {
     maxMediaDownloadSize?: number;
     /** 媒体文件保留天数。默认 3 */
     mediaRetentionDays?: number;
+    /** Sticker 发送模式：允许发送所有 / 仅允许指定 / 不允许。默认 "allow_all" */
+    stickerSendingMode?: "allow_all" | "allow_listed" | "disallow_all";
 }
 
 /** Recording Pipeline 缓冲/触发配置 */
@@ -724,6 +726,7 @@ function parseVisionConfig(fileConfig: Record<string, unknown>): VisionConfig | 
         stickerMode: (str(raw.sticker_mode) as VisionConfig["stickerMode"]) ?? undefined,
         maxMediaDownloadSize: raw.max_media_download_size != null ? num(raw.max_media_download_size, 20) : undefined,
         mediaRetentionDays: raw.media_retention_days != null ? num(raw.media_retention_days, 3) : undefined,
+        stickerSendingMode: (str(raw.sticker_sending_mode) as VisionConfig["stickerSendingMode"]) ?? undefined,
     };
 }
 
@@ -1041,6 +1044,7 @@ export function serializeConfigToObject(config: AppConfig): Record<string, unkno
         if (config.vision.stickerMode != null) v.sticker_mode = config.vision.stickerMode;
         if (config.vision.maxMediaDownloadSize != null) v.max_media_download_size = config.vision.maxMediaDownloadSize;
         if (config.vision.mediaRetentionDays != null) v.media_retention_days = config.vision.mediaRetentionDays;
+        if (config.vision.stickerSendingMode != null) v.sticker_sending_mode = config.vision.stickerSendingMode;
         obj.vision = v;
     }
 

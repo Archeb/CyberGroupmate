@@ -401,6 +401,8 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
         `);
         // 新增 emoji 列（兼容旧数据库）
         try { this.db.exec(`ALTER TABLE sticker_descriptions ADD COLUMN emoji TEXT`); } catch { /* 列已存在 */ }
+        // 新增 enabled 列（默认启用，兼容旧数据库）
+        try { this.db.exec(`ALTER TABLE sticker_descriptions ADD COLUMN enabled INTEGER DEFAULT 1`); } catch { /* 列已存在 */ }
 
         // person_group_profiles 新增 affinity_score 列（兼容旧数据库）
         try { this.db.exec(`ALTER TABLE person_group_profiles ADD COLUMN affinity_score REAL DEFAULT 0`); } catch { /* 列已存在 */ }
@@ -1839,20 +1841,21 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
     setStickerDescription(uniqueFileId: string, description: string, emoji?: string): void {
         const ts = now();
         this.db.prepare(`
-            INSERT OR REPLACE INTO sticker_descriptions (unique_file_id, description, emoji, created_at)
-            VALUES (?, ?, ?, ?)
+            INSERT OR REPLACE INTO sticker_descriptions (unique_file_id, description, emoji, enabled, created_at)
+            VALUES (?, ?, ?, 1, ?)
         `).run(uniqueFileId, description, emoji ?? null, ts);
         log.debug("setStickerDescription", { uniqueFileId, emoji, descPreview: description.slice(0, 50) });
     }
 
-    getAllStickerDescriptions(): Array<{ uniqueFileId: string; description: string; emoji?: string; createdAt: string }> {
+    getAllStickerDescriptions(): Array<{ uniqueFileId: string; description: string; emoji?: string; enabled: boolean; createdAt: string }> {
         const rows = this.db.prepare(
-            "SELECT unique_file_id, description, emoji, created_at FROM sticker_descriptions ORDER BY created_at DESC"
-        ).all() as Array<{ unique_file_id: string; description: string; emoji?: string; created_at: string }>;
+            "SELECT unique_file_id, description, emoji, enabled, created_at FROM sticker_descriptions ORDER BY created_at DESC"
+        ).all() as Array<{ unique_file_id: string; description: string; emoji?: string; enabled: number; created_at: string }>;
         return rows.map(r => ({
             uniqueFileId: r.unique_file_id,
             description: r.description,
             emoji: r.emoji ?? undefined,
+            enabled: r.enabled !== 0,
             createdAt: r.created_at,
         }));
     }
@@ -1864,25 +1867,40 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
         return result.changes > 0;
     }
 
-    updateStickerDescription(uniqueFileId: string, description: string, emoji?: string): boolean {
+    updateStickerDescription(uniqueFileId: string, description: string, emoji?: string, enabled?: boolean): boolean {
         const ts = now();
+        if (enabled !== undefined) {
+            const result = this.db.prepare(
+                "UPDATE sticker_descriptions SET description = ?, emoji = ?, enabled = ?, created_at = ? WHERE unique_file_id = ?"
+            ).run(description, emoji ?? null, enabled ? 1 : 0, ts, uniqueFileId);
+            return result.changes > 0;
+        }
         const result = this.db.prepare(
             "UPDATE sticker_descriptions SET description = ?, emoji = ?, created_at = ? WHERE unique_file_id = ?"
         ).run(description, emoji ?? null, ts, uniqueFileId);
         return result.changes > 0;
     }
 
+    /** 仅更新贴纸的启用/禁用状态 */
+    setStickerEnabled(uniqueFileId: string, enabled: boolean): boolean {
+        const result = this.db.prepare(
+            "UPDATE sticker_descriptions SET enabled = ? WHERE unique_file_id = ?"
+        ).run(enabled ? 1 : 0, uniqueFileId);
+        return result.changes > 0;
+    }
+
     /** 根据 emoji 列表批量查找匹配的已知贴纸（用于贴纸发送功能） */
-    searchStickersByEmoji(emojis: string[], limit = 10): Array<{ uniqueFileId: string; description: string; emoji: string }> {
+    searchStickersByEmoji(emojis: string[], limit = 10): Array<{ uniqueFileId: string; description: string; emoji: string; enabled: boolean }> {
         if (emojis.length === 0) return [];
         const placeholders = emojis.map(() => "?").join(", ");
         const rows = this.db.prepare(
-            `SELECT unique_file_id, description, emoji FROM sticker_descriptions WHERE emoji IN (${placeholders}) LIMIT ?`
-        ).all(...emojis, limit) as Array<{ unique_file_id: string; description: string; emoji: string }>;
+            `SELECT unique_file_id, description, emoji, enabled FROM sticker_descriptions WHERE emoji IN (${placeholders}) LIMIT ?`
+        ).all(...emojis, limit) as Array<{ unique_file_id: string; description: string; emoji: string; enabled: number }>;
         return rows.map(r => ({
             uniqueFileId: r.unique_file_id,
             description: r.description,
             emoji: r.emoji,
+            enabled: r.enabled !== 0,
         }));
     }
 

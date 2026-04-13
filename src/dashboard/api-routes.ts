@@ -551,9 +551,16 @@ export function createApiRouter(deps: DashboardDeps, bridge: EventBridge): Route
     });
 
     router.put("/stickers/:uniqueFileId", (req, res) => {
-        const { description, emoji } = req.body;
+        const { description, emoji, enabled } = req.body;
         if (!description) { res.status(400).json({ error: "description required" }); return; }
-        const ok = deps.memory.updateStickerDescription(req.params.uniqueFileId, description, emoji);
+        const ok = deps.memory.updateStickerDescription(req.params.uniqueFileId, description, emoji, enabled);
+        res.json({ ok });
+    });
+
+    router.patch("/stickers/:uniqueFileId/enabled", (req, res) => {
+        const { enabled } = req.body;
+        if (enabled === undefined) { res.status(400).json({ error: "enabled required" }); return; }
+        const ok = deps.memory.setStickerEnabled(req.params.uniqueFileId, !!enabled);
         res.json({ ok });
     });
 
