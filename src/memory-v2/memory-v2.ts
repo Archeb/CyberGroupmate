@@ -1838,13 +1838,14 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
         return { description: row.description, emoji: row.emoji ?? undefined };
     }
 
-    setStickerDescription(uniqueFileId: string, description: string, emoji?: string): void {
+    setStickerDescription(uniqueFileId: string, description: string, emoji?: string, enabled?: boolean): void {
         const ts = now();
+        const enabledValue = enabled === false ? 0 : 1;
         this.db.prepare(`
             INSERT OR REPLACE INTO sticker_descriptions (unique_file_id, description, emoji, enabled, created_at)
-            VALUES (?, ?, ?, 1, ?)
-        `).run(uniqueFileId, description, emoji ?? null, ts);
-        log.debug("setStickerDescription", { uniqueFileId, emoji, descPreview: description.slice(0, 50) });
+            VALUES (?, ?, ?, ?, ?)
+        `).run(uniqueFileId, description, emoji ?? null, enabledValue, ts);
+        log.debug("setStickerDescription", { uniqueFileId, emoji, enabled: enabledValue, descPreview: description.slice(0, 50) });
     }
 
     getAllStickerDescriptions(): Array<{ uniqueFileId: string; description: string; emoji?: string; enabled: boolean; createdAt: string }> {

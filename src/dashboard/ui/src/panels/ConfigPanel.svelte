@@ -1512,6 +1512,17 @@
                   <option value="disallow_all">disallow_all（全部禁止）</option>
                 </select></label
               >
+              <label class="cfg-field"
+                ><span class="cfg-label">新表情包默认</span>
+                <select
+                  class="select select-xs select-bordered w-full"
+                  bind:value={config.vision.newStickerDefault}
+                >
+                  <option value={undefined}>启用（默认）</option>
+                  <option value="enabled">enabled（启用）</option>
+                  <option value="disabled">disabled（禁用）</option>
+                </select></label
+              >
             </div>
           {/if}
 

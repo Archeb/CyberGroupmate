@@ -524,11 +524,16 @@ export function createApiRouter(deps: DashboardDeps, bridge: EventBridge): Route
     // ─── Sticker Management ───
     router.get("/stickers", (_req, res) => {
         const stickers = deps.memory.getAllStickerDescriptions();
-        // 附加 hasImage 标记
-        const result = stickers.map(s => ({
-            ...s,
-            hasImage: deps.mediaDownloader ? !!deps.mediaDownloader.getExistingPath(s.uniqueFileId) : false,
-        }));
+        // 附加 hasImage 标记 + 过滤 webm
+        const result = stickers.map(s => {
+            const filePath = deps.mediaDownloader?.getExistingPath(s.uniqueFileId);
+            const isWebm = filePath?.toLowerCase().endsWith(".webm") ?? false;
+            return {
+                ...s,
+                hasImage: !!filePath && !isWebm,
+                isWebm,
+            };
+        }).filter(s => !s.isWebm); // 不展示 webm 贴纸
         res.json(result);
     });
 
@@ -555,6 +560,27 @@ export function createApiRouter(deps: DashboardDeps, bridge: EventBridge): Route
         if (!description) { res.status(400).json({ error: "description required" }); return; }
         const ok = deps.memory.updateStickerDescription(req.params.uniqueFileId, description, emoji, enabled);
         res.json({ ok });
+    });
+
+    router.patch("/stickers/batch-enabled", (req, res) => {
+        const { enabled, uniqueFileIds } = req.body;
+        if (enabled === undefined) { res.status(400).json({ error: "enabled required" }); return; }
+        // 如果提供了 uniqueFileIds 则只更新指定的，否则更新全部
+        if (Array.isArray(uniqueFileIds)) {
+            let count = 0;
+            for (const id of uniqueFileIds) {
+                if (deps.memory.setStickerEnabled(id, !!enabled)) count++;
+            }
+            res.json({ ok: true, count });
+        } else {
+            // 全部更新
+            const all = deps.memory.getAllStickerDescriptions();
+            let count = 0;
+            for (const s of all) {
+                if (deps.memory.setStickerEnabled(s.uniqueFileId, !!enabled)) count++;
+            }
+            res.json({ ok: true, count });
+        }
     });
 
     router.patch("/stickers/:uniqueFileId/enabled", (req, res) => {

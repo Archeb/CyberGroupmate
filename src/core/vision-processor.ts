@@ -54,7 +54,7 @@ export interface ProcessedMedia {
 /** Sticker 描述缓存接口 */
 export interface StickerCache {
     getStickerDescription(uniqueFileId: string): { description: string; emoji?: string } | null;
-    setStickerDescription(uniqueFileId: string, description: string, emoji?: string): void;
+    setStickerDescription(uniqueFileId: string, description: string, emoji?: string, enabled?: boolean): void;
 }
 
 /** 下载函数类型 */
@@ -136,6 +136,11 @@ export async function processMediaBatch(
         if (att.type === "photo" || (att.type === "document" && att.mimeType?.startsWith("image/"))) {
             photos.push(att);
         } else if (att.type === "sticker") {
+            // 跳过 webm 视频贴纸（不收集、不处理）
+            if (att.mimeType === "video/webm") {
+                log.debug("跳过 webm 视频贴纸", { uniqueFileId: att.uniqueFileId });
+                continue;
+            }
             stickers.push(att);
         } else if (att.type === "video" || att.type === "document" || att.type === "animation") {
             downloadOnly.push(att);
@@ -417,7 +422,8 @@ async function processSingleSticker(
 
         // 写入缓存 (vision_cache mode)
         if (mode === "vision_cache" && stickerCache) {
-            stickerCache.setStickerDescription(sticker.uniqueFileId, result.description, result.emoji);
+            const newDefault = config?.newStickerDefault !== "disabled";
+            stickerCache.setStickerDescription(sticker.uniqueFileId, result.description, result.emoji, newDefault);
         }
 
         const emojiTag = result.emoji ?? sticker.emoji ?? "";
