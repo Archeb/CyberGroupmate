@@ -558,7 +558,7 @@ export class CodeActExecutor {
                     const registry = getModuleRegistryCache();
                     if (registry.length === 0) return undefined;
                     return {
-                        prefixMap: buildPrefixMap(registry),
+                        getPrefixMap: () => buildPrefixMap(getModuleRegistryCache()),
                         lookupDocs: (calledMethods: string[]) =>
                             lookupFullDocs(getModuleRegistryCache(), calledMethods),
                     };

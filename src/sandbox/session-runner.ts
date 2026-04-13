@@ -294,11 +294,11 @@ export async function runCodeActSession(
     maxTurns: number = DEFAULT_MAX_TURNS,
     /**
      * Two-pass 配置。
-     * - prefixMap: 模块前缀映射表（由 buildPrefixMap 生成）
+     * - getPrefixMap: 每个 turn 动态获取最新模块前缀映射（支持 MCP 热插拔）
      * - lookupDocs: 接收方法调用列表，返回完整 TypeDoc 文档
      */
     twoPassConfig?: {
-        prefixMap: Record<string, string>;
+        getPrefixMap: () => Record<string, string>;
         lookupDocs: (calledMethods: string[]) => string;
     },
 ): Promise<SessionResult> {
@@ -433,7 +433,7 @@ export async function runCodeActSession(
         if (twoPassConfig && codeBlocks.length > 0) {
             // 合并所有代码块的 API 调用
             const allCode = codeBlocks.map(b => b.code).join("\n");
-            const calledMethods = extractApiCalls(allCode, twoPassConfig.prefixMap);
+            const calledMethods = extractApiCalls(allCode, twoPassConfig.getPrefixMap());
 
             if (needsDocLookup(calledMethods)) {
                 // ─── 无状态去重：检查 messages 中哪些方法文档已经存在 ───
