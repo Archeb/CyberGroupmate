@@ -2,7 +2,7 @@
  * modules/docs.ts — Docs 文档系统模块
  *
  * 从 workspace/agent-docs/ 目录读取 markdown 文档，
- * 同时扫描 workspace/skills/*/SKILL.md，挂载标准 Agent Skills。
+ * 同时扫描 workspace/skills/<skill-name>/SKILL.md，挂载标准 Agent Skills。
  *
  * 完全在 worker 进程内本地执行，不经过 Host callHost。
  */
