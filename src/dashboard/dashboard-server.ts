@@ -56,6 +56,36 @@ export class DashboardServer {
         // API routes
         this.app.use("/api", createApiRouter(deps, this.bridge));
 
+        // Webhook endpoint — 外部系统通过 POST /webhook/:path 触发 sandbox 代码
+        // 无需 Token 认证（Webhook 由外部系统调用）
+        this.app.post("/webhook/:path", async (req, res) => {
+            const webhookPath = req.params.path;
+            const request = {
+                method: req.method,
+                path: webhookPath,
+                headers: req.headers,
+                body: typeof req.body === "string" ? req.body : JSON.stringify(req.body),
+                query: req.query,
+            };
+
+            // 在所有活跃 sandbox 中查找匹配的 webhook
+            for (const { sandbox } of deps.sandboxPool.entries()) {
+                try {
+                    const result = await sandbox.handleWebhookRequest(webhookPath, request);
+                    if (result !== null) {
+                        res.status(200).json({ ok: true, output: result });
+                        return;
+                    }
+                } catch (err) {
+                    log.error("Webhook 执行失败", { path: webhookPath, error: String(err) });
+                    res.status(500).json({ ok: false, error: String(err) });
+                    return;
+                }
+            }
+
+            res.status(404).json({ ok: false, error: `Webhook "${webhookPath}" not found` });
+        });
+
         // Static files (SPA)
         this.app.use(express.static(join(__dirname, "public")));
         this.app.get("/", (_req, res) => {

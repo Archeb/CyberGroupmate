@@ -110,6 +110,13 @@ filesystem.d.ts — 文件系统操作模块类型定义
 - `mkdir`: 创建目录（递归创建，类似 mkdir -p）。
 - `stat`: 获取文件或目录的状态信息。
 
+## http
+shared/http.d.ts — HTTP Webhook 模块类型定义
+
+- `onWebhook`: 注册 webhook 端点。
+- `removeWebhook`: 移除 webhook
+- `listWebhooks`: 列出当前所有 webhook
+
 ## kv
 shared/kv.d.ts — 持久化键值存储模块类型定义
 

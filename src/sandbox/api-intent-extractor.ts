@@ -39,6 +39,8 @@ const TRIVIAL_CALLS = new Set([
     "kv.get",
     "kv.del",
     "kv.keys",
+    // http
+    "http.listWebhooks",
 ]);
 
 /**

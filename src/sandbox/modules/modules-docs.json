@@ -413,6 +413,27 @@
     ]
   },
   {
+    "name": "http",
+    "description": "shared/http.d.ts — HTTP Webhook 模块类型定义",
+    "methods": [
+      {
+        "name": "onWebhook",
+        "brief": "注册 webhook 端点。",
+        "fullDoc": "```typescript\nonWebhook(path: string, handlerCode: string): Promise<string>\n```\n\n\n注册 webhook 端点。\r\n外部可通过 POST /webhook/{path} 触发 handler 代码执行。\r\nhandler 代码中可通过 `request` 变量访问请求数据。\n\n**参数：**\n- `path`: Webhook 路径（唯一标识，不含前缀斜杠）\n- `handlerCode`: 收到请求时执行的 JavaScript 代码字符串\n- **返回值**: webhook ID\n\n**示例：**\n```typescript\n// 注册一个接收 GitHub Push 事件的 webhook\r\nconst id = await http.onWebhook(\"github-push\", `\r\n  const payload = JSON.parse(request.body);\r\n  const repo = payload.repository?.full_name ?? \"unknown\";\r\n  await telegram.sendText(chatId, \"📦 Push to \" + repo + \": \" + payload.head_commit?.message);\r\n`);\r\nconsole.log(\"Webhook 已注册:\", id);\r\nconsole.log(\"URL: /webhook/github-push\");\n```"
+      },
+      {
+        "name": "removeWebhook",
+        "brief": "移除 webhook",
+        "fullDoc": "```typescript\nremoveWebhook(webhookId: string): Promise<void>\n```\n\n\n移除 webhook\n\n**参数：**\n- `webhookId`: webhook ID（由 onWebhook 返回）\n\n**示例：**\n```typescript\nawait http.removeWebhook(\"some-webhook-id\");\n```"
+      },
+      {
+        "name": "listWebhooks",
+        "brief": "列出当前所有 webhook",
+        "fullDoc": "```typescript\nlistWebhooks(): Promise<Array<{ id: string; path: string }>>\n```\n\n\n列出当前所有 webhook\n\n**示例：**\n```typescript\nconst hooks = await http.listWebhooks();\r\nfor (const h of hooks) {\r\n  console.log(`${h.id}: POST /webhook/${h.path}`);\r\n}\n```"
+      }
+    ]
+  },
+  {
     "name": "kv",
     "description": "shared/kv.d.ts — 持久化键值存储模块类型定义",
     "methods": [

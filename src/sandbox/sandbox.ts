@@ -656,4 +656,102 @@ export class Sandbox extends EventEmitter {
             }
         } catch { /* ignore */ }
     }
+
+    // ─── Webhook 管理 ───
+
+    /** Webhook Map: webhookId → { path, handlerCode } */
+    private webhooks = new Map<string, { path: string; handlerCode: string }>();
+    private static MAX_WEBHOOKS = 20;
+    private webhookCounter = 0;
+
+    /**
+     * 注册 webhook 端点
+     * @returns webhookId
+     */
+    registerWebhook(path: string, handlerCode: string): string {
+        if (this.webhooks.size >= Sandbox.MAX_WEBHOOKS) {
+            throw new Error(`已达到最大 webhook 数量 (${Sandbox.MAX_WEBHOOKS})`);
+        }
+        // 检查 path 唯一性
+        for (const [, wh] of this.webhooks) {
+            if (wh.path === path) {
+                throw new Error(`Webhook path "${path}" 已被注册`);
+            }
+        }
+        const id = `wh_${++this.webhookCounter}`;
+        this.webhooks.set(id, { path, handlerCode });
+        this.saveWebhooks();
+        return id;
+    }
+
+    /**
+     * 移除 webhook
+     */
+    removeWebhook(webhookId: string): void {
+        this.webhooks.delete(webhookId);
+        this.saveWebhooks();
+    }
+
+    /**
+     * 列出所有 webhook
+     */
+    listWebhooks(): Array<{ id: string; path: string }> {
+        return Array.from(this.webhooks.entries()).map(([id, { path }]) => ({
+            id,
+            path,
+        }));
+    }
+
+    /**
+     * 根据 path 查找并执行 webhook handler
+     * @returns 执行结果 output，未找到返回 null
+     */
+    async handleWebhookRequest(path: string, request: Record<string, unknown>): Promise<string | null> {
+        for (const [, { path: whPath, handlerCode }] of this.webhooks) {
+            if (whPath === path) {
+                const wrappedCode = `const request = ${JSON.stringify(request)};\n${handlerCode}`;
+                const result = await this.execute(wrappedCode, 30000);
+                return result.output;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 持久化 webhook 到磁盘
+     */
+    private saveWebhooks(): void {
+        try {
+            const safeChatId = this.chatId.replace(/[^a-zA-Z0-9_\-\.]/g, "_");
+            const filePath = join(this.projectRoot, "workspace", safeChatId, "webhooks.json");
+            const dir = dirname(filePath);
+            if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+            const data = Array.from(this.webhooks.entries()).map(([id, v]) => ({
+                id, ...v,
+            }));
+            writeFileSync(filePath, JSON.stringify(data, null, 2), "utf-8");
+        } catch { /* ignore */ }
+    }
+
+    /**
+     * 从磁盘恢复 webhook
+     */
+    loadWebhooks(): void {
+        try {
+            const safeChatId = this.chatId.replace(/[^a-zA-Z0-9_\-\.]/g, "_");
+            const filePath = join(this.projectRoot, "workspace", safeChatId, "webhooks.json");
+            if (existsSync(filePath)) {
+                const data = JSON.parse(readFileSync(filePath, "utf-8")) as Array<{
+                    id: string; path: string; handlerCode: string;
+                }>;
+                for (const item of data) {
+                    this.webhooks.set(item.id, {
+                        path: item.path,
+                        handlerCode: item.handlerCode,
+                    });
+                    this.webhookCounter++;
+                }
+            }
+        } catch { /* ignore */ }
+    }
 }

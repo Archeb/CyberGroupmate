@@ -189,6 +189,8 @@ async function main(): Promise<void> {
             });
             // 恢复持久化的事件监听器
             sandbox.loadEventListeners();
+            // 恢复持久化的 webhook
+            sandbox.loadWebhooks();
             sandbox.setHostCallHandler(async (method, args) => {
                 // ── Platform adapter routing: 按 method 前缀路由到对应 adapter ──
                 const adapter = adapters.find(a => a.canHandle(method));
@@ -301,6 +303,21 @@ async function main(): Promise<void> {
                         }
                         if (method === "kv.keys") {
                             return memory.kvKeys(chatId, args[0] as string | undefined);
+                        }
+
+                        // ── HTTP Webhook host calls ──
+                        if (method === "http.onWebhook") {
+                            const [path, handlerCode] = args as [string, string];
+                            const webhookId = sandbox.registerWebhook(path, handlerCode);
+                            return webhookId;
+                        }
+                        if (method === "http.removeWebhook") {
+                            const webhookId = String(args[0]);
+                            sandbox.removeWebhook(webhookId);
+                            return;
+                        }
+                        if (method === "http.listWebhooks") {
+                            return sandbox.listWebhooks();
                         }
 
                         // skills.taskList.* host calls
