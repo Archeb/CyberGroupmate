@@ -38,12 +38,28 @@ function main(): void {
         .filter(f => f.endsWith(".d.ts"))
         .sort();
 
+    // 同时扫描 shared/ 子目录（新增的 worker-local 模块类型）
+    const sharedDir = join(modulesDir, "shared");
+    const sharedDts = existsSync(sharedDir)
+        ? readdirSync(sharedDir).filter(f => f.endsWith(".d.ts")).sort()
+        : [];
+
     console.log(`内置模块: 发现 ${builtinDts.length} 个 .d.ts 文件`);
     builtinDts.forEach(f => console.log(`  - ${f}`));
+    if (sharedDts.length > 0) {
+        console.log(`Shared 模块: 发现 ${sharedDts.length} 个 .d.ts 文件`);
+        sharedDts.forEach(f => console.log(`  - shared/${f}`));
+    }
 
     for (const f of builtinDts) {
         const content = readFileSync(join(modulesDir, f), "utf-8");
         const entries = parseDtsFile(content, f);
+        mergeEntries(allEntries, entries);
+    }
+
+    for (const f of sharedDts) {
+        const content = readFileSync(join(sharedDir, f), "utf-8");
+        const entries = parseDtsFile(content, `shared/${f}`);
         mergeEntries(allEntries, entries);
     }
 

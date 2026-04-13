@@ -139,7 +139,7 @@
   },
   {
     "name": "skills",
-    "description": "shared/skills.d.ts — 所有 scene 共享的代码型 skills 能力",
+    "description": "shared/skills.d.ts — Skills 高层能力 + 管理接口",
     "methods": [
       {
         "name": "memory.recallAndSummarize",
@@ -150,6 +150,21 @@
         "name": "memory.browseForAnswer",
         "brief": "browseForAnswer(request: Record<string, unknown>): Promise<unknown>",
         "fullDoc": "```typescript\nbrowseForAnswer(request: Record<string, unknown>): Promise<unknown>\n```"
+      },
+      {
+        "name": "list",
+        "brief": "列出当前已加载的 Skills 名称",
+        "fullDoc": "```typescript\nlist(): string[]\n```\n\n\n列出当前已加载的 Skills 名称\n\n**参数：**\n- **返回值**: 如 [\"tavily\", \"weather\", \"yt-dlp\"]"
+      },
+      {
+        "name": "reload",
+        "brief": "热重载所有 Skills。在 workspace/skills/ 下创建/修改文件后调用。",
+        "fullDoc": "```typescript\nreload(): Promise<string[]>\n```\n\n\n热重载所有 Skills。在 workspace/skills/ 下创建/修改文件后调用。\n\n**参数：**\n- **返回值**: 重载后的 Skills 名称列表\n\n**示例：**\n```typescript\n// 创建 Skill 后重载\nfs.writeFile(\"skills/myapi/index.ts\", code);\nfs.writeFile(\"skills/myapi/myapi.d.ts\", typeDefs);\nconst loaded = await skills.reload();\nconsole.log(\"已加载:\", loaded);\n```"
+      },
+      {
+        "name": "npmInstall",
+        "brief": "安装 npm 包到 workspace/skills/ 目录",
+        "fullDoc": "```typescript\nnpmInstall(packages: string[]): Promise<string>\n```\n\n\n安装 npm 包到 workspace/skills/ 目录\n\n**参数：**\n- `packages`: 包名列表，如 [\"axios\", \"cheerio@1.0.0\"]\n- **返回值**: 安装输出\n\n**示例：**\n```typescript\nawait skills.npmInstall([\"cheerio\", \"node-fetch\"]);\n```"
       }
     ]
   },
@@ -314,5 +329,51 @@
       }
     ],
     "typeDefs": "interface Peer {\n    id: number;\n    displayName?: string;\n    title?: string;\n    username?: string;\n}\n\ninterface User extends Peer {\n    firstName: string;\n    lastName?: string;\n    isBot: boolean;\n}\n\ninterface Chat {\n    id: number;\n    title?: string;\n    username?: string;\n    type: \"private\" | \"group\" | \"supergroup\" | \"channel\";\n}\n\ninterface Message {\n    id: number;\n    text: string;\n    date: Date;\n    chat: Chat;\n    sender: Peer;\n    isMention: boolean;\n    replyToMessage?: { id: number } | null;\n    media?: unknown;\n    /** 结构化媒体元信息（由 adapter 提取），可直接判断类型 */\n    mediaInfo?: MediaInfo;\n}\n\ninterface MediaInfo {\n    type: \"photo\" | \"sticker\" | \"video\" | \"document\" | \"animation\" | \"other\";\n    /** TDLib/Bot API 兼容的 File ID，可传给 downloadMedia */\n    fileId?: string;\n    /** 全局唯一文件标识符 */\n    uniqueFileId?: string;\n    emoji?: string;\n    mimeType?: string;\n    fileName?: string;\n    width?: number;\n    height?: number;\n    fileSize?: number;\n}\n\ninterface Dialog {\n    peer: Peer;\n    lastMessage?: Message;\n    unreadCount: number;\n}\n\ninterface FullUser extends User {\n    /** 用户个人简介 */\n    bio?: string;\n    /** 与当前用户的共同群组数量 */\n    commonChatsCount?: number;\n}\n\ninterface FullChat extends Chat {\n    /** 群组/频道的描述文本 */\n    about?: string;\n    /** 成员数量 */\n    membersCount?: number;\n    /** 当前在线成员数量 */\n    onlineCount?: number;\n    /** 是否开启了论坛（话题板块）模式 */\n    isForum?: boolean;\n}\n\ninterface ForumTopic {\n    id: number;\n    title: string;\n    isClosed: boolean;\n    isPinned: boolean;\n    creatorId: number;\n    unreadCount: number;\n}\n\ninterface PollAnswer {\n    /** 选项文本 */\n    text: string;\n    /** 当前选项的投票人数 */\n    voterCount: number;\n    /** 当前用户是否投了此选项 */\n    chosen: boolean;\n    /** 此选项是否为正确答案（仅 quiz 模式） */\n    correct: boolean;\n}\n\ninterface Poll {\n    type: \"poll\";\n    id: string;\n    question: string;\n    answers: PollAnswer[];\n    /** 总投票人数 */\n    totalVoters: number;\n    /** 投票是否已关闭 */\n    isClosed: boolean;\n    /** 是否为公开投票（可查看投票人） */\n    isPublic: boolean;\n    /** 是否为测验模式 */\n    isQuiz: boolean;\n    /** 是否允许多选 */\n    isMultiple: boolean;\n    /** 测验模式的答案解释（答题后可见） */\n    solution?: string;\n}\n\ninterface Reaction {\n    emoji: string;\n    count: number;\n}\n\ninterface DownloadedMedia {\n    /** base64 编码的文件数据 */\n    buffer: string;\n    /** 文件大小(字节) */\n    size: number;\n}\n\ninterface SendMessageOptions {\n    /** 回复指定消息 ID（也可用于指定 Forum Topic ID） */\n    replyTo?: number;\n    /** 不触发推送铃声 */\n    silent?: boolean;\n}\n\ninterface SendPollOptions extends SendMessageOptions {\n    /** 是否匿名（默认 true） */\n    isAnonymous?: boolean;\n    /** 'regular' 普通投票 | 'quiz' 测验模式 */\n    type?: \"regular\" | \"quiz\";\n    /** 是否允许多选（仅 type='regular' 有效） */\n    allowsMultipleAnswers?: boolean;\n    /** 正确答案的索引（仅 type='quiz' 有效，从 0 开始） */\n    correctOptionId?: number;\n    /** 答错后的解释说明（仅 type='quiz' 有效） */\n    explanation?: string;\n}\n\ninterface Emitter<T> {\n    add(handler: (event: T) => void | Promise<void>): void;\n    remove(handler: (event: T) => void | Promise<void>): void;\n    once(handler: (event: T) => void | Promise<void>): void;\n    clear(): void;\n}\n\ninterface TelegramClient {\n    // ─── 发送与交互 ───\n    sendText(chatId: number | string, text: string, opts?: SendMessageOptions): Promise<Message>;\n    /**\n     * 发送媒体消息。支持 URL 和本地文件路径。\n     * @example sendMedia(chatId, { type: 'photo', file: 'https://example.com/img.jpg', caption: '看看这个' })\n     * @example sendMedia(chatId, { type: 'photo', file: '/path/to/local/image.jpg' })\n     */\n    sendMedia(chatId: number | string, media: string | { type: 'photo' | 'video' | 'document' | 'audio' | 'auto'; file: string; caption?: string; fileName?: string }, opts?: SendMessageOptions): Promise<Message>;\n    /** 发送磁盘文件到聊天（通过绝对路径）。host 侧读取文件并上传。始终作为文件/文档发送。 */\n    sendFile(chatId: number | string, filePath: string, opts?: { replyTo?: number; caption?: string; fileName?: string; mimeType?: string }): Promise<Message>;\n    /**\n     * 发送贴纸。通过 uniqueFileId 引用本地已缓存的贴纸文件。\n     * @example sendSticker(chatId, 'AgADAgATxxxxxx')\n     */\n    sendSticker(chatId: number | string, uniqueFileId: string, opts?: { replyTo?: number }): Promise<Message>;\n    /**\n     * 发送媒体相册（多张图片/视频合并为一组）。\n     * 第一个媒体项的 caption 将作为整组的文案。\n     * @example sendMediaGroup(chatId, [\n     *   { type: 'photo', file: 'https://example.com/1.jpg', caption: '相册标题' },\n     *   { type: 'photo', file: 'https://example.com/2.jpg' },\n     * ])\n     */\n    sendMediaGroup(chatId: number | string, medias: Array<{ type: 'photo' | 'video' | 'document' | 'audio'; file: string; caption?: string; fileName?: string }>, opts?: SendMessageOptions): Promise<Message[]>;\n    /**\n     * 发起投票或测验。\n     * @param question 投票标题\n     * @param options 候选选项文本列表（2-10 个）\n     * @example sendPoll(chatId, '今晚吃什么？', ['火锅', '烧烤', '外卖'], { isAnonymous: false })\n     * @example sendPoll(chatId, 'JS 中 typeof null 是？', ['object', 'null', 'undefined'], { type: 'quiz', correctOptionId: 0 })\n     */\n    sendPoll(chatId: number | string, question: string, options: string[], opts?: SendPollOptions): Promise<Message>;\n    /**\n     * 对消息发送表情表态。传 null 以撤销表态。\n     * @example sendReaction(chatId, msgId, '👍')\n     * @example sendReaction(chatId, msgId, null) // 撤销\n     */\n    sendReaction(chatId: number | string, messageId: number, emoji: string | null): Promise<void>;\n    /**\n     * 编辑已发送的消息文本。\n     * @example editMessage(chatId, msgId, '已更正：新文本内容')\n     */\n    editMessage(chatId: number | string, messageId: number, text: string): Promise<Message>;\n    /**\n     * 删除一条或多条消息。\n     * @example deleteMessages(chatId, [msgId1, msgId2])\n     */\n    deleteMessages(chatId: number | string, messageIds: number[]): Promise<void>;\n    /** 置顶一条消息 */\n    pinMessage(chatId: number | string, messageId: number, opts?: { silent?: boolean }): Promise<void>;\n    /** 取消置顶一条消息 */\n    unpinMessage(chatId: number | string, messageId: number): Promise<void>;\n\n    // ─── 信息获取 ───\n    getMe(): Promise<User>;\n    getChat(chatId: number | string): Promise<Chat>;\n    getUser(userId: number | string): Promise<User>;\n    /** 获取最近的对话列表（包含 peer、最后一条消息、未读数） */\n    getDialogs(opts?: { limit?: number }): Promise<Dialog[]>;\n    /**\n     * 获取用户的完整资料（包含个人简介 bio 等）。\n     * @example const full = await telegram.getFullUser(userId); console.log(full.bio);\n     */\n    getFullUser(userId: number | string): Promise<FullUser>;\n    /**\n     * 获取群组/频道的完整资料（包含群描述 about、成员数等）。\n     * @example const full = await telegram.getFullChat(chatId); console.log(full.about, full.isForum);\n     */\n    getFullChat(chatId: number | string): Promise<FullChat>;\n    // [USERBOT_ONLY_BEGIN]\n    getChatMembers(chatId: number | string, opts?: { limit?: number }): Promise<Peer[]>;\n    getHistory(chatId: number | string, opts?: { limit?: number }): Promise<Message[]>;\n    /**\n     * 按消息 ID 精确获取一条或多条消息。（在别人回复或者提及某消息但是你看不见的时候，善用该函数爬楼获取上下文）\n     * @example const msgs = await telegram.getMessages(chatId, [100, 101, 102]);\n     */\n    getMessages(chatId: number | string, messageIds: number[]): Promise<(Message | null)[]>;\n    /**\n     * 在群组内搜索消息。（可主动利用该函数获取视野外上下文信息）\n     * @example const results = await telegram.searchMessages(chatId, '关键词', { limit: 20 });\n     */\n    searchMessages(chatId: number | string, query: string, opts?: { limit?: number }): Promise<Message[]>;\n    /**\n     * 获取指定群组的论坛板块（话题）列表。要求该群组已开启 Forum 模式。\n     * @example const topics = await telegram.getForumTopics(chatId);\n     */\n    getForumTopics(chatId: number | string, opts?: { limit?: number }): Promise<ForumTopic[]>;\n    /**\n     * 主动拉取某条投票消息的最新计票结果。\n     * @example const poll = await telegram.getPollResults(chatId, pollMsgId);\n     */\n    getPollResults(chatId: number | string, messageId: number): Promise<Poll | null>;\n    /**\n     * 主动拉取某条消息的表态（Reaction）汇总数据。\n     * @example const reactions = await telegram.getMessageReactions(chatId, [msgId]);\n     */\n    getMessageReactions(chatId: number | string, messageIds: number[]): Promise<Reaction[]>;\n    /**\n     * 下载媒体文件的二进制数据。返回 base64 编码的 buffer 和文件大小。\n     * 需要传入通过 mediaInfo.fileId 获取的文件标识符。\n     * @param fileId TDLib/Bot API 兼容的文件 ID\n     * @param chatId  可选，用于 file reference 过期时自动 refetch\n     * @param messageId 可选，同上\n     * @param uniqueFileId 可选，用于缓存命中\n     * @example\n     * const msg = messages[0];\n     * if (msg.mediaInfo?.fileId) {\n     *   const data = await telegram.downloadMedia(msg.mediaInfo.fileId, chatId, msg.id, msg.mediaInfo.uniqueFileId);\n     *   // data.buffer 是 base64 编码的文件内容, data.size 是字节数\n     * }\n     */\n    downloadMedia(fileId: string, chatId?: number | string, messageId?: number, uniqueFileId?: string): Promise<DownloadedMedia>;\n\n    // ─── 迭代器 (for await) ───\n    iterHistory(chatId: number | string, opts?: { limit?: number }): AsyncIterable<Message>;\n    iterDialogs(opts?: { limit?: number }): AsyncIterable<Dialog>;\n\n    // ─── 群组管理 ───\n    /** 加入一个群聊或频道 */\n    joinChat(chatId: number | string): Promise<void>;\n    /** 退出一个群聊或频道 */\n    leaveChat(chatId: number | string): Promise<void>;\n\n    // ─── 状态操作 ───\n    readHistory(chatId: number | string): Promise<void>;\n    // [USERBOT_ONLY_END]\n    sendTyping(chatId: number | string): Promise<void>;\n}"
+  },
+  {
+    "name": "fs",
+    "description": "filesystem.d.ts — 文件系统操作模块类型定义",
+    "methods": [
+      {
+        "name": "readFile",
+        "brief": "读取文件内容。",
+        "fullDoc": "```typescript\nreadFile(path: string): string\n```\n\n\n读取文件内容。\n\n**参数：**\n- `path`: 文件路径（相对于 workspace/ 或绝对路径）\n- **返回值**: 文件内容字符串（UTF-8）\n\n**示例：**\n```typescript\nconst content = fs.readFile(\"skills/myskill/index.ts\");\nconsole.log(content);\n```"
+      },
+      {
+        "name": "writeFile",
+        "brief": "写入文件。如果目标目录不存在会自动创建。",
+        "fullDoc": "```typescript\nwriteFile(path: string, content: string): void\n```\n\n\n写入文件。如果目标目录不存在会自动创建。\n\n**参数：**\n- `path`: 文件路径\n- `content`: 文件内容\n\n**示例：**\n```typescript\nfs.writeFile(\"notes/todo.md\", \"# TODO\\n- 完成作业\");\n```\n\n```typescript\n// 创建新的 TS Skill\nfs.writeFile(\"skills/weather/index.ts\", `\n  import { fetch } from \"node-fetch\";\n  export const weather = {\n    current: async (city: string) => { ... }\n  };\n`);\n```"
+      },
+      {
+        "name": "appendFile",
+        "brief": "追加写入文件。文件不存在时会自动创建。",
+        "fullDoc": "```typescript\nappendFile(path: string, content: string): void\n```\n\n\n追加写入文件。文件不存在时会自动创建。\n\n**参数：**\n- `path`: 文件路径\n- `content`: 追加的内容\n\n**示例：**\n```typescript\nfs.appendFile(\"logs/activity.log\", `${new Date().toISOString()} 执行了任务\\n`);\n```"
+      },
+      {
+        "name": "readdir",
+        "brief": "列出目录下的文件和子目录名。",
+        "fullDoc": "```typescript\nreaddir(path: string): string[]\n```\n\n\n列出目录下的文件和子目录名。\n\n**参数：**\n- `path`: 目录路径\n- **返回值**: 文件名数组\n\n**示例：**\n```typescript\nconst files = fs.readdir(\"skills\");\nconsole.log(\"已安装的 Skills:\", files);\n```"
+      },
+      {
+        "name": "exists",
+        "brief": "检查文件或目录是否存在。",
+        "fullDoc": "```typescript\nexists(path: string): boolean\n```\n\n\n检查文件或目录是否存在。\n\n**参数：**\n- `path`: 路径\n- **返回值**: 是否存在"
+      },
+      {
+        "name": "unlink",
+        "brief": "删除文件。",
+        "fullDoc": "```typescript\nunlink(path: string): void\n```\n\n\n删除文件。\n\n**参数：**\n- `path`: 文件路径"
+      },
+      {
+        "name": "mkdir",
+        "brief": "创建目录（递归创建，类似 mkdir -p）。",
+        "fullDoc": "```typescript\nmkdir(path: string): void\n```\n\n\n创建目录（递归创建，类似 mkdir -p）。\n\n**参数：**\n- `path`: 目录路径"
+      },
+      {
+        "name": "stat",
+        "brief": "获取文件或目录的状态信息。",
+        "fullDoc": "```typescript\nstat(path: string): {\n        /** 文件大小（字节） */\n        size: number;\n        /** 是否是目录 */\n        isDirectory: boolean;\n        /** 是否是文件 */\n        isFile: boolean;\n        /** 最后修改时间（ISO 字符串） */\n        mtime: string;\n    }\n```\n\n\n获取文件或目录的状态信息。\n\n**参数：**\n- `path`: 路径\n- **返回值**: 状态对象\n\n**示例：**\n```typescript\nconst info = fs.stat(\"skills/tavily/index.ts\");\nconsole.log(`文件大小: ${info.size} bytes, 最后修改: ${info.mtime}`);\n```"
+      }
+    ]
   }
 ]

@@ -45,10 +45,13 @@ shared/scene.d.ts — 所有 scene 共享的场景信息能力
 - `showFullTypes`: 展示当前场景的完整类型定义（L2）
 
 ## skills
-shared/skills.d.ts — 所有 scene 共享的代码型 skills 能力
+shared/skills.d.ts — Skills 高层能力 + 管理接口
 
 - `memory.recallAndSummarize`: recallAndSummarize(query: string, options?: Record<string, unknown>): Promise<unknown>
 - `memory.browseForAnswer`: browseForAnswer(request: Record<string, unknown>): Promise<unknown>
+- `list`: 列出当前已加载的 Skills 名称
+- `reload`: 热重载所有 Skills。在 workspace/skills/ 下创建/修改文件后调用。
+- `npmInstall`: 安装 npm 包到 workspace/skills/ 目录
 
 ## telegram
 telegram.d.ts — Telegram 平台 API
@@ -84,3 +87,15 @@ telegram.d.ts — Telegram 平台 API
 - `leaveChat`: 退出一个群聊或频道
 - `readHistory`: readHistory(chatId: number | string): Promise<void>
 - `sendTyping`: sendTyping(chatId: number | string): Promise<void>
+
+## fs
+filesystem.d.ts — 文件系统操作模块类型定义
+
+- `readFile`: 读取文件内容。
+- `writeFile`: 写入文件。如果目标目录不存在会自动创建。
+- `appendFile`: 追加写入文件。文件不存在时会自动创建。
+- `readdir`: 列出目录下的文件和子目录名。
+- `exists`: 检查文件或目录是否存在。
+- `unlink`: 删除文件。
+- `mkdir`: 创建目录（递归创建，类似 mkdir -p）。
+- `stat`: 获取文件或目录的状态信息。

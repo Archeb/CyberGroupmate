@@ -10,10 +10,14 @@
  */
 
 import { createInterface } from "node:readline";
+import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
+import { dirname } from "node:path";
 import { installCapabilityRegistry, setPlatform } from "./capability-registry.js";
 import { createPromiseTracker } from "./promise-tracker.js";
 import { docs } from "./modules/docs.js";
-import { loadAllSkills, type LoadedSkill } from "./skill-loader.js";
+import { filesystem } from "./modules/filesystem.js";
+import { setSkillManagerCallbacks } from "./modules/skills.js";
+import { loadAllSkills, reloadAllSkills, installDepsRuntime, type LoadedSkill } from "./skill-loader.js";
 import { configureLogger } from "../core/logger.js";
 
 // ─── 全局 Skills 缓存（Worker 启动时加载一次） ───
@@ -97,9 +101,84 @@ interface HostCallMessage {
 type IncomingMessage = ExecuteMessage | InputResponseMessage | HostCallResultMessage;
 type OutgoingMessage = ResultMessage | NotifyMessage | InputRequestMessage | PrintMessage | HostCallMessage;
 
-// ─── 全局上下文 ───
+// ─── 全局上下文（跨 turn 持久化） ───
 
 const ctx: Record<string, unknown> = {};
+
+/** ctx 持久化路径（由 Host 通过环境变量传入） */
+const CTX_PERSIST_PATH = process.env.SANDBOX_CTX_PATH || "";
+
+/** 上次保存的 ctx JSON（用于 diff-check 避免无意义写入） */
+let lastSavedCtxJson = "{}";
+
+/** throttle 定时器 */
+let ctxSaveTimer: ReturnType<typeof setTimeout> | null = null;
+const CTX_SAVE_THROTTLE_MS = 3000;
+
+/**
+ * 从磁盘加载 ctx 快照（Worker 启动时调用）
+ */
+function loadCtxFromDisk(): void {
+    if (!CTX_PERSIST_PATH) return;
+    try {
+        if (existsSync(CTX_PERSIST_PATH)) {
+            const raw = readFileSync(CTX_PERSIST_PATH, "utf-8");
+            const parsed = JSON.parse(raw);
+            if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+                Object.assign(ctx, parsed);
+                lastSavedCtxJson = raw;
+            }
+        }
+    } catch (err) {
+        process.stderr.write(`[sandbox-worker] ctx 加载失败: ${err}\n`);
+    }
+}
+
+/**
+ * 序列化 ctx（跳过 function/symbol/circular 等不可序列化值）
+ */
+function safeStringifyCtx(): string {
+    try {
+        return JSON.stringify(ctx, (_key, value) => {
+            if (typeof value === "function" || typeof value === "symbol") return undefined;
+            if (typeof value === "bigint") return value.toString();
+            return value;
+        }, 2);
+    } catch {
+        // circular reference fallback
+        const seen = new WeakSet();
+        return JSON.stringify(ctx, (_key, value) => {
+            if (typeof value === "function" || typeof value === "symbol") return undefined;
+            if (typeof value === "bigint") return value.toString();
+            if (typeof value === "object" && value !== null) {
+                if (seen.has(value)) return "[Circular]";
+                seen.add(value);
+            }
+            return value;
+        }, 2);
+    }
+}
+
+/**
+ * throttled 保存 ctx 到磁盘
+ */
+function scheduleCtxSave(): void {
+    if (!CTX_PERSIST_PATH) return;
+    if (ctxSaveTimer) return; // 已有等待中的保存
+    ctxSaveTimer = setTimeout(() => {
+        ctxSaveTimer = null;
+        try {
+            const json = safeStringifyCtx();
+            if (json === lastSavedCtxJson) return; // 无变化
+            const dir = dirname(CTX_PERSIST_PATH);
+            if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+            writeFileSync(CTX_PERSIST_PATH, json, "utf-8");
+            lastSavedCtxJson = json;
+        } catch (err) {
+            process.stderr.write(`[sandbox-worker] ctx 保存失败: ${err}\n`);
+        }
+    }, CTX_SAVE_THROTTLE_MS);
+}
 
 // ─── IPC 通信 ───
 
@@ -281,8 +360,8 @@ async function executeCode(id: string, code: string): Promise<void> {
 
         // 构造参数列表：固定参数 + 平台 API + 动态 Skill 参数
         // ctx 保留为纯用户 state bag（LLM 可跨 turn 存取任意属性）
-        const fixedArgNames = ["ctx", "runtime", "memory", "scene", "docs", "actions", "skills", "telegram", "discord"];
-        const fixedArgValues = [ctx, rt, mem, scene, docs, act, sk, tg, dc];
+        const fixedArgNames = ["ctx", "runtime", "memory", "scene", "docs", "actions", "skills", "fs", "telegram", "discord"];
+        const fixedArgValues = [ctx, rt, mem, scene, docs, act, sk, filesystem, tg, dc];
         const allArgNames = [...fixedArgNames, ...skillArgNames];
         const allArgValues = [...fixedArgValues, ...skillArgValues];
 
@@ -306,6 +385,9 @@ async function executeCode(id: string, code: string): Promise<void> {
             output: outputLines.join("\n"),
             error: false,
         });
+
+        // ctx 持久化：每次成功执行后检查并调度保存
+        scheduleCtxSave();
     } catch (err: unknown) {
 
         const errorMsg =
@@ -379,6 +461,9 @@ async function initWorker(): Promise<void> {
     // Worker 的 stdout 是 IPC 通道，把所有 logger 输出重定向到 printToHost
     configureLogger({ sink: (line) => printToHost(line) });
 
+    // 从磁盘恢复 ctx（在 Skills 加载之前，因为 Skills 可能依赖 ctx 状态）
+    loadCtxFromDisk();
+
     // 加载用户 TS Skills（失败不阻断启动）
     try {
         loadedSkills = await loadAllSkills();
@@ -387,11 +472,21 @@ async function initWorker(): Promise<void> {
         loadedSkills = [];
     }
 
+    // 注入 Skill 管理回调（让 skills.list/reload/npmInstall 可用）
+    setSkillManagerCallbacks({
+        listSkills: () => loadedSkills.map(s => s.name),
+        reloadSkills: async () => {
+            loadedSkills = await reloadAllSkills();
+            return loadedSkills.map(s => s.name);
+        },
+        npmInstall: async (packages: string[]) => installDepsRuntime(packages),
+    });
+
     // 发送 ready 信号
     sendToHost({
         type: "result",
         id: "__ready__",
-        output: `worker ready (${loadedSkills.length} skills loaded)`,
+        output: `worker ready (${loadedSkills.length} skills loaded${CTX_PERSIST_PATH ? ", ctx persisted" : ""})`,
         error: false,
     });
 }
