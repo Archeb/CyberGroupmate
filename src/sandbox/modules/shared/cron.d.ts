@@ -11,7 +11,7 @@ declare const cron: {
      * 任务以代码字符串形式存储，触发时在 sandbox 中执行。
      *
      * @param name - 任务名称（用于显示和管理）
-     * @param cronExpr - cron 表达式，如 "0 9 * * *"（每天 9:00）、"*/5 * * * *"（每 5 分钟）
+     * @param cronExpr - cron 表达式，如 "0 9 * * *"（每天 9:00）、"<star>/5 * * * *"（每 5 分钟）
      * @param code - 触发时执行的 JavaScript 代码字符串
      * @returns 创建的任务信息
      *
@@ -25,7 +25,7 @@ declare const cron: {
      *
      * @example
      * // 每 30 分钟检查一次
-     * await cron.add("health-check", "*/30 * * * *", `
+     * await cron.add("health-check", "<star>/30 * * * *", `
      *   console.log("健康检查 at " + new Date().toISOString());
      * `);
      */

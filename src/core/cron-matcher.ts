@@ -2,7 +2,7 @@
  * cron-matcher.ts — 轻量级 cron 表达式匹配器
  *
  * 支持标准 5 字段 cron 表达式：分 时 日 月 星期
- * 支持: *, */n, n, n-m, n,m
+ * 支持: *, <star>/n, n, n-m, n,m
  */
 
 /**
