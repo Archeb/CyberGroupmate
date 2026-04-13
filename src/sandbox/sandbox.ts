@@ -243,6 +243,13 @@ export class Sandbox extends EventEmitter {
         // 构建子进程 env
         const workerEnv = this.buildWorkerEnv();
 
+        // 构建增强的 PATH（包含 skills 依赖的可执行文件）
+        const skillsBinDir = join(this.projectRoot, "workspace", "skills", "node_modules", ".bin");
+        const existingPath = workerEnv.PATH || process.env.PATH || "";
+        const enhancedPath = existsSync(skillsBinDir)
+            ? `${skillsBinDir}:${existingPath}`
+            : existingPath;
+
         this.ptyProcess = pty.spawn("/bin/bash", ["--norc", "--noprofile"], {
             name: "xterm-256color",
             cols: 200,
@@ -251,6 +258,7 @@ export class Sandbox extends EventEmitter {
             env: {
                 ...workerEnv,
                 HOME: this.shellHome,
+                PATH: enhancedPath,
                 // 使用简单提示符，避免干扰输出
                 PS1: "",
                 PS2: "",
