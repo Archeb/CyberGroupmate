@@ -50,13 +50,17 @@ export function discoverSkills(): Array<{ name: string; indexPath: string; dtsPa
         if (!statSync(dirPath).isDirectory()) continue;
         if (entry === "node_modules" || entry.startsWith(".")) continue;
 
+        const skillMd = join(dirPath, "SKILL.md");
+
         // 查找入口文件（优先 index.ts，其次 index.js）
         const indexTs = join(dirPath, "index.ts");
         const indexJs = join(dirPath, "index.js");
         const indexPath = existsSync(indexTs) ? indexTs : existsSync(indexJs) ? indexJs : null;
 
         if (!indexPath) {
-            log.warn(`[skill-loader] ⚠ 跳过 ${entry}/: 未找到 index.ts 或 index.js\n`);
+            if (!existsSync(skillMd)) {
+                log.warn(`[skill-loader] ⚠ 跳过 ${entry}/: 未找到 index.ts 或 index.js\n`);
+            }
             continue;
         }
 

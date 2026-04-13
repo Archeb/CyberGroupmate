@@ -21,7 +21,7 @@ import { SandboxPool } from "../sandbox/sandbox-pool.js";
 import { NotificationCenter } from "../event/notification-center.js";
 import { runCodeActSession, SentMessageCollector, type SessionResult, type SentMessageRecord } from "../sandbox/session-runner.js";
 import { loadModuleRegistry, lookupFullDocs, generateBriefOverview, type ModuleEntry } from "../sandbox/modules/module-registry.js";
-import { getAgentSkillsBriefs } from "../sandbox/modules/docs.js";
+import { getAgentSkillsApiBriefs, getAgentSkillsBriefs } from "../sandbox/modules/docs.js";
 import { parseAllSkillDocs } from "../sandbox/skill-loader.js";
 import { buildPrefixMap } from "../sandbox/api-intent-extractor.js";
 import { renderPrompt, deriveChatType } from "../main-agent/prompt-renderer.js";
@@ -109,8 +109,10 @@ export function loadApiTypeDefs(platform: string = "telegram"): string {
 
         // 生成轻量概览
         const result = generateBriefOverview(filteredRegistry);
-        _apiBriefCache.set(platform, result);
-        return result;
+        const agentSkills = getAgentSkillsApiBriefs();
+        const combined = agentSkills ? `${result}\n\n${agentSkills}` : result;
+        _apiBriefCache.set(platform, combined);
+        return combined;
     } catch (err) {
         const errorMsg = err instanceof Error ? err.stack ?? err.message : String(err);
         log.error("loadApiTypeDefs failed", { error: errorMsg });
