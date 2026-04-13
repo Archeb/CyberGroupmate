@@ -332,6 +332,21 @@ metrics:
 #   code_act:
 #     # 最大交互轮次 (30)
 #     max_turns: 30
+
+# ─── MCP Servers 预配置 ───
+# 在 Sandbox 启动时自动连接的 MCP Server 列表。
+# 每个条目必须指定 name 和 command。
+# auto_connect 默认 true，设为 false 则不自动连接（需手动通过 mcp.connect 连接）。
+# mcp_servers:
+#   - name: filesystem
+#     command: npx
+#     args: ["-y", "@anthropic/mcp-filesystem"]
+#     auto_connect: true
+#   - name: github
+#     command: npx
+#     args: ["-y", "@anthropic/mcp-github"]
+#     env:
+#       GITHUB_TOKEN: "ghp_xxx"
 #     # 单次代码执行超时 ms (60000)
 #     max_execution_time_ms: 60000
 #     # session 最大消息数，超过后自动 compact (100)

@@ -339,6 +339,20 @@ export interface EnvironmentVariable {
     scope: "both" | "host" | "sandbox";
 }
 
+/** MCP Server 预配置（config.yaml 中声明，Sandbox 启动时自动连接） */
+export interface McpServerPreConfig {
+    /** 显示名称（也是 tool 命名空间） */
+    name: string;
+    /** 启动命令 */
+    command: string;
+    /** 命令参数 */
+    args?: string[];
+    /** 环境变量（如 API keys） */
+    env?: Record<string, string>;
+    /** 是否在 Sandbox 启动时自动连接（默认 true） */
+    autoConnect?: boolean;
+}
+
 export interface AppConfig {
     llmProfiles: Record<string, LLMConfig>;
     llmRouting: LLMRoutingConfig;
@@ -360,6 +374,8 @@ export interface AppConfig {
     envVars?: EnvironmentVariable[];
     /** Prometheus Metrics Exporter 配置 */
     metrics?: MetricsConfig;
+    /** MCP Server 预配置列表（Sandbox 启动时自动连接） */
+    mcpServers?: McpServerPreConfig[];
 }
 
 // ─── 默认值 ───
@@ -522,6 +538,7 @@ export function loadConfig(configPath?: string, forceReload?: boolean): AppConfi
         recordingPipeline: parseRecordingPipelineConfig(fileConfig),
         envVars: parseEnvVars(fileConfig),
         metrics: parseMetricsConfig(fileConfig),
+        mcpServers: parseMcpServersConfig(fileConfig),
     };
 
     _cached = config;
@@ -631,6 +648,33 @@ function parseMetricsConfig(fileConfig: Record<string, unknown>): MetricsConfig 
         port: raw.port != null ? num(raw.port, 9091) : undefined,
         path: str(raw.path),
     };
+}
+
+// ─── MCP Servers 预配置解析 ───
+
+function parseMcpServersConfig(fileConfig: Record<string, unknown>): McpServerPreConfig[] | undefined {
+    const raw = fileConfig.mcp_servers;
+    if (!Array.isArray(raw) || raw.length === 0) return undefined;
+
+    return raw
+        .filter((item): item is Record<string, unknown> => item != null && typeof item === "object")
+        .map((item) => {
+            const cfg: McpServerPreConfig = {
+                name: str(item.name) ?? "unnamed",
+                command: str(item.command) ?? "",
+                args: Array.isArray(item.args)
+                    ? (item.args as unknown[]).map(String)
+                    : undefined,
+                env: item.env != null && typeof item.env === "object"
+                    ? Object.fromEntries(
+                          Object.entries(item.env as Record<string, unknown>).map(([k, v]) => [k, String(v)])
+                      )
+                    : undefined,
+                autoConnect: item.auto_connect != null ? Boolean(item.auto_connect) : undefined,
+            };
+            return cfg;
+        })
+        .filter((cfg) => cfg.command !== "");
 }
 
 // ─── Subagent 配置解析 ───

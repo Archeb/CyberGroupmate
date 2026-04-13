@@ -504,6 +504,30 @@ async function initWorker(): Promise<void> {
         process.stderr.write(`[sandbox-worker] MCP 自动重连失败: ${err}\n`);
     });
 
+    // MCP 预配置自动连接（config.yaml → env → mcpBridge.connect）
+    const mcpServersRaw = process.env.SANDBOX_MCP_SERVERS;
+    if (mcpServersRaw) {
+        try {
+            const servers = JSON.parse(mcpServersRaw) as Array<{
+                name: string;
+                command: string;
+                args?: string[];
+                env?: Record<string, string>;
+                autoConnect?: boolean;
+            }>;
+            for (const srv of servers) {
+                if (srv.autoConnect === false) continue;
+                mcpBridge.connect({ name: srv.name, command: srv.command, args: srv.args, env: srv.env })
+                    .then(() => printToHost(`[MCP] 预配置服务器 "${srv.name}" 已连接`))
+                    .catch(err => {
+                        process.stderr.write(`[sandbox-worker] MCP 预配置连接失败 "${srv.name}": ${err}\n`);
+                    });
+            }
+        } catch {
+            process.stderr.write(`[sandbox-worker] SANDBOX_MCP_SERVERS 解析失败\n`);
+        }
+    }
+
     // 发送 ready 信号
     sendToHost({
         type: "result",
