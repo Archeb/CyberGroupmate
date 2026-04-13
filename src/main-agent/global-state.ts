@@ -249,6 +249,23 @@ export class GlobalState {
         return event;
     }
 
+    /** 添加 sandbox-cron 定时任务（代码字符串，触发时在 sandbox 中执行） */
+    addSandboxCron(chatId: string, name: string, cronExpr: string, code: string): SchedulerEvent {
+        const event: SchedulerEvent = {
+            id: randomUUID(),
+            type: "sandbox-cron",
+            chatId,
+            description: name,
+            cronExpr,
+            code,
+            createdAt: new Date().toISOString(),
+        };
+        this.state.schedulerEvents.push(event);
+        this.markDirty();
+        log.debug("addSandboxCron", { id: event.id, chatId, name, cronExpr });
+        return event;
+    }
+
     /** 取消调度事件 */
     cancelSchedulerEvent(id: string): boolean {
         const idx = this.state.schedulerEvents.findIndex(e => e.id === id);
@@ -282,6 +299,15 @@ export class GlobalState {
         event.triggered = true;
         this.markDirty();
         return true;
+    }
+
+    /** 更新 cron/sandbox-cron 的 lastTriggeredAt */
+    markCronTriggered(id: string): void {
+        const event = this.state.schedulerEvents.find(e => e.id === id);
+        if (event) {
+            event.lastTriggeredAt = new Date().toISOString();
+            this.markDirty();
+        }
     }
 
     // ─── 持久化 ───

@@ -17,6 +17,9 @@ import { createPromiseTracker } from "./promise-tracker.js";
 import { docs } from "./modules/docs.js";
 import { filesystem } from "./modules/filesystem.js";
 import { mcpBridge, initMcpBridge, autoReconnect as mcpAutoReconnect } from "./modules/mcp-bridge.js";
+import { cronModule, setCronCallbacks } from "./modules/cron.js";
+import { eventsModule, setEventsCallbacks } from "./modules/events.js";
+import { kvModule, setKvCallbacks } from "./modules/kv.js";
 import { setSkillManagerCallbacks } from "./modules/skills.js";
 import { loadAllSkills, reloadAllSkills, installDepsRuntime, type LoadedSkill } from "./skill-loader.js";
 import { configureLogger } from "../core/logger.js";
@@ -361,8 +364,8 @@ async function executeCode(id: string, code: string): Promise<void> {
 
         // 构造参数列表：固定参数 + 平台 API + 动态 Skill 参数
         // ctx 保留为纯用户 state bag（LLM 可跨 turn 存取任意属性）
-        const fixedArgNames = ["ctx", "runtime", "memory", "scene", "docs", "actions", "skills", "fs", "mcp", "telegram", "discord"];
-        const fixedArgValues = [ctx, rt, mem, scene, docs, act, sk, filesystem, mcpBridge, tg, dc];
+        const fixedArgNames = ["ctx", "runtime", "memory", "scene", "docs", "actions", "skills", "fs", "mcp", "cron", "events", "kv", "telegram", "discord"];
+        const fixedArgValues = [ctx, rt, mem, scene, docs, act, sk, filesystem, mcpBridge, tracker.wrap(cronModule as unknown as Record<string, unknown>), eventsModule, tracker.wrap(kvModule as unknown as Record<string, unknown>), tg, dc];
         const allArgNames = [...fixedArgNames, ...skillArgNames];
         const allArgValues = [...fixedArgValues, ...skillArgValues];
 
@@ -482,6 +485,11 @@ async function initWorker(): Promise<void> {
         },
         npmInstall: async (packages: string[]) => installDepsRuntime(packages),
     });
+
+    // 注入 Cron/Events/KV 回调（通过 callHost 代理到 Host）
+    setCronCallbacks({ callHost });
+    setEventsCallbacks({ callHost });
+    setKvCallbacks({ callHost });
 
     // 初始化 MCP 桥接（持久化 + 自动重连）
     const mcpPersistPath = CTX_PERSIST_PATH
