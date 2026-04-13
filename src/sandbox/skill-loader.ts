@@ -226,3 +226,98 @@ export async function installSkillsDependencies(skillsPath: string): Promise<voi
         log.error("自动安装 Skills 依赖失败", { error: msg });
     }
 }
+
+// ─── 热重载支持 ───
+
+/** 热重载计数器（用于 cache-busting import） */
+let reloadCounter = 0;
+
+/**
+ * 热重载所有 Skills。
+ * 通过在 import URL 上追加 query string 绕过 ESM 缓存。
+ * 
+ * @returns 重新加载后的 LoadedSkill 列表
+ */
+export async function reloadAllSkills(): Promise<LoadedSkill[]> {
+    reloadCounter++;
+    const discovered = discoverSkills();
+    if (discovered.length === 0) return [];
+
+    log.info(`[skill-loader] 🔄 热重载 Skills (round ${reloadCounter}): ${discovered.map(s => s.name).join(", ")}`);
+
+    const loaded: LoadedSkill[] = [];
+
+    for (const skill of discovered) {
+        try {
+            // 追加 ?reload=N 绕过 ESM import 缓存
+            const fileUrl = pathToFileURL(skill.indexPath).href + `?reload=${reloadCounter}`;
+            const mod = await import(fileUrl);
+
+            let exports: Record<string, unknown>;
+            if (mod.default) {
+                exports = mod.default;
+            } else if (mod[skill.name]) {
+                exports = mod[skill.name];
+            } else {
+                exports = {};
+                for (const [key, value] of Object.entries(mod)) {
+                    if (!key.startsWith("__")) exports[key] = value;
+                }
+            }
+
+            loaded.push({
+                name: skill.name,
+                exports,
+                dtsPath: skill.dtsPath,
+            });
+            log.info(`[skill-loader] ✅ ${skill.name} 已重载`);
+        } catch (err) {
+            const msg = err instanceof Error ? err.stack ?? err.message : String(err);
+            log.warn(`[skill-loader] ❌ 重载 Skill "${skill.name}" 失败:\n${msg}`);
+        }
+    }
+
+    return loaded;
+}
+
+/**
+ * 在运行时执行 npm install（用于 LLM 自助安装依赖）
+ * 
+ * @param packages 要安装的包列表（如 ["axios", "cheerio"]）
+ * @returns npm install 的 stdout 输出
+ */
+export async function installDepsRuntime(packages: string[]): Promise<string> {
+    if (packages.length === 0) {
+        throw new Error("请指定至少一个要安装的包名");
+    }
+
+    // 安全检查：包名只允许 @scope/name 格式
+    for (const pkg of packages) {
+        if (!/^(@[\w-]+\/)?[\w.-]+(@[\w.^~>=<-]+)?$/.test(pkg)) {
+            throw new Error(`无效的包名: "${pkg}"`);
+        }
+    }
+
+    const npmCmd = process.platform === "win32" ? "npm.cmd" : "npm";
+
+    return new Promise<string>((resolve, reject) => {
+        const child = spawn(npmCmd, ["install", "--save", "--no-audit", "--no-fund", ...packages], {
+            cwd: SKILLS_DIR,
+            env: process.env,
+        });
+
+        let stdout = "";
+        let stderr = "";
+        child.stdout?.on("data", (data: Buffer) => { stdout += data.toString(); });
+        child.stderr?.on("data", (data: Buffer) => { stderr += data.toString(); });
+
+        child.on("close", (code) => {
+            if (code === 0) {
+                resolve(stdout || "安装成功");
+            } else {
+                reject(new Error(`npm install failed (code ${code}): ${stderr || stdout}`));
+            }
+        });
+        child.on("error", reject);
+    });
+}

@@ -21,7 +21,14 @@ const TRIVIAL_CALLS = new Set([
     "telegram.sendText",
     "telegram.sendMedia",
     "discord.sendText",
-    "discord.sendMedia"
+    "discord.sendMedia",
+    // fs 模块：简单操作不需要完整文档
+    "fs.exists",
+    "fs.readdir",
+    "fs.readFile",
+    "fs.mkdir",
+    // skills 管理
+    "skills.list",
 ]);
 
 /**

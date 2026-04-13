@@ -136,6 +136,9 @@ export class Sandbox extends EventEmitter {
         for (const key of this.hostOnlyKeys) {
             delete env[key];
         }
+        // ctx 持久化路径：per-chat 状态文件
+        const safeChatId = this.chatId.replace(/[^a-zA-Z0-9_\-\.]/g, "_");
+        env.SANDBOX_CTX_PATH = join(this.projectRoot, "workspace", safeChatId, "ctx.json");
         return env;
     }
 
