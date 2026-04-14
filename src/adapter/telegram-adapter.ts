@@ -424,7 +424,9 @@ export class TelegramAdapter implements PlatformAdapter {
                     if (isLocalPath) {
                         const { readFileSync, existsSync } = await import("node:fs");
                         const pathMod = await import("node:path");
-                        const resolvedPath = pathMod.resolve(fileStr);
+                        // 相对路径基于 workspace 目录解析（与 sandbox worker CWD 一致）
+                        const workspaceDir = pathMod.join(process.cwd(), "workspace");
+                        const resolvedPath = fileStr.startsWith("/") ? pathMod.resolve(fileStr) : pathMod.resolve(workspaceDir, fileStr);
                         if (!existsSync(resolvedPath)) {
                             throw new Error(`sendMedia: 文件不存在: ${resolvedPath}`);
                         }
@@ -454,7 +456,9 @@ export class TelegramAdapter implements PlatformAdapter {
                 // 读取文件到 Buffer（host 侧完成，避免 IPC 序列化问题）
                 const { readFileSync, existsSync, statSync } = await import("node:fs");
                 const pathMod = await import("node:path");
-                const resolvedPath = pathMod.resolve(filePath);
+                // 相对路径基于 workspace 目录解析（与 sandbox worker CWD 一致）
+                const workspaceDir = pathMod.join(process.cwd(), "workspace");
+                const resolvedPath = filePath.startsWith("/") ? pathMod.resolve(filePath) : pathMod.resolve(workspaceDir, filePath);
 
                 if (!existsSync(resolvedPath)) {
                     throw new Error(`sendFile: 文件不存在: ${resolvedPath}`);
@@ -749,7 +753,9 @@ export class TelegramAdapter implements PlatformAdapter {
                         const fileStr = m.file as string;
                         const isLocalPath = fileStr.startsWith("/") || fileStr.startsWith("./") || fileStr.startsWith("../");
                         if (isLocalPath) {
-                            const resolvedPath = pathMod.resolve(fileStr);
+                            // 相对路径基于 workspace 目录解析（与 sandbox worker CWD 一致）
+                            const workspaceDir = pathMod.join(process.cwd(), "workspace");
+                            const resolvedPath = fileStr.startsWith("/") ? pathMod.resolve(fileStr) : pathMod.resolve(workspaceDir, fileStr);
                             if (!existsSync(resolvedPath)) {
                                 throw new Error(`sendMediaGroup: 文件不存在: ${resolvedPath}`);
                             }

@@ -11,7 +11,7 @@
 
 import { createInterface } from "node:readline";
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname } from "node:path";
 import { installCapabilityRegistry, setPlatform } from "./capability-registry.js";
 import { BackgroundManager } from "./background-manager.js";
 import { createPromiseTracker } from "./promise-tracker.js";
@@ -250,14 +250,14 @@ const bgManager = new BackgroundManager({
     persistPath: PERSISTENT_TASKS_PATH,
 });
 
-/** 返回当前 sandbox 的 home 目录路径 */
+/** 返回当前 sandbox 的 home 目录路径（统一为 workspace 根目录） */
 function getHome(): string {
-    return CTX_PERSIST_PATH ? dirname(CTX_PERSIST_PATH) : process.cwd();
+    return process.cwd();
 }
 
 /** 返回 workspace 根目录路径 */
 function getWorkspace(): string {
-    return CTX_PERSIST_PATH ? dirname(dirname(CTX_PERSIST_PATH)) : join(process.cwd(), "workspace");
+    return process.cwd();
 }
 
 // ─── 代码执行 ───
