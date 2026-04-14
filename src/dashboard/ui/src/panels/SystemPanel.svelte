@@ -7,6 +7,7 @@
   let pool = {};
   let feedbackWindows = [];
   let callbacks = [];
+  let scheduler = { reminders: [], crons: [], summary: {} };
 
   $: groups = $appState.groups;
   $: if ($activeTab === 'system') refreshSystem();
@@ -19,6 +20,36 @@
     const fl = await api('/feedbackloop');
     feedbackWindows = fl.activeWindows || [];
     callbacks = await api('/callbacks') || [];
+    scheduler = await api('/scheduler') || { reminders: [], crons: [], summary: {} };
+  }
+
+  function timeUntil(isoDate) {
+    if (!isoDate) return '-';
+    const diff = new Date(isoDate).getTime() - Date.now();
+    if (diff <= 0) return '已到期';
+    const mins = Math.floor(diff / 60000);
+    if (mins < 60) return `${mins}分钟后`;
+    const hours = Math.floor(mins / 60);
+    if (hours < 24) return `${hours}小时${mins % 60}分后`;
+    const days = Math.floor(hours / 24);
+    return `${days}天后`;
+  }
+
+  function timeAgo(isoDate) {
+    if (!isoDate) return '-';
+    const diff = Date.now() - new Date(isoDate).getTime();
+    if (diff < 60000) return '刚刚';
+    const mins = Math.floor(diff / 60000);
+    if (mins < 60) return `${mins}分钟前`;
+    const hours = Math.floor(mins / 60);
+    if (hours < 24) return `${hours}小时前`;
+    return `${Math.floor(hours / 24)}天前`;
+  }
+
+  async function cancelEvent(id) {
+    if (!confirm('确认取消此调度？')) return;
+    await api(`/scheduler/${id}`, { method: 'DELETE' });
+    await refreshSystem();
   }
 </script>
 
@@ -76,6 +107,82 @@
         {/each}
       {:else}
         <div class="text-xs opacity-60">无活跃窗口</div>
+      {/if}
+    </div>
+  </div>
+
+  <!-- Scheduler -->
+  <div class="card bg-base-100">
+    <div class="card-body p-4">
+      <h3 class="card-title text-sm">
+        <i class="fa-solid fa-clock opacity-50 mr-1"></i>定时调度
+        <span class="badge badge-sm badge-ghost ml-auto">
+          {scheduler.summary.activeReminders || 0} 提醒 / {scheduler.summary.totalCrons || 0} 周期
+        </span>
+      </h3>
+
+      <!-- Reminders -->
+      {#if scheduler.reminders.length}
+        <div class="text-xs font-bold mt-2 mb-1 opacity-70">
+          <i class="fa-solid fa-bell mr-1"></i>Reminders
+        </div>
+        <div class="space-y-1">
+          {#each scheduler.reminders as r}
+            <div class="flex items-start gap-2 text-xs px-2 py-1.5 bg-base-200 rounded" class:opacity-40={r.triggered}>
+              <div class="flex-1 min-w-0">
+                <div class="flex items-center gap-1">
+                  <span class="badge badge-xs" class:badge-success={!r.triggered} class:badge-ghost={r.triggered}>
+                    {r.triggered ? '✓' : '⏳'}
+                  </span>
+                  {#if getPlatform(r.chatId)}<span class="platform-badge platform-{getPlatform(r.chatId)}">{platformLabel(getPlatform(r.chatId))}</span>{/if}
+                  <span class="font-mono">{shortId(r.chatId)}</span>
+                  <span class="opacity-50 ml-auto whitespace-nowrap">{r.triggered ? '已触发' : timeUntil(r.triggerAt)}</span>
+                </div>
+                <div class="mt-0.5 truncate" title={r.description}>{r.description}</div>
+              </div>
+              {#if !r.triggered}
+                <button class="btn btn-xs btn-ghost text-error flex-shrink-0" title="取消" on:click={() => cancelEvent(r.id)}>
+                  <i class="fa-solid fa-xmark"></i>
+                </button>
+              {/if}
+            </div>
+          {/each}
+        </div>
+      {/if}
+
+      <!-- Crons -->
+      {#if scheduler.crons.length}
+        <div class="text-xs font-bold mt-3 mb-1 opacity-70">
+          <i class="fa-solid fa-repeat mr-1"></i>Crons
+        </div>
+        <div class="space-y-1">
+          {#each scheduler.crons as c}
+            <div class="flex items-start gap-2 text-xs px-2 py-1.5 bg-base-200 rounded">
+              <div class="flex-1 min-w-0">
+                <div class="flex items-center gap-1">
+                  <span class="badge badge-xs badge-info">⟳</span>
+                  {#if getPlatform(c.chatId)}<span class="platform-badge platform-{getPlatform(c.chatId)}">{platformLabel(getPlatform(c.chatId))}</span>{/if}
+                  <span class="font-mono">{shortId(c.chatId)}</span>
+                  <code class="text-[10px] opacity-60 ml-1">{c.cronExpr}</code>
+                  <span class="opacity-50 ml-auto whitespace-nowrap">
+                    {c.lastTriggeredAt ? timeAgo(c.lastTriggeredAt) : '未触发'}
+                  </span>
+                </div>
+                <div class="mt-0.5 font-semibold">{c.description}</div>
+                {#if c.taskTemplate && c.taskTemplate !== c.description}
+                  <div class="mt-0.5 truncate opacity-60" title={c.taskTemplate}>{c.taskTemplate}</div>
+                {/if}
+              </div>
+              <button class="btn btn-xs btn-ghost text-error flex-shrink-0" title="取消" on:click={() => cancelEvent(c.id)}>
+                <i class="fa-solid fa-xmark"></i>
+              </button>
+            </div>
+          {/each}
+        </div>
+      {/if}
+
+      {#if !scheduler.reminders.length && !scheduler.crons.length}
+        <div class="text-xs opacity-60 mt-2">无调度事件</div>
       {/if}
     </div>
   </div>

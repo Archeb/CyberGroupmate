@@ -68,7 +68,7 @@ function main(): void {
     for (const entry of allEntries) {
         console.log(`  ${entry.name}: ${entry.methods.length} 个方法`);
         for (const m of entry.methods) {
-            console.log(`    - ${m.name}: ${m.brief.slice(0, 60)}`);
+            console.log(`    - ${m.name}: ${m.brief}`);
         }
     }
 

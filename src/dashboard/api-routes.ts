@@ -342,6 +342,44 @@ export function createApiRouter(deps: DashboardDeps, bridge: EventBridge): Route
         res.json(deps.globalState.getState());
     });
 
+    // ─── Scheduler Events ───
+    router.get("/scheduler", (_req, res) => {
+        const events = deps.globalState.getSchedulerEvents();
+        const reminders = events.filter(e => e.type === "reminder");
+        const crons = events.filter(e => e.type === "cron");
+        res.json({
+            reminders: reminders.map(e => ({
+                id: e.id,
+                chatId: e.chatId,
+                description: e.description,
+                triggerAt: e.triggerAt,
+                triggered: !!e.triggered,
+                createdAt: e.createdAt,
+                requestedBy: e.requestedBy,
+            })),
+            crons: crons.map(e => ({
+                id: e.id,
+                chatId: e.chatId,
+                description: e.description,
+                cronExpr: e.cronExpr,
+                taskTemplate: e.taskTemplate,
+                lastTriggeredAt: e.lastTriggeredAt,
+                createdAt: e.createdAt,
+            })),
+            summary: {
+                totalReminders: reminders.length,
+                activeReminders: reminders.filter(e => !e.triggered).length,
+                triggeredReminders: reminders.filter(e => e.triggered).length,
+                totalCrons: crons.length,
+            },
+        });
+    });
+
+    router.delete("/scheduler/:id", (req, res) => {
+        const ok = deps.globalState.cancelSchedulerEvent(req.params.id);
+        res.json({ ok });
+    });
+
     // ─── Memory: User / Group ───
     router.get("/memory/user/:userId", async (req, res) => {
         try {

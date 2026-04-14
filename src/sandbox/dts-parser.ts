@@ -44,15 +44,17 @@ function extractDescription(jsDoc: string): string {
 }
 
 /**
- * 从 JSDoc 中提取第一行非 @tag 的描述作为 brief
+ * 从 JSDoc 中提取所有非 @tag 的描述行拼为一行作为 brief
  */
 function extractBrief(jsDoc: string): string {
     const desc = extractDescription(jsDoc);
+    const lines: string[] = [];
     for (const line of desc.split("\n")) {
         const trimmed = line.trim();
-        if (trimmed && !trimmed.startsWith("@")) return trimmed;
+        if (trimmed.startsWith("@")) break;   // 遇到 @param/@example 等立即停止
+        if (trimmed) lines.push(trimmed);
     }
-    return "";
+    return lines.join(" ");
 }
 
 /**
