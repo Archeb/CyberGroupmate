@@ -25,7 +25,7 @@ FROM node:22-bookworm
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     ffmpeg zip unzip wget curl jq imagemagick git ca-certificates \
-    python3 python3-pip python3-venv \
+    python3 python3-pip python3-venv python3-dev build-essential \
     libmagic-dev \
     pandoc poppler-utils \
     dnsutils \
@@ -33,6 +33,9 @@ RUN apt-get update && \
 
 # 设置 Python 别名
 RUN ln -s /usr/bin/python3 /usr/bin/python
+
+# 安装 uv (极速 Python 包管理器) 和 ruff (极速 Linter)
+RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR="/usr/local/bin" sh
 
 WORKDIR /app
 
