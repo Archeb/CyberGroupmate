@@ -510,6 +510,15 @@ ${fullDocs}
                             log.info(`Turn ${turnNum}: Pass 2 完成`, {
                                 codeBlocks: pass2Parsed.codeBlocks.length,
                             });
+
+                            // 发射 Pass 2 thinking 进度事件（覆盖 Pass 1 的代码块）
+                            emitProgress({
+                                turn: turnNum,
+                                phase: "thinking",
+                                thinking: pass2Parsed.thinking,
+                                codeBlocks: pass2Parsed.codeBlocks.length > 0 ? pass2Parsed.codeBlocks : undefined,
+                                isProcessing: true,
+                            });
                         } catch (err: unknown) {
                             // Pass 2 LLM 失败 → 回退到 Pass 1 的代码继续执行
                             log.warn(`Turn ${turnNum}: Pass 2 LLM 失败，回退到 Pass 1 代码`, {
