@@ -89,6 +89,13 @@ export class DynamicAttentionQueue {
             if (entry.newMessageCount !== undefined) existing.newMessageCount = entry.newMessageCount;
             if (entry.hasFastPathRequest !== undefined) existing.hasFastPathRequest = entry.hasFastPathRequest;
             if (entry.stickinessLevel) existing.stickinessLevel = entry.stickinessLevel;
+            // 合并 schedulerTriggers（追加，不覆盖）
+            if (entry.schedulerTriggers?.length) {
+                existing.schedulerTriggers = [
+                    ...(existing.schedulerTriggers ?? []),
+                    ...entry.schedulerTriggers,
+                ];
+            }
 
             log.debug("enqueueOrUpdate: UPDATE", { chatId: entry.chatId, priority: existing.priority, source: existing.source });
         } else {
@@ -112,6 +119,7 @@ export class DynamicAttentionQueue {
                 newMessageCount: entry.newMessageCount ?? 0,
                 topicDigests: entry.topicDigests ?? [],
                 stickinessLevel: entry.stickinessLevel ?? "STRANGER",
+                ...(entry.schedulerTriggers?.length ? { schedulerTriggers: entry.schedulerTriggers } : {}),
             };
 
             this.entries.set(entry.chatId, newEntry);
