@@ -20,8 +20,8 @@ import { join, resolve, relative } from "node:path";
 
 // ─── 安全路径解析 ───
 
-/** workspace 根目录 */
-const WORKSPACE_ROOT = resolve(process.cwd(), "workspace");
+/** workspace 根目录（Worker 进程 CWD 已被设置为 workspace/） */
+const WORKSPACE_ROOT = resolve(process.cwd());
 
 /** 单文件大小限制 (bytes) */
 const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
