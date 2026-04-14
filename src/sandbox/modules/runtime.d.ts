@@ -46,12 +46,10 @@ declare const runtime: {
     workspace(): string;
 
     /**
-     * 设置一次性定时提醒（自然语言）。
-     * 到期后 agent 将被唤醒并收到 description 作为新任务。
+     * 设置一次性定时提醒（自然语言）。到期后 agent 将被唤醒并收到 description 作为新任务。重复定时提醒请用 cron
      *
      * ⚠️ description 必须是详细的自然语言描述，不是代码。
      * 写清楚：要做什么、给谁发、发什么内容、如何获取信息等。
-     * agent 会在触发时作为全新 session 收到这段描述。
      *
      * 限制：最短 1 分钟，最长 365 天，每个群最多 10 个活跃提醒。
      *

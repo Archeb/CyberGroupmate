@@ -7,18 +7,19 @@
 
 declare const cron: {
     /**
-     * 添加持久化定时任务。触发时以自然语言任务描述唤醒 agent，
-     * agent 在当时的上下文中自主决定如何执行。
+     * 添加持久化定时任务。触发时以自然语言任务描述唤醒 agent，agent 在当时的上下文中自主决定如何执行。
      *
      * ⚠️ taskDescription 必须是详细的自然语言描述，不是代码。
      * 写清楚：要做什么、给谁发、发什么内容、从哪里获取信息等。
      * agent 会在每次触发时收到这段描述作为新任务。
      *
      * 限制：最短间隔 1 小时，每个群最多 10 个 cron 任务。
+     * 
+     * 一次性定时任务请使用 runtime.remind
      *
      * @param name - 任务名称（用于显示和管理）
      * @param cronExpr - cron 表达式（最短间隔 1 小时），如 "0 9 * * *"（每天 9:00）
-* @param taskDescription - 触发时的自然语言任务描述
+     * @param taskDescription - 触发时的自然语言任务描述
      * @returns 创建的任务信息
      *
      * @example

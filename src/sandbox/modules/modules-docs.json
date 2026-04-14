@@ -22,7 +22,7 @@
   },
   {
     "name": "discord",
-    "description": "discord.d.ts — Discord 平台 API",
+    "description": "discord.d.ts — Discord 平台 API 系统注入的 Discord host proxy 接口。 提供给 Agent 在 sandbox 执行时作为 TypeScript 强类型上下文参考。 平台连接与消息监听由宿主侧 DiscordAdapter 管理。",
     "methods": [
       {
         "name": "sendText",
@@ -44,7 +44,7 @@
   },
   {
     "name": "docs",
-    "description": "docs.d.ts — 文档查阅系统类型定义",
+    "description": "docs.d.ts — 文档查阅系统类型定义 Agent 可通过 docs 对象查阅 workspace/agent-docs/ 下的 markdown 文档。 文档在 worker 启动时加载，支持精确匹配和模糊匹配。",
     "methods": [
       {
         "name": "list",
@@ -53,28 +53,28 @@
       },
       {
         "name": "read",
-        "brief": "读取指定文档的完整内容",
+        "brief": "读取指定文档的完整内容 支持精确 slug 匹配和模糊匹配",
         "fullDoc": "```typescript\nread(slug: string): string\n```\n\n\n读取指定文档的完整内容\n支持精确 slug 匹配和模糊匹配\n\n**参数：**\n- `slug`: 文档标识符（不含 .md 后缀的文件名）\n- **返回值**: 文档内容字符串；不存在时返回提示信息"
       }
     ]
   },
   {
     "name": "memory",
-    "description": "memory.d.ts — Memory V2 Agent API 类型定义",
+    "description": "memory.d.ts — Memory V2 Agent API 类型定义 记忆系统 V2 接口。Agent 可通过 memory 全局对象使用： - recall()：统一记忆检索（向量 + 关键词混合搜索） - browseHistory()：消息档案检索（LLM 深度阅读） - reflect()：触发群组反思总结 注意：记忆的写入由后台 Pipeline 自动完成（RecordingPipeline + post-session fact extraction），Agent 不需要手动写入。 memory: MemoryStore — 全局可用",
     "methods": [
       {
         "name": "recall",
-        "brief": "统一记忆检索入口",
+        "brief": "统一记忆检索入口 使用向量搜索 + 关键词搜索混合检索",
         "fullDoc": "```typescript\nrecall(query: string, options?: RecallOptions): Promise<RecallResult>\n```\n\n\n统一记忆检索入口\n使用向量搜索 + 关键词搜索混合检索\n\n**示例：**\n```typescript\nconst result = await memory.recall(\"alice 东京\", {\n  chatId: \"-100xxx\",\n  userId: \"alice_123\",\n  categories: ['preference', 'plan'],\n});\n```"
       },
       {
         "name": "browseHistory",
-        "brief": "消息档案检索",
+        "brief": "消息档案检索 话题索引引导 + 模糊搜索 + cheap model 深度阅读",
         "fullDoc": "```typescript\nbrowseHistory(request: HistoryBrowseRequest): Promise<HistoryBrowseResult>\n```\n\n\n消息档案检索\n话题索引引导 + 模糊搜索 + cheap model 深度阅读\n\n**示例：**\n```typescript\nconst result = await memory.browseHistory({\n  intent: \"谁说过要去京都吃抹茶\",\n  hints: { chatId: \"-100xxx\", daysBack: 7 },\n});\n```"
       },
       {
         "name": "reflect",
-        "brief": "对指定群组进行反思总结",
+        "brief": "对指定群组进行反思总结 读取上次反思以来的 topics 和 interactions，生成结构化总结",
         "fullDoc": "```typescript\nreflect(chatId: string): Promise<{\n        reflectedPeriod: { from: string; to: string };\n        topicsSummary: Array<{ label: string; summary: string; participants: string[]; sentiment: string }>;\n        personUpdates: Array<{ userId: string; chatId: string; changes: string }>;\n        groupUpdates: string;\n        newCoreFacts: string[];\n        mergedEpisodes: number;\n        insights: string;\n    }>\n```\n\n\n对指定群组进行反思总结\n读取上次反思以来的 topics 和 interactions，生成结构化总结"
       }
     ],
@@ -106,7 +106,7 @@
       },
       {
         "name": "spawnPersistent",
-        "brief": "启动持久化后台任务（Worker 重启后自动恢复）。",
+        "brief": "启动持久化后台任务（Worker 重启后自动恢复）。 代码以字符串形式存储，触发时在 sandbox 中执行。 代码中可通过 `signal` 变量访问 AbortSignal。",
         "fullDoc": "```typescript\nspawnPersistent(name: string, code: string): void\n```\n\n\n启动持久化后台任务（Worker 重启后自动恢复）。\n代码以字符串形式存储，触发时在 sandbox 中执行。\n代码中可通过 `signal` 变量访问 AbortSignal。\n\n**参数：**\n- `name`: 任务名称（唯一标识，同名会替换）\n- `code`: JavaScript 代码字符串\n\n**示例：**\n```typescript\nruntime.spawnPersistent(\"monitor\", `\n  while (!signal.aborted) {\n    console.log(\"heartbeat at \" + new Date().toISOString());\n    await new Promise(r => setTimeout(r, 60000));\n  }\n`);\n```"
       },
       {
@@ -131,14 +131,14 @@
       },
       {
         "name": "remind",
-        "brief": "设置一次性定时提醒（自然语言）。",
-        "fullDoc": "```typescript\nremind(description: string, delayMinutes: number): Promise<{ reminderId: string; triggerAt: string }>\n```\n\n\n设置一次性定时提醒（自然语言）。\n到期后 agent 将被唤醒并收到 description 作为新任务。\n\n⚠️ description 必须是详细的自然语言描述，不是代码。\n写清楚：要做什么、给谁发、发什么内容、如何获取信息等。\nagent 会在触发时作为全新 session 收到这段描述。\n\n限制：最短 1 分钟，最长 365 天，每个群最多 10 个活跃提醒。\n\n**参数：**\n- `description`: 详细的自然语言任务描述\n- `delayMinutes`: 延迟分钟数（1 ~ 525600，即 365 天）\n- **返回值**: { reminderId, triggerAt }\n\n**示例：**\n```typescript\n// 3 分钟后提醒\nawait runtime.remind(\"提醒群友莫莫该起床了，用活泼的语气叫他\", 3);\n```\n\n```typescript\n// 1 小时后提醒\nawait runtime.remind(\"用 tavily 搜索刚才讨论的那个开源项目的最新版本，然后把结果发到群里\", 60);\n```"
+        "brief": "设置一次性定时提醒（自然语言）。到期后 agent 将被唤醒并收到 description 作为新任务。重复定时提醒请用 cron ⚠️ description 必须是详细的自然语言描述，不是代码。 写清楚：要做什么、给谁发、发什么内容、如何获取信息等。 限制：最短 1 分钟，最长 365 天，每个群最多 10 个活跃提醒。",
+        "fullDoc": "```typescript\nremind(description: string, delayMinutes: number): Promise<{ reminderId: string; triggerAt: string }>\n```\n\n\n设置一次性定时提醒（自然语言）。到期后 agent 将被唤醒并收到 description 作为新任务。重复定时提醒请用 cron\n\n⚠️ description 必须是详细的自然语言描述，不是代码。\n写清楚：要做什么、给谁发、发什么内容、如何获取信息等。\n\n限制：最短 1 分钟，最长 365 天，每个群最多 10 个活跃提醒。\n\n**参数：**\n- `description`: 详细的自然语言任务描述\n- `delayMinutes`: 延迟分钟数（1 ~ 525600，即 365 天）\n- **返回值**: { reminderId, triggerAt }\n\n**示例：**\n```typescript\n// 3 分钟后提醒\nawait runtime.remind(\"提醒群友该起床了，用活泼的语气叫他\", 3);\n```\n\n```typescript\n// 1 小时后提醒\nawait runtime.remind(\"用 tavily 搜索刚才讨论的那个开源项目的最新版本，然后把结果发到群里\", 60);\n```"
       }
     ]
   },
   {
     "name": "scene",
-    "description": "shared/scene.d.ts — 所有 scene 共享的场景信息能力",
+    "description": "shared/scene.d.ts — 所有 scene 共享的场景信息能力 agent 不再主动切换场景，框架根据角色自动注入对应的 API。",
     "methods": [
       {
         "name": "current",
@@ -190,7 +190,7 @@
   },
   {
     "name": "telegram",
-    "description": "telegram.d.ts — Telegram 平台 API",
+    "description": "telegram.d.ts — Telegram 平台 API 这是系统注入的 Telegram host proxy 的接口子集。 提供给 Agent 在 sandbox 执行时作为 TypeScript 强类型上下文参考。 平台连接与消息监听由宿主侧官方 adapter 管理。",
     "methods": [
       {
         "name": "sendText",
@@ -214,7 +214,7 @@
       },
       {
         "name": "sendMediaGroup",
-        "brief": "发送媒体相册（多张图片/视频合并为一组）。",
+        "brief": "发送媒体相册（多张图片/视频合并为一组）。 第一个媒体项的 caption 将作为整组的文案。",
         "fullDoc": "```typescript\nsendMediaGroup(chatId: number | string, medias: Array<{ type: 'photo' | 'video' | 'document' | 'audio'; file: string; caption?: string; fileName?: string }>, opts?: SendMessageOptions): Promise<Message[]>\n```\n\n\n发送媒体相册（多张图片/视频合并为一组）。\n第一个媒体项的 caption 将作为整组的文案。\n\n**示例：**\n```typescript\n// sendMediaGroup(chatId, [\n  { type: 'photo', file: 'https://example.com/1.jpg', caption: '相册标题' },\n  { type: 'photo', file: 'https://example.com/2.jpg' },\n])\n```"
       },
       {
@@ -314,7 +314,7 @@
       },
       {
         "name": "downloadMedia",
-        "brief": "下载媒体文件的二进制数据。返回 base64 编码的 buffer 和文件大小。",
+        "brief": "下载媒体文件的二进制数据。返回 base64 编码的 buffer 和文件大小。 需要传入通过 mediaInfo.fileId 获取的文件标识符。",
         "fullDoc": "```typescript\ndownloadMedia(fileId: string, chatId?: number | string, messageId?: number, uniqueFileId?: string): Promise<DownloadedMedia>\n```\n\n\n下载媒体文件的二进制数据。返回 base64 编码的 buffer 和文件大小。\n需要传入通过 mediaInfo.fileId 获取的文件标识符。\n\n**参数：**\n- `fileId`: TDLib/Bot API 兼容的文件 ID\n- `chatId`: 可选，用于 file reference 过期时自动 refetch\n- `messageId`: 可选，同上\n- `uniqueFileId`: 可选，用于缓存命中\n\n**示例：**\n```typescript\nconst msg = messages[0];\nif (msg.mediaInfo?.fileId) {\n  const data = await telegram.downloadMedia(msg.mediaInfo.fileId, chatId, msg.id, msg.mediaInfo.uniqueFileId);\n  // data.buffer 是 base64 编码的文件内容, data.size 是字节数\n}\n```"
       },
       {
@@ -352,12 +352,12 @@
   },
   {
     "name": "cron",
-    "description": "shared/cron.d.ts — 定时任务管理模块类型定义",
+    "description": "shared/cron.d.ts — 定时任务管理模块类型定义 通过 Host 侧 GlobalState 持久化 cron 任务。 触发时以自然语言任务描述唤醒 agent，由 agent 自主决策执行。",
     "methods": [
       {
         "name": "add",
-        "brief": "添加持久化定时任务。触发时以自然语言任务描述唤醒 agent，",
-        "fullDoc": "```typescript\nadd(name: string, cronExpr: string, taskDescription: string): Promise<{ id: string }>\n```\n\n\n添加持久化定时任务。触发时以自然语言任务描述唤醒 agent，\nagent 在当时的上下文中自主决定如何执行。\n\n⚠️ taskDescription 必须是详细的自然语言描述，不是代码。\n写清楚：要做什么、给谁发、发什么内容、从哪里获取信息等。\nagent 会在每次触发时收到这段描述作为新任务。\n\n限制：最短间隔 1 小时，每个群最多 10 个 cron 任务。\n\n**参数：**\n- `name`: 任务名称（用于显示和管理）\n- `cronExpr`: cron 表达式（最短间隔 1 小时），如 \"0 9 * * *\"（每天 9:00）\n- `taskDescription`: 触发时的自然语言任务描述\n- **返回值**: 创建的任务信息\n\n**示例：**\n```typescript\n// 每天早上 9 点发送早安\nawait cron.add(\"每日早安\", \"0 8 * * *\",\n  \"给群里发一条早安消息，可以根据当天日期说点应景的话\");\n```\n\n```typescript\n// 工作日早 9 点播报新闻\nawait cron.add(\"新闻播报\", \"0 9 * * 1-5\",\n  \"用 tavily 搜索今日科技新闻，整理成简短的播报发送到群里\");\n```"
+        "brief": "添加持久化定时任务。触发时以自然语言任务描述唤醒 agent，agent 在当时的上下文中自主决定如何执行。 ⚠️ taskDescription 必须是详细的自然语言描述，不是代码。 写清楚：要做什么、给谁发、发什么内容、从哪里获取信息等。 agent 会在每次触发时收到这段描述作为新任务。 限制：最短间隔 1 小时，每个群最多 10 个 cron 任务。 一次性定时任务请使用 runtime.remind",
+        "fullDoc": "```typescript\nadd(name: string, cronExpr: string, taskDescription: string): Promise<{ id: string }>\n```\n\n\n添加持久化定时任务。触发时以自然语言任务描述唤醒 agent，agent 在当时的上下文中自主决定如何执行。\n\n⚠️ taskDescription 必须是详细的自然语言描述，不是代码。\n写清楚：要做什么、给谁发、发什么内容、从哪里获取信息等。\nagent 会在每次触发时收到这段描述作为新任务。\n\n限制：最短间隔 1 小时，每个群最多 10 个 cron 任务。\n\n一次性定时任务请使用 runtime.remind\n\n**参数：**\n- `name`: 任务名称（用于显示和管理）\n- `cronExpr`: cron 表达式（最短间隔 1 小时），如 \"0 9 * * *\"（每天 9:00）\n- `taskDescription`: 触发时的自然语言任务描述\n- **返回值**: 创建的任务信息\n\n**示例：**\n```typescript\n// 每天早上 9 点发送早安\nawait cron.add(\"每日早安\", \"0 8 * * *\",\n  \"给群里发一条早安消息，可以根据当天日期说点应景的话\");\n```\n\n```typescript\n// 工作日早 9 点播报新闻\nawait cron.add(\"新闻播报\", \"0 9 * * 1-5\",\n  \"用 tavily 搜索今日科技新闻，整理成简短的播报发送到群里\");\n```"
       },
       {
         "name": "remove",
@@ -373,11 +373,11 @@
   },
   {
     "name": "events",
-    "description": "shared/events.d.ts — 事件监听器模块类型定义",
+    "description": "shared/events.d.ts — 事件监听器模块类型定义 注册事件监听器，当匹配的事件到达时在 sandbox 中执行处理代码。 监听器持久化到磁盘，Worker 重启后自动恢复。",
     "methods": [
       {
         "name": "on",
-        "brief": "注册事件监听器。匹配 type 前缀的事件会触发 handlerCode 在 sandbox 中执行。",
+        "brief": "注册事件监听器。匹配 type 前缀的事件会触发 handlerCode 在 sandbox 中执行。 handler 代码中可通过 `event` 变量访问事件数据。",
         "fullDoc": "```typescript\non(typePrefix: string, handlerCode: string): string\n```\n\n\n注册事件监听器。匹配 type 前缀的事件会触发 handlerCode 在 sandbox 中执行。\nhandler 代码中可通过 `event` 变量访问事件数据。\n\n**参数：**\n- `typePrefix`: 事件类型前缀（如 \"telegram.message\" 匹配所有以此开头的事件）\n- `handlerCode`: 触发时执行的 JavaScript 代码字符串\n- **返回值**: 监听器 ID\n\n**示例：**\n```typescript\n// 监听新消息事件\nconst id = events.on(\"telegram.message\", `\n  if (event.text?.includes(\"ping\")) {\n    runtime.notify({ type: \"system.pong\", from: event.chatId });\n  }\n`);\nconsole.log(\"监听器已注册:\", id);\n```\n\n```typescript\n// 监听所有系统事件\nevents.on(\"system.\", `\n  console.log(\"系统事件:\", event.type);\n`);\n```"
       },
       {
@@ -394,7 +394,7 @@
   },
   {
     "name": "fs",
-    "description": "filesystem.d.ts — 文件系统操作模块类型定义",
+    "description": "filesystem.d.ts — 文件系统操作模块类型定义 所有路径操作限定在 workspace/ 目录下。 支持相对路径（相对于 workspace/）和绝对路径。",
     "methods": [
       {
         "name": "readFile",
@@ -440,11 +440,11 @@
   },
   {
     "name": "http",
-    "description": "shared/http.d.ts — HTTP Webhook 模块类型定义",
+    "description": "shared/http.d.ts — HTTP Webhook 模块类型定义 注册 HTTP webhook 端点，外部系统通过 HTTP POST 触发 sandbox 代码执行。 Webhook 持久化到磁盘，Worker 重启后自动恢复。",
     "methods": [
       {
         "name": "onWebhook",
-        "brief": "注册 webhook 端点。",
+        "brief": "注册 webhook 端点。 外部可通过 POST /webhook/{path} 触发 handler 代码执行。 handler 代码中可通过 `request` 变量访问请求数据。",
         "fullDoc": "```typescript\nonWebhook(path: string, handlerCode: string): Promise<string>\n```\n\n\n注册 webhook 端点。\n外部可通过 POST /webhook/{path} 触发 handler 代码执行。\nhandler 代码中可通过 `request` 变量访问请求数据。\n\n**参数：**\n- `path`: Webhook 路径（唯一标识，不含前缀斜杠）\n- `handlerCode`: 收到请求时执行的 JavaScript 代码字符串\n- **返回值**: webhook ID\n\n**示例：**\n```typescript\n// 注册一个接收 GitHub Push 事件的 webhook\nconst id = await http.onWebhook(\"github-push\", `\n  const payload = JSON.parse(request.body);\n  const repo = payload.repository?.full_name ?? \"unknown\";\n  await telegram.sendText(chatId, \"📦 Push to \" + repo + \": \" + payload.head_commit?.message);\n`);\nconsole.log(\"Webhook 已注册:\", id);\nconsole.log(\"URL: /webhook/github-push\");\n```"
       },
       {
@@ -461,7 +461,7 @@
   },
   {
     "name": "kv",
-    "description": "shared/kv.d.ts — 持久化键值存储模块类型定义",
+    "description": "shared/kv.d.ts — 持久化键值存储模块类型定义 简单的 per-chat 键值存储，数据持久化到 SQLite。 比 ctx 更正式的存储方式，支持 TTL 过期。",
     "methods": [
       {
         "name": "get",
@@ -487,11 +487,11 @@
   },
   {
     "name": "mcp",
-    "description": "mcp-bridge.d.ts — MCP Server 连接器类型定义",
+    "description": "mcp-bridge.d.ts — MCP Server 连接器类型定义 连接外部 MCP (Model Context Protocol) Server，自动发现并代理其工具。 支持 stdio 和 Streamable HTTP 两种传输。",
     "methods": [
       {
         "name": "connect",
-        "brief": "连接到一个 MCP Server。",
+        "brief": "连接到一个 MCP Server。 根据配置使用 stdio 或 Streamable HTTP 建立连接，自动发现所有 tools。",
         "fullDoc": "```typescript\nconnect(config: {\n        /** 显示名称，也用作 tool 命名空间 */\n        name: string;\n        /** 传输方式。省略时：有 url 则视为 streamable-http，否则视为 stdio */\n        transport?: \"stdio\" | \"streamable-http\";\n        /** stdio 启动命令 */\n        command?: string;\n        /** stdio 命令参数 */\n        args?: string[];\n        /** stdio 环境变量（如 API keys） */\n        env?: Record<string, string>;\n        /** Streamable HTTP endpoint */\n        url?: string;\n        /** Streamable HTTP 附加请求头（如 Authorization） */\n        headers?: Record<string, string>;\n    }): Promise<{\n        name: string;\n        tools: Array<{ name: string; description: string }>;\n        /** 调用指定 tool */\n        call(toolName: string, args?: Record<string, unknown>): Promise<unknown>;\n    }>\n```\n\n\n连接到一个 MCP Server。\n根据配置使用 stdio 或 Streamable HTTP 建立连接，自动发现所有 tools。\n\n**参数：**\n- `config`: Server 配置\n- **返回值**: 包含 tools 列表和 call 方法的代理对象\n\n**示例：**\n```typescript\n// 连接 GitHub MCP Server\nconst github = await mcp.connect({\n  name: \"github\",\n  transport: \"streamable-http\",\n  url: \"https://example.com/mcp\",\n  headers: { Authorization: \"Bearer xxx\" }\n});\nconsole.log(\"可用工具:\", github.tools);\n\n// 调用 tool\nconst repos = await github.call(\"search_repositories\", { query: \"mcp typescript\" });\nconsole.log(repos);\n```"
       },
       {
