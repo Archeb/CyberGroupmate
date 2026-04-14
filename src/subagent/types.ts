@@ -73,6 +73,8 @@ export interface AttentionQueueEntry {
     urgentSignals?: string[];
     /** 快照时间戳 */
     snapshotTimestamp?: string;
+    /** Scheduler 触发描述列表（watchdog 注入，source=SCHEDULER_TRIGGER 时存在） */
+    schedulerTriggers?: Array<{ id: string; type: "reminder" | "cron"; description: string }>;
 }
 
 /** AttentionQueue 评估结果 */
@@ -371,27 +373,25 @@ export interface AgentNote {
 export interface SchedulerEvent {
     /** 任务 ID */
     id: string;
-    /** 类型：一次性提醒 or 周期 cron or sandbox 定时执行 */
-    type: "reminder" | "cron" | "sandbox-cron";
+    /** 类型：一次性提醒 or 周期 cron */
+    type: "reminder" | "cron";
     /** 关联群组 */
     chatId: string;
-    /** 描述（注入 ATTENTION prompt 用） */
+    /** 描述 / 自然语言任务描述（触发时注入 ATTENTION prompt） */
     description: string;
     /** 触发时间 ISO 8601（reminder） */
     triggerAt?: string;
-    /** cron 表达式（cron / sandbox-cron） */
+    /** cron 表达式（cron） */
     cronExpr?: string;
-    /** 每次触发时创建的任务方向（cron） */
+    /** 每次触发时的自然语言任务描述（cron） */
     taskTemplate?: string;
-    /** sandbox-cron: 触发时在 sandbox 中执行的 JS 代码 */
-    code?: string;
     /** 请求人 userId */
     requestedBy?: string;
     /** 创建时间 */
     createdAt: string;
     /** 是否已触发（reminder 触发后标记） */
     triggered?: boolean;
-    /** 上次触发时间（cron / sandbox-cron） */
+    /** 上次触发时间（cron） */
     lastTriggeredAt?: string;
 }
 

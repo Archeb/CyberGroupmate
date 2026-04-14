@@ -44,4 +44,28 @@ declare const runtime: {
 
     /** 返回 workspace 根目录路径 */
     workspace(): string;
+
+    /**
+     * 设置一次性定时提醒（自然语言）。
+     * 到期后 agent 将被唤醒并收到 description 作为新任务。
+     *
+     * ⚠️ description 必须是详细的自然语言描述，不是代码。
+     * 写清楚：要做什么、给谁发、发什么内容、如何获取信息等。
+     * agent 会在触发时作为全新 session 收到这段描述。
+     *
+     * 限制：最短 1 分钟，最长 365 天，每个群最多 10 个活跃提醒。
+     *
+     * @param description - 详细的自然语言任务描述
+     * @param delayMinutes - 延迟分钟数（1 ~ 525600，即 365 天）
+     * @returns { reminderId, triggerAt }
+     *
+     * @example
+     * // 3 分钟后提醒
+     * await runtime.remind("提醒群友该起床了，用活泼的语气叫他", 3);
+     *
+     * @example
+     * // 1 小时后提醒
+     * await runtime.remind("用 tavily 搜索刚才讨论的那个开源项目的最新版本，然后把结果发到群里", 60);
+     */
+    remind(description: string, delayMinutes: number): Promise<{ reminderId: string; triggerAt: string }>;
 };

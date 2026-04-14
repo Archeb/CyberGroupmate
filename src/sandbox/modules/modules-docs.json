@@ -48,8 +48,8 @@
     "methods": [
       {
         "name": "list",
-        "brief": "列出所有可用文档（返回 slug 和标题）",
-        "fullDoc": "```typescript\nlist(): Array<{ slug: string; title: string }>\n```\n\n\n列出所有可用文档（返回 slug 和标题）"
+        "brief": "列出所有可用文档（返回 slug、标题，以及是否为标准 Agent Skill）",
+        "fullDoc": "```typescript\nlist(): Array<{ slug: string; title: string; kind: \"doc\" | \"agent-skill\" }>\n```\n\n\n列出所有可用文档（返回 slug、标题，以及是否为标准 Agent Skill）"
       },
       {
         "name": "read",
@@ -128,6 +128,11 @@
         "name": "workspace",
         "brief": "返回 workspace 根目录路径",
         "fullDoc": "```typescript\nworkspace(): string\n```\n\n\n返回 workspace 根目录路径"
+      },
+      {
+        "name": "remind",
+        "brief": "设置一次性定时提醒（自然语言）。",
+        "fullDoc": "```typescript\nremind(description: string, delayMinutes: number): Promise<{ reminderId: string; triggerAt: string }>\n```\n\n\n设置一次性定时提醒（自然语言）。\n到期后 agent 将被唤醒并收到 description 作为新任务。\n\n⚠️ description 必须是详细的自然语言描述，不是代码。\n写清楚：要做什么、给谁发、发什么内容、如何获取信息等。\nagent 会在触发时作为全新 session 收到这段描述。\n\n限制：最短 1 分钟，最长 365 天，每个群最多 10 个活跃提醒。\n\n**参数：**\n- `description`: 详细的自然语言任务描述\n- `delayMinutes`: 延迟分钟数（1 ~ 525600，即 365 天）\n- **返回值**: { reminderId, triggerAt }\n\n**示例：**\n```typescript\n// 3 分钟后提醒\nawait runtime.remind(\"提醒群友莫莫该起床了，用活泼的语气叫他\", 3);\n```\n\n```typescript\n// 1 小时后提醒\nawait runtime.remind(\"用 tavily 搜索刚才讨论的那个开源项目的最新版本，然后把结果发到群里\", 60);\n```"
       }
     ]
   },
@@ -346,13 +351,34 @@
     "typeDefs": "interface Peer {\n    id: number;\n    displayName?: string;\n    title?: string;\n    username?: string;\n}\n\ninterface User extends Peer {\n    firstName: string;\n    lastName?: string;\n    isBot: boolean;\n}\n\ninterface Chat {\n    id: number;\n    title?: string;\n    username?: string;\n    type: \"private\" | \"group\" | \"supergroup\" | \"channel\";\n}\n\ninterface Message {\n    id: number;\n    text: string;\n    date: Date;\n    chat: Chat;\n    sender: Peer;\n    isMention: boolean;\n    replyToMessage?: { id: number } | null;\n    media?: unknown;\n    /** 结构化媒体元信息（由 adapter 提取），可直接判断类型 */\n    mediaInfo?: MediaInfo;\n}\n\ninterface MediaInfo {\n    type: \"photo\" | \"sticker\" | \"video\" | \"document\" | \"animation\" | \"other\";\n    /** TDLib/Bot API 兼容的 File ID，可传给 downloadMedia */\n    fileId?: string;\n    /** 全局唯一文件标识符 */\n    uniqueFileId?: string;\n    emoji?: string;\n    mimeType?: string;\n    fileName?: string;\n    width?: number;\n    height?: number;\n    fileSize?: number;\n}\n\ninterface Dialog {\n    peer: Peer;\n    lastMessage?: Message;\n    unreadCount: number;\n}\n\ninterface FullUser extends User {\n    /** 用户个人简介 */\n    bio?: string;\n    /** 与当前用户的共同群组数量 */\n    commonChatsCount?: number;\n}\n\ninterface FullChat extends Chat {\n    /** 群组/频道的描述文本 */\n    about?: string;\n    /** 成员数量 */\n    membersCount?: number;\n    /** 当前在线成员数量 */\n    onlineCount?: number;\n    /** 是否开启了论坛（话题板块）模式 */\n    isForum?: boolean;\n}\n\ninterface ForumTopic {\n    id: number;\n    title: string;\n    isClosed: boolean;\n    isPinned: boolean;\n    creatorId: number;\n    unreadCount: number;\n}\n\ninterface PollAnswer {\n    /** 选项文本 */\n    text: string;\n    /** 当前选项的投票人数 */\n    voterCount: number;\n    /** 当前用户是否投了此选项 */\n    chosen: boolean;\n    /** 此选项是否为正确答案（仅 quiz 模式） */\n    correct: boolean;\n}\n\ninterface Poll {\n    type: \"poll\";\n    id: string;\n    question: string;\n    answers: PollAnswer[];\n    /** 总投票人数 */\n    totalVoters: number;\n    /** 投票是否已关闭 */\n    isClosed: boolean;\n    /** 是否为公开投票（可查看投票人） */\n    isPublic: boolean;\n    /** 是否为测验模式 */\n    isQuiz: boolean;\n    /** 是否允许多选 */\n    isMultiple: boolean;\n    /** 测验模式的答案解释（答题后可见） */\n    solution?: string;\n}\n\ninterface Reaction {\n    emoji: string;\n    count: number;\n}\n\ninterface DownloadedMedia {\n    /** base64 编码的文件数据 */\n    buffer: string;\n    /** 文件大小(字节) */\n    size: number;\n}\n\ninterface SendMessageOptions {\n    /** 回复指定消息 ID（也可用于指定 Forum Topic ID） */\n    replyTo?: number;\n    /** 不触发推送铃声 */\n    silent?: boolean;\n}\n\ninterface SendPollOptions extends SendMessageOptions {\n    /** 是否匿名（默认 true） */\n    isAnonymous?: boolean;\n    /** 'regular' 普通投票 | 'quiz' 测验模式 */\n    type?: \"regular\" | \"quiz\";\n    /** 是否允许多选（仅 type='regular' 有效） */\n    allowsMultipleAnswers?: boolean;\n    /** 正确答案的索引（仅 type='quiz' 有效，从 0 开始） */\n    correctOptionId?: number;\n    /** 答错后的解释说明（仅 type='quiz' 有效） */\n    explanation?: string;\n}\n\ninterface Emitter<T> {\n    add(handler: (event: T) => void | Promise<void>): void;\n    remove(handler: (event: T) => void | Promise<void>): void;\n    once(handler: (event: T) => void | Promise<void>): void;\n    clear(): void;\n}\n\ninterface TelegramClient {\n    // ─── 发送与交互 ───\n    sendText(chatId: number | string, text: string, opts?: SendMessageOptions): Promise<Message>;\n    /**\n     * 发送媒体消息。支持 URL 和本地文件路径。\n     * @example sendMedia(chatId, { type: 'photo', file: 'https://example.com/img.jpg', caption: '看看这个' })\n     * @example sendMedia(chatId, { type: 'photo', file: '/path/to/local/image.jpg' })\n     */\n    sendMedia(chatId: number | string, media: string | { type: 'photo' | 'video' | 'document' | 'audio' | 'auto'; file: string; caption?: string; fileName?: string }, opts?: SendMessageOptions): Promise<Message>;\n    /** 发送磁盘文件到聊天（通过绝对路径）。host 侧读取文件并上传。始终作为文件/文档发送。 */\n    sendFile(chatId: number | string, filePath: string, opts?: { replyTo?: number; caption?: string; fileName?: string; mimeType?: string }): Promise<Message>;\n    /**\n     * 发送贴纸。通过 uniqueFileId 引用本地已缓存的贴纸文件。\n     * @example sendSticker(chatId, 'AgADAgATxxxxxx')\n     */\n    sendSticker(chatId: number | string, uniqueFileId: string, opts?: { replyTo?: number }): Promise<Message>;\n    /**\n     * 发送媒体相册（多张图片/视频合并为一组）。\n     * 第一个媒体项的 caption 将作为整组的文案。\n     * @example sendMediaGroup(chatId, [\n     *   { type: 'photo', file: 'https://example.com/1.jpg', caption: '相册标题' },\n     *   { type: 'photo', file: 'https://example.com/2.jpg' },\n     * ])\n     */\n    sendMediaGroup(chatId: number | string, medias: Array<{ type: 'photo' | 'video' | 'document' | 'audio'; file: string; caption?: string; fileName?: string }>, opts?: SendMessageOptions): Promise<Message[]>;\n    /**\n     * 发起投票或测验。\n     * @param question 投票标题\n     * @param options 候选选项文本列表（2-10 个）\n     * @example sendPoll(chatId, '今晚吃什么？', ['火锅', '烧烤', '外卖'], { isAnonymous: false })\n     * @example sendPoll(chatId, 'JS 中 typeof null 是？', ['object', 'null', 'undefined'], { type: 'quiz', correctOptionId: 0 })\n     */\n    sendPoll(chatId: number | string, question: string, options: string[], opts?: SendPollOptions): Promise<Message>;\n    /**\n     * 对消息发送表情表态。传 null 以撤销表态。\n     * @example sendReaction(chatId, msgId, '👍')\n     * @example sendReaction(chatId, msgId, null) // 撤销\n     */\n    sendReaction(chatId: number | string, messageId: number, emoji: string | null): Promise<void>;\n    /**\n     * 编辑已发送的消息文本。\n     * @example editMessage(chatId, msgId, '已更正：新文本内容')\n     */\n    editMessage(chatId: number | string, messageId: number, text: string): Promise<Message>;\n    /**\n     * 删除一条或多条消息。\n     * @example deleteMessages(chatId, [msgId1, msgId2])\n     */\n    deleteMessages(chatId: number | string, messageIds: number[]): Promise<void>;\n    /** 置顶一条消息 */\n    pinMessage(chatId: number | string, messageId: number, opts?: { silent?: boolean }): Promise<void>;\n    /** 取消置顶一条消息 */\n    unpinMessage(chatId: number | string, messageId: number): Promise<void>;\n\n    // ─── 信息获取 ───\n    getMe(): Promise<User>;\n    getChat(chatId: number | string): Promise<Chat>;\n    getUser(userId: number | string): Promise<User>;\n    /** 获取最近的对话列表（包含 peer、最后一条消息、未读数） */\n    getDialogs(opts?: { limit?: number }): Promise<Dialog[]>;\n    /**\n     * 获取用户的完整资料（包含个人简介 bio 等）。\n     * @example const full = await telegram.getFullUser(userId); console.log(full.bio);\n     */\n    getFullUser(userId: number | string): Promise<FullUser>;\n    /**\n     * 获取群组/频道的完整资料（包含群描述 about、成员数等）。\n     * @example const full = await telegram.getFullChat(chatId); console.log(full.about, full.isForum);\n     */\n    getFullChat(chatId: number | string): Promise<FullChat>;\n    // [USERBOT_ONLY_BEGIN]\n    getChatMembers(chatId: number | string, opts?: { limit?: number }): Promise<Peer[]>;\n    getHistory(chatId: number | string, opts?: { limit?: number }): Promise<Message[]>;\n    /**\n     * 按消息 ID 精确获取一条或多条消息。（在别人回复或者提及某消息但是你看不见的时候，善用该函数爬楼获取上下文）\n     * @example const msgs = await telegram.getMessages(chatId, [100, 101, 102]);\n     */\n    getMessages(chatId: number | string, messageIds: number[]): Promise<(Message | null)[]>;\n    /**\n     * 在群组内搜索消息。（可主动利用该函数获取视野外上下文信息）\n     * @example const results = await telegram.searchMessages(chatId, '关键词', { limit: 20 });\n     */\n    searchMessages(chatId: number | string, query: string, opts?: { limit?: number }): Promise<Message[]>;\n    /**\n     * 获取指定群组的论坛板块（话题）列表。要求该群组已开启 Forum 模式。\n     * @example const topics = await telegram.getForumTopics(chatId);\n     */\n    getForumTopics(chatId: number | string, opts?: { limit?: number }): Promise<ForumTopic[]>;\n    /**\n     * 主动拉取某条投票消息的最新计票结果。\n     * @example const poll = await telegram.getPollResults(chatId, pollMsgId);\n     */\n    getPollResults(chatId: number | string, messageId: number): Promise<Poll | null>;\n    /**\n     * 主动拉取某条消息的表态（Reaction）汇总数据。\n     * @example const reactions = await telegram.getMessageReactions(chatId, [msgId]);\n     */\n    getMessageReactions(chatId: number | string, messageIds: number[]): Promise<Reaction[]>;\n    /**\n     * 下载媒体文件的二进制数据。返回 base64 编码的 buffer 和文件大小。\n     * 需要传入通过 mediaInfo.fileId 获取的文件标识符。\n     * @param fileId TDLib/Bot API 兼容的文件 ID\n     * @param chatId  可选，用于 file reference 过期时自动 refetch\n     * @param messageId 可选，同上\n     * @param uniqueFileId 可选，用于缓存命中\n     * @example\n     * const msg = messages[0];\n     * if (msg.mediaInfo?.fileId) {\n     *   const data = await telegram.downloadMedia(msg.mediaInfo.fileId, chatId, msg.id, msg.mediaInfo.uniqueFileId);\n     *   // data.buffer 是 base64 编码的文件内容, data.size 是字节数\n     * }\n     */\n    downloadMedia(fileId: string, chatId?: number | string, messageId?: number, uniqueFileId?: string): Promise<DownloadedMedia>;\n\n    // ─── 迭代器 (for await) ───\n    iterHistory(chatId: number | string, opts?: { limit?: number }): AsyncIterable<Message>;\n    iterDialogs(opts?: { limit?: number }): AsyncIterable<Dialog>;\n\n    // ─── 群组管理 ───\n    /** 加入一个群聊或频道 */\n    joinChat(chatId: number | string): Promise<void>;\n    /** 退出一个群聊或频道 */\n    leaveChat(chatId: number | string): Promise<void>;\n\n    // ─── 状态操作 ───\n    readHistory(chatId: number | string): Promise<void>;\n    // [USERBOT_ONLY_END]\n    sendTyping(chatId: number | string): Promise<void>;\n}"
   },
   {
+    "name": "cron",
+    "description": "shared/cron.d.ts — 定时任务管理模块类型定义",
+    "methods": [
+      {
+        "name": "add",
+        "brief": "添加持久化定时任务。触发时以自然语言任务描述唤醒 agent，",
+        "fullDoc": "```typescript\nadd(name: string, cronExpr: string, taskDescription: string): Promise<{ id: string }>\n```\n\n\n添加持久化定时任务。触发时以自然语言任务描述唤醒 agent，\nagent 在当时的上下文中自主决定如何执行。\n\n⚠️ taskDescription 必须是详细的自然语言描述，不是代码。\n写清楚：要做什么、给谁发、发什么内容、从哪里获取信息等。\nagent 会在每次触发时收到这段描述作为新任务。\n\n限制：最短间隔 1 小时，每个群最多 10 个 cron 任务。\n\n**参数：**\n- `name`: 任务名称（用于显示和管理）\n- `cronExpr`: cron 表达式（最短间隔 1 小时），如 \"0 9 * * *\"（每天 9:00）\n- `taskDescription`: 触发时的自然语言任务描述\n- **返回值**: 创建的任务信息\n\n**示例：**\n```typescript\n// 每天早上 9 点发送早安\nawait cron.add(\"每日早安\", \"0 8 * * *\",\n  \"给群里发一条早安消息，可以根据当天日期说点应景的话\");\n```\n\n```typescript\n// 工作日早 9 点播报新闻\nawait cron.add(\"新闻播报\", \"0 9 * * 1-5\",\n  \"用 tavily 搜索今日科技新闻，整理成简短的播报发送到群里\");\n```"
+      },
+      {
+        "name": "remove",
+        "brief": "移除定时任务",
+        "fullDoc": "```typescript\nremove(id: string): Promise<void>\n```\n\n\n移除定时任务\n\n**参数：**\n- `id`: 任务 ID（由 add 返回）\n\n**示例：**\n```typescript\nawait cron.remove(\"some-task-id\");\n```"
+      },
+      {
+        "name": "list",
+        "brief": "列出当前 chat 的所有定时任务",
+        "fullDoc": "```typescript\nlist(): Promise<Array<{\n        id: string;\n        name: string;\n        cronExpr: string;\n    }>>\n```\n\n\n列出当前 chat 的所有定时任务\n\n**示例：**\n```typescript\nconst tasks = await cron.list();\nfor (const t of tasks) {\n  console.log(`${t.name} (${t.cronExpr})`);\n}\n```"
+      }
+    ]
+  },
+  {
     "name": "events",
     "description": "shared/events.d.ts — 事件监听器模块类型定义",
     "methods": [
       {
         "name": "on",
         "brief": "注册事件监听器。匹配 type 前缀的事件会触发 handlerCode 在 sandbox 中执行。",
-        "fullDoc": "```typescript\non(typePrefix: string, handlerCode: string): string\n```\n\n\n注册事件监听器。匹配 type 前缀的事件会触发 handlerCode 在 sandbox 中执行。\r\nhandler 代码中可通过 `event` 变量访问事件数据。\n\n**参数：**\n- `typePrefix`: 事件类型前缀（如 \"telegram.message\" 匹配所有以此开头的事件）\n- `handlerCode`: 触发时执行的 JavaScript 代码字符串\n- **返回值**: 监听器 ID\n\n**示例：**\n```typescript\n// 监听新消息事件\r\nconst id = events.on(\"telegram.message\", `\r\n  if (event.text?.includes(\"ping\")) {\r\n    runtime.notify({ type: \"system.pong\", from: event.chatId });\r\n  }\r\n`);\r\nconsole.log(\"监听器已注册:\", id);\n```\n\n```typescript\n// 监听所有系统事件\r\nevents.on(\"system.\", `\r\n  console.log(\"系统事件:\", event.type);\r\n`);\n```"
+        "fullDoc": "```typescript\non(typePrefix: string, handlerCode: string): string\n```\n\n\n注册事件监听器。匹配 type 前缀的事件会触发 handlerCode 在 sandbox 中执行。\nhandler 代码中可通过 `event` 变量访问事件数据。\n\n**参数：**\n- `typePrefix`: 事件类型前缀（如 \"telegram.message\" 匹配所有以此开头的事件）\n- `handlerCode`: 触发时执行的 JavaScript 代码字符串\n- **返回值**: 监听器 ID\n\n**示例：**\n```typescript\n// 监听新消息事件\nconst id = events.on(\"telegram.message\", `\n  if (event.text?.includes(\"ping\")) {\n    runtime.notify({ type: \"system.pong\", from: event.chatId });\n  }\n`);\nconsole.log(\"监听器已注册:\", id);\n```\n\n```typescript\n// 监听所有系统事件\nevents.on(\"system.\", `\n  console.log(\"系统事件:\", event.type);\n`);\n```"
       },
       {
         "name": "off",
@@ -362,7 +388,7 @@
       {
         "name": "list",
         "brief": "列出当前所有监听器",
-        "fullDoc": "```typescript\nlist(): Array<{\r\n        id: string;\r\n        typePrefix: string;\r\n    }>\n```\n\n\n列出当前所有监听器\n\n**示例：**\n```typescript\nconst listeners = events.list();\r\nfor (const l of listeners) {\r\n  console.log(`${l.id}: 监听 \"${l.typePrefix}\"`);\r\n}\n```"
+        "fullDoc": "```typescript\nlist(): Array<{\n        id: string;\n        typePrefix: string;\n    }>\n```\n\n\n列出当前所有监听器\n\n**示例：**\n```typescript\nconst listeners = events.list();\nfor (const l of listeners) {\n  console.log(`${l.id}: 监听 \"${l.typePrefix}\"`);\n}\n```"
       }
     ]
   },
@@ -419,7 +445,7 @@
       {
         "name": "onWebhook",
         "brief": "注册 webhook 端点。",
-        "fullDoc": "```typescript\nonWebhook(path: string, handlerCode: string): Promise<string>\n```\n\n\n注册 webhook 端点。\r\n外部可通过 POST /webhook/{path} 触发 handler 代码执行。\r\nhandler 代码中可通过 `request` 变量访问请求数据。\n\n**参数：**\n- `path`: Webhook 路径（唯一标识，不含前缀斜杠）\n- `handlerCode`: 收到请求时执行的 JavaScript 代码字符串\n- **返回值**: webhook ID\n\n**示例：**\n```typescript\n// 注册一个接收 GitHub Push 事件的 webhook\r\nconst id = await http.onWebhook(\"github-push\", `\r\n  const payload = JSON.parse(request.body);\r\n  const repo = payload.repository?.full_name ?? \"unknown\";\r\n  await telegram.sendText(chatId, \"📦 Push to \" + repo + \": \" + payload.head_commit?.message);\r\n`);\r\nconsole.log(\"Webhook 已注册:\", id);\r\nconsole.log(\"URL: /webhook/github-push\");\n```"
+        "fullDoc": "```typescript\nonWebhook(path: string, handlerCode: string): Promise<string>\n```\n\n\n注册 webhook 端点。\n外部可通过 POST /webhook/{path} 触发 handler 代码执行。\nhandler 代码中可通过 `request` 变量访问请求数据。\n\n**参数：**\n- `path`: Webhook 路径（唯一标识，不含前缀斜杠）\n- `handlerCode`: 收到请求时执行的 JavaScript 代码字符串\n- **返回值**: webhook ID\n\n**示例：**\n```typescript\n// 注册一个接收 GitHub Push 事件的 webhook\nconst id = await http.onWebhook(\"github-push\", `\n  const payload = JSON.parse(request.body);\n  const repo = payload.repository?.full_name ?? \"unknown\";\n  await telegram.sendText(chatId, \"📦 Push to \" + repo + \": \" + payload.head_commit?.message);\n`);\nconsole.log(\"Webhook 已注册:\", id);\nconsole.log(\"URL: /webhook/github-push\");\n```"
       },
       {
         "name": "removeWebhook",
@@ -429,7 +455,7 @@
       {
         "name": "listWebhooks",
         "brief": "列出当前所有 webhook",
-        "fullDoc": "```typescript\nlistWebhooks(): Promise<Array<{ id: string; path: string }>>\n```\n\n\n列出当前所有 webhook\n\n**示例：**\n```typescript\nconst hooks = await http.listWebhooks();\r\nfor (const h of hooks) {\r\n  console.log(`${h.id}: POST /webhook/${h.path}`);\r\n}\n```"
+        "fullDoc": "```typescript\nlistWebhooks(): Promise<Array<{ id: string; path: string }>>\n```\n\n\n列出当前所有 webhook\n\n**示例：**\n```typescript\nconst hooks = await http.listWebhooks();\nfor (const h of hooks) {\n  console.log(`${h.id}: POST /webhook/${h.path}`);\n}\n```"
       }
     ]
   },
@@ -440,12 +466,12 @@
       {
         "name": "get",
         "brief": "读取键值",
-        "fullDoc": "```typescript\nget(key: string): Promise<string | null>\n```\n\n\n读取键值\n\n**参数：**\n- `key`: 键名\n- **返回值**: 值字符串，不存在时返回 null\n\n**示例：**\n```typescript\nconst token = await kv.get(\"api_token\");\r\nif (token) {\r\n  console.log(\"已有 token\");\r\n}\n```"
+        "fullDoc": "```typescript\nget(key: string): Promise<string | null>\n```\n\n\n读取键值\n\n**参数：**\n- `key`: 键名\n- **返回值**: 值字符串，不存在时返回 null\n\n**示例：**\n```typescript\nconst token = await kv.get(\"api_token\");\nif (token) {\n  console.log(\"已有 token\");\n}\n```"
       },
       {
         "name": "set",
         "brief": "写入键值",
-        "fullDoc": "```typescript\nset(key: string, value: string, ttlSeconds?: number): Promise<void>\n```\n\n\n写入键值\n\n**参数：**\n- `key`: 键名\n- `value`: 值（字符串）\n- `ttlSeconds`: 可选的过期时间（秒）。不设置则永不过期。\n\n**示例：**\n```typescript\nawait kv.set(\"last_check\", new Date().toISOString());\n```\n\n```typescript\n// 设置 1 小时后过期的缓存\r\nawait kv.set(\"weather_cache\", JSON.stringify(data), 3600);\n```"
+        "fullDoc": "```typescript\nset(key: string, value: string, ttlSeconds?: number): Promise<void>\n```\n\n\n写入键值\n\n**参数：**\n- `key`: 键名\n- `value`: 值（字符串）\n- `ttlSeconds`: 可选的过期时间（秒）。不设置则永不过期。\n\n**示例：**\n```typescript\nawait kv.set(\"last_check\", new Date().toISOString());\n```\n\n```typescript\n// 设置 1 小时后过期的缓存\nawait kv.set(\"weather_cache\", JSON.stringify(data), 3600);\n```"
       },
       {
         "name": "del",
@@ -455,7 +481,7 @@
       {
         "name": "keys",
         "brief": "列出键名（可按前缀过滤）",
-        "fullDoc": "```typescript\nkeys(prefix?: string): Promise<string[]>\n```\n\n\n列出键名（可按前缀过滤）\n\n**参数：**\n- `prefix`: 可选的键名前缀\n- **返回值**: 匹配的键名列表\n\n**示例：**\n```typescript\nconst keys = await kv.keys(\"cache_\");\r\nconsole.log(\"缓存键:\", keys);\n```"
+        "fullDoc": "```typescript\nkeys(prefix?: string): Promise<string[]>\n```\n\n\n列出键名（可按前缀过滤）\n\n**参数：**\n- `prefix`: 可选的键名前缀\n- **返回值**: 匹配的键名列表\n\n**示例：**\n```typescript\nconst keys = await kv.keys(\"cache_\");\nconsole.log(\"缓存键:\", keys);\n```"
       }
     ]
   },
@@ -466,7 +492,7 @@
       {
         "name": "connect",
         "brief": "连接到一个 MCP Server。",
-        "fullDoc": "```typescript\nconnect(config: {\n        /** 显示名称，也用作 tool 命名空间 */\n        name: string;\n        /** 启动命令 */\n        command: string;\n        /** 命令参数 */\n        args?: string[];\n        /** 环境变量（如 API keys） */\n        env?: Record<string, string>;\n    }): Promise<{\n        name: string;\n        tools: Array<{ name: string; description: string }>;\n        /** 调用指定 tool */\n        call(toolName: string, args?: Record<string, unknown>): Promise<unknown>;\n    }>\n```\n\n\n连接到一个 MCP Server。\n启动子进程并通过 stdio 通信，自动发现所有 tools。\n\n**参数：**\n- `config`: Server 配置\n- **返回值**: 包含 tools 列表和 call 方法的代理对象\n\n**示例：**\n```typescript\n// 连接 GitHub MCP Server\nconst github = await mcp.connect({\n  name: \"github\",\n  command: \"npx\",\n  args: [\"-y\", \"@modelcontextprotocol/server-github\"],\n  env: { GITHUB_TOKEN: \"ghp_xxx\" }\n});\nconsole.log(\"可用工具:\", github.tools);\n\n// 调用 tool\nconst repos = await github.call(\"search_repositories\", { query: \"mcp typescript\" });\nconsole.log(repos);\n```"
+        "fullDoc": "```typescript\nconnect(config: {\n        /** 显示名称，也用作 tool 命名空间 */\n        name: string;\n        /** 传输方式。省略时：有 url 则视为 streamable-http，否则视为 stdio */\n        transport?: \"stdio\" | \"streamable-http\";\n        /** stdio 启动命令 */\n        command?: string;\n        /** stdio 命令参数 */\n        args?: string[];\n        /** stdio 环境变量（如 API keys） */\n        env?: Record<string, string>;\n        /** Streamable HTTP endpoint */\n        url?: string;\n        /** Streamable HTTP 附加请求头（如 Authorization） */\n        headers?: Record<string, string>;\n    }): Promise<{\n        name: string;\n        tools: Array<{ name: string; description: string }>;\n        /** 调用指定 tool */\n        call(toolName: string, args?: Record<string, unknown>): Promise<unknown>;\n    }>\n```\n\n\n连接到一个 MCP Server。\n根据配置使用 stdio 或 Streamable HTTP 建立连接，自动发现所有 tools。\n\n**参数：**\n- `config`: Server 配置\n- **返回值**: 包含 tools 列表和 call 方法的代理对象\n\n**示例：**\n```typescript\n// 连接 GitHub MCP Server\nconst github = await mcp.connect({\n  name: \"github\",\n  transport: \"streamable-http\",\n  url: \"https://example.com/mcp\",\n  headers: { Authorization: \"Bearer xxx\" }\n});\nconsole.log(\"可用工具:\", github.tools);\n\n// 调用 tool\nconst repos = await github.call(\"search_repositories\", { query: \"mcp typescript\" });\nconsole.log(repos);\n```"
       },
       {
         "name": "disconnect",
@@ -476,7 +502,7 @@
       {
         "name": "list",
         "brief": "列出所有已连接的 MCP Servers 及其工具",
-        "fullDoc": "```typescript\nlist(): Array<{\n        name: string;\n        tools: string[];\n        running: boolean;\n    }>\n```\n\n\n列出所有已连接的 MCP Servers 及其工具\n\n**示例：**\n```typescript\nconst servers = mcp.list();\nfor (const s of servers) {\n  console.log(`${s.name}: ${s.tools.join(\", \")} (running: ${s.running})`);\n}\n```"
+        "fullDoc": "```typescript\nlist(): Array<{\n        name: string;\n        transport: \"stdio\" | \"streamable-http\";\n        url?: string;\n        tools: string[];\n        running: boolean;\n    }>\n```\n\n\n列出所有已连接的 MCP Servers 及其工具\n\n**示例：**\n```typescript\nconst servers = mcp.list();\nfor (const s of servers) {\n  console.log(`${s.name}: ${s.tools.join(\", \")} (running: ${s.running})`);\n}\n```"
       },
       {
         "name": "call",

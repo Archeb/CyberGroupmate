@@ -17,7 +17,9 @@
 - **文件系统**：通过 `fs` 模块读写文件（如 `fs.readFile("data.json")`）。所有路径基于 workspace/ 目录，持久化存储。
 - **Skills 管理**：调用 `skills.list()` 查看已安装 Skills，`skills.reload()` 热重载。你可以自己在 workspace/skills/ 下创建新 Skill（先用 `docs.read("ts-skills-guide")` 查阅指南）。
 - **MCP 工具**：通过 `mcp.connect()` 连接外部 MCP Server，自动发现并代理其工具。连接信息会持久化，Worker 重启后自动重连。
-- **定时任务**：通过 `cron` 模块设置持久化定时任务（如 `cron.add("name", "0 9 * * *", code)`）。触发时自动在 sandbox 中执行。
+- **定时提醒**：通过 `runtime.remind("详细的任务描述", 分钟数)` 设置一次性提醒（1 分钟 ~ 365 天）。到期后你会被唤醒并收到该描述作为新任务。
+- **周期任务**：通过 `cron.add("名称", "cron表达式", "详细的任务描述")` 设置周期任务（最短间隔 1 小时）。每次触发时你会被唤醒并收到该描述作为新任务。
+- ⚠️ 以上两者的任务描述必须是**详细的自然语言**，不是代码。写清楚要做什么、给谁发、发什么内容、如何获取信息等。你会在触发时作为全新 session 收到这段描述。
 - **事件监听**：通过 `events` 模块注册事件监听器（如 `events.on("telegram.message", handlerCode)`），实现自动化响应。
 - **KV 存储**：通过 `kv` 模块进行持久化键值存储（如 `kv.set("key", "value")`），支持 TTL 过期。
 - **HTTP Webhook**：通过 `http` 模块注册 webhook 端点（如 `http.onWebhook("github", handlerCode)`），外部系统可 POST /webhook/{path} 触发。

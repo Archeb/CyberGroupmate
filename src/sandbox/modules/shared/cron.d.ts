@@ -2,34 +2,36 @@
  * shared/cron.d.ts — 定时任务管理模块类型定义
  *
  * 通过 Host 侧 GlobalState 持久化 cron 任务。
- * 触发时在对应 sandbox 中执行 code 字符串。
+ * 触发时以自然语言任务描述唤醒 agent，由 agent 自主决策执行。
  */
 
 declare const cron: {
     /**
-     * 添加一个持久化定时任务（cron 表达式）。
-     * 任务以代码字符串形式存储，触发时在 sandbox 中执行。
+     * 添加持久化定时任务。触发时以自然语言任务描述唤醒 agent，
+     * agent 在当时的上下文中自主决定如何执行。
+     *
+     * ⚠️ taskDescription 必须是详细的自然语言描述，不是代码。
+     * 写清楚：要做什么、给谁发、发什么内容、从哪里获取信息等。
+     * agent 会在每次触发时收到这段描述作为新任务。
+     *
+     * 限制：最短间隔 1 小时，每个群最多 10 个 cron 任务。
      *
      * @param name - 任务名称（用于显示和管理）
-     * @param cronExpr - cron 表达式，如 "0 9 * * *"（每天 9:00）、"<star>/5 * * * *"（每 5 分钟）
-     * @param code - 触发时执行的 JavaScript 代码字符串
+     * @param cronExpr - cron 表达式（最短间隔 1 小时），如 "0 9 * * *"（每天 9:00）
+* @param taskDescription - 触发时的自然语言任务描述
      * @returns 创建的任务信息
      *
      * @example
-     * // 每天早上 9 点发送天气播报
-     * const task = await cron.add("daily-weather", "0 9 * * *", `
-     *   const weather = await fetch("https://api.weather.com/today").then(r => r.json());
-     *   await telegram.sendText(chatId, "☀️ 今日天气: " + weather.summary);
-     * `);
-     * console.log("已创建:", task.id);
+     * // 每天早上 9 点发送早安
+     * await cron.add("每日早安", "0 8 * * *",
+     *   "给群里发一条早安消息，可以根据当天日期说点应景的话");
      *
      * @example
-     * // 每 30 分钟检查一次
-     * await cron.add("health-check", "<star>/30 * * * *", `
-     *   console.log("健康检查 at " + new Date().toISOString());
-     * `);
+     * // 工作日早 9 点播报新闻
+     * await cron.add("新闻播报", "0 9 * * 1-5",
+     *   "用 tavily 搜索今日科技新闻，整理成简短的播报发送到群里");
      */
-    add(name: string, cronExpr: string, code: string): Promise<{ id: string }>;
+    add(name: string, cronExpr: string, taskDescription: string): Promise<{ id: string }>;
 
     /**
      * 移除定时任务
@@ -46,13 +48,12 @@ declare const cron: {
      * @example
      * const tasks = await cron.list();
      * for (const t of tasks) {
-     *   console.log(`${t.name} (${t.cronExpr}) → next: ${t.nextRun}`);
+     *   console.log(`${t.name} (${t.cronExpr})`);
      * }
      */
     list(): Promise<Array<{
         id: string;
         name: string;
         cronExpr: string;
-        nextRun?: string;
     }>>;
 };

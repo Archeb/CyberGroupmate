@@ -261,6 +261,12 @@ export interface SubagentExternalConfig {
         maxSessionMessages?: number;
         maxTurns?: number;
     };
+    scheduler?: {
+        /** 每个群最大 reminder 数量。默认 10 */
+        maxReminders?: number;
+        /** 每个群最大 cron 数量。默认 10 */
+        maxCrons?: number;
+    };
 }
 
 /** Vision 处理配置 */
@@ -708,6 +714,7 @@ function parseSubagentConfig(fileConfig: Record<string, unknown>): SubagentExter
     const rawGS = (raw.global_state ?? {}) as Record<string, unknown>;
     const rawCA = (raw.code_act ?? {}) as Record<string, unknown>;
     const rawCD = (raw.cosine_decay ?? {}) as Record<string, unknown>;
+    const rawSched = (raw.scheduler ?? {}) as Record<string, unknown>;
 
     // Parse stickiness levels
     const stickinessDefaults: SubagentExternalConfig["stickiness"] = {};
@@ -770,6 +777,10 @@ function parseSubagentConfig(fileConfig: Record<string, unknown>): SubagentExter
             maxExecutionTimeMs: rawCA.max_execution_time_ms != null ? num(rawCA.max_execution_time_ms, 60000) : undefined,
             maxSessionMessages: rawCA.max_session_messages != null ? num(rawCA.max_session_messages, 100) : undefined,
             maxTurns: rawCA.max_turns != null ? num(rawCA.max_turns, 30) : undefined,
+        } : undefined,
+        scheduler: Object.keys(rawSched).length > 0 ? {
+            maxReminders: rawSched.max_reminders != null ? num(rawSched.max_reminders, 10) : undefined,
+            maxCrons: rawSched.max_crons != null ? num(rawSched.max_crons, 10) : undefined,
         } : undefined,
     };
 }

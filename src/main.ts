@@ -43,7 +43,7 @@ import { createDispatchHandler } from "./main-agent/dispatch-handler.js";
 import type { FastPathEvent } from "./subagent/fast-path-handler.js";
 import { FastPathHandler } from "./subagent/fast-path-handler.js";
 import { evaluateStickiness, createStickiness, updateStickiness } from "./subagent/stickiness.js";
-import { matchesCron } from "./core/cron-matcher.js";
+import { matchesCron, validateCronMinInterval } from "./core/cron-matcher.js";
 
 const log = createLogger("main");
 
@@ -253,8 +253,19 @@ async function main(): Promise<void> {
                     default: {
                         // ── Cron API host calls ──
                         if (method === "cron.add") {
-                            const [name, cronExpr, code] = args as [string, string, string];
-                            const event = globalState.addSandboxCron(chatId, name, cronExpr, code);
+                            const [name, cronExpr, taskDescription] = args as [string, string, string];
+                            // 最短间隔校验：cron 至少 1 小时
+                            if (!validateCronMinInterval(cronExpr, 60)) {
+                                throw new Error("cron 最短触发间隔为 1 小时");
+                            }
+                            // 数量限制
+                            const maxCrons = appConfig.subagent?.scheduler?.maxCrons ?? 10;
+                            const existing = globalState.getSchedulerEvents(chatId)
+                                .filter(e => e.type === "cron");
+                            if (existing.length >= maxCrons) {
+                                throw new Error(`cron 数量上限 ${maxCrons}，请先删除不需要的任务`);
+                            }
+                            const event = globalState.addCron(chatId, name, cronExpr, taskDescription);
                             return { id: event.id };
                         }
                         if (method === "cron.remove") {
@@ -264,13 +275,35 @@ async function main(): Promise<void> {
                         }
                         if (method === "cron.list") {
                             const events = globalState.getSchedulerEvents(chatId)
-                                .filter(e => e.type === "sandbox-cron")
+                                .filter(e => e.type === "cron")
                                 .map(e => ({
                                     id: e.id,
                                     name: e.description,
                                     cronExpr: e.cronExpr,
                                 }));
                             return events;
+                        }
+
+                        // ── Runtime.remind host call ──
+                        if (method === "runtime.remind") {
+                            const [description, delayMinutes] = args as [string, number];
+                            if (typeof delayMinutes !== "number" || delayMinutes < 1) {
+                                throw new Error("remind 最短 1 分钟");
+                            }
+                            if (delayMinutes > 525600) {
+                                throw new Error("remind 最长 365 天（525600 分钟）");
+                            }
+                            // 数量限制
+                            const maxReminders = appConfig.subagent?.scheduler?.maxReminders ?? 10;
+                            const existingReminders = globalState.getSchedulerEvents(chatId)
+                                .filter(e => e.type === "reminder" && !e.triggered);
+                            if (existingReminders.length >= maxReminders) {
+                                throw new Error(`remind 数量上限 ${maxReminders}，请等待已有提醒触发或手动取消`);
+                            }
+                            const triggerAt = new Date(Date.now() + delayMinutes * 60000).toISOString();
+                            const event = globalState.addReminder(chatId, description, triggerAt);
+                            log.info("runtime.remind 已设置", { id: event.id, chatId, triggerAt, description: description.slice(0, 80) });
+                            return { reminderId: event.id, triggerAt };
                         }
 
                         // ── Events API host calls ──
@@ -947,13 +980,33 @@ async function main(): Promise<void> {
         }
     });
 
-    // ─── Sandbox Cron 调度器 ───
-    // 每 60 秒检查一次 sandbox-cron 事件，匹配则在对应 sandbox 中执行代码
-    const cronCheckInterval = setInterval(async () => {
+    // ─── 统一调度器 Watchdog ───
+    // 每 30 秒检查到期 reminder 和匹配的 cron 事件
+    // 触发时通过 Q3 注意力队列唤醒主 Agent，而非直接执行代码
+    const schedulerWatchdogInterval = setInterval(() => {
         const now = new Date();
+
+        // ── Reminder 检查 ──
+        const dueReminders = globalState.getDueReminders();
+        for (const reminder of dueReminders) {
+            globalState.markReminderTriggered(reminder.id);
+
+            const sub = subagentManager.getOrCreate(reminder.chatId);
+            const entry = sub.buildQueueEntry("SCHEDULER_TRIGGER");
+            entry.schedulerTriggers = [{
+                id: reminder.id,
+                type: "reminder",
+                description: reminder.description,
+            }];
+            q3.enqueueOrUpdate(entry);
+            q3.boost(reminder.chatId, 80);
+            log.info("Reminder 到期 → Q3", { id: reminder.id, desc: reminder.description.slice(0, 80), chatId: reminder.chatId });
+        }
+
+        // ── Cron 检查 ──
         const allEvents = globalState.getSchedulerEvents();
         for (const evt of allEvents) {
-            if (evt.type !== "sandbox-cron" || !evt.cronExpr || !evt.code) continue;
+            if (evt.type !== "cron" || !evt.cronExpr) continue;
 
             // 防止同一分钟内重复触发
             if (evt.lastTriggeredAt) {
@@ -970,18 +1023,21 @@ async function main(): Promise<void> {
             if (!matchesCron(evt.cronExpr, now)) continue;
 
             globalState.markCronTriggered(evt.id);
-            log.info("Sandbox cron 触发", { id: evt.id, name: evt.description, chatId: evt.chatId });
+            const taskDesc = evt.taskTemplate ?? evt.description;
 
-            try {
-                const sandbox = await sandboxPool.acquire(evt.chatId);
-                await sandbox.execute(evt.code, 30000);
-                sandboxPool.release(evt.chatId);
-            } catch (err) {
-                log.error("Sandbox cron 执行失败", { id: evt.id, error: String(err) });
-            }
+            const sub = subagentManager.getOrCreate(evt.chatId);
+            const entry = sub.buildQueueEntry("SCHEDULER_TRIGGER");
+            entry.schedulerTriggers = [{
+                id: evt.id,
+                type: "cron",
+                description: taskDesc,
+            }];
+            q3.enqueueOrUpdate(entry);
+            q3.boost(evt.chatId, 80);
+            log.info("Cron 触发 → Q3", { id: evt.id, name: evt.description, chatId: evt.chatId });
         }
-    }, 60_000);
-    if (cronCheckInterval.unref) cronCheckInterval.unref();
+    }, 30_000);
+    if (schedulerWatchdogInterval.unref) schedulerWatchdogInterval.unref();
 
     // ─── 启动 ───
     for (const adapter of adapters) {

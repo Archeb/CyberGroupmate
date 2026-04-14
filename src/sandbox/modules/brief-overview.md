@@ -17,7 +17,7 @@ discord.d.ts — Discord 平台 API
 ## docs
 docs.d.ts — 文档查阅系统类型定义
 
-- `list`: 列出所有可用文档（返回 slug 和标题）
+- `list`: 列出所有可用文档（返回 slug、标题，以及是否为标准 Agent Skill）
 - `read`: 读取指定文档的完整内容
 
 ## memory
@@ -39,6 +39,7 @@ shared/runtime.d.ts — 所有 scene 共享的 runtime 能力
 - `ps`: 列出后台任务
 - `home`: 返回当前 sandbox 的 home 目录路径（per-chat 隔离）
 - `workspace`: 返回 workspace 根目录路径
+- `remind`: 设置一次性定时提醒（自然语言）。
 
 ## scene
 shared/scene.d.ts — 所有 scene 共享的场景信息能力
@@ -90,6 +91,13 @@ telegram.d.ts — Telegram 平台 API
 - `leaveChat`: 退出一个群聊或频道
 - `readHistory`: readHistory(chatId: number | string): Promise<void>
 - `sendTyping`: sendTyping(chatId: number | string): Promise<void>
+
+## cron
+shared/cron.d.ts — 定时任务管理模块类型定义
+
+- `add`: 添加持久化定时任务。触发时以自然语言任务描述唤醒 agent，
+- `remove`: 移除定时任务
+- `list`: 列出当前 chat 的所有定时任务
 
 ## events
 shared/events.d.ts — 事件监听器模块类型定义

@@ -484,11 +484,12 @@ async function initWorker(): Promise<void> {
     setKvCallbacks({ callHost });
     setHttpCallbacks({ callHost });
 
-    // 注入 Runtime 扩展回调（spawnPersistent, home, workspace）
+    // 注入 Runtime 扩展回调（spawnPersistent, home, workspace, callHost）
     setRuntimeCallbacks({
         spawnPersistent: (name, code) => bgManager.spawnPersistent(name, code),
         getHome,
         getWorkspace,
+        callHost,
     });
 
     // 恢复持久化后台任务
