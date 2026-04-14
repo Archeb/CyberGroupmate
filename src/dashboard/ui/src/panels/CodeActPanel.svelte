@@ -149,7 +149,7 @@
             {@const content = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content, null, 2)}
             <div class="codeact-msg role-{msg.role}">
               <span class="role-label">{msg.role}</span>
-              <div class="mt-1 text-xs">{@html formatCodeActContent(content.slice(0, 5000))}</div>
+              <div class="mt-1 text-xs">{@html formatCodeActContent(content)}</div>
             </div>
           {/each}
 
@@ -166,7 +166,7 @@
                 </div>
                 {#if evt.thinking}
                   <div class="progress-content thinking-content">
-                    {@html formatCodeActContent(evt.thinking.slice(0, 3000))}
+                    {@html formatCodeActContent(evt.thinking)}
                   </div>
                 {/if}
                 {#if evt.codeBlocks && evt.codeBlocks.length > 0}
@@ -178,12 +178,12 @@
                 {/if}
                 {#if evt.executionOutput}
                   <div class="progress-content output-content">
-                    <pre class="output-block">{evt.executionOutput.slice(0, 3000)}</pre>
+                    <pre class="output-block">{evt.executionOutput}</pre>
                   </div>
                 {/if}
                 {#if evt.userMessage}
                   <div class="progress-content user-message-content">
-                    <pre class="output-block">{evt.userMessage.slice(0, 2000)}</pre>
+                    <pre class="output-block">{evt.userMessage}</pre>
                   </div>
                 {/if}
                 {#if evt.endReason}
@@ -312,8 +312,6 @@
 .progress-content {
   margin-top: 0.25rem;
   font-size: 0.75rem;
-  max-height: 300px;
-  overflow-y: auto;
 }
 
 .thinking-content {

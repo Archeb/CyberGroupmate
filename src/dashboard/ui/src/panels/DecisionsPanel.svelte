@@ -112,7 +112,7 @@
           {@const content = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content, null, 2)}
           <div class="codeact-msg role-{msg.role}">
             <span class="role-label">{msg.role}</span>
-            <div class="mt-1 text-xs">{@html formatCodeActContent(content.slice(0, 5000))}</div>
+            <div class="mt-1 text-xs">{@html formatCodeActContent(content)}</div>
           </div>
         {/each}
       </div>
