@@ -13,8 +13,8 @@
  */
 
 import { readFileSync, existsSync, readdirSync, statSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import { join, resolve, dirname } from "node:path";
+import { pathToFileURL, fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { parseDtsFile } from "./dts-parser.js";
@@ -22,7 +22,10 @@ import { createLogger } from "../core/logger.js";
 import type { ModuleEntry } from "./modules/module-registry.js";
 
 const log = createLogger("skill-loader");
-const SKILLS_DIR = resolve("workspace/skills");
+/** 基于源码位置定位项目根（src/sandbox/skill-loader.ts → 项目根），不依赖 process.cwd() */
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const PROJECT_ROOT = resolve(__dirname, "../..");
+const SKILLS_DIR = resolve(PROJECT_ROOT, "workspace/skills");
 
 export interface LoadedSkill {
     /** Skill 名称（目录名） */

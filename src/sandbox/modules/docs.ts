@@ -8,10 +8,14 @@
  */
 
 import { readFileSync, readdirSync, existsSync, statSync } from "node:fs";
-import { join, basename, extname, resolve } from "node:path";
+import { join, basename, extname, resolve, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const DOCS_DIR = "workspace/agent-docs";
-const AGENT_SKILLS_DIR = "workspace/skills";
+/** 基于源码位置定位项目根（src/sandbox/modules/docs.ts → 项目根），不依赖 process.cwd() */
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const PROJECT_ROOT = resolve(__dirname, "../../..");
+const DOCS_DIR = resolve(PROJECT_ROOT, "workspace/agent-docs");
+const AGENT_SKILLS_DIR = resolve(PROJECT_ROOT, "workspace/skills");
 
 export interface DocEntry {
     slug: string;
