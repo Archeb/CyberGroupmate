@@ -232,37 +232,20 @@ export class GlobalState {
         return event;
     }
 
-    /** 添加周期 cron 任务 */
-    addCron(chatId: string, description: string, cronExpr: string, taskTemplate: string): SchedulerEvent {
+    /** 添加周期 cron 任务（自然语言任务描述） */
+    addCron(chatId: string, description: string, cronExpr: string, taskDescription: string): SchedulerEvent {
         const event: SchedulerEvent = {
             id: randomUUID(),
             type: "cron",
             chatId,
             description,
             cronExpr,
-            taskTemplate,
+            taskTemplate: taskDescription,
             createdAt: new Date().toISOString(),
         };
         this.state.schedulerEvents.push(event);
         this.markDirty();
         log.debug("addCron", { id: event.id, chatId, cronExpr });
-        return event;
-    }
-
-    /** 添加 sandbox-cron 定时任务（代码字符串，触发时在 sandbox 中执行） */
-    addSandboxCron(chatId: string, name: string, cronExpr: string, code: string): SchedulerEvent {
-        const event: SchedulerEvent = {
-            id: randomUUID(),
-            type: "sandbox-cron",
-            chatId,
-            description: name,
-            cronExpr,
-            code,
-            createdAt: new Date().toISOString(),
-        };
-        this.state.schedulerEvents.push(event);
-        this.markDirty();
-        log.debug("addSandboxCron", { id: event.id, chatId, name, cronExpr });
         return event;
     }
 
@@ -301,7 +284,7 @@ export class GlobalState {
         return true;
     }
 
-    /** 更新 cron/sandbox-cron 的 lastTriggeredAt */
+    /** 更新 cron 的 lastTriggeredAt */
     markCronTriggered(id: string): void {
         const event = this.state.schedulerEvents.find(e => e.id === id);
         if (event) {

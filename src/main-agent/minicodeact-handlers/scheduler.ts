@@ -4,10 +4,14 @@
  * 提供 scheduler.setReminder / scheduler.setCron / scheduler.cancel / scheduler.list
  *
  * 设计理由：触发不直接推送消息，而是写入 GlobalState.schedulerEvents，
- * 由 Phase 1.5 Watchdog 检测到期 → boost Q3 → 主 Agent attend 时自然介入。
+ * 由统一调度器 Watchdog 检测到期 → boost Q3 → 主 Agent attend 时自然介入。
+ *
+ * 所有定时任务只接受自然语言描述，不接受代码。触发时创建新的 CodeAct session，
+ * agent 在当时的上下文中自主决策执行。
  */
 
 import { registerHandlers, type MiniCodeActHandler, type MiniCodeActDeps } from "../minicodeact-executor.js";
+import { validateCronMinInterval } from "../../core/cron-matcher.js";
 
 function handler(
     fn: (args: Record<string, unknown>, chatId: string, deps: MiniCodeActDeps) => unknown,
@@ -49,6 +53,11 @@ registerHandlers("scheduler", {
                 throw new Error("triggerAt is in the past");
             }
 
+            // 最长 365 天
+            if (parsed.getTime() > Date.now() + 365 * 24 * 60 * 60_000) {
+                throw new Error("triggerAt 最长 365 天");
+            }
+
             const requestedBy = args.requestedBy as string | undefined;
             const event = deps.globalState.addReminder(targetChatId, description, parsed.toISOString(), requestedBy);
             return { reminderId: event.id };
@@ -70,10 +79,14 @@ registerHandlers("scheduler", {
                 throw new Error("missing required arg: cronExpr");
             }
             if (!taskTemplate) {
-                throw new Error("missing required arg: taskTemplate");
+                throw new Error("missing required arg: taskTemplate (自然语言任务描述)");
             }
             if (!isValidCronExpr(cronExpr)) {
                 throw new Error(`invalid cron expression: "${cronExpr}" (expected 5-7 fields)`);
+            }
+            // 最短间隔 1 小时
+            if (!validateCronMinInterval(cronExpr, 60)) {
+                throw new Error("cron 最短触发间隔为 1 小时");
             }
 
             const event = deps.globalState.addCron(targetChatId, description, cronExpr, taskTemplate);
@@ -105,6 +118,7 @@ registerHandlers("scheduler", {
                     description: e.description,
                     triggerAt: e.triggerAt,
                     cronExpr: e.cronExpr,
+                    taskTemplate: e.taskTemplate,
                     triggered: e.triggered,
                 })),
             };

@@ -294,6 +294,14 @@ export function createAttendHandler(
                     .join("\n");
             }
 
+            // ═══ Scheduler 触发上下文注入 ═══
+            if (entry.source === "SCHEDULER_TRIGGER" && entry.schedulerTriggers?.length) {
+                promptVars.hasSchedulerTriggers = true;
+                promptVars.schedulerTriggers = entry.schedulerTriggers
+                    .map(t => `- [${t.type}] ${t.description}`)
+                    .join("\n");
+            }
+
             const attentionPrompt = renderPrompt("ATTENTION", promptVars);
 
             // ➋ 主 Agent 系统 Prompt — 纯静态，确保前缀缓存命中 (subagent.md §12.2 ➋)

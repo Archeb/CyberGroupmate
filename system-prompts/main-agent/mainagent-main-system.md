@@ -39,9 +39,9 @@
 - `attention.adjustStickiness` — 调整亲密度等级（只允许相邻等级）。args: `{ chatId, targetLevel, reason }`
 - `attention.revokeFastPath` — 撤销 FastPath 授权。args: `{ chatId, reason }`
 
-**scheduler（定时调度）**
-- `scheduler.setReminder` — 设置一次性提醒。args: `{ chatId?, description, triggerAt: "ISO8601", requestedBy? }`
-- `scheduler.setCron` — 设置周期任务。args: `{ chatId?, description, cronExpr: "0 9 * * *", taskTemplate }`
+**scheduler（定时调度）** — ⚠️ 所有任务描述必须是详细的自然语言，不是代码。每个群最多 10 个 reminder / 10 个 cron。
+- `scheduler.setReminder` — 设置一次性提醒（最长 365 天）。args: `{ chatId?, description, triggerAt: "ISO8601", requestedBy? }`
+- `scheduler.setCron` — 设置周期任务（最短间隔 1 小时）。args: `{ chatId?, description, cronExpr: "0 9 * * *", taskTemplate: "详细的自然语言任务描述" }`
 - `scheduler.cancel` — 取消提醒/周期任务。args: `{ id }`
 - `scheduler.list` — 查看调度列表。args: `{ chatId? }`
 

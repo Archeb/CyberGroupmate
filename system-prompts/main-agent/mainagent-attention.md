@@ -54,6 +54,12 @@
 {{notes}}
 {{/hasNotes}}
 
+{{#hasSchedulerTriggers}}
+## ⏰ 定时任务触发
+以下定时任务已到期，请立即为每个任务生成 REPLY 决策，将任务描述作为 contentDirection 传递给执行器：
+{{schedulerTriggers}}
+{{/hasSchedulerTriggers}}
+
 {{#hasDispatchedTopics}}
 ## ⚠️ 已分派回复任务的话题
 以下话题已有进行中或已完成的回复任务，请勿重复分派: {{dispatchedTopicIds}}
