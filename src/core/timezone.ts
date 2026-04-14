@@ -8,11 +8,16 @@
 let _globalTimezone: string | undefined;
 
 /**
- * 设置全局时区（启动时由 main.ts 调用一次）
+ * 设置全局时区（启动时由 main.ts 调用一次）。
+ * 同时设置 process.env.TZ，使 Date 的本地时间方法（getHours 等）
+ * 统一使用配置时区，确保 cron 匹配、remind 触发等均基于该时区。
  * @param tz - IANA 时区标识符，例如 "Asia/Shanghai"
  */
 export function setGlobalTimezone(tz: string | undefined): void {
     _globalTimezone = tz;
+    if (tz) {
+        process.env.TZ = tz;
+    }
 }
 
 /**
