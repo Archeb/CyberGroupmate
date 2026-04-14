@@ -82,43 +82,40 @@ const PLATFORM_MODULES: Record<string, string> = {
  * 完整文档由 Two-pass 机制在 session-runner 中按需注入。
  */
 export function loadApiTypeDefs(platform: string = "telegram"): string {
-    const cached = _apiBriefCache.get(platform);
-    if (cached) return cached;
-
     try {
         // 确保 registry 已加载（合并内置模块与动态 TS Skills）
         const registry = getModuleRegistryCache();
 
-        if (registry.length === 0) {
-            // 降级：如果 modules-docs.json 不存在且无 Skills，返回空提示
-            const fallback = "// API type definitions not available. Run `npm run gen:module-docs` to generate host APIs.";
-            _apiBriefCache.set(platform, fallback);
-            return fallback;
-        }
+        let moduleBrief = _apiBriefCache.get(platform);
+        if (!moduleBrief) {
+            if (registry.length === 0) {
+                // 降级：如果 modules-docs.json 不存在且无 Skills，返回空提示
+                moduleBrief = "// API type definitions not available. Run `npm run gen:module-docs` to generate host APIs.";
+            } else {
+                // 确定需要排除的其他平台模块
+                const excludedModules = new Set<string>();
+                for (const [plat, modName] of Object.entries(PLATFORM_MODULES)) {
+                    if (plat !== platform) {
+                        excludedModules.add(modName);
+                    }
+                }
 
-        // 确定需要排除的其他平台模块
-        const excludedModules = new Set<string>();
-        for (const [plat, modName] of Object.entries(PLATFORM_MODULES)) {
-            if (plat !== platform) {
-                excludedModules.add(modName);
+                // 按平台过滤模块
+                const filteredRegistry = registry.filter(mod => !excludedModules.has(mod.name));
+
+                // 生成轻量概览（仅缓存模块部分，不含 agent skills）
+                moduleBrief = generateBriefOverview(filteredRegistry);
             }
+            _apiBriefCache.set(platform, moduleBrief);
         }
 
-        // 按平台过滤模块
-        const filteredRegistry = registry.filter(mod => !excludedModules.has(mod.name));
-
-        // 生成轻量概览
-        const result = generateBriefOverview(filteredRegistry);
+        // Agent skills 每次从磁盘读取，不缓存，以支持运行时热更新
         const agentSkills = getAgentSkillsApiBriefs();
-        const combined = agentSkills ? `${result}\n\n${agentSkills}` : result;
-        _apiBriefCache.set(platform, combined);
-        return combined;
+        return agentSkills ? `${moduleBrief}\n\n${agentSkills}` : moduleBrief;
     } catch (err) {
         const errorMsg = err instanceof Error ? err.stack ?? err.message : String(err);
         log.error("loadApiTypeDefs failed", { error: errorMsg });
-        const fallback = "// API type definitions not available";
-        _apiBriefCache.set(platform, fallback);
-        return fallback;
+        return "// API type definitions not available";
     }
 }
 
