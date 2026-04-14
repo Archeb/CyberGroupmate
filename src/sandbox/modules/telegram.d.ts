@@ -199,12 +199,12 @@ interface TelegramClient {
     // ─── 发送与交互 ───
     sendText(chatId: number | string, text: string, opts?: SendMessageOptions): Promise<Message>;
     /**
-     * 发送媒体消息。支持 URL 和本地文件路径。
+     * 发送媒体消息。支持 URL 和本地文件路径（支持绝对路径或基于 cwd 工作区的相对路径）。
      * @example sendMedia(chatId, { type: 'photo', file: 'https://example.com/img.jpg', caption: '看看这个' })
-     * @example sendMedia(chatId, { type: 'photo', file: '/path/to/local/image.jpg' })
+     * @example sendMedia(chatId, { type: 'photo', file: 'ip_skk_moe.png' }) // 自动基于 process.cwd() 解析
      */
     sendMedia(chatId: number | string, media: string | { type: 'photo' | 'video' | 'document' | 'audio' | 'auto'; file: string; caption?: string; fileName?: string }, opts?: SendMessageOptions): Promise<Message>;
-    /** 发送磁盘文件到聊天（通过绝对路径）。host 侧读取文件并上传。始终作为文件/文档发送。 */
+    /** 发送磁盘文件到聊天。支持绝对路径或基于 cwd 的相对路径。host 侧读取文件并上传。始终作为文件/文档发送。 */
     sendFile(chatId: number | string, filePath: string, opts?: { replyTo?: number; caption?: string; fileName?: string; mimeType?: string }): Promise<Message>;
     /**
      * 发送贴纸。通过 uniqueFileId 引用本地已缓存的贴纸文件。
