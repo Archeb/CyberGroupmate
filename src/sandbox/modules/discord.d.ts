@@ -32,11 +32,12 @@ interface DiscordClient {
     sendText(channelId: string, text: string, opts?: { replyTo?: string }): Promise<DiscordMessage>;
 
     /**
-     * 发送媒体消息（附件）到指定频道。
+     * 发送媒体消息（附件）到指定频道。支持 URL 和本地文件路径（支持绝对路径或基于 cwd 工作区的相对路径）。
      * @param channelId 目标频道 ID
      * @param media 媒体对象，支持 URL 或文件内容
      * @param opts 可选参数
      * @example sendMedia(channelId, { url: "https://example.com/image.png", caption: "看看这张图" })
+     * @example sendMedia(channelId, { file: "screenshot.png", caption: "本地截图" }) // 自动基于 process.cwd() 解析
      */
     sendMedia(channelId: string, media: { url?: string; file?: string; caption?: string; fileName?: string }, opts?: { replyTo?: string }): Promise<DiscordMessage>;
 

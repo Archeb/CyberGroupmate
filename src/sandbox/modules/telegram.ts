@@ -9,6 +9,8 @@
  */
 
 import type { CapabilityRegistryEnv } from "../capability-registry.js";
+import { resolve as pathResolve } from "node:path";
+import { existsSync } from "node:fs";
 
 // ─── 工具函数 ───
 
@@ -41,6 +43,21 @@ export function formatTelegramAck(prefix: string, payload: unknown): string {
 // ─── Telegram 客户端代理 ───
 
 export function createTelegramClientProxy(env: CapabilityRegistryEnv, sentHistory: Map<string, Set<string>>) {
+    /**
+     * 将可能的工作区相对路径解析为绝对路径。
+     * 如果解析后的路径对应的文件存在，则返回绝对路径；
+     * 否则原样返回（可能是 URL、Telegram File ID 或是无效路径）。
+     */
+    function resolveLocalFile(file: unknown): unknown {
+        if (typeof file !== "string") return file;
+        if (file.startsWith("http://") || file.startsWith("https://") || file.startsWith("data:")) return file;
+        const absPath = pathResolve(process.cwd(), file);
+        if (existsSync(absPath)) {
+            return absPath;
+        }
+        return file;
+    }
+
     /**
      * 检查消息是否是重复发送。
      * 如果是新消息则记录并返回 false；如果已发送过则返回 true。
@@ -115,7 +132,20 @@ export function createTelegramClientProxy(env: CapabilityRegistryEnv, sentHistor
                 });
                 return null;
             }
-            const sent = hydrateTelegramMessage(await env.callHost("telegram.sendMedia", [chatId, media, opts]));
+
+            // 处理 media 中的相对文件路径
+            let processedMedia = media;
+            if (typeof media === "string") {
+                processedMedia = resolveLocalFile(media);
+            } else if (media && typeof media === "object") {
+                const m = media as Record<string, unknown>;
+                processedMedia = {
+                    ...m,
+                    file: resolveLocalFile(m.file)
+                };
+            }
+
+            const sent = hydrateTelegramMessage(await env.callHost("telegram.sendMedia", [chatId, processedMedia, opts]));
             env.emitOutput(formatTelegramAck("[Telegram] sendMedia ok", sent));
             // 发射 agent_message_sent 通知
             env.notifyHost({
@@ -143,7 +173,11 @@ export function createTelegramClientProxy(env: CapabilityRegistryEnv, sentHistor
                 });
                 return null;
             }
-            const sent = hydrateTelegramMessage(await env.callHost("telegram.sendFile", [chatId, filePath, opts]));
+            
+            // 解析可能的相对路径
+            const absFilePath = typeof filePath === "string" ? String(resolveLocalFile(filePath)) : filePath;
+            
+            const sent = hydrateTelegramMessage(await env.callHost("telegram.sendFile", [chatId, absFilePath, opts]));
             env.emitOutput(formatTelegramAck("[Telegram] sendFile ok", sent));
             // 发射 agent_message_sent 通知
             env.notifyHost({
@@ -259,7 +293,20 @@ export function createTelegramClientProxy(env: CapabilityRegistryEnv, sentHistor
                 });
                 return null;
             }
-            const sent = await env.callHost("telegram.sendMediaGroup", [chatId, medias, opts]);
+
+            // 处理媒体组中的所有相对文件路径
+            const processedMedias = (medias || []).map((m: unknown) => {
+                if (m && typeof m === "object") {
+                    const record = m as Record<string, unknown>;
+                    return {
+                        ...record,
+                        file: resolveLocalFile(record.file)
+                    };
+                }
+                return m;
+            });
+
+            const sent = await env.callHost("telegram.sendMediaGroup", [chatId, processedMedias, opts]);
             env.emitOutput(`[Telegram] sendMediaGroup ok chat=${String(chatId)} count=${medias.length}`);
             env.notifyHost({
                 type: "system.agent_message_sent",
