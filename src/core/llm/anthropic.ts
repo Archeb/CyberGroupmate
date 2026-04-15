@@ -28,6 +28,7 @@ export async function callAnthropic(
         "Content-Type": "application/json",
         "x-api-key": config.apiKey,
         "anthropic-version": "2023-06-01",
+        ...(config.customHeaders ?? {}),
     };
 
     // 组装 API 消息列表

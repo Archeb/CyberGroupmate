@@ -23,6 +23,7 @@ export async function callOpenAI(
 
     const headers: Record<string, string> = {
         "Content-Type": "application/json",
+        ...(config.customHeaders ?? {}),
     };
     if (config.apiKey) {
         headers["Authorization"] = `Bearer ${config.apiKey}`;
