@@ -876,67 +876,28 @@ export function createApiRouter(deps: DashboardDeps, bridge: EventBridge): Route
                 return;
             }
 
+            const { callLLM } = await import("../core/llm.js");
             const start = Date.now();
 
-            // ── Google provider: 使用 @google/genai SDK ──
-            if (isGoogle) {
-                const { GoogleGenAI } = await import("@google/genai");
-                const options: Record<string, unknown> = {};
-                if (hasVertexProject) {
-                    options.vertexai = true;
-                    options.project = resolvedProject;
-                    options.location = profile.vertexRegion ?? "global";
-                    if (profile.vertexCredentials) {
-                        options.googleAuthOptions = { credentials: profile.vertexCredentials };
-                    }
-                } else {
-                    options.apiKey = profile.apiKey;
-                }
-                const client = new GoogleGenAI(options);
-                const response = await client.models.generateContent({
-                    model: profile.model,
-                    contents: "ping",
-                    config: { maxOutputTokens: 10 },
-                });
+            try {
+                // 使用内部真实的 callLLM 调用，确保应用所有的系统配置（如 customHeaders, extraBody）
+                await callLLM(
+                    [{ role: "user", content: "ping" }],
+                    profile,
+                    { maxTokens: 10, timeoutMs: 15000, caller: "dashboard-test" }
+                );
                 const latency = Date.now() - start;
                 res.json({ ok: true, latency, model: profile.model, status: 200 });
-                return;
-            }
-
-            // ── Anthropic / OpenAI: REST 测试 ──
-            const isAnthropic = profile.provider === "anthropic";
-            const url = isAnthropic
-                ? `${profile.baseUrl.replace(/\/$/, "")}/messages`
-                : `${profile.baseUrl.replace(/\/$/, "")}/chat/completions`;
-            const headers: Record<string, string> = { "Content-Type": "application/json" };
-            if (isAnthropic) {
-                headers["x-api-key"] = profile.apiKey;
-                headers["anthropic-version"] = "2023-06-01";
-            } else {
-                headers["Authorization"] = `Bearer ${profile.apiKey}`;
-            }
-            const body = isAnthropic
-                ? { model: profile.model, max_tokens: 10, messages: [{ role: "user", content: "ping" }] }
-                : { model: profile.model, max_tokens: 10, messages: [{ role: "user", content: "ping" }] };
-
-            const controller = new AbortController();
-            const timeout = setTimeout(() => controller.abort(), 15000);
-            const response = await fetch(url, {
-                method: "POST",
-                headers,
-                body: JSON.stringify(body),
-                signal: controller.signal,
-            });
-            clearTimeout(timeout);
-            const latency = Date.now() - start;
-
-            if (response.ok) {
-                const data = await response.json();
-                const model = isAnthropic ? data.model : data.model;
-                res.json({ ok: true, latency, model, status: response.status });
-            } else {
-                const text = await response.text().catch(() => "");
-                res.json({ ok: false, latency, status: response.status, error: text.slice(0, 500) });
+            } catch (err: unknown) {
+                const latency = Date.now() - start;
+                const errMsg = err instanceof Error ? err.message : String(err);
+                const isTimeout = errMsg.toLowerCase().includes("timeout") || errMsg.includes("abort");
+                res.json({
+                    ok: false,
+                    latency,
+                    status: isTimeout ? 408 : 500,
+                    error: isTimeout ? "连接超时 (15s)" : errMsg.slice(0, 500)
+                });
             }
         } catch (err: unknown) {
             const errMsg = err instanceof Error ? err.message : String(err);
