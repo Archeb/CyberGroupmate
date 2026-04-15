@@ -293,6 +293,36 @@
     config = config;
   }
 
+  // ── Drag and Drop state for routing profiles ──
+  let draggedItem = null;
+  let draggedCompKey = null;
+
+  function handleRoutingDragStart(compKey, idx) {
+    draggedItem = idx;
+    draggedCompKey = compKey;
+  }
+
+  function handleRoutingDrop(compKey, dropIdx) {
+    if (draggedCompKey !== compKey) return;
+    if (draggedItem === null || draggedItem === dropIdx) {
+      draggedItem = null;
+      draggedCompKey = null;
+      return;
+    }
+    const arr = getRoutingValue(compKey);
+    const item = arr.splice(draggedItem, 1)[0];
+    arr.splice(dropIdx, 0, item);
+    config.llmRouting[compKey] = arr.length === 1 ? arr[0] : [...arr];
+    config = config;
+    draggedItem = null;
+    draggedCompKey = null;
+  }
+
+  function handleRoutingDragEnd() {
+    draggedItem = null;
+    draggedCompKey = null;
+  }
+
   // ── System Prompts state ──
   let promptList = [];
   let promptTree = {};
@@ -854,7 +884,15 @@
                     </div>
                     <div class="flex items-center gap-2 flex-wrap mt-1">
                       {#each assigned as pn, idx (pn)}
-                        <div class="badge badge-primary badge-sm gap-1">
+                        <div
+                          class="badge badge-primary badge-sm gap-1 cursor-move transition-opacity"
+                          draggable="true"
+                          on:dragstart={(e) => { e.dataTransfer.effectAllowed = "move"; handleRoutingDragStart(comp.key, idx); }}
+                          on:dragend={handleRoutingDragEnd}
+                          on:dragover|preventDefault
+                          on:drop|preventDefault={() => handleRoutingDrop(comp.key, idx)}
+                          class:opacity-40={draggedCompKey === comp.key && draggedItem === idx}
+                        >
                           <span class="opacity-60 text-[10px]">#{idx + 1}</span>
                           {pn}
                           <button
