@@ -448,6 +448,19 @@ export function formatMessages(
         lines.push(`[${formatTsForDisplay(m.timestamp) ?? ""}] [msgId:${m.id ?? "?"}] ${m.sender ?? "?"}${replyTag}: ${textPart}`);
     }
 
+    // ─── 最后一条消息距今时间标记 ───
+    if (prevTimestamp !== undefined) {
+        const nowMs = Date.now();
+        const sinceMs = nowMs - prevTimestamp;
+        const sinceMin = Math.round(sinceMs / 60_000);
+        if (sinceMin >= 1) {
+            const label = sinceMin >= 60
+                ? `${Math.floor(sinceMin / 60)} 小时${sinceMin % 60 > 0 ? ` ${sinceMin % 60} 分钟` : ""}`
+                : `${sinceMin} 分钟`;
+            lines.push(`--- (距今 ${label}) ---`);
+        }
+    }
+
     return lines.join("\n") || "(无目标消息原文)";
 }
 
