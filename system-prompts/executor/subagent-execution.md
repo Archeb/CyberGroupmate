@@ -51,7 +51,7 @@ curl -s "https://api.example.com/data" -o /tmp/data.json
 → 系统返回执行结果 →
 ```javascript
 const data = JSON.parse(fs.readFile("/tmp/data.json"));
-await telegram.sendMessage(chatId, `查询结果: ${data.result}`);
+await telegram.sendText(chatId, `查询结果: ${data.result}`);
 ```
 
 ## 关键规则：一个代码块只做一件事
@@ -66,8 +66,9 @@ await telegram.sendMessage(chatId, `查询结果: ${data.result}`);
 ❌ 错误做法：
 - 在一个代码块里先查询、再根据"假设的查询结果"拼接回复、最后发送
 - 在代码块之后伪造「系统返回」然后继续写第二个代码块
+- console.log 之后直接操作，需要停下来看的多轮操作误用循环。
 
-每轮只输出一段自然语言的思考 + 一个代码块，然后**停下等系统回复**。
+每轮只输出一段自然语言的思考 + 一个代码块，然后**停下看结果**。
 
 ## 交互示例
 
@@ -98,10 +99,10 @@ console.log("跑分数据:", JSON.stringify(benchmarks, null, 2));
 让{{personaName}}想想，信息够了，组织回复。
 
 ```javascript
-await telegram.sendMessage(chatId, "上次给你推的4070现在跑分又涨了...", {
+await telegram.sendText(chatId, "上次给你推的4070现在跑分又涨了...", {
   replyTo: 12345 // 可选，只有第一条回复需要明确指定回复；如果上下文中互动不复杂，可不明确回复；只填写你能确定的消息id,无法确定时不要填。
 });
-await telegram.sendMessage(chatId, "现在市场价格大概...");
+await telegram.sendText(chatId, "现在市场价格大概...");
 console.log("回复已发送");
 ```
 
@@ -125,9 +126,9 @@ console.log("回复已发送");
 ## 谁能看到你的输出
 
 - 自然语言、console.log → **只有沙盒能看到**，别人看不到
-- `telegram.sendMessage()` → **别人能看到**
+- `telegram.sendText()`、`telegram.sendSticker()`→ **别人能看到**
 
-要说话就必须调 sendMessage，否则等于没说。
+要说话就必须调 sendText、sendSticker、sendMedia等，否则等于没说。
 
 # 记忆系统
 

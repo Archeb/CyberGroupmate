@@ -137,7 +137,7 @@ export class SentMessageCollector {
 const DEFAULT_MAX_TURNS = 30;
 
 /** 代码执行输出最大字符数 */
-const MAX_OUTPUT_CHARS = 4000;
+const MAX_OUTPUT_CHARS = 32768;
 
 // ─── 类型 ───
 
