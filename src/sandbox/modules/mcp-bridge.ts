@@ -211,7 +211,7 @@ function setupStdoutHandler(conn: McpConnection): void {
     conn.outputBuffer = "";
 
     conn.process.stdout.on("data", (data: Buffer) => {
-        conn.outputBuffer += data.toString();
+        conn.outputBuffer = (conn.outputBuffer ?? "") + data.toString();
         const lines = conn.outputBuffer.split("\n");
         conn.outputBuffer = lines.pop() ?? "";
 

@@ -26,7 +26,8 @@ import type {
 import { executeMiniCodeActs } from "./minicodeact-executor.js";
 import { DEFAULT_SUBAGENT_CONFIG } from "../subagent/types.js";
 import type { ChatMessage } from "../core/llm.js";
-import type { LLMConfig } from "../core/config.js";
+
+import { resolveComponentProfiles } from "../core/config.js";
 import { renderPrompt, buildCallbackVariables } from "./prompt-renderer.js";
 import { shouldCompact, compact as contextManagerCompact } from "../memory-v2/context-manager.js";
 import { createLogger } from "../core/logger.js";
@@ -89,8 +90,6 @@ export class MainAgentLoop {
      */
     private conversationHistory: ChatMessage[] = [];
 
-    /** LLM 配置（用于对话历史 compact） */
-    private llmConfigs: LLMConfig[] = [];
 
     /** 外部 attend handler（由 main.ts 集成注入） */
     private attendHandler: ((entry: AttentionQueueEntry) => Promise<AttendResult | null>) | null = null;
@@ -454,12 +453,6 @@ export class MainAgentLoop {
         this.globalState = gs;
     }
 
-    /**
-     * 设置 LLM 配置（用于对话历史 compact）
-     */
-    setLLMConfig(config: LLMConfig | LLMConfig[]): void {
-        this.llmConfigs = Array.isArray(config) ? config : [config];
-    }
 
     // ─── 对话历史管理 ───
 
@@ -488,8 +481,9 @@ export class MainAgentLoop {
      * 如果 token 总量未超预算，不做任何操作。
      */
     async compactHistoryIfNeeded(): Promise<void> {
-        if (this.llmConfigs.length === 0) return;
-        if (!shouldCompact(this.conversationHistory, undefined, this.llmConfigs[0])) return;
+        const compactConfigs = resolveComponentProfiles("compact");
+        if (compactConfigs.length === 0) return;
+        if (!shouldCompact(this.conversationHistory, undefined, compactConfigs[0])) return;
 
         try {
             log.info("主 Agent 对话历史 compact: token 超预算", {
@@ -497,7 +491,7 @@ export class MainAgentLoop {
             });
             this.conversationHistory = await contextManagerCompact(
                 this.conversationHistory,
-                this.llmConfigs,
+                compactConfigs,
             );
             log.info("主 Agent 对话历史 compact 完成", {
                 afterCount: this.conversationHistory.length,

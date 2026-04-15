@@ -14,7 +14,7 @@ import type { AttendResult, CodeActReplyTask, SubagentCallback, MiniCodeActResul
 import { formatMiniCodeActReport } from "./minicodeact-formatter.js";
 import type { SubagentManager } from "../subagent/subagent-manager.js";
 import type { MemoryStoreV2 } from "../memory-v2/index.js";
-import type { LLMConfig } from "../core/config.js";
+
 import type { SandboxPool } from "../sandbox/sandbox-pool.js";
 import type { NotificationCenter } from "../event/notification-center.js";
 import type { DynamicAttentionQueue } from "../subagent/attention-queue.js";
@@ -47,8 +47,6 @@ export interface DispatchHandlerDeps {
     nc: NotificationCenter;
     q3: DynamicAttentionQueue;
     q5: CallbackQueue;
-    llmConfigs: LLMConfig[];
-    fastPathConfigs: LLMConfig[];
     persona: { name: string; description: string };
 
     /** 完整 AppConfig（用于解析 vision 等配置） */
@@ -69,7 +67,7 @@ export interface DispatchHandlerDeps {
 export function createDispatchHandler(
     deps: DispatchHandlerDeps,
 ): (result: AttendResult) => Promise<void> {
-    const { memory, globalState, subagentManager, sandboxPool, nc, q3, q5, llmConfigs, fastPathConfigs, appConfig: _appConfig, adapters: adapterList, sendTyping, mediaDownloader } = deps;
+    const { memory, globalState, subagentManager, sandboxPool, nc, q3, q5, appConfig: _appConfig, adapters: adapterList, sendTyping, mediaDownloader } = deps;
     // 构建下载函数（根据 chatId 平台路由到对应 adapter）
     const buildDownloadFn = (chatId: string) => {
         if (!adapterList?.length) return undefined;
@@ -154,7 +152,7 @@ export function createDispatchHandler(
                                 replyToText = await resolveReplyText(origMsg, {
                                     stickerCache: memory,
                                     visionConfig,
-                                    llmConfig: llmConfigs[0],
+                                    llmConfig: resolveComponentProfiles("session")[0],
                                     visionLlmConfig,
                                     downloadFn: buildDownloadFn(result.chatId),
                                     chatId: result.chatId,
@@ -313,7 +311,7 @@ export function createDispatchHandler(
                     // 获取平台对应的 formatMention 函数
                     const chatAdapter = adapterList?.find(a => result.chatId.startsWith(a.platform + ":"));
                     const formatMention = chatAdapter ? (rawId: string, username?: string) => chatAdapter.formatMention(rawId, username) : undefined;
-                    executor.setDependencies(sandboxPool, nc, llmConfigs, persona, memory, visionConfig, downloadFn, sendTyping, visionLlmConfig, mediaDownloader, formatMention);
+                    executor.setDependencies(sandboxPool, nc, persona, memory, visionConfig, downloadFn, sendTyping, visionLlmConfig, mediaDownloader, formatMention);
                 }
 
                 executor.enqueue(task);
@@ -352,7 +350,7 @@ export function createDispatchHandler(
                 if (!fp) {
                     fp = new FastPathHandler(result.chatId);
                     fp.setCallbackHandler((cb: SubagentCallback) => q5.enqueue(cb));
-                    fp.setLLMConfig(fastPathConfigs, persona, fpGroupModel?.chatTitle ?? result.chatId, fpGroupModel?.isDirectMessage);
+                    fp.setPersonaContext(persona, fpGroupModel?.chatTitle ?? result.chatId, fpGroupModel?.isDirectMessage);
                     // 注入发送函数：通过平台 adapter 路由发送消息
                     const fpAdapter = adapterList?.find(a => result.chatId.startsWith(a.platform + ":"));
                     if (fpAdapter) {

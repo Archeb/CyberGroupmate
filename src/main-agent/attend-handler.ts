@@ -15,7 +15,7 @@ import type { SubagentManager } from "../subagent/subagent-manager.js";
 import type { DynamicAttentionQueue } from "../subagent/attention-queue.js";
 import type { FastPathHandler } from "../subagent/fast-path-handler.js";
 import type { MemoryStoreV2 } from "../memory-v2/index.js";
-import type { LLMConfig, AppConfig } from "../core/config.js";
+import type { AppConfig } from "../core/config.js";
 import type { ChatMessage } from "../core/llm.js";
 import type { GlobalState } from "./global-state.js";
 import type { MainAgentLoop } from "./main-agent-loop.js";
@@ -49,8 +49,6 @@ export interface AttendHandlerDeps {
     globalState: GlobalState;
     subagentManager: SubagentManager;
     mainLoop: MainAgentLoop;
-    /** SOTA tier 的 LLM 配置列表（按 fallback 顺序） */
-    sotaConfigs: LLMConfig[];
     persona: { name: string; description: string };
     /** 所有平台 adapter（用于平台无关的媒体下载） */
     adapters?: PlatformAdapter[];
@@ -68,7 +66,7 @@ export interface AttendHandlerDeps {
 export function createAttendHandler(
     deps: AttendHandlerDeps,
 ): (entry: AttentionQueueEntry) => Promise<AttendResult | null> {
-    const { memory, globalState, subagentManager, mainLoop, sotaConfigs, adapters: adapterList, mediaDownloader, attentionQueue } = deps;
+    const { memory, globalState, subagentManager, mainLoop, adapters: adapterList, mediaDownloader, attentionQueue } = deps;
 
     // 构建下载函数（用于 vision 处理 sticker/photo）
     // 从 adapters 数组中按 chatId 平台路由到对应 adapter 的 downloadMedia
@@ -226,7 +224,7 @@ export function createAttendHandler(
                         ? resolveComponentProfiles("vision", currentConfig)[0]
                         : undefined;
                     // 使用 vision tier LLM 进行媒体富化，而非 attend LLM
-                    const enrichLlmConfig = visionLlmConfig ?? sotaConfigs[0];
+                    const enrichLlmConfig = visionLlmConfig ?? resolveComponentProfiles("attend", currentConfig)[0];
 
                     const downloadFn = buildDownloadFn(entry.chatId);
 
@@ -318,7 +316,7 @@ export function createAttendHandler(
 
             const llmResponse = await callLLMWithFallback(
                 messages,
-                sotaConfigs,
+                resolveComponentProfiles("attend"),
                 {
                     caller: "attend-handler",
                     prefill: `让${persona.name}看看，`,
