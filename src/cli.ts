@@ -192,10 +192,8 @@ async function cmdMemory(args: string[]): Promise<void> {
 
     const cfg = loadConfig();
     const embeddingConfig = resolveEmbeddingConfig(cfg);
-    const cheapLlmConfigs = resolveComponentProfiles("memory", cfg);
     const memory = new MemoryStoreV2(dbPath, {
         embeddingConfig,
-        cheapLlmConfigs,
     });
     const subCmd = args[0] ?? "help";
 

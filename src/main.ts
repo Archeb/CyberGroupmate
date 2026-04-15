@@ -16,7 +16,7 @@ import { SandboxPool } from "./sandbox/sandbox-pool.js";
 import { installSkillsDependencies } from "./sandbox/skill-loader.js";
 import { createTaskListSkill, buildTaskListHostCalls } from "./sandbox/skills/task-list.js";
 import { MemoryStoreV2 } from "./memory-v2/index.js";
-import { loadConfig, resolveComponentProfiles, resolveComponentTimeout, type AppConfig, type LLMConfig } from "./core/config.js";
+import { loadConfig, type AppConfig } from "./core/config.js";
 import {
     TopicRegistry,
     FeedbackLoop,
@@ -105,15 +105,7 @@ async function main(): Promise<void> {
     ensureDataDirs();
 
     const appConfig = loadConfig();
-    const attendConfigs = resolveComponentProfiles("attend", appConfig);
-    const sessionConfigs = resolveComponentProfiles("session", appConfig);
-    const fastPathConfigs = resolveComponentProfiles("fast_path", appConfig);
-    const clusterConfigs = resolveComponentProfiles("recording_cluster", appConfig);
-    const triageConfigs = resolveComponentProfiles("recording_triage", appConfig);
-    const compactConfig = resolveComponentProfiles("compact", appConfig)[0];
-    const memoryConfigs = resolveComponentProfiles("memory", appConfig);
-    const reflectionConfigs = resolveComponentProfiles("reflection", appConfig);
-    const visionConfigs = resolveComponentProfiles("vision", appConfig);
+
 
     // ─── 全局时区初始化 ───
     setGlobalTimezone(appConfig.timezone);
@@ -215,7 +207,7 @@ async function main(): Promise<void> {
                     case "memory.browseHistory":
                         return memory.browseHistory(args[0] as any);
                     case "memory.reflect":
-                        return memory.reflect(String(args[0]), reflectionConfigs, appConfig.reflection);
+                        return memory.reflect(String(args[0]), undefined, appConfig.reflection);
                     case "actions.getTopicContext": {
                         // 在所有 per-group topicRegistries 中查找
                         const topicId = String(args[0]);
@@ -380,9 +372,7 @@ async function main(): Promise<void> {
             log.debug("SandboxPool onAcquire: 已初始化", { chatId });
         },
     });
-    const memory = new MemoryStoreV2(join(DATA_DIR, "memory.db"), {
-        cheapLlmConfigs: memoryConfigs,
-    });
+    const memory = new MemoryStoreV2(join(DATA_DIR, "memory.db"));
     const { createInterface: createRL } = await import("node:readline");
     const hostRL = createRL({ input: process.stdin, output: process.stdout });
 
@@ -437,14 +427,10 @@ async function main(): Promise<void> {
             mentionKeywords: appConfig.notification?.mentionKeywords ?? [],
         },
         recordingDeps: {
-            clusterLlmConfigs: clusterConfigs,
-            triageLlmConfigs: triageConfigs,
             personaName: appConfig.persona?.name ?? "赛博群友",
             personaDescription: appConfig.persona?.description ?? "赛博群友",
             memory,
             pipelineConfig: appConfig.recordingPipeline,
-            clusterTimeoutMs: resolveComponentTimeout("recording_cluster", appConfig),
-            triageTimeoutMs: resolveComponentTimeout("recording_triage", appConfig),
         },
         memory,  // 用于启动时恢复 TopicRegistry
         sessionsDir: SESSIONS_DIR,
@@ -803,7 +789,7 @@ async function main(): Promise<void> {
                 const reason = silenceTriggered ? "冷场触发" : maxIntervalTriggered ? "最大间隔触发" : "作息触发";
                 log.info(`${reason} Reflection`, { chatId });
                 try {
-                    const result = await memory.reflect(chatId, reflectionConfigs, reflCfg);
+                    const result = await memory.reflect(chatId, undefined, reflCfg);
                     lastReflectedAtMap.set(chatId, Date.now());
 
                     // Stickiness 重评估（architecture_v2.md §2.2）
@@ -848,7 +834,7 @@ async function main(): Promise<void> {
         maxAttendsPerTick: 3,
         cosineDecayCyclePeriod: appConfig.subagent?.cosineDecay?.defaultCyclePeriod ?? 20,
     }, globalState);
-    mainLoop.setLLMConfig(compactConfig);  // 对话历史 compact
+
     mainLoop.setMemory(memory);  // MiniCodeAct corrections
 
     // Attend handler: 主 Agent LLM 决策逻辑（subagent.md §12.2 ➛➜➝）
@@ -857,7 +843,7 @@ async function main(): Promise<void> {
         globalState,
         subagentManager,
         mainLoop,
-        sotaConfigs: attendConfigs,
+
         persona: appConfig.persona,
         adapters,
         mediaDownloader: sharedMediaDownloader,
@@ -873,8 +859,7 @@ async function main(): Promise<void> {
         nc,
         q3,
         q5,
-        llmConfigs: sessionConfigs,
-        fastPathConfigs,
+
         persona: appConfig.persona,
         appConfig,
         adapters,

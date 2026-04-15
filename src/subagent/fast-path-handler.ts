@@ -18,7 +18,7 @@ import type {
 import { DEFAULT_SUBAGENT_CONFIG } from "./types.js";
 import { callLLMWithFallback, type ChatMessage } from "../core/llm.js";
 import { renderPrompt, buildFastPathTaskVariables, buildFastPathTurnContent } from "../main-agent/prompt-renderer.js";
-import { resolveComponentTimeout, type LLMConfig } from "../core/config.js";
+import { resolveComponentTimeout, resolveComponentProfiles } from "../core/config.js";
 import { createLogger } from "../core/logger.js";
 import { getAgentSkillsBriefs } from "../sandbox/modules/docs.js";
 
@@ -50,8 +50,6 @@ export class FastPathHandler {
     private repliesSent = 0;
     private sentMessages: Array<{ text: string; timestamp: string }> = [];
 
-    /** LLM 配置（用于生成回复） */
-    private llmConfigs: LLMConfig[] = [];
     private personaName: string = "赛博群友";
     private personaDescription: string = "";
     private chatTitle: string = "";
@@ -92,10 +90,9 @@ export class FastPathHandler {
     }
 
     /**
-     * 注入 LLM 配置和 persona
+     * 注入 persona 和群组上下文
      */
-    setLLMConfig(llmConfigs: LLMConfig[], persona: { name: string; description: string }, chatTitle?: string, isDirectMessage?: boolean): void {
-        this.llmConfigs = llmConfigs;
+    setPersonaContext(persona: { name: string; description: string }, chatTitle?: string, isDirectMessage?: boolean): void {
         this.personaName = persona.name;
         this.personaDescription = persona.description;
         if (chatTitle) this.chatTitle = chatTitle;
@@ -278,7 +275,8 @@ export class FastPathHandler {
     private async generateReply(event: FastPathEvent, auth: FastPathConfig): Promise<string> {
         // 尝试使用 LLM 生成回复 (subagent.md §12.2 ➆)
         // 3-layer prompt: system (静态 persona) → task (授权范围) → per-turn (触发消息 + 剩余额度)
-        if (this.llmConfigs.length > 0) {
+        const fpConfigs = resolveComponentProfiles("fast_path");
+        if (fpConfigs.length > 0) {
             try {
                 // Layer 1: System prompt — 复用 sandbox 的 EXECUTION 模板
                 const systemPrompt = renderPrompt("EXECUTION", {
@@ -307,7 +305,7 @@ export class FastPathHandler {
 
                 const response = await callLLMWithFallback(
                     messages,
-                    this.llmConfigs,
+                    fpConfigs,
                     { caller: "fast-path", timeoutMs: resolveComponentTimeout("fast_path") },
                 );
 
