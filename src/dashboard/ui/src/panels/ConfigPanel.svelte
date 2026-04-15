@@ -660,10 +660,10 @@
                 {/if}
                 {#if p.provider === "openai" || p.provider === "anthropic"}
                   <div class="divider text-xs opacity-50 my-2">
-                    <i class="fa-solid fa-plus-circle mr-1"></i>Extra Body（可选）
+                    <i class="fa-solid fa-plus-circle mr-1"></i>Extra Body & Headers（可选）
                   </div>
                   <p class="text-xs opacity-40 mb-2">
-                    额外请求体字段，JSON 对象格式。会被展开合并到 API 请求中。例如：<code class="text-[10px]">&lbrace;"chat_template_kwargs":&lbrace;"enable_thinking":false&rbrace;&rbrace;</code>
+                    额外请求体字段和自定义请求头，JSON 对象格式。会被展开合并到对应的 API 请求中。
                   </p>
                   <label class="cfg-field"
                     ><span class="cfg-label">Extra Body (JSON)</span>
@@ -696,6 +696,38 @@
                   </label>
                   {#if p._extraBodyError}
                     <div class="text-xs text-error mt-1"><i class="fa-solid fa-triangle-exclamation mr-1"></i>{p._extraBodyError}</div>
+                  {/if}
+                  <label class="cfg-field mt-2"
+                    ><span class="cfg-label">Custom Headers (JSON)</span>
+                    <textarea
+                      class="textarea textarea-bordered w-full font-mono text-xs"
+                      rows="3"
+                      placeholder={'{"X-My-Header": "value"}'}
+                      value={p.customHeaders ? JSON.stringify(p.customHeaders, null, 2) : ""}
+                      on:blur={(e) => {
+                        const val = e.target.value.trim();
+                        if (!val) {
+                          p.customHeaders = undefined;
+                          p._customHeadersError = undefined;
+                        } else {
+                          try {
+                            const parsed = JSON.parse(val);
+                            if (typeof parsed !== "object" || Array.isArray(parsed)) {
+                              p._customHeadersError = "必须是 JSON 对象";
+                            } else {
+                              p.customHeaders = Object.fromEntries(Object.entries(parsed).map(([k, v]) => [k, String(v)]));
+                              p._customHeadersError = undefined;
+                            }
+                          } catch (err) {
+                            p._customHeadersError = "JSON 格式错误: " + err.message;
+                          }
+                        }
+                        config = config;
+                      }}
+                    ></textarea>
+                  </label>
+                  {#if p._customHeadersError}
+                    <div class="text-xs text-error mt-1"><i class="fa-solid fa-triangle-exclamation mr-1"></i>{p._customHeadersError}</div>
                   {/if}
                 {/if}
                 <!-- Pricing -->

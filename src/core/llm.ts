@@ -59,6 +59,8 @@ export interface LLMCallEvent {
     timestamp: string;
     /** 额外请求体字段（如有） */
     extraBody?: Record<string, unknown>;
+    /** 自定义请求头（如有） */
+    customHeaders?: Record<string, string>;
 }
 
 /** LLM 响应事件数据 */
@@ -331,6 +333,7 @@ async function callLLMSingleKey(
             messageSummaries: summarizeMessages(messages),
             timestamp: new Date().toISOString(),
             extraBody: config.extraBody,
+            customHeaders: config.customHeaders,
         };
         llmEvents.emit("llm:call", callEvent);
     }
