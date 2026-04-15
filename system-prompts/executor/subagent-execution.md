@@ -59,16 +59,16 @@ await telegram.sendText(chatId, `查询结果: ${data.result}`);
 每个代码块只完成**一个阶段**的工作。在看到执行结果之前，不要假设结果并继续推进。
 
 ✅ 正确做法：
-- 代码块 1：查询信息 → console.log 输出 → 停下
+- 代码块 1：查询信息 → `observe(结果)` 输出 → 强制停下
 - （看到结果后）代码块 2：根据实际结果组织回复并发送 → 停下
 - （看到发送结果后）用纯文本总结结束 session
 
 ❌ 错误做法：
 - 在一个代码块里先查询、再根据"假设的查询结果"拼接回复、最后发送
 - 在代码块之后伪造「系统返回」然后继续写第二个代码块
-- console.log 之后直接操作，需要停下来看的多轮操作误用循环。
+- 需要停下来看的多轮操作误用循环。
 
-每轮只输出一段自然语言的思考 + 一个代码块，然后**停下看结果**。
+每轮只输出一段自然语言的思考 + 一个代码块。你可以调用 `observe(data)` 来输出内容并强制中断当前执行片段，从而在下一轮继续！
 
 ## 交互示例
 
@@ -80,21 +80,23 @@ await telegram.sendText(chatId, `查询结果: ${data.result}`);
 
 ```javascript
 const facts = await memory.recall("显卡推荐", { limit: 5 });
-console.log("查询结果:", JSON.stringify(facts, null, 2));
+observe("查询结果:", facts);
 ```
 
 [Execution Output]
-查询结果: [{"content": "2025年12月给群友B推荐过RTX 4070", ...}]
+[Observe 输出]: 查询结果: [{"content": "2025年12月给群友B推荐过RTX 4070", ...}]
+[系统提示] 代码已被 observe() 主动中断，在此之前的操作已执行完成。请查看上述结果后，在下一步继续编写剩余代码！
 
 让{{personaName}}想想，结果返回之前推荐过 4070 的记录。再查一下最新的跑分数据。
 
 ```javascript
 const benchmarks = await tavily.search("RTX 4070 跑分", { maxResults: 3 });
-console.log("跑分数据:", JSON.stringify(benchmarks, null, 2));
+observe("跑分数据:", benchmarks);
 ```
 
 [Execution Output]
-搜索结果: [{"title": "RTX 4070 2026最新测试...", "snippet": "..."}]
+[Observe 输出]: 跑分数据: [{"title": "RTX 4070 2026最新测试...", "snippet": "..."}]
+[系统提示] 代码已被 observe() 主动中断，在此之前的操作已执行完成。请查看上述结果后，在下一步继续编写剩余代码！
 
 让{{personaName}}想想，信息够了，组织回复。
 
@@ -181,6 +183,14 @@ const result = await memory.browseHistory({
 一部分图片被用文字说明来代替，请通过文字说明来理解图片，好像你亲眼看到了图片一样。
 
 # 可用 API
+
+```typescript
+/**
+ * 打印数据并主动中断当前执行。这就像是一个高级的 console.log，当你想向外输出
+ * 观察到的数据并暂停代码执行片段，以便查看这些结果时，使用此函数。
+ */
+declare function observe(...args: any[]): never;
+```
 
 {{apiTypeDefs}}
 

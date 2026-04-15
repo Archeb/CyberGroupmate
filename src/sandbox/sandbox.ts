@@ -42,6 +42,8 @@ export interface ExecutionResult {
     output: string;
     /** 是否有错误 */
     error: boolean;
+    /** 是否被 observe 等机制提前中断 */
+    interrupted?: boolean;
 }
 
 /** Worker → Host 消息 */
@@ -50,6 +52,7 @@ interface WorkerMessage {
     id?: string;
     output?: string;
     error?: boolean;
+    interrupted?: boolean;
     event?: Record<string, unknown>;
     prompt?: string;
     message?: string;
@@ -377,6 +380,7 @@ export class Sandbox extends EventEmitter {
                 pending.resolve({
                     output: msg.output ?? "",
                     error: msg.error ?? false,
+                    interrupted: msg.interrupted ?? false,
                 });
             }
         } else if (msg.type === "notify" && msg.event) {

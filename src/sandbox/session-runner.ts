@@ -574,6 +574,10 @@ ${fullDocs}
                 if (result.error) {
                     errorOccurred = true;
                 }
+                
+                if (result.interrupted) {
+                    break;
+                }
             } catch (err: unknown) {
                 const errorMsg =
                     err instanceof Error ? err.message : String(err);
