@@ -4,7 +4,9 @@
 
 declare const skills: {
     memory: {
+        /** 检索记忆并针对查询生成结构化总结 */
         recallAndSummarize(query: string, options?: Record<string, unknown>): Promise<unknown>;
+        /** 主动搜索多渠道历史档案以详细回答复杂问题 */
         browseForAnswer(request: Record<string, unknown>): Promise<unknown>;
     };
 

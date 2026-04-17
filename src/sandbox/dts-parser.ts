@@ -176,22 +176,31 @@ function extractMethodsFromMembers(
 
             const signature = nodeToSignature(member, sourceFile);
             const displayName = prefix ? `${prefix}.${name}` : name;
-            const brief = jsDoc ? extractBrief(jsDoc) : signature;
+            let simplified = displayName;
+            if (ts.isMethodSignature(member) || ts.isMethodDeclaration(member)) {
+                const params = member.parameters.map(p => p.name.getText(sourceFile) + (p.questionToken ? "?" : "")).join(", ");
+                simplified = `${displayName}(${params})`;
+            }
+            const brief = (jsDoc ? extractBrief(jsDoc) : "") || simplified;
             const fullDoc = jsDoc
                 ? formatFullDoc(jsDoc, signature)
                 : `\`\`\`typescript\n${signature}\n\`\`\``;
 
             methods.push({ name: displayName, brief, fullDoc });
+
         }
 
         // 处理 call signature: (param: Type) => ReturnType 作为函数式成员
         if (ts.isCallSignatureDeclaration(member)) {
             const signature = nodeToSignature(member, sourceFile);
-            const brief = jsDoc ? extractBrief(jsDoc) : signature;
+            const displayName = prefix ?? "call";
+            const params = member.parameters.map(p => p.name.getText(sourceFile) + (p.questionToken ? "?" : "")).join(", ");
+            const simplified = `${displayName}(${params})`;
+            const brief = (jsDoc ? extractBrief(jsDoc) : "") || simplified;
             const fullDoc = jsDoc
                 ? formatFullDoc(jsDoc, signature)
                 : `\`\`\`typescript\n${signature}\n\`\`\``;
-            methods.push({ name: prefix ?? "call", brief, fullDoc });
+            methods.push({ name: displayName, brief, fullDoc });
         }
     }
 
@@ -371,7 +380,7 @@ export function parseDtsFile(content: string, fileName: string): ModuleEntry[] {
                     const jsDoc = getJsDocText(stmt, sourceFile);
                     const typeText = typeNode.getText(sourceFile);
                     const signature = `${name}: ${typeText}`;
-                    const brief = jsDoc ? extractBrief(jsDoc) : typeText;
+                    const brief = (jsDoc ? extractBrief(jsDoc) : "") || `${name}(...)`;
                     const fullDoc = jsDoc
                         ? formatFullDoc(jsDoc, signature)
                         : `\`\`\`typescript\n${signature}\n\`\`\``;

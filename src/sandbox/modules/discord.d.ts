@@ -6,19 +6,7 @@
  * 平台连接与消息监听由宿主侧 DiscordAdapter 管理。
  */
 
-declare const discord: DiscordClient;
-
-/** Discord 消息对象 */
-interface DiscordMessage {
-    id: string;
-    text: string;
-    channelId: string;
-    guildId?: string;
-    timestamp: string;
-}
-
-/** 系统注入的 DiscordClient 代理接口。 */
-interface DiscordClient {
+declare const discord: {
     // ─── 发送与交互 ───
 
     /**
@@ -29,7 +17,7 @@ interface DiscordClient {
      * @example sendText(channelId, "你好！")
      * @example sendText(channelId, "回复你的问题", { replyTo: "1234567890" })
      */
-    sendText(channelId: string, text: string, opts?: { replyTo?: string }): Promise<DiscordMessage>;
+    sendText(channelId: string, text: string, opts?: { replyTo?: string }): Promise<{ id: string; text: string; channelId: string; guildId?: string; timestamp: string; }>;
 
     /**
      * 发送媒体消息（附件）到指定频道。支持 URL 和本地文件路径（支持绝对路径或基于 cwd 工作区的相对路径）。
@@ -39,7 +27,7 @@ interface DiscordClient {
      * @example sendMedia(channelId, { url: "https://example.com/image.png", caption: "看看这张图" })
      * @example sendMedia(channelId, { file: "screenshot.png", caption: "本地截图" }) // 自动基于 process.cwd() 解析
      */
-    sendMedia(channelId: string, media: { url?: string; file?: string; caption?: string; fileName?: string }, opts?: { replyTo?: string }): Promise<DiscordMessage>;
+    sendMedia(channelId: string, media: { url?: string; file?: string; caption?: string; fileName?: string }, opts?: { replyTo?: string }): Promise<{ id: string; text: string; channelId: string; guildId?: string; timestamp: string; }>;
 
     // ─── 状态操作 ───
 
@@ -48,4 +36,4 @@ interface DiscordClient {
      * @param channelId 目标频道 ID
      */
     sendTyping(channelId: string): Promise<void>;
-}
+};

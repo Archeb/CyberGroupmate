@@ -11,7 +11,7 @@ shared/actions.d.ts — 所有 scene 共享的 actions 能力
 discord.d.ts — Discord 平台 API 系统注入的 Discord host proxy 接口。 提供给 Agent 在 sandbox 执行时作为 TypeScript 强类型上下文参考。 平台连接与消息监听由宿主侧 DiscordAdapter 管理。
 
 - `sendText`: 发送文本消息到指定频道。
-- `sendMedia`: 发送媒体消息（附件）到指定频道。
+- `sendMedia`: 发送媒体消息（附件）到指定频道。支持 URL 和本地文件路径（支持绝对路径或基于 cwd 工作区的相对路径）。
 - `sendTyping`: 在频道中显示 "正在输入..." 状态。
 
 ## docs
@@ -51,8 +51,8 @@ shared/scene.d.ts — 所有 scene 共享的场景信息能力 agent 不再主�
 ## skills
 shared/skills.d.ts — Skills 高层能力 + 管理接口
 
-- `memory.recallAndSummarize`: recallAndSummarize(query: string, options?: Record<string, unknown>): Promise<unknown>
-- `memory.browseForAnswer`: browseForAnswer(request: Record<string, unknown>): Promise<unknown>
+- `memory.recallAndSummarize`: 检索记忆并针对查询生成结构化总结
+- `memory.browseForAnswer`: 主动搜索多渠道历史档案以详细回答复杂问题
 - `list`: 列出当前已加载的 Skills 名称
 - `reload`: 热重载所有 Skills。在 workspace/skills/ 下创建/修改文件后调用。
 - `npmInstall`: 安装 npm 包到 workspace/skills/ 目录
@@ -60,9 +60,9 @@ shared/skills.d.ts — Skills 高层能力 + 管理接口
 ## telegram
 telegram.d.ts — Telegram 平台 API 这是系统注入的 Telegram host proxy 的接口子集。 提供给 Agent 在 sandbox 执行时作为 TypeScript 强类型上下文参考。 平台连接与消息监听由宿主侧官方 adapter 管理。
 
-- `sendText`: sendText(chatId: number | string, text: string, opts?: SendMessageOptions): Promise<Message>
-- `sendMedia`: 发送媒体消息。支持 URL 和本地文件路径。
-- `sendFile`: 发送磁盘文件到聊天（通过绝对路径）。host 侧读取文件并上传。始终作为文件/文档发送。
+- `sendText`: 发送普通文本消息
+- `sendMedia`: 发送媒体消息。支持 URL 和本地文件路径（支持绝对路径或基于 cwd 工作区的相对路径）。
+- `sendFile`: 发送磁盘文件到聊天。支持绝对路径或基于 cwd 的相对路径。host 侧读取文件并上传。始终作为文件/文档发送。
 - `sendSticker`: 发送贴纸。通过 uniqueFileId 引用本地已缓存的贴纸文件。
 - `sendMediaGroup`: 发送媒体相册（多张图片/视频合并为一组）。 第一个媒体项的 caption 将作为整组的文案。
 - `sendPoll`: 发起投票或测验。
@@ -71,26 +71,26 @@ telegram.d.ts — Telegram 平台 API 这是系统注入的 Telegram host proxy 
 - `deleteMessages`: 删除一条或多条消息。
 - `pinMessage`: 置顶一条消息
 - `unpinMessage`: 取消置顶一条消息
-- `getMe`: getMe(): Promise<User>
-- `getChat`: getChat(chatId: number | string): Promise<Chat>
-- `getUser`: getUser(userId: number | string): Promise<User>
+- `getMe`: 获取当前登录机器人的基础信息
+- `getChat`: 精确获取指定会话的基础信息
+- `getUser`: 精确获取指定用户的基础信息
 - `getDialogs`: 获取最近的对话列表（包含 peer、最后一条消息、未读数）
 - `getFullUser`: 获取用户的完整资料（包含个人简介 bio 等）。
 - `getFullChat`: 获取群组/频道的完整资料（包含群描述 about、成员数等）。
-- `getChatMembers`: getChatMembers(chatId: number | string, opts?: { limit?: number }): Promise<Peer[]>
-- `getHistory`: getHistory(chatId: number | string, opts?: { limit?: number }): Promise<Message[]>
+- `getChatMembers`: 分页拉取群组成员列表
+- `getHistory`: 拉取指定会话的历史消息（一次性返回列表）
 - `getMessages`: 按消息 ID 精确获取一条或多条消息。（在别人回复或者提及某消息但是你看不见的时候，善用该函数爬楼获取上下文）
 - `searchMessages`: 在群组内搜索消息。（可主动利用该函数获取视野外上下文信息）
 - `getForumTopics`: 获取指定群组的论坛板块（话题）列表。要求该群组已开启 Forum 模式。
 - `getPollResults`: 主动拉取某条投票消息的最新计票结果。
 - `getMessageReactions`: 主动拉取某条消息的表态（Reaction）汇总数据。
 - `downloadMedia`: 下载媒体文件的二进制数据。返回 base64 编码的 buffer 和文件大小。 需要传入通过 mediaInfo.fileId 获取的文件标识符。
-- `iterHistory`: iterHistory(chatId: number | string, opts?: { limit?: number }): AsyncIterable<Message>
-- `iterDialogs`: iterDialogs(opts?: { limit?: number }): AsyncIterable<Dialog>
+- `iterHistory`: 以异步迭代器方式遍历历史消息，用于深入流式检索
+- `iterDialogs`: 以异步迭代器方式遍历最近的对话列表
 - `joinChat`: 加入一个群聊或频道
 - `leaveChat`: 退出一个群聊或频道
-- `readHistory`: readHistory(chatId: number | string): Promise<void>
-- `sendTyping`: sendTyping(chatId: number | string): Promise<void>
+- `readHistory`: 将指定会话的所有未读消息标记为已读
+- `sendTyping`: 触发短暂的 `Typing` 正在输入反馈状态
 
 ## cron
 shared/cron.d.ts — 定时任务管理模块类型定义 通过 Host 侧 GlobalState 持久化 cron 任务。 触发时以自然语言任务描述唤醒 agent，由 agent 自主决策执行。
