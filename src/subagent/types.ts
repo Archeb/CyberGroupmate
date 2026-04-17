@@ -42,7 +42,7 @@ export interface AttentionQueueEntry {
     /** 群组 chatId */
     chatId: string;
     /** 来源标记 (subagent.md §2.2) */
-    source: 'DIGEST_UPDATE' | 'OBSERVER_ALERT' | 'FAST_PATH_REQUEST' | 'DEFERRED_RE_ENTRY' | 'DIRECT_ADDRESS' | 'SCHEDULED_REVISIT' | 'MINICODEACT_BOOST' | 'SCHEDULER_TRIGGER';
+    source: 'DIGEST_UPDATE' | 'OBSERVER_ALERT' | 'FAST_PATH_REQUEST' | 'DEFERRED_RE_ENTRY' | 'DIRECT_ADDRESS' | 'SCHEDULED_REVISIT' | 'SCHEDULER_TRIGGER';
     /** 当前优先级分数 (0-100) */
     priority: number;
     /** 基础优先级（不含时间衰减） */
@@ -170,14 +170,6 @@ export interface SubagentCallback {
     // ─── subagent.md §2.2 C1/C2 补齐字段 ───
     /** Session 摘要（CodeAct session 的结构化摘要） */
     sessionSummary?: string;
-
-    // ─── MiniCodeAct 修正 ───
-    /** MiniCodeAct 修正建议（Subagent 审查后返回） */
-    corrections?: Array<{
-        originalCall: string;
-        issue: string;
-        suggestedFix: MiniCodeActCall;
-    }>;
 }
 
 // ─── FastPath ───
@@ -296,10 +288,6 @@ export interface GroupContextPackage {
     contentDirection?: string;
     /** 可用贴纸目录（emoji + 描述 + 本地文件路径） */
     availableStickers?: Array<{ emoji: string; description: string; uniqueFileId: string }>;
-    /** MiniCodeAct 执行报告（dispatch 注入） */
-    miniCodeActReport?: string;
-    /** 是否包含 MiniCodeAct 报告 */
-    hasMiniCodeActReport?: boolean;
 }
 
 /** 主 Agent attend 后的决策结果 */
@@ -313,8 +301,6 @@ export interface AttendResult {
     fastPathAuth?: FastPathConfig;
     /** 决策理由 */
     reasoning: string;
-    /** MiniCodeAct 执行结果（Phase 5.5 附加） */
-    miniCodeActResults?: MiniCodeActResult[];
 }
 
 /** 单条决策 */
@@ -335,29 +321,9 @@ export interface Decision {
     confidence: number;
     /** 理由 */
     reason: string;
-    /** MiniCodeAct 即时操作列表（可选） */
-    miniCodeActs?: MiniCodeActCall[];
 }
 
-// ─── MiniCodeAct ───
 
-/** MiniCodeAct 调用描述 */
-export interface MiniCodeActCall {
-    /** 调用目标，格式 "namespace.method" */
-    call: string;
-    /** 调用参数 */
-    args: Record<string, unknown>;
-}
-
-/** MiniCodeAct 执行结果 */
-export interface MiniCodeActResult {
-    call: string;
-    success: boolean;
-    result?: unknown;
-    error?: string;
-    /** 人类可读的一句话结果 */
-    summary: string;
-}
 
 /** Agent 工作笔记 */
 export interface AgentNote {

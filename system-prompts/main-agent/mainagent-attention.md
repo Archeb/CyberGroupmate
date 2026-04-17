@@ -49,10 +49,7 @@
 {{activePersons}}
 {{/activePersons}}
 
-{{#hasNotes}}
-## 工作笔记
-{{notes}}
-{{/hasNotes}}
+
 
 {{#hasSchedulerTriggers}}
 ## ⏰ 定时任务触发

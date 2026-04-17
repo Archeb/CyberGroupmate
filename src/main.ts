@@ -835,7 +835,7 @@ async function main(): Promise<void> {
         cosineDecayCyclePeriod: appConfig.subagent?.cosineDecay?.defaultCyclePeriod ?? 20,
     }, globalState);
 
-    mainLoop.setMemory(memory);  // MiniCodeAct corrections
+
 
     // Attend handler: 主 Agent LLM 决策逻辑（subagent.md §12.2 ➛➜➝）
     mainLoop.setAttendHandler(createAttendHandler({
@@ -847,7 +847,7 @@ async function main(): Promise<void> {
         persona: appConfig.persona,
         adapters,
         mediaDownloader: sharedMediaDownloader,
-        attentionQueue: q3,
+
     }));
 
     // Dispatch handler: 分派任务到 CodeActExecutor / FastPath / Deferred Re-entry

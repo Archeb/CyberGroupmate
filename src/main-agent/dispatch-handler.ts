@@ -10,8 +10,8 @@
  * 参考设计：subagent.md §13.2 B1/B2, subtask.md S3/S4
  */
 
-import type { AttendResult, CodeActReplyTask, SubagentCallback, MiniCodeActResult } from "../subagent/types.js";
-import { formatMiniCodeActReport } from "./minicodeact-formatter.js";
+import type { AttendResult, CodeActReplyTask, SubagentCallback } from "../subagent/types.js";
+
 import type { SubagentManager } from "../subagent/subagent-manager.js";
 import type { MemoryStoreV2 } from "../memory-v2/index.js";
 
@@ -205,11 +205,7 @@ export function createDispatchHandler(
                     ?? (subagent.stickiness.level === "CORE" ? "随意友好" : "礼貌得体");
                 contextSnapshot.contentDirection = decision.contentDirection ?? "";
 
-                // MiniCodeAct Report 注入
-                if (result.miniCodeActResults?.length) {
-                    contextSnapshot.miniCodeActReport = formatMiniCodeActReport(result.miniCodeActResults);
-                    contextSnapshot.hasMiniCodeActReport = true;
-                }
+
 
                 // 贴纸查找：根据 suggestedEmojis 查找可发送的贴纸
                 // 按 stickerSendingMode 控制：disallow_all 跳过 / allow_listed 仅已启用 / allow_all（默认）全部
