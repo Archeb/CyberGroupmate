@@ -440,7 +440,7 @@ export async function runCodeActSession(
             log.debug(`Turn ${turnNum}: 纯文本轮次（无代码块、无 <end_turn>），继续`);
             turns.push(turn);
 
-            let textOnlyObs = "[📝 纯文本轮次，未执行代码]";
+            let textOnlyObs = "[📝 纯文本轮次，未执行代码。如需结束请输出 <end_turn>]";
 
             if (sentMessageCollector) {
                 const turnSent = sentMessageCollector.drainTurn();
