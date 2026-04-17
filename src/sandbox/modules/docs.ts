@@ -83,7 +83,13 @@ export function loadAgentSkillDocs(projectRoot: string = process.cwd()): AgentSk
 
         const raw = readFileSync(skillMdPath, "utf-8");
         const parsed = parseFrontmatter(raw);
-        const name = parsed.name || entry;
+        let name = parsed.name || entry;
+        
+        // Ensure name is a valid Javascript identifier for the sandbox injection
+        name = name.replace(/[^a-zA-Z0-9_$]/g, "_");
+        // Ensure it doesn't start with a number
+        if (/^[0-9]/.test(name)) name = "_" + name;
+
         const description = parsed.description || "Standard Agent Skill";
         const scriptsDir = join(skillDir, "scripts");
 
