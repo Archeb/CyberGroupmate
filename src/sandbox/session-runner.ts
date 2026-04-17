@@ -139,6 +139,9 @@ const DEFAULT_MAX_TURNS = 30;
 /** 代码执行输出最大字符数 */
 const MAX_OUTPUT_CHARS = 32768;
 
+/** 模型显式终止标记 */
+const END_TURN_MARKER = "<end_turn>";
+
 // ─── 类型 ───
 
 /** 解析出的代码块（携带语言标记） */
@@ -174,7 +177,7 @@ export interface SessionResult {
     /** 完整的消息历史 */
     messages: ChatMessage[];
     /** 结束原因 */
-    endReason: "no_code" | "max_turns" | "error" | "interrupted";
+    endReason: "end_turn" | "max_turns" | "error" | "interrupted";
     /** 如果因为 error 结束，错误信息 */
     error?: string;
 }
@@ -252,12 +255,13 @@ export function parseResponse(response: string): {
  *
  * 流程：
  * 1. 调用 LLM 获取 response
- * 2. 解析 response：分离思考和代码块
- * 3. 没有代码块 → session 结束
- * 4. 有代码块 → 在 sandbox 中依次执行，收集输出
- * 5. 输出作为 [Execution Output] 追加到消息历史
- * 6. 每轮检查是否有新通知；若有新的外部消息/回复任务，则中断当前 session 交还主循环
- * 7. 重复直到无代码块或达到最大轮次
+ * 2. 解析 response：分离思考和代码块，检测 <end_turn> 标记
+ * 3. 有 <end_turn> → session 结束（若有代码块则先执行）
+ * 4. 无代码块且无 <end_turn> → 纯文本思考轮次，继续下一轮
+ * 5. 有代码块 → 在 sandbox 中依次执行，收集输出
+ * 6. 输出作为 [Execution Output] 追加到消息历史
+ * 7. 每轮检查是否有新通知；若有新的外部消息/回复任务，则中断当前 session 交还主循环
+ * 8. 重复直到 <end_turn> 或达到最大轮次
  *
  * @param initialMessages - 初始消息（含 system prompt、context 等）
  * @param sandbox - Sandbox 实例
@@ -376,13 +380,20 @@ export async function runCodeActSession(
         }
 
         const rawAssistantText = llmResponse.content;
+
+        // ─── 检测 <end_turn> 显式终止标记 ───
+        let hasEndTurn = rawAssistantText.includes(END_TURN_MARKER);
+        const strippedText = hasEndTurn
+            ? rawAssistantText.replace(END_TURN_MARKER, "").trimEnd()
+            : rawAssistantText;
+
         // ─── 截断：只保留第一个完整代码块及其前面的文本 ───
-        const assistantText = trimAfterFirstCodeBlock(rawAssistantText);
-        if (assistantText.length < rawAssistantText.length) {
+        const assistantText = trimAfterFirstCodeBlock(strippedText);
+        if (assistantText.length < strippedText.length) {
             log.info(`Turn ${turnNum}: 截断模型输出`, {
-                before: rawAssistantText.length,
+                before: strippedText.length,
                 after: assistantText.length,
-                discarded: rawAssistantText.length - assistantText.length,
+                discarded: strippedText.length - assistantText.length,
             });
         }
         messages.push({ role: "assistant", content: assistantText });
@@ -400,7 +411,7 @@ export async function runCodeActSession(
         };
 
         // ─── Debug: 输出本轮的思考和代码 ───
-        log.debug(`Turn ${turnNum}: thinking`, { text: thinking });
+        log.debug(`Turn ${turnNum}: thinking`, { text: thinking, hasEndTurn });
 
         // 发射 thinking 进度事件
         emitProgress({
@@ -411,20 +422,54 @@ export async function runCodeActSession(
             isProcessing: true,
         });
 
-        // ─── 无代码块 → session 结束 ───
-        if (codeBlocks.length === 0) {
-            log.debug(`Turn ${turnNum}: 无代码块，session 结束`);
+        // ─── <end_turn> 且无代码块 → 直接结束 session ───
+        if (hasEndTurn && codeBlocks.length === 0) {
+            log.debug(`Turn ${turnNum}: 检测到 <end_turn>，session 结束`);
             turns.push(turn);
-
-            // 发射结束事件
-            emitProgress({ turn: turnNum, phase: "end", thinking, isProcessing: false, endReason: "no_code" });
-
+            emitProgress({ turn: turnNum, phase: "end", thinking, isProcessing: false, endReason: "end_turn" });
             return {
                 sessionId,
                 turns,
                 messages,
-                endReason: "no_code",
+                endReason: "end_turn",
             };
+        }
+
+        // ─── 无代码块且无 <end_turn> → 纯文本思考轮次，继续下一轮 ───
+        if (codeBlocks.length === 0) {
+            log.debug(`Turn ${turnNum}: 纯文本轮次（无代码块、无 <end_turn>），继续`);
+            turns.push(turn);
+
+            let textOnlyObs = "[📝 纯文本轮次，未执行代码]";
+
+            if (sentMessageCollector) {
+                const turnSent = sentMessageCollector.drainTurn();
+                const turnDupWarnings = sentMessageCollector.drainDuplicateWarnings();
+                const sentConfirmation = SentMessageCollector.formatAsObservation(turnSent, turnDupWarnings);
+                if (sentConfirmation) {
+                    textOnlyObs += `\n\n${sentConfirmation}`;
+                }
+            }
+
+            const currentTurn = turnNum + 1;
+            const remaining = maxTurns - currentTurn;
+            let turnStatus = `[📊 轮次状态: 第 ${currentTurn}/${maxTurns} 轮，剩余 ${remaining} 轮]`;
+            if (remaining === 0) {
+                turnStatus += `\n[⚠ 这是最后一轮，请确保在本轮内完成所有必要操作并发送最终回复]`;
+            } else if (remaining === 1) {
+                turnStatus += `\n[⚠ 仅剩 1 轮，请尽快完成操作]`;
+            }
+            textOnlyObs += `\n\n${turnStatus}`;
+
+            emitProgress({
+                turn: turnNum,
+                phase: "observation",
+                executionOutput: textOnlyObs,
+                isProcessing: true,
+            });
+
+            messages.push({ role: "user", content: textOnlyObs });
+            continue;
         }
 
         // ─── Two-pass: 类型解析与文档注入（无状态去重） ───
@@ -493,7 +538,15 @@ ${fullDocs}
                                 ...(stopSequences ? { stop: stopSequences } : {}),
                             });
 
-                            const pass2Text = trimAfterFirstCodeBlock(pass2Response.content);
+                            // ─── Pass 2: 检测 <end_turn> ───
+                            const pass2Raw = pass2Response.content;
+                            const pass2HasEndTurn = pass2Raw.includes(END_TURN_MARKER);
+                            const pass2Stripped = pass2HasEndTurn
+                                ? pass2Raw.replace(END_TURN_MARKER, "").trimEnd()
+                                : pass2Raw;
+                            const pass2Text = trimAfterFirstCodeBlock(pass2Stripped);
+                            hasEndTurn = pass2HasEndTurn; // Pass 2 覆盖 Pass 1 的终止信号
+
                             messages.push({ role: "assistant", content: pass2Text });
 
                             // 重新解析 Pass 2 的输出
@@ -503,12 +556,12 @@ ${fullDocs}
                             turn.codeBlocks = pass2Parsed.codeBlocks;
                             turn.usage = pass2Response.usage;
 
-                            // 如果 Pass 2 也没有代码块，结束 session
-                            if (pass2Parsed.codeBlocks.length === 0) {
-                                log.debug(`Turn ${turnNum}: Pass 2 无代码块，session 结束`);
+                            // 如果 Pass 2 有 <end_turn> 且无代码块，结束 session
+                            if (pass2HasEndTurn && pass2Parsed.codeBlocks.length === 0) {
+                                log.debug(`Turn ${turnNum}: Pass 2 检测到 <end_turn>，session 结束`);
                                 turns.push(turn);
-                                emitProgress({ turn: turnNum, phase: "end", thinking: pass2Parsed.thinking, isProcessing: false, endReason: "no_code" });
-                                return { sessionId, turns, messages, endReason: "no_code" };
+                                emitProgress({ turn: turnNum, phase: "end", thinking: pass2Parsed.thinking, isProcessing: false, endReason: "end_turn" });
+                                return { sessionId, turns, messages, endReason: "end_turn" };
                             }
 
                             log.info(`Turn ${turnNum}: Pass 2 完成`, {
@@ -652,6 +705,17 @@ ${fullDocs}
             messages.push({ role: "user", content: observation });
         }
 
+        // ─── <end_turn> 检查：代码已执行完毕，终止 session ───
+        if (hasEndTurn) {
+            log.debug(`Turn ${turnNum}: 代码已执行，检测到 <end_turn>，session 结束`);
+            emitProgress({ turn: turnNum, phase: "end", isProcessing: false, endReason: "end_turn" });
+            return {
+                sessionId,
+                turns,
+                messages,
+                endReason: "end_turn",
+            };
+        }
 
     }
 
