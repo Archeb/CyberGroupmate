@@ -19,6 +19,7 @@
 ```json
 {
   "replyMode": "NONE | SINGLE",
+  "useSkills": ["moduleName1", "moduleName2"],
   "decisions": [
     {
       "action": "REPLY | IGNORE | DEFER",
@@ -36,9 +37,10 @@
 ```
 
 决策规则:
+- useSkills: 如果 REPLY 任务需要用到"可指派功能模块"列表中的某些模块，在此列出模块名。不需要额外模块时留空数组 []。基础模块（消息收发、记忆、搜索等）已默认加载，不必列出。
 - topicId: 必须使用话题注册表中提供的真实 topicId（格式如 topic_xxx_0001）。如果无活跃话题或不确定归属，topicId 留空字符串 ""。**不要自行编造 topic ID**。
 - targetMessageIds: 从上下文消息中选择需要回复的消息 ID（即消息原文中的 msg#xxx 编号）。这决定了 subagent 将回复谁。**必须使用上下文中出现的真实消息 ID**。
-- contentDirection: 不仅仅是回复谁以及回复的内容，还要包括”先获取哪些相关信息，为后续的回复做准备“
+- contentDirection: 不仅仅是回复谁以及回复的内容，还要包括"先获取哪些相关信息，为后续的回复做准备"
 - toneGuidance: 根据群组氛围、回复人关系给出具体语气指导、还有应该避免的语气。以及要发多少句、每句长度。
 - suggestedEmojis: 为 REPLY 决策根据当前语境/情绪提供 2-4 个相关 emoji，用于查找可发送的贴纸
 - REPLY: 需要给出明确的 contentDirection（内容方向）、targetMessageIds（回复目标）、toneGuidance（语气）和 suggestedEmojis（相关表情）

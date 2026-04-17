@@ -329,6 +329,21 @@ metrics:
 # 控制 CodeAct 交互引擎的行为参数
 # 所有字段可选，缺省使用括号内默认值
 # subagent:
+#   # 常驻模块清单：始终全量注入子代理运行时的底层基础模块和指定扩展。
+#   # 平台 adapter (例如 telegram/discord) 会在实际生成时自动混入此列表，不需要在此处填写。
+#   # 默认情况下包含以下必备的核心模块，如需精简可自行删改。
+#   base_skills:
+#     - runtime
+#     - memory
+#     - docs
+#     - fs
+#     - actions
+#     - skills
+#     - mcp
+#     - cron
+#     - events
+#     - kv
+#     - http
 #   code_act:
 #     # 最大交互轮次 (30)
 #     max_turns: 30

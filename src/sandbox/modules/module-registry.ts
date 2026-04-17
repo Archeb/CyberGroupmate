@@ -73,15 +73,35 @@ export function loadModuleRegistry(): ModuleEntry[] {
  * ...
  * ```
  */
-export function generateBriefOverview(registry: ModuleEntry[]): string {
+export function generateBriefOverview(registry: ModuleEntry[], allowedModules?: Set<string>): string {
     const sections: string[] = [];
     for (const mod of registry) {
+        // 如果指定了白名单，则过滤未包含的模块
+        if (allowedModules && !allowedModules.has(mod.name)) continue;
         const header = `## ${mod.name}`;
         const desc = mod.description ? `${mod.description}\n` : "";
         const methodLines = mod.methods.map(m => `- ${m.name}: ${m.brief}`);
         sections.push(`${header}\n${desc}${methodLines.join("\n")}`);
     }
     return sections.join("\n\n");
+}
+
+/**
+ * 生成极简模块名册（供主 Agent 决策时浏览）
+ *
+ * 每个模块只占一行，格式：“- moduleName: description”
+ * 不包含方法列表、参数签名等细节。
+ *
+ * @param registry 模块注册表
+ * @param excludeBaseSkills 不需要展示的常驻模块名称集（它们已经始终可见，无需主脑指派）
+ */
+export function generateModuleRoster(registry: ModuleEntry[], excludeBaseSkills?: Set<string>): string {
+    const lines: string[] = [];
+    for (const mod of registry) {
+        if (excludeBaseSkills && excludeBaseSkills.has(mod.name)) continue;
+        lines.push(`- ${mod.name}: ${mod.description || mod.methods.map(m => m.brief).join('; ')}`);
+    }
+    return lines.join("\n");
 }
 
 /**

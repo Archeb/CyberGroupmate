@@ -27,6 +27,8 @@ import { formatTsForDisplay } from "../core/timezone.js";
 import { enrichMessages, formatMessageLine, resolveReplyText, type RawMessage } from "../core/message-enricher.js";
 import { loadConfig, resolveComponentProfiles } from "../core/config.js";
 import type { PlatformAdapter } from "../adapter/platform-adapter.js";
+import { generateModuleRoster } from "../sandbox/modules/module-registry.js";
+import { getAgentSkillsRoster } from "../sandbox/modules/docs.js";
 
 const log = createLogger("attend-handler");
 
@@ -313,6 +315,25 @@ export function createAttendHandler(
                     .join("\n");
             }
 
+            // ═══ 可指派模块名册注入（供主 Agent 决策 useSkills） ═══
+            const currentConfig = loadConfig();
+            const baseSkills = new Set(currentConfig.subagent?.baseSkills ?? [
+                "runtime", "memory", "docs", "fs", "actions", "skills", "mcp", "cron", "events", "kv", "http",
+            ]);
+            // 平台 adapter 也是 base
+            if (currentConfig.telegram) baseSkills.add("telegram");
+            if (currentConfig.discord) baseSkills.add("discord");
+            // 注册表中 TS Skills 的 roster（已过滤 baseSkills）
+            const { getModuleRegistryCache } = await import("../subagent/code-act-executor.js");
+            const tsModuleRoster = generateModuleRoster(getModuleRegistryCache(), baseSkills);
+            // AgentSkills 的 roster（已过滤 baseSkills）
+            const agentSkillsRoster = getAgentSkillsRoster(baseSkills);
+            const combinedRoster = [tsModuleRoster, agentSkillsRoster].filter(Boolean).join("\n");
+            if (combinedRoster) {
+                promptVars.hasAvailableSkills = true;
+                promptVars.availableSkillsRoster = combinedRoster;
+            }
+
             const attentionPrompt = renderPrompt("ATTENTION", promptVars);
 
             // ➋ 主 Agent 系统 Prompt — 纯静态，确保前缀缓存命中 (subagent.md §12.2 ➋)
@@ -375,6 +396,7 @@ export function createAttendHandler(
 
                 })) : [{ action: "OBSERVE", confidence: 0.3, reason: "LLM 返回格式异常" }],
                 reasoning: parsed.reasoning ?? "",
+                useSkills: Array.isArray(parsed.useSkills) ? parsed.useSkills : undefined,
             };
 
             // ═══ 追加本轮对话到历史（下轮 LLM 可见） ═══
