@@ -178,9 +178,35 @@ export function createAttendHandler(
             // 构建消息原文（所有深度均获取）+ Vision 富化 sticker/photo
             let messagesText = "";
             {
-                const recentMsgs = memory.getRecentMessages(entry.chatId, messageLimit);
+                let recentMsgs = memory.getRecentMessages(entry.chatId, messageLimit);
                 recentMsgs.reverse(); // DESC→ASC: LLM 需要时间正序
                 if (recentMsgs.length > 0) {
+                    // 构建 messageId 集合以过滤
+                    const msgIdsInContext = new Set<string>();
+                    for (const m of recentMsgs) {
+                        msgIdsInContext.add(m.messageId);
+                    }
+
+                    // 收集所有需要额外拉取的上下文消息（Reply Chain + Surrounding User Context）
+                    const extraMsgsMap = new Map<string, any>();
+                    for (const m of recentMsgs) {
+                        if (m.replyToMessageId && !msgIdsInContext.has(m.replyToMessageId)) {
+                            // 提取深度到10，连带下文各提取最多2条历史消息
+                            const chain = memory.getReplyChainWithContext(entry.chatId, m.replyToMessageId, 10, 2);
+                            for (const c of chain) {
+                                if (!msgIdsInContext.has(c.messageId)) {
+                                    extraMsgsMap.set(c.messageId, c);
+                                }
+                            }
+                        }
+                    }
+
+                    // 组合并重新按时间 ASC 排序
+                    if (extraMsgsMap.size > 0) {
+                        recentMsgs = [...Array.from(extraMsgsMap.values()), ...recentMsgs];
+                        recentMsgs.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+                    }
+
                     // 构建 messageId → displayName 映射，用于解析 replyTo 关系
                     const msgIdToName = new Map<string, string>();
                     for (const m of recentMsgs) {
@@ -217,7 +243,7 @@ export function createAttendHandler(
                         }
                     ));
 
-                    // 使用 enrichMessages 进行 Vision 富化（下载并分析 sticker/photo）
+                    // 使用 enrichMessages 进行 Vision 富化（下载并分析 sticker/photo/gif 等所有带附件消息）
                     const currentConfig = loadConfig();
                     const visionConfig = currentConfig.vision;
                     const visionLlmConfig = currentConfig.llmRouting.vision
@@ -236,7 +262,6 @@ export function createAttendHandler(
                         stickerCache: memory,
                         chatId: entry.chatId,
                         mediaDownloader,
-                        mediaTypes: ["sticker"], // 仅处理 sticker
                     });
                     messagesText = formattedText;
                 }
