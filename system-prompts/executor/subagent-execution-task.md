@@ -8,12 +8,7 @@
 语气: {{toneGuidance}}
 
 
-{{#hasMiniCodeActReport}}
-## 预执行操作结果
-以下操作已在任务分派前由主 Agent 即时执行。请审查结果是否准确，
-如发现偏差请在最终总结中指出。
-{{miniCodeActReport}}
-{{/hasMiniCodeActReport}}
+
 
 ## 话题摘要
 {{topicSummary}}
