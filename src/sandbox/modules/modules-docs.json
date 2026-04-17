@@ -27,20 +27,19 @@
       {
         "name": "sendText",
         "brief": "发送文本消息到指定频道。",
-        "fullDoc": "```typescript\nsendText(channelId: string, text: string, opts?: { replyTo?: string }): Promise<DiscordMessage>\n```\n\n\n发送文本消息到指定频道。\n\n**参数：**\n- `channelId`: 目标频道 ID（由 sandbox 上下文自动填入当前频道）\n- `text`: 消息内容\n- `opts`: 可选参数\n\n**示例：**\n```typescript\n// sendText(channelId, \"你好！\")\n```\n\n```typescript\n// sendText(channelId, \"回复你的问题\", { replyTo: \"1234567890\" })\n```"
+        "fullDoc": "```typescript\nsendText(channelId: string, text: string, opts?: { replyTo?: string }): Promise<{ id: string; text: string; channelId: string; guildId?: string; timestamp: string; }>\n```\n\n\n发送文本消息到指定频道。\n\n**参数：**\n- `channelId`: 目标频道 ID（由 sandbox 上下文自动填入当前频道）\n- `text`: 消息内容\n- `opts`: 可选参数\n\n**示例：**\n```typescript\n// sendText(channelId, \"你好！\")\n```\n\n```typescript\n// sendText(channelId, \"回复你的问题\", { replyTo: \"1234567890\" })\n```"
       },
       {
         "name": "sendMedia",
-        "brief": "发送媒体消息（附件）到指定频道。",
-        "fullDoc": "```typescript\nsendMedia(channelId: string, media: { url?: string; file?: string; caption?: string; fileName?: string }, opts?: { replyTo?: string }): Promise<DiscordMessage>\n```\n\n\n发送媒体消息（附件）到指定频道。\n\n**参数：**\n- `channelId`: 目标频道 ID\n- `media`: 媒体对象，支持 URL 或文件内容\n- `opts`: 可选参数\n\n**示例：**\n```typescript\n// sendMedia(channelId, { url: \"https://example.com/image.png\", caption: \"看看这张图\" })\n```"
+        "brief": "发送媒体消息（附件）到指定频道。支持 URL 和本地文件路径（支持绝对路径或基于 cwd 工作区的相对路径）。",
+        "fullDoc": "```typescript\nsendMedia(channelId: string, media: { url?: string; file?: string; caption?: string; fileName?: string }, opts?: { replyTo?: string }): Promise<{ id: string; text: string; channelId: string; guildId?: string; timestamp: string; }>\n```\n\n\n发送媒体消息（附件）到指定频道。支持 URL 和本地文件路径（支持绝对路径或基于 cwd 工作区的相对路径）。\n\n**参数：**\n- `channelId`: 目标频道 ID\n- `media`: 媒体对象，支持 URL 或文件内容\n- `opts`: 可选参数\n\n**示例：**\n```typescript\n// sendMedia(channelId, { url: \"https://example.com/image.png\", caption: \"看看这张图\" })\n```\n\n```typescript\n// sendMedia(channelId, { file: \"screenshot.png\", caption: \"本地截图\" }) // 自动基于 process.cwd() 解析\n```"
       },
       {
         "name": "sendTyping",
         "brief": "在频道中显示 \"正在输入...\" 状态。",
         "fullDoc": "```typescript\nsendTyping(channelId: string): Promise<void>\n```\n\n\n在频道中显示 \"正在输入...\" 状态。\n\n**参数：**\n- `channelId`: 目标频道 ID"
       }
-    ],
-    "typeDefs": "interface DiscordMessage {\n    id: string;\n    text: string;\n    channelId: string;\n    guildId?: string;\n    timestamp: string;\n}\n\ninterface DiscordClient {\n    // ─── 发送与交互 ───\n\n    /**\n     * 发送文本消息到指定频道。\n     * @param channelId 目标频道 ID（由 sandbox 上下文自动填入当前频道）\n     * @param text 消息内容\n     * @param opts 可选参数\n     * @example sendText(channelId, \"你好！\")\n     * @example sendText(channelId, \"回复你的问题\", { replyTo: \"1234567890\" })\n     */\n    sendText(channelId: string, text: string, opts?: { replyTo?: string }): Promise<DiscordMessage>;\n\n    /**\n     * 发送媒体消息（附件）到指定频道。\n     * @param channelId 目标频道 ID\n     * @param media 媒体对象，支持 URL 或文件内容\n     * @param opts 可选参数\n     * @example sendMedia(channelId, { url: \"https://example.com/image.png\", caption: \"看看这张图\" })\n     */\n    sendMedia(channelId: string, media: { url?: string; file?: string; caption?: string; fileName?: string }, opts?: { replyTo?: string }): Promise<DiscordMessage>;\n\n    // ─── 状态操作 ───\n\n    /**\n     * 在频道中显示 \"正在输入...\" 状态。\n     * @param channelId 目标频道 ID\n     */\n    sendTyping(channelId: string): Promise<void>;\n}"
+    ]
   },
   {
     "name": "docs",
@@ -163,13 +162,13 @@
     "methods": [
       {
         "name": "memory.recallAndSummarize",
-        "brief": "recallAndSummarize(query: string, options?: Record<string, unknown>): Promise<unknown>",
-        "fullDoc": "```typescript\nrecallAndSummarize(query: string, options?: Record<string, unknown>): Promise<unknown>\n```"
+        "brief": "检索记忆并针对查询生成结构化总结",
+        "fullDoc": "```typescript\nrecallAndSummarize(query: string, options?: Record<string, unknown>): Promise<unknown>\n```\n\n\n检索记忆并针对查询生成结构化总结"
       },
       {
         "name": "memory.browseForAnswer",
-        "brief": "browseForAnswer(request: Record<string, unknown>): Promise<unknown>",
-        "fullDoc": "```typescript\nbrowseForAnswer(request: Record<string, unknown>): Promise<unknown>\n```"
+        "brief": "主动搜索多渠道历史档案以详细回答复杂问题",
+        "fullDoc": "```typescript\nbrowseForAnswer(request: Record<string, unknown>): Promise<unknown>\n```\n\n\n主动搜索多渠道历史档案以详细回答复杂问题"
       },
       {
         "name": "list",
@@ -194,33 +193,33 @@
     "methods": [
       {
         "name": "sendText",
-        "brief": "sendText(chatId: number | string, text: string, opts?: SendMessageOptions): Promise<Message>",
-        "fullDoc": "```typescript\nsendText(chatId: number | string, text: string, opts?: SendMessageOptions): Promise<Message>\n```"
+        "brief": "发送普通文本消息",
+        "fullDoc": "```typescript\nsendText(chatId: number | string, text: string, opts?: { replyTo?: number; silent?: boolean; }): Promise<{ id: number; text: string; date: Date; chat: { id: number; title?: string; username?: string; type: \"private\" | \"group\" | \"supergroup\" | \"channel\"; }; sender: { id: number; displayName?: string; title?: string; username?: string; }; isMention: boolean; replyToMessage?: { id: number } | null; media?: unknown; mediaInfo?: { type: \"photo\" | \"sticker\" | \"video\" | \"document\" | \"animation\" | \"other\"; fileId?: string; uniqueFileId?: string; emoji?: string; mimeType?: string; fileName?: string; width?: number; height?: number; fileSize?: number; }; }>\n```\n\n\n发送普通文本消息"
       },
       {
         "name": "sendMedia",
-        "brief": "发送媒体消息。支持 URL 和本地文件路径。",
-        "fullDoc": "```typescript\nsendMedia(chatId: number | string, media: string | { type: 'photo' | 'video' | 'document' | 'audio' | 'auto'; file: string; caption?: string; fileName?: string }, opts?: SendMessageOptions): Promise<Message>\n```\n\n\n发送媒体消息。支持 URL 和本地文件路径。\n\n**示例：**\n```typescript\n// sendMedia(chatId, { type: 'photo', file: 'https://example.com/img.jpg', caption: '看看这个' })\n```\n\n```typescript\n// sendMedia(chatId, { type: 'photo', file: '/path/to/local/image.jpg' })\n```"
+        "brief": "发送媒体消息。支持 URL 和本地文件路径（支持绝对路径或基于 cwd 工作区的相对路径）。",
+        "fullDoc": "```typescript\nsendMedia(chatId: number | string, media: string | { type: 'photo' | 'video' | 'document' | 'audio' | 'auto'; file: string; caption?: string; fileName?: string }, opts?: { replyTo?: number; silent?: boolean; }): Promise<{ id: number; text: string; date: Date; chat: { id: number; title?: string; username?: string; type: \"private\" | \"group\" | \"supergroup\" | \"channel\"; }; sender: { id: number; displayName?: string; title?: string; username?: string; }; isMention: boolean; replyToMessage?: { id: number } | null; media?: unknown; mediaInfo?: { type: \"photo\" | \"sticker\" | \"video\" | \"document\" | \"animation\" | \"other\"; fileId?: string; uniqueFileId?: string; emoji?: string; mimeType?: string; fileName?: string; width?: number; height?: number; fileSize?: number; }; }>\n```\n\n\n发送媒体消息。支持 URL 和本地文件路径（支持绝对路径或基于 cwd 工作区的相对路径）。\n\n**示例：**\n```typescript\n// sendMedia(chatId, { type: 'photo', file: 'https://example.com/img.jpg', caption: '看看这个' })\n```\n\n```typescript\n// sendMedia(chatId, { type: 'photo', file: 'ip_skk_moe.png' }) // 自动基于 process.cwd() 解析\n```"
       },
       {
         "name": "sendFile",
-        "brief": "发送磁盘文件到聊天（通过绝对路径）。host 侧读取文件并上传。始终作为文件/文档发送。",
-        "fullDoc": "```typescript\nsendFile(chatId: number | string, filePath: string, opts?: { replyTo?: number; caption?: string; fileName?: string; mimeType?: string }): Promise<Message>\n```\n\n\n发送磁盘文件到聊天（通过绝对路径）。host 侧读取文件并上传。始终作为文件/文档发送。"
+        "brief": "发送磁盘文件到聊天。支持绝对路径或基于 cwd 的相对路径。host 侧读取文件并上传。始终作为文件/文档发送。",
+        "fullDoc": "```typescript\nsendFile(chatId: number | string, filePath: string, opts?: { replyTo?: number; caption?: string; fileName?: string; mimeType?: string }): Promise<{ id: number; text: string; date: Date; chat: { id: number; title?: string; username?: string; type: \"private\" | \"group\" | \"supergroup\" | \"channel\"; }; sender: { id: number; displayName?: string; title?: string; username?: string; }; isMention: boolean; replyToMessage?: { id: number } | null; media?: unknown; mediaInfo?: { type: \"photo\" | \"sticker\" | \"video\" | \"document\" | \"animation\" | \"other\"; fileId?: string; uniqueFileId?: string; emoji?: string; mimeType?: string; fileName?: string; width?: number; height?: number; fileSize?: number; }; }>\n```\n\n\n发送磁盘文件到聊天。支持绝对路径或基于 cwd 的相对路径。host 侧读取文件并上传。始终作为文件/文档发送。"
       },
       {
         "name": "sendSticker",
         "brief": "发送贴纸。通过 uniqueFileId 引用本地已缓存的贴纸文件。",
-        "fullDoc": "```typescript\nsendSticker(chatId: number | string, uniqueFileId: string, opts?: { replyTo?: number }): Promise<Message>\n```\n\n\n发送贴纸。通过 uniqueFileId 引用本地已缓存的贴纸文件。\n\n**示例：**\n```typescript\n// sendSticker(chatId, 'AgADAgATxxxxxx')\n```"
+        "fullDoc": "```typescript\nsendSticker(chatId: number | string, uniqueFileId: string, opts?: { replyTo?: number }): Promise<{ id: number; text: string; date: Date; chat: { id: number; title?: string; username?: string; type: \"private\" | \"group\" | \"supergroup\" | \"channel\"; }; sender: { id: number; displayName?: string; title?: string; username?: string; }; isMention: boolean; replyToMessage?: { id: number } | null; media?: unknown; mediaInfo?: { type: \"photo\" | \"sticker\" | \"video\" | \"document\" | \"animation\" | \"other\"; fileId?: string; uniqueFileId?: string; emoji?: string; mimeType?: string; fileName?: string; width?: number; height?: number; fileSize?: number; }; }>\n```\n\n\n发送贴纸。通过 uniqueFileId 引用本地已缓存的贴纸文件。\n\n**示例：**\n```typescript\n// sendSticker(chatId, 'AgADAgATxxxxxx')\n```"
       },
       {
         "name": "sendMediaGroup",
         "brief": "发送媒体相册（多张图片/视频合并为一组）。 第一个媒体项的 caption 将作为整组的文案。",
-        "fullDoc": "```typescript\nsendMediaGroup(chatId: number | string, medias: Array<{ type: 'photo' | 'video' | 'document' | 'audio'; file: string; caption?: string; fileName?: string }>, opts?: SendMessageOptions): Promise<Message[]>\n```\n\n\n发送媒体相册（多张图片/视频合并为一组）。\n第一个媒体项的 caption 将作为整组的文案。\n\n**示例：**\n```typescript\n// sendMediaGroup(chatId, [\n  { type: 'photo', file: 'https://example.com/1.jpg', caption: '相册标题' },\n  { type: 'photo', file: 'https://example.com/2.jpg' },\n])\n```"
+        "fullDoc": "```typescript\nsendMediaGroup(chatId: number | string, medias: Array<{ type: 'photo' | 'video' | 'document' | 'audio'; file: string; caption?: string; fileName?: string }>, opts?: { replyTo?: number; silent?: boolean; }): Promise<Array<{ id: number; text: string; date: Date; chat: { id: number; title?: string; username?: string; type: \"private\" | \"group\" | \"supergroup\" | \"channel\"; }; sender: { id: number; displayName?: string; title?: string; username?: string; }; isMention: boolean; replyToMessage?: { id: number } | null; media?: unknown; mediaInfo?: { type: \"photo\" | \"sticker\" | \"video\" | \"document\" | \"animation\" | \"other\"; fileId?: string; uniqueFileId?: string; emoji?: string; mimeType?: string; fileName?: string; width?: number; height?: number; fileSize?: number; }; }>>\n```\n\n\n发送媒体相册（多张图片/视频合并为一组）。\n第一个媒体项的 caption 将作为整组的文案。\n\n**示例：**\n```typescript\n// sendMediaGroup(chatId, [\n  { type: 'photo', file: 'https://example.com/1.jpg', caption: '相册标题' },\n  { type: 'photo', file: 'https://example.com/2.jpg' },\n])\n```"
       },
       {
         "name": "sendPoll",
         "brief": "发起投票或测验。",
-        "fullDoc": "```typescript\nsendPoll(chatId: number | string, question: string, options: string[], opts?: SendPollOptions): Promise<Message>\n```\n\n\n发起投票或测验。\n\n**参数：**\n- `question`: 投票标题\n- `options`: 候选选项文本列表（2-10 个）\n\n**示例：**\n```typescript\n// sendPoll(chatId, '今晚吃什么？', ['火锅', '烧烤', '外卖'], { isAnonymous: false })\n```\n\n```typescript\n// sendPoll(chatId, 'JS 中 typeof null 是？', ['object', 'null', 'undefined'], { type: 'quiz', correctOptionId: 0 })\n```"
+        "fullDoc": "```typescript\nsendPoll(chatId: number | string, question: string, options: string[], opts?: { replyTo?: number; silent?: boolean; isAnonymous?: boolean; type?: \"regular\" | \"quiz\"; allowsMultipleAnswers?: boolean; correctOptionId?: number; explanation?: string; }): Promise<{ id: number; text: string; date: Date; chat: { id: number; title?: string; username?: string; type: \"private\" | \"group\" | \"supergroup\" | \"channel\"; }; sender: { id: number; displayName?: string; title?: string; username?: string; }; isMention: boolean; replyToMessage?: { id: number } | null; media?: unknown; mediaInfo?: { type: \"photo\" | \"sticker\" | \"video\" | \"document\" | \"animation\" | \"other\"; fileId?: string; uniqueFileId?: string; emoji?: string; mimeType?: string; fileName?: string; width?: number; height?: number; fileSize?: number; }; }>\n```\n\n\n发起投票或测验。\n\n**参数：**\n- `question`: 投票标题\n- `options`: 候选选项文本列表（2-10 个）\n\n**示例：**\n```typescript\n// sendPoll(chatId, '今晚吃什么？', ['火锅', '烧烤', '外卖'], { isAnonymous: false })\n```\n\n```typescript\n// sendPoll(chatId, 'JS 中 typeof null 是？', ['object', 'null', 'undefined'], { type: 'quiz', correctOptionId: 0 })\n```"
       },
       {
         "name": "sendReaction",
@@ -230,7 +229,7 @@
       {
         "name": "editMessage",
         "brief": "编辑已发送的消息文本。",
-        "fullDoc": "```typescript\neditMessage(chatId: number | string, messageId: number, text: string): Promise<Message>\n```\n\n\n编辑已发送的消息文本。\n\n**示例：**\n```typescript\n// editMessage(chatId, msgId, '已更正：新文本内容')\n```"
+        "fullDoc": "```typescript\neditMessage(chatId: number | string, messageId: number, text: string): Promise<{ id: number; text: string; date: Date; chat: { id: number; title?: string; username?: string; type: \"private\" | \"group\" | \"supergroup\" | \"channel\"; }; sender: { id: number; displayName?: string; title?: string; username?: string; }; isMention: boolean; replyToMessage?: { id: number } | null; media?: unknown; mediaInfo?: { type: \"photo\" | \"sticker\" | \"video\" | \"document\" | \"animation\" | \"other\"; fileId?: string; uniqueFileId?: string; emoji?: string; mimeType?: string; fileName?: string; width?: number; height?: number; fileSize?: number; }; }>\n```\n\n\n编辑已发送的消息文本。\n\n**示例：**\n```typescript\n// editMessage(chatId, msgId, '已更正：新文本内容')\n```"
       },
       {
         "name": "deleteMessages",
@@ -249,83 +248,83 @@
       },
       {
         "name": "getMe",
-        "brief": "getMe(): Promise<User>",
-        "fullDoc": "```typescript\ngetMe(): Promise<User>\n```"
+        "brief": "获取当前登录机器人的基础信息",
+        "fullDoc": "```typescript\ngetMe(): Promise<{ id: number; displayName?: string; title?: string; username?: string; firstName: string; lastName?: string; isBot: boolean; }>\n```\n\n\n获取当前登录机器人的基础信息"
       },
       {
         "name": "getChat",
-        "brief": "getChat(chatId: number | string): Promise<Chat>",
-        "fullDoc": "```typescript\ngetChat(chatId: number | string): Promise<Chat>\n```"
+        "brief": "精确获取指定会话的基础信息",
+        "fullDoc": "```typescript\ngetChat(chatId: number | string): Promise<{ id: number; title?: string; username?: string; type: \"private\" | \"group\" | \"supergroup\" | \"channel\"; }>\n```\n\n\n精确获取指定会话的基础信息"
       },
       {
         "name": "getUser",
-        "brief": "getUser(userId: number | string): Promise<User>",
-        "fullDoc": "```typescript\ngetUser(userId: number | string): Promise<User>\n```"
+        "brief": "精确获取指定用户的基础信息",
+        "fullDoc": "```typescript\ngetUser(userId: number | string): Promise<{ id: number; displayName?: string; title?: string; username?: string; firstName: string; lastName?: string; isBot: boolean; }>\n```\n\n\n精确获取指定用户的基础信息"
       },
       {
         "name": "getDialogs",
         "brief": "获取最近的对话列表（包含 peer、最后一条消息、未读数）",
-        "fullDoc": "```typescript\ngetDialogs(opts?: { limit?: number }): Promise<Dialog[]>\n```\n\n\n获取最近的对话列表（包含 peer、最后一条消息、未读数）"
+        "fullDoc": "```typescript\ngetDialogs(opts?: { limit?: number }): Promise<Array<{ peer: { id: number; displayName?: string; title?: string; username?: string; }; lastMessage?: { id: number; text: string; date: Date; chat: { id: number; title?: string; username?: string; type: \"private\" | \"group\" | \"supergroup\" | \"channel\"; }; sender: { id: number; displayName?: string; title?: string; username?: string; }; isMention: boolean; replyToMessage?: { id: number } | null; media?: unknown; mediaInfo?: { type: \"photo\" | \"sticker\" | \"video\" | \"document\" | \"animation\" | \"other\"; fileId?: string; uniqueFileId?: string; emoji?: string; mimeType?: string; fileName?: string; width?: number; height?: number; fileSize?: number; }; }; unreadCount: number; }>>\n```\n\n\n获取最近的对话列表（包含 peer、最后一条消息、未读数）"
       },
       {
         "name": "getFullUser",
         "brief": "获取用户的完整资料（包含个人简介 bio 等）。",
-        "fullDoc": "```typescript\ngetFullUser(userId: number | string): Promise<FullUser>\n```\n\n\n获取用户的完整资料（包含个人简介 bio 等）。\n\n**示例：**\n```typescript\n// const full = await telegram.getFullUser(userId); console.log(full.bio);\n```"
+        "fullDoc": "```typescript\ngetFullUser(userId: number | string): Promise<{ id: number; displayName?: string; title?: string; username?: string; firstName: string; lastName?: string; isBot: boolean; bio?: string; commonChatsCount?: number; }>\n```\n\n\n获取用户的完整资料（包含个人简介 bio 等）。\n\n**示例：**\n```typescript\n// const full = await telegram.getFullUser(userId); console.log(full.bio);\n```"
       },
       {
         "name": "getFullChat",
         "brief": "获取群组/频道的完整资料（包含群描述 about、成员数等）。",
-        "fullDoc": "```typescript\ngetFullChat(chatId: number | string): Promise<FullChat>\n```\n\n\n获取群组/频道的完整资料（包含群描述 about、成员数等）。\n\n**示例：**\n```typescript\n// const full = await telegram.getFullChat(chatId); console.log(full.about, full.isForum);\n```"
+        "fullDoc": "```typescript\ngetFullChat(chatId: number | string): Promise<{ id: number; title?: string; username?: string; type: \"private\" | \"group\" | \"supergroup\" | \"channel\"; about?: string; membersCount?: number; onlineCount?: number; isForum?: boolean; }>\n```\n\n\n获取群组/频道的完整资料（包含群描述 about、成员数等）。\n\n**示例：**\n```typescript\n// const full = await telegram.getFullChat(chatId); console.log(full.about, full.isForum);\n```"
       },
       {
         "name": "getChatMembers",
-        "brief": "getChatMembers(chatId: number | string, opts?: { limit?: number }): Promise<Peer[]>",
-        "fullDoc": "```typescript\ngetChatMembers(chatId: number | string, opts?: { limit?: number }): Promise<Peer[]>\n```"
+        "brief": "分页拉取群组成员列表",
+        "fullDoc": "```typescript\ngetChatMembers(chatId: number | string, opts?: { limit?: number }): Promise<Array<{ id: number; displayName?: string; title?: string; username?: string; }>>\n```\n\n\n分页拉取群组成员列表"
       },
       {
         "name": "getHistory",
-        "brief": "getHistory(chatId: number | string, opts?: { limit?: number }): Promise<Message[]>",
-        "fullDoc": "```typescript\ngetHistory(chatId: number | string, opts?: { limit?: number }): Promise<Message[]>\n```"
+        "brief": "拉取指定会话的历史消息（一次性返回列表）",
+        "fullDoc": "```typescript\ngetHistory(chatId: number | string, opts?: { limit?: number }): Promise<Array<{ id: number; text: string; date: Date; chat: { id: number; title?: string; username?: string; type: \"private\" | \"group\" | \"supergroup\" | \"channel\"; }; sender: { id: number; displayName?: string; title?: string; username?: string; }; isMention: boolean; replyToMessage?: { id: number } | null; media?: unknown; mediaInfo?: { type: \"photo\" | \"sticker\" | \"video\" | \"document\" | \"animation\" | \"other\"; fileId?: string; uniqueFileId?: string; emoji?: string; mimeType?: string; fileName?: string; width?: number; height?: number; fileSize?: number; }; }>>\n```\n\n\n拉取指定会话的历史消息（一次性返回列表）"
       },
       {
         "name": "getMessages",
         "brief": "按消息 ID 精确获取一条或多条消息。（在别人回复或者提及某消息但是你看不见的时候，善用该函数爬楼获取上下文）",
-        "fullDoc": "```typescript\ngetMessages(chatId: number | string, messageIds: number[]): Promise<(Message | null)[]>\n```\n\n\n按消息 ID 精确获取一条或多条消息。（在别人回复或者提及某消息但是你看不见的时候，善用该函数爬楼获取上下文）\n\n**示例：**\n```typescript\n// const msgs = await telegram.getMessages(chatId, [100, 101, 102]);\n```"
+        "fullDoc": "```typescript\ngetMessages(chatId: number | string, messageIds: number[]): Promise<Array<{ id: number; text: string; date: Date; chat: { id: number; title?: string; username?: string; type: \"private\" | \"group\" | \"supergroup\" | \"channel\"; }; sender: { id: number; displayName?: string; title?: string; username?: string; }; isMention: boolean; replyToMessage?: { id: number } | null; media?: unknown; mediaInfo?: { type: \"photo\" | \"sticker\" | \"video\" | \"document\" | \"animation\" | \"other\"; fileId?: string; uniqueFileId?: string; emoji?: string; mimeType?: string; fileName?: string; width?: number; height?: number; fileSize?: number; }; } | null>>\n```\n\n\n按消息 ID 精确获取一条或多条消息。（在别人回复或者提及某消息但是你看不见的时候，善用该函数爬楼获取上下文）\n\n**示例：**\n```typescript\n// const msgs = await telegram.getMessages(chatId, [100, 101, 102]);\n```"
       },
       {
         "name": "searchMessages",
         "brief": "在群组内搜索消息。（可主动利用该函数获取视野外上下文信息）",
-        "fullDoc": "```typescript\nsearchMessages(chatId: number | string, query: string, opts?: { limit?: number }): Promise<Message[]>\n```\n\n\n在群组内搜索消息。（可主动利用该函数获取视野外上下文信息）\n\n**示例：**\n```typescript\n// const results = await telegram.searchMessages(chatId, '关键词', { limit: 20 });\n```"
+        "fullDoc": "```typescript\nsearchMessages(chatId: number | string, query: string, opts?: { limit?: number }): Promise<Array<{ id: number; text: string; date: Date; chat: { id: number; title?: string; username?: string; type: \"private\" | \"group\" | \"supergroup\" | \"channel\"; }; sender: { id: number; displayName?: string; title?: string; username?: string; }; isMention: boolean; replyToMessage?: { id: number } | null; media?: unknown; mediaInfo?: { type: \"photo\" | \"sticker\" | \"video\" | \"document\" | \"animation\" | \"other\"; fileId?: string; uniqueFileId?: string; emoji?: string; mimeType?: string; fileName?: string; width?: number; height?: number; fileSize?: number; }; }>>\n```\n\n\n在群组内搜索消息。（可主动利用该函数获取视野外上下文信息）\n\n**示例：**\n```typescript\n// const results = await telegram.searchMessages(chatId, '关键词', { limit: 20 });\n```"
       },
       {
         "name": "getForumTopics",
         "brief": "获取指定群组的论坛板块（话题）列表。要求该群组已开启 Forum 模式。",
-        "fullDoc": "```typescript\ngetForumTopics(chatId: number | string, opts?: { limit?: number }): Promise<ForumTopic[]>\n```\n\n\n获取指定群组的论坛板块（话题）列表。要求该群组已开启 Forum 模式。\n\n**示例：**\n```typescript\n// const topics = await telegram.getForumTopics(chatId);\n```"
+        "fullDoc": "```typescript\ngetForumTopics(chatId: number | string, opts?: { limit?: number }): Promise<Array<{ id: number; title: string; isClosed: boolean; isPinned: boolean; creatorId: number; unreadCount: number; }>>\n```\n\n\n获取指定群组的论坛板块（话题）列表。要求该群组已开启 Forum 模式。\n\n**示例：**\n```typescript\n// const topics = await telegram.getForumTopics(chatId);\n```"
       },
       {
         "name": "getPollResults",
         "brief": "主动拉取某条投票消息的最新计票结果。",
-        "fullDoc": "```typescript\ngetPollResults(chatId: number | string, messageId: number): Promise<Poll | null>\n```\n\n\n主动拉取某条投票消息的最新计票结果。\n\n**示例：**\n```typescript\n// const poll = await telegram.getPollResults(chatId, pollMsgId);\n```"
+        "fullDoc": "```typescript\ngetPollResults(chatId: number | string, messageId: number): Promise<{ type: \"poll\"; id: string; question: string; answers: Array<{ text: string; voterCount: number; chosen: boolean; correct: boolean; }>; totalVoters: number; isClosed: boolean; isPublic: boolean; isQuiz: boolean; isMultiple: boolean; solution?: string; } | null>\n```\n\n\n主动拉取某条投票消息的最新计票结果。\n\n**示例：**\n```typescript\n// const poll = await telegram.getPollResults(chatId, pollMsgId);\n```"
       },
       {
         "name": "getMessageReactions",
         "brief": "主动拉取某条消息的表态（Reaction）汇总数据。",
-        "fullDoc": "```typescript\ngetMessageReactions(chatId: number | string, messageIds: number[]): Promise<Reaction[]>\n```\n\n\n主动拉取某条消息的表态（Reaction）汇总数据。\n\n**示例：**\n```typescript\n// const reactions = await telegram.getMessageReactions(chatId, [msgId]);\n```"
+        "fullDoc": "```typescript\ngetMessageReactions(chatId: number | string, messageIds: number[]): Promise<Array<{ emoji: string; count: number; }>>\n```\n\n\n主动拉取某条消息的表态（Reaction）汇总数据。\n\n**示例：**\n```typescript\n// const reactions = await telegram.getMessageReactions(chatId, [msgId]);\n```"
       },
       {
         "name": "downloadMedia",
         "brief": "下载媒体文件的二进制数据。返回 base64 编码的 buffer 和文件大小。 需要传入通过 mediaInfo.fileId 获取的文件标识符。",
-        "fullDoc": "```typescript\ndownloadMedia(fileId: string, chatId?: number | string, messageId?: number, uniqueFileId?: string): Promise<DownloadedMedia>\n```\n\n\n下载媒体文件的二进制数据。返回 base64 编码的 buffer 和文件大小。\n需要传入通过 mediaInfo.fileId 获取的文件标识符。\n\n**参数：**\n- `fileId`: TDLib/Bot API 兼容的文件 ID\n- `chatId`: 可选，用于 file reference 过期时自动 refetch\n- `messageId`: 可选，同上\n- `uniqueFileId`: 可选，用于缓存命中\n\n**示例：**\n```typescript\nconst msg = messages[0];\nif (msg.mediaInfo?.fileId) {\n  const data = await telegram.downloadMedia(msg.mediaInfo.fileId, chatId, msg.id, msg.mediaInfo.uniqueFileId);\n  // data.buffer 是 base64 编码的文件内容, data.size 是字节数\n}\n```"
+        "fullDoc": "```typescript\ndownloadMedia(fileId: string, chatId?: number | string, messageId?: number, uniqueFileId?: string): Promise<{ buffer: string; size: number; }>\n```\n\n\n下载媒体文件的二进制数据。返回 base64 编码的 buffer 和文件大小。\n需要传入通过 mediaInfo.fileId 获取的文件标识符。\n\n**参数：**\n- `fileId`: TDLib/Bot API 兼容的文件 ID\n- `chatId`: 可选，用于 file reference 过期时自动 refetch\n- `messageId`: 可选，同上\n- `uniqueFileId`: 可选，用于缓存命中\n\n**示例：**\n```typescript\nconst msg = messages[0];\nif (msg.mediaInfo?.fileId) {\n  const data = await telegram.downloadMedia(msg.mediaInfo.fileId, chatId, msg.id, msg.mediaInfo.uniqueFileId);\n  // data.buffer 是 base64 编码的文件内容, data.size 是字节数\n}\n```"
       },
       {
         "name": "iterHistory",
-        "brief": "iterHistory(chatId: number | string, opts?: { limit?: number }): AsyncIterable<Message>",
-        "fullDoc": "```typescript\niterHistory(chatId: number | string, opts?: { limit?: number }): AsyncIterable<Message>\n```"
+        "brief": "以异步迭代器方式遍历历史消息，用于深入流式检索",
+        "fullDoc": "```typescript\niterHistory(chatId: number | string, opts?: { limit?: number }): AsyncIterable<{ id: number; text: string; date: Date; chat: { id: number; title?: string; username?: string; type: \"private\" | \"group\" | \"supergroup\" | \"channel\"; }; sender: { id: number; displayName?: string; title?: string; username?: string; }; isMention: boolean; replyToMessage?: { id: number } | null; media?: unknown; mediaInfo?: { type: \"photo\" | \"sticker\" | \"video\" | \"document\" | \"animation\" | \"other\"; fileId?: string; uniqueFileId?: string; emoji?: string; mimeType?: string; fileName?: string; width?: number; height?: number; fileSize?: number; }; }>\n```\n\n\n以异步迭代器方式遍历历史消息，用于深入流式检索"
       },
       {
         "name": "iterDialogs",
-        "brief": "iterDialogs(opts?: { limit?: number }): AsyncIterable<Dialog>",
-        "fullDoc": "```typescript\niterDialogs(opts?: { limit?: number }): AsyncIterable<Dialog>\n```"
+        "brief": "以异步迭代器方式遍历最近的对话列表",
+        "fullDoc": "```typescript\niterDialogs(opts?: { limit?: number }): AsyncIterable<{ peer: { id: number; displayName?: string; title?: string; username?: string; }; lastMessage?: { id: number; text: string; date: Date; chat: { id: number; title?: string; username?: string; type: \"private\" | \"group\" | \"supergroup\" | \"channel\"; }; sender: { id: number; displayName?: string; title?: string; username?: string; }; isMention: boolean; replyToMessage?: { id: number } | null; media?: unknown; mediaInfo?: { type: \"photo\" | \"sticker\" | \"video\" | \"document\" | \"animation\" | \"other\"; fileId?: string; uniqueFileId?: string; emoji?: string; mimeType?: string; fileName?: string; width?: number; height?: number; fileSize?: number; }; }; unreadCount: number; }>\n```\n\n\n以异步迭代器方式遍历最近的对话列表"
       },
       {
         "name": "joinChat",
@@ -339,16 +338,15 @@
       },
       {
         "name": "readHistory",
-        "brief": "readHistory(chatId: number | string): Promise<void>",
-        "fullDoc": "```typescript\nreadHistory(chatId: number | string): Promise<void>\n```"
+        "brief": "将指定会话的所有未读消息标记为已读",
+        "fullDoc": "```typescript\nreadHistory(chatId: number | string): Promise<void>\n```\n\n\n将指定会话的所有未读消息标记为已读"
       },
       {
         "name": "sendTyping",
-        "brief": "sendTyping(chatId: number | string): Promise<void>",
-        "fullDoc": "```typescript\nsendTyping(chatId: number | string): Promise<void>\n```"
+        "brief": "触发短暂的 `Typing` 正在输入反馈状态",
+        "fullDoc": "```typescript\nsendTyping(chatId: number | string): Promise<void>\n```\n\n\n触发短暂的 `Typing` 正在输入反馈状态"
       }
-    ],
-    "typeDefs": "interface Peer {\n    id: number;\n    displayName?: string;\n    title?: string;\n    username?: string;\n}\n\ninterface User extends Peer {\n    firstName: string;\n    lastName?: string;\n    isBot: boolean;\n}\n\ninterface Chat {\n    id: number;\n    title?: string;\n    username?: string;\n    type: \"private\" | \"group\" | \"supergroup\" | \"channel\";\n}\n\ninterface Message {\n    id: number;\n    text: string;\n    date: Date;\n    chat: Chat;\n    sender: Peer;\n    isMention: boolean;\n    replyToMessage?: { id: number } | null;\n    media?: unknown;\n    /** 结构化媒体元信息（由 adapter 提取），可直接判断类型 */\n    mediaInfo?: MediaInfo;\n}\n\ninterface MediaInfo {\n    type: \"photo\" | \"sticker\" | \"video\" | \"document\" | \"animation\" | \"other\";\n    /** TDLib/Bot API 兼容的 File ID，可传给 downloadMedia */\n    fileId?: string;\n    /** 全局唯一文件标识符 */\n    uniqueFileId?: string;\n    emoji?: string;\n    mimeType?: string;\n    fileName?: string;\n    width?: number;\n    height?: number;\n    fileSize?: number;\n}\n\ninterface Dialog {\n    peer: Peer;\n    lastMessage?: Message;\n    unreadCount: number;\n}\n\ninterface FullUser extends User {\n    /** 用户个人简介 */\n    bio?: string;\n    /** 与当前用户的共同群组数量 */\n    commonChatsCount?: number;\n}\n\ninterface FullChat extends Chat {\n    /** 群组/频道的描述文本 */\n    about?: string;\n    /** 成员数量 */\n    membersCount?: number;\n    /** 当前在线成员数量 */\n    onlineCount?: number;\n    /** 是否开启了论坛（话题板块）模式 */\n    isForum?: boolean;\n}\n\ninterface ForumTopic {\n    id: number;\n    title: string;\n    isClosed: boolean;\n    isPinned: boolean;\n    creatorId: number;\n    unreadCount: number;\n}\n\ninterface PollAnswer {\n    /** 选项文本 */\n    text: string;\n    /** 当前选项的投票人数 */\n    voterCount: number;\n    /** 当前用户是否投了此选项 */\n    chosen: boolean;\n    /** 此选项是否为正确答案（仅 quiz 模式） */\n    correct: boolean;\n}\n\ninterface Poll {\n    type: \"poll\";\n    id: string;\n    question: string;\n    answers: PollAnswer[];\n    /** 总投票人数 */\n    totalVoters: number;\n    /** 投票是否已关闭 */\n    isClosed: boolean;\n    /** 是否为公开投票（可查看投票人） */\n    isPublic: boolean;\n    /** 是否为测验模式 */\n    isQuiz: boolean;\n    /** 是否允许多选 */\n    isMultiple: boolean;\n    /** 测验模式的答案解释（答题后可见） */\n    solution?: string;\n}\n\ninterface Reaction {\n    emoji: string;\n    count: number;\n}\n\ninterface DownloadedMedia {\n    /** base64 编码的文件数据 */\n    buffer: string;\n    /** 文件大小(字节) */\n    size: number;\n}\n\ninterface SendMessageOptions {\n    /** 回复指定消息 ID（也可用于指定 Forum Topic ID） */\n    replyTo?: number;\n    /** 不触发推送铃声 */\n    silent?: boolean;\n}\n\ninterface SendPollOptions extends SendMessageOptions {\n    /** 是否匿名（默认 true） */\n    isAnonymous?: boolean;\n    /** 'regular' 普通投票 | 'quiz' 测验模式 */\n    type?: \"regular\" | \"quiz\";\n    /** 是否允许多选（仅 type='regular' 有效） */\n    allowsMultipleAnswers?: boolean;\n    /** 正确答案的索引（仅 type='quiz' 有效，从 0 开始） */\n    correctOptionId?: number;\n    /** 答错后的解释说明（仅 type='quiz' 有效） */\n    explanation?: string;\n}\n\ninterface Emitter<T> {\n    add(handler: (event: T) => void | Promise<void>): void;\n    remove(handler: (event: T) => void | Promise<void>): void;\n    once(handler: (event: T) => void | Promise<void>): void;\n    clear(): void;\n}\n\ninterface TelegramClient {\n    // ─── 发送与交互 ───\n    sendText(chatId: number | string, text: string, opts?: SendMessageOptions): Promise<Message>;\n    /**\n     * 发送媒体消息。支持 URL 和本地文件路径。\n     * @example sendMedia(chatId, { type: 'photo', file: 'https://example.com/img.jpg', caption: '看看这个' })\n     * @example sendMedia(chatId, { type: 'photo', file: '/path/to/local/image.jpg' })\n     */\n    sendMedia(chatId: number | string, media: string | { type: 'photo' | 'video' | 'document' | 'audio' | 'auto'; file: string; caption?: string; fileName?: string }, opts?: SendMessageOptions): Promise<Message>;\n    /** 发送磁盘文件到聊天（通过绝对路径）。host 侧读取文件并上传。始终作为文件/文档发送。 */\n    sendFile(chatId: number | string, filePath: string, opts?: { replyTo?: number; caption?: string; fileName?: string; mimeType?: string }): Promise<Message>;\n    /**\n     * 发送贴纸。通过 uniqueFileId 引用本地已缓存的贴纸文件。\n     * @example sendSticker(chatId, 'AgADAgATxxxxxx')\n     */\n    sendSticker(chatId: number | string, uniqueFileId: string, opts?: { replyTo?: number }): Promise<Message>;\n    /**\n     * 发送媒体相册（多张图片/视频合并为一组）。\n     * 第一个媒体项的 caption 将作为整组的文案。\n     * @example sendMediaGroup(chatId, [\n     *   { type: 'photo', file: 'https://example.com/1.jpg', caption: '相册标题' },\n     *   { type: 'photo', file: 'https://example.com/2.jpg' },\n     * ])\n     */\n    sendMediaGroup(chatId: number | string, medias: Array<{ type: 'photo' | 'video' | 'document' | 'audio'; file: string; caption?: string; fileName?: string }>, opts?: SendMessageOptions): Promise<Message[]>;\n    /**\n     * 发起投票或测验。\n     * @param question 投票标题\n     * @param options 候选选项文本列表（2-10 个）\n     * @example sendPoll(chatId, '今晚吃什么？', ['火锅', '烧烤', '外卖'], { isAnonymous: false })\n     * @example sendPoll(chatId, 'JS 中 typeof null 是？', ['object', 'null', 'undefined'], { type: 'quiz', correctOptionId: 0 })\n     */\n    sendPoll(chatId: number | string, question: string, options: string[], opts?: SendPollOptions): Promise<Message>;\n    /**\n     * 对消息发送表情表态。传 null 以撤销表态。\n     * @example sendReaction(chatId, msgId, '👍')\n     * @example sendReaction(chatId, msgId, null) // 撤销\n     */\n    sendReaction(chatId: number | string, messageId: number, emoji: string | null): Promise<void>;\n    /**\n     * 编辑已发送的消息文本。\n     * @example editMessage(chatId, msgId, '已更正：新文本内容')\n     */\n    editMessage(chatId: number | string, messageId: number, text: string): Promise<Message>;\n    /**\n     * 删除一条或多条消息。\n     * @example deleteMessages(chatId, [msgId1, msgId2])\n     */\n    deleteMessages(chatId: number | string, messageIds: number[]): Promise<void>;\n    /** 置顶一条消息 */\n    pinMessage(chatId: number | string, messageId: number, opts?: { silent?: boolean }): Promise<void>;\n    /** 取消置顶一条消息 */\n    unpinMessage(chatId: number | string, messageId: number): Promise<void>;\n\n    // ─── 信息获取 ───\n    getMe(): Promise<User>;\n    getChat(chatId: number | string): Promise<Chat>;\n    getUser(userId: number | string): Promise<User>;\n    /** 获取最近的对话列表（包含 peer、最后一条消息、未读数） */\n    getDialogs(opts?: { limit?: number }): Promise<Dialog[]>;\n    /**\n     * 获取用户的完整资料（包含个人简介 bio 等）。\n     * @example const full = await telegram.getFullUser(userId); console.log(full.bio);\n     */\n    getFullUser(userId: number | string): Promise<FullUser>;\n    /**\n     * 获取群组/频道的完整资料（包含群描述 about、成员数等）。\n     * @example const full = await telegram.getFullChat(chatId); console.log(full.about, full.isForum);\n     */\n    getFullChat(chatId: number | string): Promise<FullChat>;\n    // [USERBOT_ONLY_BEGIN]\n    getChatMembers(chatId: number | string, opts?: { limit?: number }): Promise<Peer[]>;\n    getHistory(chatId: number | string, opts?: { limit?: number }): Promise<Message[]>;\n    /**\n     * 按消息 ID 精确获取一条或多条消息。（在别人回复或者提及某消息但是你看不见的时候，善用该函数爬楼获取上下文）\n     * @example const msgs = await telegram.getMessages(chatId, [100, 101, 102]);\n     */\n    getMessages(chatId: number | string, messageIds: number[]): Promise<(Message | null)[]>;\n    /**\n     * 在群组内搜索消息。（可主动利用该函数获取视野外上下文信息）\n     * @example const results = await telegram.searchMessages(chatId, '关键词', { limit: 20 });\n     */\n    searchMessages(chatId: number | string, query: string, opts?: { limit?: number }): Promise<Message[]>;\n    /**\n     * 获取指定群组的论坛板块（话题）列表。要求该群组已开启 Forum 模式。\n     * @example const topics = await telegram.getForumTopics(chatId);\n     */\n    getForumTopics(chatId: number | string, opts?: { limit?: number }): Promise<ForumTopic[]>;\n    /**\n     * 主动拉取某条投票消息的最新计票结果。\n     * @example const poll = await telegram.getPollResults(chatId, pollMsgId);\n     */\n    getPollResults(chatId: number | string, messageId: number): Promise<Poll | null>;\n    /**\n     * 主动拉取某条消息的表态（Reaction）汇总数据。\n     * @example const reactions = await telegram.getMessageReactions(chatId, [msgId]);\n     */\n    getMessageReactions(chatId: number | string, messageIds: number[]): Promise<Reaction[]>;\n    /**\n     * 下载媒体文件的二进制数据。返回 base64 编码的 buffer 和文件大小。\n     * 需要传入通过 mediaInfo.fileId 获取的文件标识符。\n     * @param fileId TDLib/Bot API 兼容的文件 ID\n     * @param chatId  可选，用于 file reference 过期时自动 refetch\n     * @param messageId 可选，同上\n     * @param uniqueFileId 可选，用于缓存命中\n     * @example\n     * const msg = messages[0];\n     * if (msg.mediaInfo?.fileId) {\n     *   const data = await telegram.downloadMedia(msg.mediaInfo.fileId, chatId, msg.id, msg.mediaInfo.uniqueFileId);\n     *   // data.buffer 是 base64 编码的文件内容, data.size 是字节数\n     * }\n     */\n    downloadMedia(fileId: string, chatId?: number | string, messageId?: number, uniqueFileId?: string): Promise<DownloadedMedia>;\n\n    // ─── 迭代器 (for await) ───\n    iterHistory(chatId: number | string, opts?: { limit?: number }): AsyncIterable<Message>;\n    iterDialogs(opts?: { limit?: number }): AsyncIterable<Dialog>;\n\n    // ─── 群组管理 ───\n    /** 加入一个群聊或频道 */\n    joinChat(chatId: number | string): Promise<void>;\n    /** 退出一个群聊或频道 */\n    leaveChat(chatId: number | string): Promise<void>;\n\n    // ─── 状态操作 ───\n    readHistory(chatId: number | string): Promise<void>;\n    // [USERBOT_ONLY_END]\n    sendTyping(chatId: number | string): Promise<void>;\n}"
+    ]
   },
   {
     "name": "cron",
@@ -378,7 +376,7 @@
       {
         "name": "on",
         "brief": "注册事件监听器。匹配 type 前缀的事件会触发 handlerCode 在 sandbox 中执行。 handler 代码中可通过 `event` 变量访问事件数据。",
-        "fullDoc": "```typescript\non(typePrefix: string, handlerCode: string): string\n```\n\n\n注册事件监听器。匹配 type 前缀的事件会触发 handlerCode 在 sandbox 中执行。\nhandler 代码中可通过 `event` 变量访问事件数据。\n\n**参数：**\n- `typePrefix`: 事件类型前缀（如 \"telegram.message\" 匹配所有以此开头的事件）\n- `handlerCode`: 触发时执行的 JavaScript 代码字符串\n- **返回值**: 监听器 ID\n\n**示例：**\n```typescript\n// 监听新消息事件\nconst id = events.on(\"telegram.message\", `\n  if (event.text?.includes(\"ping\")) {\n    runtime.notify({ type: \"system.pong\", from: event.chatId });\n  }\n`);\nconsole.log(\"监听器已注册:\", id);\n```\n\n```typescript\n// 监听所有系统事件\nevents.on(\"system.\", `\n  console.log(\"系统事件:\", event.type);\n`);\n```"
+        "fullDoc": "```typescript\non(typePrefix: string, handlerCode: string): string\n```\n\n\n注册事件监听器。匹配 type 前缀的事件会触发 handlerCode 在 sandbox 中执行。\r\nhandler 代码中可通过 `event` 变量访问事件数据。\n\n**参数：**\n- `typePrefix`: 事件类型前缀（如 \"telegram.message\" 匹配所有以此开头的事件）\n- `handlerCode`: 触发时执行的 JavaScript 代码字符串\n- **返回值**: 监听器 ID\n\n**示例：**\n```typescript\n// 监听新消息事件\r\nconst id = events.on(\"telegram.message\", `\r\n  if (event.text?.includes(\"ping\")) {\r\n    runtime.notify({ type: \"system.pong\", from: event.chatId });\r\n  }\r\n`);\r\nconsole.log(\"监听器已注册:\", id);\n```\n\n```typescript\n// 监听所有系统事件\r\nevents.on(\"system.\", `\r\n  console.log(\"系统事件:\", event.type);\r\n`);\n```"
       },
       {
         "name": "off",
@@ -388,7 +386,7 @@
       {
         "name": "list",
         "brief": "列出当前所有监听器",
-        "fullDoc": "```typescript\nlist(): Array<{\n        id: string;\n        typePrefix: string;\n    }>\n```\n\n\n列出当前所有监听器\n\n**示例：**\n```typescript\nconst listeners = events.list();\nfor (const l of listeners) {\n  console.log(`${l.id}: 监听 \"${l.typePrefix}\"`);\n}\n```"
+        "fullDoc": "```typescript\nlist(): Array<{\r\n        id: string;\r\n        typePrefix: string;\r\n    }>\n```\n\n\n列出当前所有监听器\n\n**示例：**\n```typescript\nconst listeners = events.list();\r\nfor (const l of listeners) {\r\n  console.log(`${l.id}: 监听 \"${l.typePrefix}\"`);\r\n}\n```"
       }
     ]
   },
@@ -445,7 +443,7 @@
       {
         "name": "onWebhook",
         "brief": "注册 webhook 端点。 外部可通过 POST /webhook/{path} 触发 handler 代码执行。 handler 代码中可通过 `request` 变量访问请求数据。",
-        "fullDoc": "```typescript\nonWebhook(path: string, handlerCode: string): Promise<string>\n```\n\n\n注册 webhook 端点。\n外部可通过 POST /webhook/{path} 触发 handler 代码执行。\nhandler 代码中可通过 `request` 变量访问请求数据。\n\n**参数：**\n- `path`: Webhook 路径（唯一标识，不含前缀斜杠）\n- `handlerCode`: 收到请求时执行的 JavaScript 代码字符串\n- **返回值**: webhook ID\n\n**示例：**\n```typescript\n// 注册一个接收 GitHub Push 事件的 webhook\nconst id = await http.onWebhook(\"github-push\", `\n  const payload = JSON.parse(request.body);\n  const repo = payload.repository?.full_name ?? \"unknown\";\n  await telegram.sendText(chatId, \"📦 Push to \" + repo + \": \" + payload.head_commit?.message);\n`);\nconsole.log(\"Webhook 已注册:\", id);\nconsole.log(\"URL: /webhook/github-push\");\n```"
+        "fullDoc": "```typescript\nonWebhook(path: string, handlerCode: string): Promise<string>\n```\n\n\n注册 webhook 端点。\r\n外部可通过 POST /webhook/{path} 触发 handler 代码执行。\r\nhandler 代码中可通过 `request` 变量访问请求数据。\n\n**参数：**\n- `path`: Webhook 路径（唯一标识，不含前缀斜杠）\n- `handlerCode`: 收到请求时执行的 JavaScript 代码字符串\n- **返回值**: webhook ID\n\n**示例：**\n```typescript\n// 注册一个接收 GitHub Push 事件的 webhook\r\nconst id = await http.onWebhook(\"github-push\", `\r\n  const payload = JSON.parse(request.body);\r\n  const repo = payload.repository?.full_name ?? \"unknown\";\r\n  await telegram.sendText(chatId, \"📦 Push to \" + repo + \": \" + payload.head_commit?.message);\r\n`);\r\nconsole.log(\"Webhook 已注册:\", id);\r\nconsole.log(\"URL: /webhook/github-push\");\n```"
       },
       {
         "name": "removeWebhook",
@@ -455,7 +453,7 @@
       {
         "name": "listWebhooks",
         "brief": "列出当前所有 webhook",
-        "fullDoc": "```typescript\nlistWebhooks(): Promise<Array<{ id: string; path: string }>>\n```\n\n\n列出当前所有 webhook\n\n**示例：**\n```typescript\nconst hooks = await http.listWebhooks();\nfor (const h of hooks) {\n  console.log(`${h.id}: POST /webhook/${h.path}`);\n}\n```"
+        "fullDoc": "```typescript\nlistWebhooks(): Promise<Array<{ id: string; path: string }>>\n```\n\n\n列出当前所有 webhook\n\n**示例：**\n```typescript\nconst hooks = await http.listWebhooks();\r\nfor (const h of hooks) {\r\n  console.log(`${h.id}: POST /webhook/${h.path}`);\r\n}\n```"
       }
     ]
   },
@@ -466,12 +464,12 @@
       {
         "name": "get",
         "brief": "读取键值",
-        "fullDoc": "```typescript\nget(key: string): Promise<string | null>\n```\n\n\n读取键值\n\n**参数：**\n- `key`: 键名\n- **返回值**: 值字符串，不存在时返回 null\n\n**示例：**\n```typescript\nconst token = await kv.get(\"api_token\");\nif (token) {\n  console.log(\"已有 token\");\n}\n```"
+        "fullDoc": "```typescript\nget(key: string): Promise<string | null>\n```\n\n\n读取键值\n\n**参数：**\n- `key`: 键名\n- **返回值**: 值字符串，不存在时返回 null\n\n**示例：**\n```typescript\nconst token = await kv.get(\"api_token\");\r\nif (token) {\r\n  console.log(\"已有 token\");\r\n}\n```"
       },
       {
         "name": "set",
         "brief": "写入键值",
-        "fullDoc": "```typescript\nset(key: string, value: string, ttlSeconds?: number): Promise<void>\n```\n\n\n写入键值\n\n**参数：**\n- `key`: 键名\n- `value`: 值（字符串）\n- `ttlSeconds`: 可选的过期时间（秒）。不设置则永不过期。\n\n**示例：**\n```typescript\nawait kv.set(\"last_check\", new Date().toISOString());\n```\n\n```typescript\n// 设置 1 小时后过期的缓存\nawait kv.set(\"weather_cache\", JSON.stringify(data), 3600);\n```"
+        "fullDoc": "```typescript\nset(key: string, value: string, ttlSeconds?: number): Promise<void>\n```\n\n\n写入键值\n\n**参数：**\n- `key`: 键名\n- `value`: 值（字符串）\n- `ttlSeconds`: 可选的过期时间（秒）。不设置则永不过期。\n\n**示例：**\n```typescript\nawait kv.set(\"last_check\", new Date().toISOString());\n```\n\n```typescript\n// 设置 1 小时后过期的缓存\r\nawait kv.set(\"weather_cache\", JSON.stringify(data), 3600);\n```"
       },
       {
         "name": "del",
@@ -481,7 +479,7 @@
       {
         "name": "keys",
         "brief": "列出键名（可按前缀过滤）",
-        "fullDoc": "```typescript\nkeys(prefix?: string): Promise<string[]>\n```\n\n\n列出键名（可按前缀过滤）\n\n**参数：**\n- `prefix`: 可选的键名前缀\n- **返回值**: 匹配的键名列表\n\n**示例：**\n```typescript\nconst keys = await kv.keys(\"cache_\");\nconsole.log(\"缓存键:\", keys);\n```"
+        "fullDoc": "```typescript\nkeys(prefix?: string): Promise<string[]>\n```\n\n\n列出键名（可按前缀过滤）\n\n**参数：**\n- `prefix`: 可选的键名前缀\n- **返回值**: 匹配的键名列表\n\n**示例：**\n```typescript\nconst keys = await kv.keys(\"cache_\");\r\nconsole.log(\"缓存键:\", keys);\n```"
       }
     ]
   },
