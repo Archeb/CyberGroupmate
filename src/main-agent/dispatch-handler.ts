@@ -259,6 +259,7 @@ export function createDispatchHandler(
                     replyMode: result.replyMode === "BATCH" ? "BATCH" : "SINGLE",
                     createdAt: new Date().toISOString(),
                     targetMessageIds: decision.targetMessageIds,
+                    useSkills: result.useSkills,
                 };
 
                 // 获取或创建 CodeActExecutor

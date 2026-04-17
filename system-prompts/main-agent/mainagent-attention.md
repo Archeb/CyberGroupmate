@@ -62,5 +62,11 @@
 以下话题已有进行中或已完成的回复任务，请勿重复分派: {{dispatchedTopicIds}}
 {{/hasDispatchedTopics}}
 
+{{#hasAvailableSkills}}
+## 🧩 可指派给执行器的功能模块
+以下模块是可选的——仅当任务需要时在 useSkills 中列出对应模块名。基础模块（消息收发、记忆、文件等）已默认加载，无需指派。
+{{availableSkillsRoster}}
+{{/hasAvailableSkills}}
+
 ## 请决策
 基于以上信息，输出你的决策（JSON 格式的 AttendResult）。

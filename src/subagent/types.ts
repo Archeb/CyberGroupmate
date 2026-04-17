@@ -114,6 +114,8 @@ export interface CodeActReplyTask {
     replyStrategy?: ReplyStrategy;
     /** 最大响应时间 (ms) */
     maxResponseTime?: number;
+    /** 主 Agent 指定的模块路由（限制 Subagent Pass 1 可见的额外技能模块） */
+    useSkills?: string[];
 }
 
 /** 回复策略 (subagent.md §2.2 B1) */
@@ -301,6 +303,8 @@ export interface AttendResult {
     fastPathAuth?: FastPathConfig;
     /** 决策理由 */
     reasoning: string;
+    /** 主 Agent 指定的模块路由（Subagent 可见的额外技能模块名） */
+    useSkills?: string[];
 }
 
 /** 单条决策 */

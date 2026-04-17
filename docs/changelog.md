@@ -1,5 +1,49 @@
 # Changelog
 
+## 2026-04-18: AgentSkills 架构分层路由与彻底解耦
+
+实现主 Agent 控制的渐进式模块路由机制（Subagent Progressive Disclosure），大幅降低 Subagent 的上下文负担，并规范化了 AgentSkills 的展示形式与访问入口。
+
+### 🧩 核心改进点：双层渐进式披露
+
+原系统所有启用的 TS Skills 甚至完整的 Agent Skills 都会堆积在 Subagent 的 System Prompt 里，导致 Context Token 严重浪费。
+新版重构为 **主Agent路由 → Subagent可用** 的两层渐进式分发：
+
+1. **主 Agent 拥有全局视野**：在 Attention Prompt 中，主 Agent 能够看到一个精简的 `availableSkillsRoster` 名册（包含所有拓展功能但不含具体说明）。
+2. **主动模块分发 `useSkills`**：主 Agent 输出 `useSkills: [ "module1" ]`。
+3. **受限的运行沙盒（代码执行器）**：仅 `baseSkills`，平台插件（Discord/Telegram）和 Main Agent 发放给当前任务的 `useSkills` 相关代码会呈现给执行器。
+
+### 📦 AgentSkills `.use()` 平级注入调用
+
+弃用了以前挂载在 `docs.read()` 之下、使得子代理误认其为 markdown 的陈旧路径。
+AgentSkills 被提升为直接并列在沙盒内的顶级调用对象（例如引入 `x_search` 后可以在代码里执行 `await x_search.use()`）。
+并且 `docs.js` 已被剥离，现在 Subagent 如果自己调用 `docs.list()` 则只能读取原本普通的 markdown 用户文档库，从而断绝了系统越权和访问旧系统的途径。
+
+### ⚙️ 常驻模块名单配置 (Base Skills)
+
+由于核心功能如 `runtime`, `memory`, `fs` 需要始终在上下文中存在，因此从系统抽取了 `baseSkills`。
+- `config.yaml` 新增 `subagent.base_skills` 清单。
+- Dashboard UI 在 Subagent 设置区段中新增了可视化的一键管理 Tag 控制面板。
+- 保证系统平台级的 Telegram/Discord 不在此基础名单中时仍然由执行器硬编码携带。
+
+### 改动文件清单
+
+| 文件 | 变更目的 |
+|---|---|
+| `src/core/config.ts` | 新增 `base_skills` yaml序列化和反序列化和校验 |
+| `config.example.yaml` | 提供 `subagent.base_skills` 注释和示范配置 |
+| `src/subagent/types.ts` | 增加 `useSkills: string[]` 给相关上下文 |
+| `src/main-agent/attend-handler.ts` | 注入 `availableSkillsRoster` + 解析决策中的 `useSkills` |
+| `src/main-agent/dispatch-handler.ts` | 将 `useSkills` 进行透传 |
+| `src/subagent/code-act-executor.ts` | 根据白名单合成 System Prompt 并传递 filter 参数 |
+| `src/sandbox/modules/module-registry.ts` |  支持生成 Roster 字典与 `generateBriefOverview` 白名单过滤 |
+| `src/sandbox/modules/docs.ts` | 生成 `.use()` 调用对象，彻底移除非 markdown 相关的 `docs.read` 合并 |
+| `src/sandbox/sandbox-worker.ts` | Worker 内暴露并赋予 agent 所有的 `use()` 引用对象 |
+| `src/dashboard/ui/src/panels/ConfigPanel.svelte` | 添加 Dashboard 设置界面中对 `baseSkills` 的编辑入口 |
+| `system-prompts/main-agent/mainagent-attention.md` | 新增 **可指派给执行器的功能模块** 注释提示模版 |
+| `system-prompts/main-agent/mainagent-main-system.md` | 修改 JSON Schema 中的 `useSkills` 结构说明 |
+
+
 ## 2026-04-13: Sandbox 能力升级 — 自主 Agent 运行环境
 
 大规模能力扩展，覆盖 MCP Bridge（stdio + Streamable HTTP）、agentskills.io SKILL.md 生态原生支持、Cron API（持久化定时任务）、Events API（NC 事件监听器）、KV Store（SQLite 键值存储）、后台任务持久化（spawnPersistent + Worker 重启恢复）、Shell 增强（自定义 .bashrc + PATH）、HTTP Webhook 模块、Two-pass prefixMap 动态化（MCP 运行时连接工具即时可见）。Dashboard 新增 MCP 管理面板，支持 stdio 和 Streamable HTTP 两种传输模式。

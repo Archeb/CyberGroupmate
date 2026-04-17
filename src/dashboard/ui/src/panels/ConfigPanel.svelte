@@ -21,6 +21,7 @@
   let showNewProfile = false;
   let newProfileName = "";
   let newKeyword = "";
+  let newBaseSkill = "";
   /** 当前展开的 profile 名称集合 */
   let expandedProfiles = new Set();
 
@@ -77,6 +78,9 @@
         config.dashboard.host = "127.0.0.1";
       }
       if (!config.subagent) config.subagent = {};
+      if (!config.subagent.baseSkills) config.subagent.baseSkills = [
+        "runtime", "memory", "docs", "fs", "actions", "skills", "mcp", "cron", "events", "kv", "http",
+      ];
       if (!config.llmRouting) config.llmRouting = {};
       if (!config.llmRouting.timeouts) config.llmRouting.timeouts = {};
       if (!config.recordingPipeline) config.recordingPipeline = {};
@@ -258,6 +262,25 @@
   function removeKeyword(kw) {
     config.notification.mentionKeywords =
       config.notification.mentionKeywords.filter((k) => k !== kw);
+  }
+  // ── Base Skills helpers ──
+  function addBaseSkill() {
+    const sk = newBaseSkill.trim();
+    if (!sk) return;
+    if (!config.subagent.baseSkills) config.subagent.baseSkills = [];
+    if (!config.subagent.baseSkills.includes(sk)) {
+      config.subagent.baseSkills = [...config.subagent.baseSkills, sk];
+    }
+    newBaseSkill = "";
+  }
+  function removeBaseSkill(sk) {
+    config.subagent.baseSkills = config.subagent.baseSkills.filter((s) => s !== sk);
+  }
+  function resetBaseSkills() {
+    config.subagent.baseSkills = [
+      "runtime", "memory", "docs", "fs", "actions", "skills", "mcp", "cron", "events", "kv", "http",
+    ];
+    config = config;
   }
   function getProfileNames() {
     return config ? Object.keys(config.llmProfiles) : [];
@@ -1746,6 +1769,33 @@
                     placeholder="100"
                   /></label
                 >
+              </div>
+              <div class="divider text-xs opacity-50 my-3"><i class="fa-solid fa-puzzle-piece mr-1"></i>常驻模块 (Base Skills)</div>
+              <p class="text-xs opacity-40 mb-2">
+                始终对 Subagent 可见的模块。平台 adapter（telegram/discord）会自动包含，无需在此列举。
+              </p>
+              <div class="flex flex-wrap gap-1.5 mb-2">
+                {#each config.subagent.baseSkills || [] as sk}
+                  <span class="badge badge-sm badge-outline gap-1">
+                    {sk}
+                    <button class="btn btn-ghost btn-xs px-0" on:click={() => removeBaseSkill(sk)}>×</button>
+                  </span>
+                {/each}
+              </div>
+              <div class="flex gap-1">
+                <input
+                  type="text"
+                  class="input input-xs input-bordered flex-1"
+                  bind:value={newBaseSkill}
+                  placeholder="模块名…"
+                  on:keydown={(e) => e.key === "Enter" && addBaseSkill()}
+                />
+                <button class="btn btn-xs btn-outline btn-primary" on:click={addBaseSkill}>
+                  <i class="fa-solid fa-plus"></i> 添加
+                </button>
+                <button class="btn btn-xs btn-outline btn-ghost" on:click={resetBaseSkills} title="重置为默认值">
+                  <i class="fa-solid fa-rotate-left"></i>
+                </button>
               </div>
             {/if}
           {/if}

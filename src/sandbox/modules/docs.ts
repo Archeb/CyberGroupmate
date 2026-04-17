@@ -103,34 +103,77 @@ export function loadAgentSkillDocs(projectRoot: string = process.cwd()): AgentSk
 }
 
 function loadAllDocs(): DocEntry[] {
-    return [...loadMarkdownDocs(), ...loadAgentSkillDocs()];
+    return loadMarkdownDocs();
 }
 
-export function getAgentSkillsApiBriefs(projectRoot: string = process.cwd()): string {
+export function getAgentSkillsApiBriefs(projectRoot: string = process.cwd(), allowedSkills?: Set<string>): string {
     const skills = loadAgentSkillDocs(projectRoot);
     if (skills.length === 0) return "";
 
-    const lines = [
-        "## agent-skills",
-        "Standard Agent Skills from workspace/skills/*/SKILL.md. These are not JS APIs: inspect details with docs.read(\"skill-name\") and run their scripts in bash when needed.",
-        ...skills.map((skill) => {
-            const scriptHint = skill.scriptsDir ? ` scripts=${skill.scriptsDir}` : "";
-            return `- ${skill.name}: ${skill.description}. docs.read(\"${skill.name}\")${scriptHint}`;
-        }),
-    ];
+    const filtered = allowedSkills ? skills.filter(s => allowedSkills.has(s.name) || allowedSkills.has(s.dirName)) : skills;
+    if (filtered.length === 0) return "";
+
+    const lines: string[] = [];
+    for (const skill of filtered) {
+        lines.push(`## ${skill.name}`);
+        lines.push(`${skill.description}`);
+        lines.push(`- use: 打印并阅读该 Skill 的详细指南。调用方式: await ${skill.name}.use()`);
+    }
 
     return lines.join("\n");
 }
 
-export function getAgentSkillsBriefs(): string {
+export function getAgentSkillsBriefs(allowedSkills?: Set<string>): string {
     const skills = loadAgentSkillDocs();
     if (skills.length === 0) return "";
 
-    return skills
+    const filtered = allowedSkills ? skills.filter(s => allowedSkills.has(s.name) || allowedSkills.has(s.dirName)) : skills;
+    if (filtered.length === 0) return "";
+
+    return filtered
         .map(skill =>
-            `- ${skill.name}: ${skill.description}. (阅读详细指令请使用 \`docs.read("${skill.name}")\`)`
+            `- ${skill.name}: ${skill.description}. (调用 \`await ${skill.name}.use()\` 查看详细指南)`
         )
         .join("\n");
+}
+
+/**
+ * 生成 AgentSkills 的极简名册（供主 Agent 决策时浏览，与 TS Skills 拍平展示）
+ *
+ * 每个 Skill 只占一行，格式：“- skillName: description”
+ */
+export function getAgentSkillsRoster(excludeBaseSkills?: Set<string>): string {
+    const skills = loadAgentSkillDocs();
+    if (skills.length === 0) return "";
+
+    const lines: string[] = [];
+    for (const skill of skills) {
+        if (excludeBaseSkills && (excludeBaseSkills.has(skill.name) || excludeBaseSkills.has(skill.dirName))) continue;
+        lines.push(`- ${skill.name}: ${skill.description}`);
+    }
+    return lines.join("\n");
+}
+
+/**
+ * 构建 AgentSkill 注入对象（供 Sandbox Worker 动态注入）
+ *
+ * 每个 AgentSkill 会被转化为一个 { use(): Promise<string> } 对象，
+ * 调用 .use() 时将 SKILL.md 内容通过 console.log 打印到 outputLines。
+ */
+export function buildAgentSkillUseObjects(): Array<{ name: string; obj: { use: () => string } }> {
+    const skills = loadAgentSkillDocs();
+    return skills.map(skill => ({
+        name: skill.name,
+        obj: {
+            use: () => {
+                const header = `\n═══ [AgentSkill: ${skill.name}] ${skill.description} ═══`;
+                const footer = `═══ [/${skill.name}] ═══\n`;
+                const content = `${header}\n${skill.content}\n${footer}`;
+                console.log(content);
+                return content;
+            },
+        },
+    }));
 }
 
 export function getAgentSkillScriptDirs(projectRoot: string = process.cwd()): string[] {
@@ -147,11 +190,6 @@ export const docs = {
 
         const exact = allDocs.find(d => d.slug.toLowerCase() === normalized);
         if (exact) return exact.content;
-
-        const skillExact = loadAgentSkillDocs().find(skill =>
-            skill.name.toLowerCase() === normalized || skill.dirName.toLowerCase() === normalized
-        );
-        if (skillExact) return skillExact.content;
 
         const fuzzy = allDocs.find(d =>
             d.slug.toLowerCase().includes(normalized) || normalized.includes(d.slug.toLowerCase())

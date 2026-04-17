@@ -269,6 +269,12 @@ export interface SubagentExternalConfig {
         /** 每个群最大 cron 数量。默认 10 */
         maxCrons?: number;
     };
+    /**
+     * 常驻模块列表（始终对 Subagent 可见，无需主 Agent 在 useSkills 中指定）。
+     * 平台 adapter 模块（telegram / discord）会根据当前平台自动包含，无需在此列举。
+     * 默认: ["runtime", "memory", "docs", "fs", "actions", "skills", "mcp", "cron", "events", "kv", "http"]
+     */
+    baseSkills?: string[];
 }
 
 /** Vision 处理配置 */
@@ -784,6 +790,7 @@ function parseSubagentConfig(fileConfig: Record<string, unknown>): SubagentExter
             maxReminders: rawSched.max_reminders != null ? num(rawSched.max_reminders, 10) : undefined,
             maxCrons: rawSched.max_crons != null ? num(rawSched.max_crons, 10) : undefined,
         } : undefined,
+        baseSkills: Array.isArray(raw.base_skills) ? (raw.base_skills as string[]) : undefined,
     };
 }
 
@@ -1219,6 +1226,14 @@ export function serializeConfigToObject(config: AppConfig): Record<string, unkno
                 max_session_messages: sa.codeAct.maxSessionMessages,
                 max_turns: sa.codeAct.maxTurns,
             };
+        }
+        if (sa.scheduler) {
+            s.scheduler = {};
+            if (sa.scheduler.maxReminders != null) (s.scheduler as any).max_reminders = sa.scheduler.maxReminders;
+            if (sa.scheduler.maxCrons != null) (s.scheduler as any).max_crons = sa.scheduler.maxCrons;
+        }
+        if (sa.baseSkills) {
+            s.base_skills = sa.baseSkills;
         }
         obj.subagent = s;
     }

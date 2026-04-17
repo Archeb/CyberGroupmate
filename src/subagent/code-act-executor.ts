@@ -26,7 +26,7 @@ import { parseAllSkillDocs } from "../sandbox/skill-loader.js";
 import { buildPrefixMap } from "../sandbox/api-intent-extractor.js";
 import { renderPrompt, deriveChatType } from "../main-agent/prompt-renderer.js";
 import type { LLMConfig, VisionConfig } from "../core/config.js";
-import { resolveComponentProfiles } from "../core/config.js";
+import { resolveComponentProfiles, loadConfig } from "../core/config.js";
 import { enrichMessages, formatMessageLine, resolveReplyText } from "../core/message-enricher.js";
 import type { MediaDownloader } from "../core/media-downloader.js";
 import type { ChatMessage } from "../core/llm.js";
@@ -82,12 +82,14 @@ const PLATFORM_MODULES: Record<string, string> = {
  * workspace/skills/ 里的 TS Skills 的 .d.ts，提取每个方法的一句话 brief 签名。
  * 完整文档由 Two-pass 机制在 session-runner 中按需注入。
  */
-export function loadApiTypeDefs(platform: string = "telegram"): string {
+export function loadApiTypeDefs(platform: string = "telegram", allowedModules?: Set<string>): string {
     try {
         // 确保 registry 已加载（合并内置模块与动态 TS Skills）
         const registry = getModuleRegistryCache();
 
-        let moduleBrief = _apiBriefCache.get(platform);
+        // 当有 allowedModules 过滤时，不使用缓存（每次 task 可能不同）
+        const cacheKey = allowedModules ? null : platform;
+        let moduleBrief = cacheKey ? _apiBriefCache.get(cacheKey) : undefined;
         if (!moduleBrief) {
             if (registry.length === 0) {
                 // 降级：如果 modules-docs.json 不存在且无 Skills，返回空提示
@@ -105,13 +107,13 @@ export function loadApiTypeDefs(platform: string = "telegram"): string {
                 const filteredRegistry = registry.filter(mod => !excludedModules.has(mod.name));
 
                 // 生成轻量概览（仅缓存模块部分，不含 agent skills）
-                moduleBrief = generateBriefOverview(filteredRegistry);
+                moduleBrief = generateBriefOverview(filteredRegistry, allowedModules);
             }
-            _apiBriefCache.set(platform, moduleBrief);
+            if (cacheKey) _apiBriefCache.set(cacheKey, moduleBrief);
         }
 
         // Agent skills 每次从磁盘读取，不缓存，以支持运行时热更新
-        const agentSkills = getAgentSkillsApiBriefs();
+        const agentSkills = getAgentSkillsApiBriefs(undefined, allowedModules);
         return agentSkills ? `${moduleBrief}\n\n${agentSkills}` : moduleBrief;
     } catch (err) {
         const errorMsg = err instanceof Error ? err.stack ?? err.message : String(err);
@@ -449,11 +451,23 @@ export class CodeActExecutor {
         ).join("\n");
 
         // 4. 渲染系统 prompt (subagent.md §12.2 ➎ — 稳定部分，可缓存)
+        // 计算这次 task 的 allowedSkills 白名单
+        const currentConfig = loadConfig();
+        const baseSkills = currentConfig.subagent?.baseSkills ?? [
+            "runtime", "memory", "docs", "fs", "actions", "skills", "mcp", "cron", "events", "kv", "http",
+        ];
+        const allowedSkills = new Set<string>([
+            ...baseSkills,
+            // 平台 adapter 始终可见
+            getPlatform(this.chatId),
+            // 主 Agent 指定的额外模块
+            ...(task.useSkills ?? []),
+        ]);
         const systemVars = {
             personaName: this.personaName,
             personaDescription: this.personaDescription,
-            apiTypeDefs: loadApiTypeDefs(getPlatform(this.chatId)),
-            agentSkillsBrief: getAgentSkillsBriefs(),
+            apiTypeDefs: loadApiTypeDefs(getPlatform(this.chatId), allowedSkills),
+            agentSkillsBrief: getAgentSkillsBriefs(allowedSkills),
         };
         const systemPrompt = renderPrompt("EXECUTION", systemVars);
 
