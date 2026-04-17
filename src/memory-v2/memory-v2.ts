@@ -1797,6 +1797,70 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
         };
     }
 
+    /**
+     * 获取指定消息的回复链，并带上每个节点的上下文（如同发信人前后的连续发言）
+     * @param maxDepth 最大追溯层数
+     * @param limitPerNode 每侧提取的最大前后连续消息数量
+     */
+    getReplyChainWithContext(chatId: string, messageId: string, maxDepth: number = 10, limitPerNode: number = 2): RecentMessageEntry[] {
+        const results = new Map<string, RecentMessageEntry>();
+        let currentMsgId: string | undefined = messageId;
+        let depth = 0;
+
+        while (currentMsgId && depth < maxDepth) {
+            const parent = this.getMessageById(chatId, currentMsgId);
+            if (!parent) break;
+
+            if (!results.has(parent.messageId)) {
+                results.set(parent.messageId, parent);
+
+                try {
+                    // 查询该发件人在 parent 消息之前的 N 条发言
+                    const beforeCtx = this.db.prepare(`
+                        SELECT message_id, chat_id, user_id, display_name, text, reply_to_message_id, timestamp, media_type, media_info
+                        FROM message_log 
+                        WHERE chat_id = ? AND user_id = ? AND timestamp <= ?
+                        ORDER BY timestamp DESC
+                        LIMIT ?
+                    `).all(chatId, parent.userId, parent.timestamp, limitPerNode + 1) as Record<string, unknown>[];
+
+                    // 查询该发件人在 parent 消息之后的 N 条发言
+                    const afterCtx = this.db.prepare(`
+                        SELECT message_id, chat_id, user_id, display_name, text, reply_to_message_id, timestamp, media_type, media_info
+                        FROM message_log 
+                        WHERE chat_id = ? AND user_id = ? AND timestamp > ?
+                        ORDER BY timestamp ASC
+                        LIMIT ?
+                    `).all(chatId, parent.userId, parent.timestamp, limitPerNode) as Record<string, unknown>[];
+
+                    for (const row of [...beforeCtx, ...afterCtx]) {
+                        const mid = row.message_id as string;
+                        if (!results.has(mid)) {
+                            results.set(mid, {
+                                messageId: mid,
+                                chatId: row.chat_id as string,
+                                userId: row.user_id as string,
+                                displayName: (row.display_name as string) ?? "",
+                                text: (row.text as string) ?? "",
+                                replyToMessageId: (row.reply_to_message_id as string) ?? undefined,
+                                timestamp: row.timestamp as string,
+                                mediaType: (row.media_type as string) ?? undefined,
+                                mediaInfo: (row.media_info as string) ?? undefined,
+                            });
+                        }
+                    }
+                } catch {
+                    // 发生解析异常时不中断主流程
+                }
+            }
+
+            currentMsgId = parent.replyToMessageId;
+            depth++;
+        }
+
+        return Array.from(results.values());
+    }
+
     /** 批量按 messageId 获取消息（保持 messageIds 顺序） */
     getMessagesByIds(chatId: string, messageIds: string[]): RecentMessageEntry[] {
         if (messageIds.length === 0) return [];

@@ -463,8 +463,12 @@ export async function runCodeActSession(
                             isProcessing: true,
                         });
 
-                        // 移除 Pass 1 的 assistant 输出（最后一条 assistant message）
+                        // 将 Pass 1 的 assistant 输出替换为第一人称提示
                         messages.pop();
+                        messages.push({
+                            role: "assistant",
+                            content: "[让我先参考下文档]",
+                        });
 
                         // 注入文档到 history 中（作为系统提示的补充）
                         messages.push({

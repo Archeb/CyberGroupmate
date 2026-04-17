@@ -174,6 +174,8 @@ interface PlainMessage {
     replyToMessage?: { id: string } | null;
     media?: unknown;
     mediaInfo?: MediaInfo;
+    forwardFrom?: string;
+    forwardFromUrl?: string;
 }
 
 interface PlainDialog {
@@ -1236,6 +1238,11 @@ export class TelegramAdapter implements PlatformAdapter {
             }
         }
 
+        if (plain.forwardFrom) {
+            const urlHint = plain.forwardFromUrl ? `(${plain.forwardFromUrl})` : "";
+            text = `[转发自: ${plain.forwardFrom}${urlHint}]\n${text}`;
+        }
+
         return {
             chatId: composeChatId("telegram", plain.chat.id),
             userId: /^-?\d+$/.test(senderId) ? composeChatId("telegram", senderId) : senderId,
@@ -1262,6 +1269,18 @@ export class TelegramAdapter implements PlatformAdapter {
     }
 
     private normalizeMessage(message: any): PlainMessage {
+        let forwardFrom: string | undefined;
+        let forwardFromUrl: string | undefined;
+        if (message?.forward) {
+            const fwd = message.forward;
+            forwardFrom = fwd.senderName ?? fwd.sender?.displayName ?? fwd.sender?.title ?? fwd.sender?.firstName ?? fwd.chat?.title ?? "Unknown";
+            if (fwd.chat?.username) {
+                forwardFromUrl = `https://t.me/${fwd.chat.username}`;
+            } else if (fwd.sender?.username) {
+                forwardFromUrl = `https://t.me/${fwd.sender.username}`;
+            }
+        }
+
         return {
             id: String(message?.id ?? ""),
             text: String(message?.text ?? ""),
@@ -1272,6 +1291,8 @@ export class TelegramAdapter implements PlatformAdapter {
             replyToMessage: message?.replyToMessage ? { id: String(message.replyToMessage.id ?? "") } : undefined,
             media: message?.media,
             mediaInfo: this.extractMediaInfo(message?.media),
+            forwardFrom,
+            forwardFromUrl,
         };
     }
 
