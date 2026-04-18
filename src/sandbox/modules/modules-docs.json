@@ -290,6 +290,26 @@
         "fullDoc": "```typescript\nworkspace(): string\n```\n\n\n返回 workspace 根目录路径"
       },
       {
+        "name": "env.list",
+        "brief": "列出所有受管环境变量",
+        "fullDoc": "```typescript\nlist(): Promise<Array<{ key: string; value: string; scope: \"both\" | \"host\" | \"sandbox\" }>>\n```\n\n\n列出所有受管环境变量"
+      },
+      {
+        "name": "env.get",
+        "brief": "查询单个环境变量，不存在返回 null",
+        "fullDoc": "```typescript\nget(key: string): Promise<{ key: string; value: string; scope: \"both\" | \"host\" | \"sandbox\" } | null>\n```\n\n\n查询单个环境变量，不存在返回 null"
+      },
+      {
+        "name": "env.set",
+        "brief": "新增或覆盖环境变量。",
+        "fullDoc": "```typescript\nset(key: string, value: string, scope?: \"both\" | \"host\" | \"sandbox\"): Promise<{ ok: true; key: string; value: string; scope: \"both\" | \"host\" | \"sandbox\" }>\n```\n\n\n新增或覆盖环境变量。\n\n**参数：**\n- `scope`: both(默认)/host/sandbox"
+      },
+      {
+        "name": "env.delete",
+        "brief": "删除环境变量（不存在时安全返回）",
+        "fullDoc": "```typescript\ndelete(key: string): Promise<{ ok: true; deleted: boolean }>\n```\n\n\n删除环境变量（不存在时安全返回）"
+      },
+      {
         "name": "remind",
         "brief": "设置一次性定时提醒（自然语言）。到期后 agent 将被唤醒并收到 description 作为新任务。重复定时提醒请用 cron ⚠️ description 必须是详细的自然语言描述，不是代码。 写清楚：要做什么、给谁发、发什么内容、如何获取信息等。 限制：最短 1 分钟，最长 365 天，每个群最多 10 个活跃提醒。",
         "fullDoc": "```typescript\nremind(description: string, delayMinutes: number): Promise<{ reminderId: string; triggerAt: string }>\n```\n\n\n设置一次性定时提醒（自然语言）。到期后 agent 将被唤醒并收到 description 作为新任务。重复定时提醒请用 cron\n\n⚠️ description 必须是详细的自然语言描述，不是代码。\n写清楚：要做什么、给谁发、发什么内容、如何获取信息等。\n\n限制：最短 1 分钟，最长 365 天，每个群最多 10 个活跃提醒。\n\n**参数：**\n- `description`: 详细的自然语言任务描述\n- `delayMinutes`: 延迟分钟数（1 ~ 525600，即 365 天）\n- **返回值**: { reminderId, triggerAt }\n\n**示例：**\n```typescript\n// 3 分钟后提醒\nawait runtime.remind(\"提醒群友该起床了，用活泼的语气叫他\", 3);\n```\n\n```typescript\n// 1 小时后提醒\nawait runtime.remind(\"用 tavily 搜索刚才讨论的那个开源项目的最新版本，然后把结果发到群里\", 60);\n```"

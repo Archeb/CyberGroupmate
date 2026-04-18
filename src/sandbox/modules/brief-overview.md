@@ -88,6 +88,10 @@ shared/runtime.d.ts — 所有 scene 共享的 runtime 能力
 - `ps`: 列出后台任务
 - `home`: 返回当前 sandbox 的 home 目录路径（per-chat 隔离）
 - `workspace`: 返回 workspace 根目录路径
+- `env.list`: 列出所有受管环境变量
+- `env.get`: 查询单个环境变量，不存在返回 null
+- `env.set`: 新增或覆盖环境变量。
+- `env.delete`: 删除环境变量（不存在时安全返回）
 - `remind`: 设置一次性定时提醒（自然语言）。到期后 agent 将被唤醒并收到 description 作为新任务。重复定时提醒请用 cron ⚠️ description 必须是详细的自然语言描述，不是代码。 写清楚：要做什么、给谁发、发什么内容、如何获取信息等。 限制：最短 1 分钟，最长 365 天，每个群最多 10 个活跃提醒。
 
 ## skills
