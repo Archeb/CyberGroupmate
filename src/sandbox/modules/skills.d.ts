@@ -3,12 +3,12 @@
  */
 
 declare const skills: {
-    memory: {
-        /** 检索记忆并针对查询生成结构化总结 */
-        recallAndSummarize(query: string, options?: Record<string, unknown>): Promise<unknown>;
-        /** 主动搜索多渠道历史档案以详细回答复杂问题 */
-        browseForAnswer(request: Record<string, unknown>): Promise<unknown>;
-    };
+    /**
+     * 安装或创建一个新 Skill 的指导说明（实际上不会自动执行代码动作，而是返回具体的操作步骤指南）
+     * @param name 拟创建的 Skill 名称
+     * @returns 怎样按照格式存放文件来创建 skill 的说明文档
+     */
+    install(name: string): string;
 
     /**
      * 列出当前已加载的 Skills 名称
