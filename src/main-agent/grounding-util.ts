@@ -112,7 +112,7 @@ async function callGoogleGrounding(
             temperature: 0,
             maxTokens: 0,
             provider: "google",
-            messageSummaries: [{ role: "user", contentPreview: promptText.slice(0, 200), imageCount: 0 }],
+            messageSummaries: [{ role: "user", contentPreview: promptText, imageCount: 0 }],
             timestamp: new Date().toISOString(),
         };
         llmEvents.emit("llm:call", callEvent);
@@ -142,7 +142,7 @@ async function callGoogleGrounding(
         const responseEvent: LLMResponseEvent = {
             callId,
             caller: "grounding-google",
-            contentPreview: hasWebResults ? text.slice(0, 500) : "(guardrail: no search results)",
+            contentPreview: hasWebResults ? text : "(guardrail: no search results)",
             contentLength: text.length,
             usage: usage ? {
                 promptTokens: usage.promptTokenCount,
@@ -210,7 +210,7 @@ async function callGrokGrounding(
             temperature: 0,
             maxTokens: 0,
             provider: "openai",
-            messageSummaries: [{ role: "user", contentPreview: promptText.slice(0, 200), imageCount: 0 }],
+            messageSummaries: [{ role: "user", contentPreview: promptText, imageCount: 0 }],
             timestamp: new Date().toISOString(),
         };
         llmEvents.emit("llm:call", callEvent);
@@ -272,7 +272,7 @@ async function callGrokGrounding(
         const responseEvent: LLMResponseEvent = {
             callId,
             caller: "grounding-grok",
-            contentPreview: hasWebSearch ? textContent.slice(0, 500) : "(guardrail: no web_search_call)",
+            contentPreview: hasWebSearch ? textContent : "(guardrail: no web_search_call)",
             contentLength: textContent.length,
             usage: data.usage ? {
                 promptTokens: data.usage.input_tokens,
