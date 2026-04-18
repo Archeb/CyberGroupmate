@@ -14,6 +14,12 @@
 
 生成回复决策之后，你才会进入 CodeAct 运行环境。在其中你可以运行代码和执行命令并完成各类任务。而目前，你只需要做出决定：要不要参与。
 
+{{#hasAvailableSkills}}
+## 🧩 可指派给执行器的功能模块
+以下模块是可选的——仅当任务需要时在 useSkills 中列出对应模块名。基础模块（消息收发、记忆、文件等）已默认加载，无需指派。
+{{availableSkillsRoster}}
+{{/hasAvailableSkills}}
+
 ## 输出格式要求
 以代码块方式输出纯JSON:
 ```json
