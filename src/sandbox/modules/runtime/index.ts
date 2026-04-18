@@ -34,6 +34,32 @@ export function installRuntime(env: CapabilityRegistryEnv) {
         },
         home: () => _callbacks ? _callbacks.getHome() : process.cwd(),
         workspace: () => _callbacks ? _callbacks.getWorkspace() : process.cwd(),
+        env: {
+            list: async (): Promise<Array<{ key: string; value: string; scope: "both" | "host" | "sandbox" }>> => {
+                if (!_callbacks) throw new Error("Runtime not initialized");
+                const result = await _callbacks.callHost("runtime.env.list");
+                return result as Array<{ key: string; value: string; scope: "both" | "host" | "sandbox" }>;
+            },
+            get: async (key: string): Promise<{ key: string; value: string; scope: "both" | "host" | "sandbox" } | null> => {
+                if (!_callbacks) throw new Error("Runtime not initialized");
+                const result = await _callbacks.callHost("runtime.env.get", [key]);
+                return (result as { key: string; value: string; scope: "both" | "host" | "sandbox" } | null) ?? null;
+            },
+            set: async (
+                key: string,
+                value: string,
+                scope: "both" | "host" | "sandbox" = "both",
+            ): Promise<{ ok: true; key: string; value: string; scope: "both" | "host" | "sandbox" }> => {
+                if (!_callbacks) throw new Error("Runtime not initialized");
+                const result = await _callbacks.callHost("runtime.env.set", [key, value, scope]);
+                return result as { ok: true; key: string; value: string; scope: "both" | "host" | "sandbox" };
+            },
+            delete: async (key: string): Promise<{ ok: true; deleted: boolean }> => {
+                if (!_callbacks) throw new Error("Runtime not initialized");
+                const result = await _callbacks.callHost("runtime.env.delete", [key]);
+                return result as { ok: true; deleted: boolean };
+            },
+        },
 
         /**
          * 设置一次性定时提醒（自然语言）。

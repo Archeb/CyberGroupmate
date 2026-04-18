@@ -190,6 +190,25 @@ export class SandboxPool {
     }
 
     /**
+     * 热更新受管 env（立即同步到当前活跃 sandbox，并作为后续新实例默认值）
+     */
+    async updateManagedEnv(sandboxVisibleEnv: Record<string, string>, managedKeys: string[]): Promise<void> {
+        this.config.sandboxEnv = { ...sandboxVisibleEnv };
+        this.config.hostOnlyKeys = managedKeys.filter((k) => !(k in sandboxVisibleEnv));
+
+        const tasks: Promise<void>[] = [];
+        for (const [chatId, entry] of this.pool.entries()) {
+            if (!entry.sandbox.isAlive()) continue;
+            tasks.push(
+                entry.sandbox.applyManagedEnv(this.config.sandboxEnv, managedKeys).catch((err) => {
+                    log.warn("updateManagedEnv: sandbox 更新失败", { chatId, error: String(err) });
+                }),
+            );
+        }
+        await Promise.all(tasks);
+    }
+
+    /**
      * 获取池状态
      */
     getStats(): { total: number; inUse: number; idle: number; instances: Array<{ chatId: string; inUse: boolean; lastUsedAt: number }> } {

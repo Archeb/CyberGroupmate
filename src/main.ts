@@ -16,7 +16,14 @@ import { SandboxPool } from "./sandbox/sandbox-pool.js";
 import { installSkillsDependencies } from "./sandbox/skill-loader.js";
 import { createTaskListSkill, buildTaskListHostCalls } from "./sandbox/skills/task-list.js";
 import { MemoryStoreV2 } from "./memory-v2/index.js";
-import { loadConfig, resolveComponentProfiles, type AppConfig } from "./core/config.js";
+import {
+    loadConfig,
+    resolveComponentProfiles,
+    saveConfig,
+    validateConfig,
+    type AppConfig,
+    type EnvironmentVariable,
+} from "./core/config.js";
 import { describeImage, ensureSupportedFormat } from "./core/vision-processor.js";
 import {
     TopicRegistry,
@@ -77,6 +84,64 @@ function ensureDataDirs(): void {
     }
 }
 
+interface EnvPlan {
+    hostVisible: Record<string, string>;
+    sandboxVisible: Record<string, string>;
+    managedKeys: string[];
+}
+
+function buildEnvPlan(envVars?: EnvironmentVariable[]): EnvPlan {
+    const hostVisible: Record<string, string> = {};
+    const sandboxVisible: Record<string, string> = {};
+    const managedKeySet = new Set<string>();
+
+    if (envVars) {
+        for (const ev of envVars) {
+            managedKeySet.add(ev.key);
+            if (ev.scope === "host" || ev.scope === "both") {
+                hostVisible[ev.key] = ev.value;
+            }
+            if (ev.scope === "sandbox" || ev.scope === "both") {
+                sandboxVisible[ev.key] = ev.value;
+            }
+        }
+    }
+
+    return {
+        hostVisible,
+        sandboxVisible,
+        managedKeys: [...managedKeySet],
+    };
+}
+
+function applyHostManagedEnv(plan: EnvPlan): void {
+    for (const key of plan.managedKeys) {
+        if (key in plan.hostVisible) {
+            process.env[key] = plan.hostVisible[key];
+        } else {
+            delete process.env[key];
+        }
+    }
+}
+
+function normalizeEnvVars(envVars?: EnvironmentVariable[]): EnvironmentVariable[] {
+    if (!envVars || envVars.length === 0) return [];
+    const out: EnvironmentVariable[] = [];
+    const seen = new Set<string>();
+    for (let i = envVars.length - 1; i >= 0; i--) {
+        const ev = envVars[i];
+        const key = String(ev.key ?? "").trim();
+        if (!key || seen.has(key)) continue;
+        seen.add(key);
+        out.push({ key, value: String(ev.value ?? ""), scope: ev.scope });
+    }
+    return out.reverse();
+}
+
+function isValidEnvKey(key: string): boolean {
+    return /^[A-Za-z_][A-Za-z0-9_]*$/.test(key);
+}
+
 
 
 function serializeTopic(topic: ReturnType<TopicRegistry["get"]>): Record<string, unknown> | null {
@@ -113,27 +178,17 @@ async function main(): Promise<void> {
     setGlobalTimezone(appConfig.timezone);
 
     // ─── 环境变量注入（按 scope 分流） ───
-    const sandboxEnv: Record<string, string> = {};
-    const hostOnlyKeys: string[] = [];
-    if (appConfig.envVars) {
-        for (const ev of appConfig.envVars) {
-            if (ev.scope === "host" || ev.scope === "both") {
-                process.env[ev.key] = ev.value;
-            }
-            if (ev.scope === "host") {
-                hostOnlyKeys.push(ev.key);
-            }
-            if (ev.scope === "sandbox" || ev.scope === "both") {
-                sandboxEnv[ev.key] = ev.value;
-            }
-        }
-        if (Object.keys(sandboxEnv).length > 0 || hostOnlyKeys.length > 0) {
-            log.info("环境变量注入", {
-                hostOnly: hostOnlyKeys.length,
-                sandboxOnly: Object.keys(sandboxEnv).filter(k => !process.env[k] || hostOnlyKeys.includes(k)).length,
-                both: appConfig.envVars.filter(e => e.scope === "both").length,
-            });
-        }
+    let currentEnvPlan = buildEnvPlan(appConfig.envVars);
+    applyHostManagedEnv(currentEnvPlan);
+    if (currentEnvPlan.managedKeys.length > 0) {
+        const hostOnlyKeys = currentEnvPlan.managedKeys.filter((k) => !(k in currentEnvPlan.sandboxVisible));
+        log.info("环境变量注入", {
+            hostOnly: hostOnlyKeys.length,
+            sandboxOnly: Object.keys(currentEnvPlan.sandboxVisible)
+                .filter((k) => !(k in currentEnvPlan.hostVisible)).length,
+            both: Object.keys(currentEnvPlan.sandboxVisible)
+                .filter((k) => k in currentEnvPlan.hostVisible).length,
+        });
     }
 
     log.info("LLM Profiles 加载完成", {
@@ -174,8 +229,8 @@ async function main(): Promise<void> {
     const sandboxPool = new SandboxPool({
         maxInstances: appConfig.subagent?.maxSandboxInstances ?? 5,
         idleTimeout: appConfig.subagent?.sandboxIdleTimeout ?? 600_000,
-        sandboxEnv,
-        hostOnlyKeys,
+        sandboxEnv: currentEnvPlan.sandboxVisible,
+        hostOnlyKeys: currentEnvPlan.managedKeys.filter((k) => !(k in currentEnvPlan.sandboxVisible)),
         onAcquire: (sandbox, chatId) => {
             // 每个新建的 sandbox 实例注册事件处理和 host call handler
             sandbox.on("notify", (event: Record<string, unknown>) => {
@@ -298,6 +353,78 @@ async function main(): Promise<void> {
                             const event = globalState.addReminder(chatId, description, triggerAt);
                             log.info("runtime.remind 已设置", { id: event.id, chatId, triggerAt, description: description.slice(0, 80) });
                             return { reminderId: event.id, triggerAt };
+                        }
+
+                        // ── Runtime.env host calls ──
+                        if (method === "runtime.env.list") {
+                            const cfg = loadConfig("config.yaml", true);
+                            return normalizeEnvVars(cfg.envVars);
+                        }
+                        if (method === "runtime.env.get") {
+                            const key = String(args[0] ?? "").trim();
+                            if (!key) return null;
+                            const cfg = loadConfig("config.yaml", true);
+                            const list = normalizeEnvVars(cfg.envVars);
+                            const found = list.find((ev) => ev.key === key);
+                            return found ?? null;
+                        }
+                        if (method === "runtime.env.set") {
+                            const key = String(args[0] ?? "").trim();
+                            const value = String(args[1] ?? "");
+                            const scopeRaw = String(args[2] ?? "both").trim().toLowerCase();
+                            const scope = (scopeRaw === "host" || scopeRaw === "sandbox" || scopeRaw === "both")
+                                ? scopeRaw as EnvironmentVariable["scope"]
+                                : "both";
+                            if (!isValidEnvKey(key)) {
+                                throw new Error(`非法 env key: ${key}`);
+                            }
+
+                            const cfg = loadConfig("config.yaml", true);
+                            const list = normalizeEnvVars(cfg.envVars);
+                            const nextList = list.filter((ev) => ev.key !== key);
+                            nextList.push({ key, value, scope });
+                            cfg.envVars = nextList.length > 0 ? nextList : undefined;
+
+                            const validation = validateConfig(cfg);
+                            if (!validation.valid) {
+                                throw new Error(validation.errors.join("; "));
+                            }
+                            const save = saveConfig(cfg);
+                            if (!save.ok) {
+                                throw new Error(save.error || "saveConfig failed");
+                            }
+
+                            currentEnvPlan = buildEnvPlan(nextList);
+                            applyHostManagedEnv(currentEnvPlan);
+                            await sandboxPool.updateManagedEnv(
+                                currentEnvPlan.sandboxVisible,
+                                currentEnvPlan.managedKeys,
+                            );
+                            log.info("runtime.env.set 已应用", { key, scope });
+                            return { ok: true, key, scope, value };
+                        }
+                        if (method === "runtime.env.delete") {
+                            const key = String(args[0] ?? "").trim();
+                            if (!key) return { ok: true, deleted: false };
+                            const cfg = loadConfig("config.yaml", true);
+                            const list = normalizeEnvVars(cfg.envVars);
+                            const had = list.some((ev) => ev.key === key);
+                            const nextList = list.filter((ev) => ev.key !== key);
+                            cfg.envVars = nextList.length > 0 ? nextList : undefined;
+
+                            const save = saveConfig(cfg);
+                            if (!save.ok) {
+                                throw new Error(save.error || "saveConfig failed");
+                            }
+
+                            currentEnvPlan = buildEnvPlan(nextList);
+                            applyHostManagedEnv(currentEnvPlan);
+                            await sandboxPool.updateManagedEnv(
+                                currentEnvPlan.sandboxVisible,
+                                currentEnvPlan.managedKeys,
+                            );
+                            log.info("runtime.env.delete 已应用", { key, deleted: had });
+                            return { ok: true, deleted: had };
                         }
 
                         // ── Events API host calls ──
@@ -949,7 +1076,32 @@ async function main(): Promise<void> {
         process.on("exit", () => tokenStats.shutdown());
 
         const dashboard = new DashboardServer(
-            { nc, subagentManager, q3, q5, mainLoop, globalState, sandboxPool, memory, feedbackLoop, tokenStats, mediaDownloader: sharedMediaDownloader, adapters },
+            {
+                nc,
+                subagentManager,
+                q3,
+                q5,
+                mainLoop,
+                globalState,
+                sandboxPool,
+                memory,
+                feedbackLoop,
+                tokenStats,
+                mediaDownloader: sharedMediaDownloader,
+                adapters,
+                onConfigSaved: async (config) => {
+                    const normalized = normalizeEnvVars(config.envVars);
+                    currentEnvPlan = buildEnvPlan(normalized);
+                    applyHostManagedEnv(currentEnvPlan);
+                    await sandboxPool.updateManagedEnv(
+                        currentEnvPlan.sandboxVisible,
+                        currentEnvPlan.managedKeys,
+                    );
+                    log.info("Dashboard 配置变更：env 已热同步", {
+                        managed: currentEnvPlan.managedKeys.length,
+                    });
+                },
+            },
             { host: dashboardHost, port: dashboardPort, token: dashboardToken, enabled: true },
         );
         await dashboard.start();
