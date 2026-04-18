@@ -79,7 +79,6 @@ interface ResultMessage {
     id: string;
     output: string;
     error: boolean;
-    interrupted?: boolean;
 }
 
 /** Worker → Host: 后台任务推送事件 */
@@ -264,21 +263,7 @@ function getWorkspace(): string {
     return process.cwd();
 }
 
-class ObserveInterruptError extends Error {
-    public observeMessage: string;
-    constructor(msg: string) {
-        super("OBSERVE_INTERRUPT: " + msg);
-        this.name = "ObserveInterruptError";
-        this.observeMessage = msg;
-    }
-}
 
-const observe = (...args: unknown[]) => {
-    const line = args
-        .map((a) => typeof a === "string" ? a : JSON.stringify(a, null, 2) ?? String(a))
-        .join(" ");
-    throw new ObserveInterruptError(line);
-};
 
 // ─── 代码执行 ───
 
@@ -353,10 +338,8 @@ async function executeCode(id: string, code: string): Promise<void> {
             discord: unknown;
         };
 
-        let trackFlush: typeof tracker.flush;
         // 用 PromiseTracker 包装注入的 API，追踪所有返回的 Promise
         const tracker = createPromiseTracker();
-        trackFlush = tracker.flush.bind(tracker);
         const rt = tracker.wrap(runtime as Record<string, unknown>);
         const mem = tracker.wrap(memory as Record<string, unknown>);
         const act = tracker.wrap(actions as Record<string, unknown>);
@@ -387,8 +370,8 @@ async function executeCode(id: string, code: string): Promise<void> {
 
         // 构造参数列表：固定参数 + 平台 API + 动态 Skill 参数（含 TS Skills + AgentSkills）
         // ctx 保留为纯用户 state bag（LLM 可跨 turn 存取任意属性）
-        const fixedArgNames = ["ctx", "runtime", "memory", "scene", "docs", "actions", "skills", "fs", "mcp", "cron", "events", "kv", "http", "telegram", "discord", "observe"];
-        const fixedArgValues = [ctx, rt, mem, scene, docs, act, sk, filesystem, mcpBridge, tracker.wrap(cronModule as unknown as Record<string, unknown>), eventsModule, tracker.wrap(kvModule as unknown as Record<string, unknown>), tracker.wrap(httpModule as unknown as Record<string, unknown>), tg, dc, observe];
+        const fixedArgNames = ["ctx", "runtime", "memory", "scene", "docs", "actions", "skills", "fs", "mcp", "cron", "events", "kv", "http", "telegram", "discord"];
+        const fixedArgValues = [ctx, rt, mem, scene, docs, act, sk, filesystem, mcpBridge, tracker.wrap(cronModule as unknown as Record<string, unknown>), eventsModule, tracker.wrap(kvModule as unknown as Record<string, unknown>), tracker.wrap(httpModule as unknown as Record<string, unknown>), tg, dc];
         const allArgNames = [...fixedArgNames, ...skillArgNames];
         const allArgValues = [...fixedArgValues, ...skillArgValues];
 
@@ -416,29 +399,6 @@ async function executeCode(id: string, code: string): Promise<void> {
         // ctx 持久化：每次成功执行后检查并调度保存
         scheduleCtxSave();
     } catch (err: unknown) {
-        if (err instanceof Error && err.name === "ObserveInterruptError") {
-            const msg = (err as any).observeMessage;
-            outputLines.push(`[Observe 输出]: ${msg}`);
-            outputLines.push(`[系统提示] 代码已被 observe() 主动中断，在此之前的操作已执行完成。请查看上述结果后，在下一步继续编写剩余代码！`);
-            
-            if (trackFlush!) {
-                try {
-                    const { warning } = await trackFlush();
-                    if (warning) outputLines.push(warning);
-                } catch { /* ignore flush error */ }
-            }
-            activeExecGuard = "";
-
-            sendToHost({
-                type: "result",
-                id,
-                output: outputLines.join("\n"),
-                error: false,
-                interrupted: true,
-            });
-            scheduleCtxSave();
-            return;
-        }
 
         const errorMsg =
             err instanceof Error
