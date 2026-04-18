@@ -73,7 +73,7 @@ const SUPPORTED_MIME = new Set(["image/jpeg", "image/png"]);
  * 不支持的格式（如 TIFF、WebP、AVIF 等）通过 ffmpeg 转码为 PNG
  * 如果 ffmpeg 不可用，返回原始 buffer（多数 Vision API 支持 WebP）
  */
-async function ensureSupportedFormat(
+export async function ensureSupportedFormat(
     buffer: Buffer,
     mimeType: string,
 ): Promise<{ buffer: Buffer; mimeType: string }> {
@@ -445,7 +445,7 @@ async function processSingleSticker(
 /**
  * 调用 Vision LLM 描述图片
  */
-async function describeImage(
+export async function describeImage(
     imageBuffer: Buffer,
     mimeType: string,
     visionConfigs: LLMConfig[],
