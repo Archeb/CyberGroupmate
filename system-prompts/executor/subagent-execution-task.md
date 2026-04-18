@@ -2,13 +2,10 @@
 聊天对象: {{chatTitle}} (chatId: {{chatId}}) [{{chatType}}]
 
 
-## 本次行动参考
+## 参考回复方式
 
 {{decisions}}
 语气: {{toneGuidance}}
-
-
-
 
 ## 话题摘要
 {{topicSummary}}
