@@ -4,7 +4,7 @@
  * 通过 callHost 转发 getTopicContext, listActiveTopics, recallForTopic 调用到 Host 进程。
  */
 
-import type { CapabilityRegistryEnv } from "../capability-registry.js";
+import type { CapabilityRegistryEnv } from "../../capability-registry.js";
 
 export function installActions(env: CapabilityRegistryEnv) {
     return {

@@ -13,7 +13,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import type { ModuleEntry, MethodDoc } from "./module-registry.js";
+import type { ModuleEntry, MethodDoc } from "../module-registry.js";
 
 // ─── 类型定义 ───
 

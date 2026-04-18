@@ -20,7 +20,7 @@ import { callLLMWithFallback, type ChatMessage } from "../core/llm.js";
 import { renderPrompt, buildFastPathTaskVariables, buildFastPathTurnContent } from "../main-agent/prompt-renderer.js";
 import { resolveComponentTimeout, resolveComponentProfiles } from "../core/config.js";
 import { createLogger } from "../core/logger.js";
-import { getAgentSkillsBriefs } from "../sandbox/modules/docs.js";
+import { getAgentSkillsBriefs } from "../sandbox/modules/docs/index.js";
 
 const log = createLogger("fast-path");
 

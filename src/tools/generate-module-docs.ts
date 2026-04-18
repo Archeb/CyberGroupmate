@@ -12,7 +12,7 @@
  * - 不引入 ts-morph / typedoc 等重型依赖
  * - 直接用正则 + 简单解析器读 .d.ts 文件
  */
-import { readFileSync, readdirSync, writeFileSync, existsSync } from "node:fs";
+import { readFileSync, readdirSync, writeFileSync, existsSync, statSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ModuleEntry } from "../sandbox/modules/module-registry.js";
@@ -33,33 +33,30 @@ function main(): void {
 
     const allEntries: ModuleEntry[] = [];
 
-    // ─── 仅仅扫描内置模块 d.ts (Host-coupled) ───
-    const builtinDts = readdirSync(modulesDir)
-        .filter(f => f.endsWith(".d.ts"))
-        .sort();
+    // ─── 递归扫描 modules/ 下所有子目录中的 .d.ts ───
+    const subDirs = readdirSync(modulesDir).filter(f => {
+        const fullPath = join(modulesDir, f);
+        return existsSync(fullPath) && statSync(fullPath).isDirectory();
+    }).sort();
 
-    // 同时扫描 shared/ 子目录（新增的 worker-local 模块类型）
-    const sharedDir = join(modulesDir, "shared");
-    const sharedDts = existsSync(sharedDir)
-        ? readdirSync(sharedDir).filter(f => f.endsWith(".d.ts")).sort()
-        : [];
-
-    console.log(`内置模块: 发现 ${builtinDts.length} 个 .d.ts 文件`);
-    builtinDts.forEach(f => console.log(`  - ${f}`));
-    if (sharedDts.length > 0) {
-        console.log(`Shared 模块: 发现 ${sharedDts.length} 个 .d.ts 文件`);
-        sharedDts.forEach(f => console.log(`  - shared/${f}`));
+    const allDtsFiles: Array<{ relPath: string; absPath: string }> = [];
+    for (const dir of subDirs) {
+        const dirPath = join(modulesDir, dir);
+        const dtsFiles = readdirSync(dirPath).filter(f => f.endsWith(".d.ts"));
+        for (const f of dtsFiles) {
+            allDtsFiles.push({
+                relPath: `${dir}/${f}`,
+                absPath: join(dirPath, f),
+            });
+        }
     }
 
-    for (const f of builtinDts) {
-        const content = readFileSync(join(modulesDir, f), "utf-8");
-        const entries = parseDtsFile(content, f);
-        mergeEntries(allEntries, entries);
-    }
+    console.log(`模块: 发现 ${allDtsFiles.length} 个 .d.ts 文件`);
+    allDtsFiles.forEach(f => console.log(`  - ${f.relPath}`));
 
-    for (const f of sharedDts) {
-        const content = readFileSync(join(sharedDir, f), "utf-8");
-        const entries = parseDtsFile(content, `shared/${f}`);
+    for (const { relPath, absPath } of allDtsFiles) {
+        const content = readFileSync(absPath, "utf-8");
+        const entries = parseDtsFile(content, relPath);
         mergeEntries(allEntries, entries);
     }
 

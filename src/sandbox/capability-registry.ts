@@ -5,13 +5,12 @@
  * 每个模块的实现细节在各自的文件中，这里只负责编排。
  */
 
-import { installRuntime } from "./modules/runtime.js";
-import { installMemory } from "./modules/memory.js";
-import { installActions } from "./modules/actions.js";
-import { installSkills } from "./modules/skills.js";
-import { installScene } from "./modules/scene.js";
-import { createTelegramClientProxy } from "./modules/telegram.js";
-import { createDiscordClientProxy } from "./modules/discord.js";
+import { installRuntime } from "./modules/runtime/index.js";
+import { installMemory } from "./modules/memory/index.js";
+import { installActions } from "./modules/actions/index.js";
+import { installSkills } from "./modules/skills/index.js";
+import { createTelegramClientProxy } from "./modules/telegram/index.js";
+import { createDiscordClientProxy } from "./modules/discord/index.js";
 
 // ─── 环境接口 ───
 
@@ -75,7 +74,6 @@ export function installCapabilityRegistry(env: CapabilityRegistryEnv): Record<st
         memory: installMemory(env),
         actions: installActions(env),
         skills: installSkills(env, sentHistory),
-        scene: installScene(env),
         telegram,
         discord,
     };

@@ -4,7 +4,7 @@
  * 提供 notify, input, print, spawn, kill, ps, remind 等系统级能力。
  */
 
-import type { CapabilityRegistryEnv } from "../capability-registry.js";
+import type { CapabilityRegistryEnv } from "../../capability-registry.js";
 
 /** Runtime 回调（由 sandbox-worker 注入） */
 interface RuntimeCallbacks {
