@@ -290,6 +290,8 @@ export interface GroupContextPackage {
     contentDirection?: string;
     /** 可用贴纸目录（emoji + 描述 + 本地文件路径） */
     availableStickers?: Array<{ emoji: string; description: string; uniqueFileId: string }>;
+    /** 并行 Grounding 查证结果（联网搜索得到的事实信息） */
+    groundingContext?: string;
 }
 
 /** 主 Agent attend 后的决策结果 */
@@ -305,6 +307,8 @@ export interface AttendResult {
     reasoning: string;
     /** 主 Agent 指定的模块路由（Subagent 可见的额外技能模块名） */
     useSkills?: string[];
+    /** 并行 Grounding 查证结果（联网搜索得到的事实信息） */
+    groundingContext?: string;
 }
 
 /** 单条决策 */

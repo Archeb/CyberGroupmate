@@ -373,6 +373,18 @@ export interface McpServerPreConfig {
     autoConnect?: boolean;
 }
 
+/** Grounding（联网事实查证）配置 */
+export interface GroundingConfig {
+    /** 搜索提供者：google (Gemini Google Search) 或 grok (xAI Web Search) */
+    provider: "google" | "grok";
+    /** API Key */
+    apiKey: string;
+    /** 自定义 Base URL（Grok 默认 https://api.x.ai/v1，Google 无需设置） */
+    baseUrl?: string;
+    /** 使用的模型（Grok 默认 grok-3-mini-fast，Google 默认 gemini-2.0-flash-lite） */
+    model?: string;
+}
+
 export interface AppConfig {
     llmProfiles: Record<string, LLMConfig>;
     llmRouting: LLMRoutingConfig;
@@ -396,6 +408,8 @@ export interface AppConfig {
     metrics?: MetricsConfig;
     /** MCP Server 预配置列表（Sandbox 启动时自动连接） */
     mcpServers?: McpServerPreConfig[];
+    /** Grounding（联网事实查证）配置 */
+    grounding?: GroundingConfig;
 }
 
 // ─── 默认值 ───
@@ -559,6 +573,7 @@ export function loadConfig(configPath?: string, forceReload?: boolean): AppConfi
         envVars: parseEnvVars(fileConfig),
         metrics: parseMetricsConfig(fileConfig),
         mcpServers: parseMcpServersConfig(fileConfig),
+        grounding: parseGroundingConfig(fileConfig),
     };
 
     _cached = config;
@@ -821,6 +836,22 @@ function parseRecordingPipelineConfig(fileConfig: Record<string, unknown>): Reco
         eagerThreshold: raw.eager_threshold != null ? num(raw.eager_threshold, 15) : undefined,
         normalSilenceMs: raw.normal_silence_ms != null ? num(raw.normal_silence_ms, 120000) : undefined,
         eagerSilenceMs: raw.eager_silence_ms != null ? num(raw.eager_silence_ms, 30000) : undefined,
+    };
+}
+
+// ─── Grounding 配置解析 ───
+
+function parseGroundingConfig(fileConfig: Record<string, unknown>): GroundingConfig | undefined {
+    const raw = fileConfig.grounding as Record<string, unknown> | undefined;
+    if (!raw || typeof raw !== "object") return undefined;
+    const provider = str(raw.provider) as "google" | "grok" | undefined;
+    const apiKey = str(raw.api_key);
+    if (!provider || !apiKey) return undefined;
+    return {
+        provider,
+        apiKey,
+        baseUrl: str(raw.base_url),
+        model: str(raw.model),
     };
 }
 
@@ -1245,6 +1276,17 @@ export function serializeConfigToObject(config: AppConfig): Record<string, unkno
             value: ev.value,
             scope: ev.scope,
         }));
+    }
+
+    // grounding
+    if (config.grounding) {
+        const g: Record<string, unknown> = {
+            provider: config.grounding.provider,
+            api_key: config.grounding.apiKey,
+        };
+        if (config.grounding.baseUrl) g.base_url = config.grounding.baseUrl;
+        if (config.grounding.model) g.model = config.grounding.model;
+        obj.grounding = g;
     }
 
     return obj;

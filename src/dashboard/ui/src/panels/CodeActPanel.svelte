@@ -26,15 +26,16 @@
     selectedCodeActChatId.set(chatId);
     showSidebar = false;
     if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
-    await refreshSession(chatId);
+    await refreshSession(chatId, true);
   }
 
-  async function refreshSession(chatId) {
+  async function refreshSession(chatId, forceScroll = false) {
     if (!chatId) return;
+    const shouldFollow = forceScroll || (sessionEl ? isAtBottom(sessionEl) : true);
     const data = await api(`/codeact/${chatId}`);
     sessionData = data;
     await tick();
-    if (sessionEl) scrollToBottom(sessionEl);
+    if (sessionEl && shouldFollow) scrollToBottom(sessionEl);
 
     if (data.isProcessing && !pollTimer) {
       pollTimer = setInterval(() => refreshSession(chatId), 5000);
@@ -42,6 +43,10 @@
       clearInterval(pollTimer);
       pollTimer = null;
     }
+  }
+
+  function onSessionScroll() {
+    if (sessionEl) wasBottom = isAtBottom(sessionEl);
   }
 
   async function cancelCodeAct() {
@@ -75,7 +80,7 @@
 
   <!-- Sidebar overlay -->
   {#if showSidebar}
-    <div class="mobile-sidebar-overlay ca-sidebar-overlay" onclick={() => showSidebar = false}></div>
+    <button class="mobile-sidebar-overlay ca-sidebar-overlay" aria-label="关闭侧栏" onclick={() => showSidebar = false}></button>
   {/if}
 
   <!-- Chat list -->
@@ -143,7 +148,7 @@
         </div>
 
         <!-- Session content + real-time progress -->
-        <div bind:this={sessionEl} class="overflow-y-auto flex-1 min-h-0 space-y-2">
+        <div bind:this={sessionEl} class="overflow-y-auto flex-1 min-h-0 space-y-2" onscroll={onSessionScroll}>
           <!-- Historical session messages (from REST API) -->
           {#each (sessionData.session || []) as msg}
             {@const content = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content, null, 2)}
