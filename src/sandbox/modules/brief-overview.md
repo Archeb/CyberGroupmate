@@ -140,3 +140,8 @@ mcp-bridge.d.ts — MCP Server 连接器类型定义 连接外部 MCP (Model Con
 - `disconnect`: 断开连接并清理 MCP Server 子进程
 - `list`: 列出所有已连接的 MCP Servers 及其工具
 - `call`: 直接调用指定 server 的 tool（无需先调用 connect 返回的代理对象）
+
+## vision
+vision.d.ts — Vision 视觉模块类型定义 提供图片识别能力，让 Agent 可以"看到"图片并理解其内容。 图片路径限定在 workspace/ 目录下。
+
+- `see`: 看图：读取一张或多张图片文件，返回每张图片的文字描述。使用 Vision LLM 分析图片内容，支持 JPEG、PNG、WebP 等常见格式。传入多个图片路径参数，返回对应描述数组。

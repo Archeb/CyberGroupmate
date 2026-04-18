@@ -16,7 +16,8 @@ import { SandboxPool } from "./sandbox/sandbox-pool.js";
 import { installSkillsDependencies } from "./sandbox/skill-loader.js";
 import { createTaskListSkill, buildTaskListHostCalls } from "./sandbox/skills/task-list.js";
 import { MemoryStoreV2 } from "./memory-v2/index.js";
-import { loadConfig, type AppConfig } from "./core/config.js";
+import { loadConfig, resolveComponentProfiles, type AppConfig } from "./core/config.js";
+import { describeImage, ensureSupportedFormat } from "./core/vision-processor.js";
 import {
     TopicRegistry,
     FeedbackLoop,
@@ -25,8 +26,9 @@ import {
 import {
     existsSync,
     mkdirSync,
+    readFileSync,
 } from "node:fs";
-import { join } from "node:path";
+import { join, resolve, relative } from "node:path";
 import { createLogger } from "./core/logger.js";
 import { setGlobalTimezone, getGlobalTimezone } from "./core/timezone.js";
 import { TelegramAdapter } from "./adapter/telegram-adapter.js";
@@ -343,6 +345,57 @@ async function main(): Promise<void> {
                         }
                         if (method === "http.listWebhooks") {
                             return sandbox.listWebhooks();
+                        }
+
+                        // ── Vision API host call ──
+                        if (method === "vision.see") {
+                            const imagePaths = args as string[];
+                            if (!imagePaths || imagePaths.length === 0) {
+                                throw new Error("vision.see() 至少需要传入一个图片路径");
+                            }
+                            const workspaceRoot = resolve("workspace");
+                            const visionConfigs = resolveComponentProfiles("vision");
+
+                            const results = await Promise.all(imagePaths.map(async (userPath) => {
+                                // 安全路径解析（与 filesystem.ts safePath 逻辑一致）
+                                let resolved: string;
+                                if (userPath.startsWith("/")) {
+                                    resolved = resolve(userPath);
+                                } else {
+                                    resolved = resolve(workspaceRoot, userPath);
+                                }
+                                const rel = relative(workspaceRoot, resolved);
+                                if (rel.startsWith("..") || resolve(workspaceRoot, rel) !== resolved) {
+                                    throw new Error(
+                                        `[vision 安全限制] 路径 "${userPath}" 超出 workspace 范围。`,
+                                    );
+                                }
+                                if (!existsSync(resolved)) {
+                                    throw new Error(`文件不存在: ${userPath}`);
+                                }
+
+                                // 读取文件
+                                const rawBuffer = readFileSync(resolved);
+                                // 推断 MIME 类型
+                                const ext = resolved.split(".").pop()?.toLowerCase() ?? "";
+                                const mimeMap: Record<string, string> = {
+                                    jpg: "image/jpeg", jpeg: "image/jpeg",
+                                    png: "image/png",
+                                    webp: "image/webp",
+                                    gif: "image/gif",
+                                    bmp: "image/bmp",
+                                    tiff: "image/tiff", tif: "image/tiff",
+                                    avif: "image/avif",
+                                    svg: "image/svg+xml",
+                                };
+                                const mimeType = mimeMap[ext] ?? "image/png";
+
+                                // 转码 + 描述
+                                const { buffer, mimeType: finalMime } = await ensureSupportedFormat(rawBuffer, mimeType);
+                                return describeImage(buffer, finalMime, visionConfigs);
+                            }));
+
+                            return results;
                         }
 
                         // skills.taskList.* host calls

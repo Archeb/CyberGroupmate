@@ -1,5 +1,28 @@
 # Changelog
 
+## 2026-04-18: Sandbox 增加 vision 模块，支持原生看图能力
+
+新增 `vision.see()` 沙盒 API，允许子代理通过执行代码读取工作区内的图片文件，并调用原生 Vision LLM 管线获取文字描述，与 `message-enricher` 看图逻辑完全对齐。
+
+### ✨ 核心特性
+
+- **原生模块**：提供 `src/sandbox/modules/vision.d.ts` 类型支持，全局变量 `vision` 可通过执行代码发起图片理解请求。
+- **并行处理**：支持一次性传入多个图片路径（如 `vision.see('a.png', 'b.jpg')`），引擎将并发读取和请求 Vision API。
+- **安全沙盒校验**：基于核心的跨域限制保证传入到宿主端的图片路径都被严格限制在 `workspace/` 目录下。
+- **自动转码容错**：共享现有核心管线的 `ensureSupportedFormat` 逻辑，即使不支持的文件格式（如 WebP 等）也可尝试经过 ffmpeg 转码。
+
+### 改动文件清单
+
+| 文件 | 变更目的 |
+|---|---|
+| `src/core/vision-processor.ts` | 导出内核方法 `describeImage` 及 `ensureSupportedFormat` 供外层调用 |
+| `src/sandbox/modules/vision.d.ts` / `.ts` | 新增模块类型声明和运行态回调垫片 |
+| `src/main.ts` | 在 Sandbox Host Call Handler 中添加 `vision.see` 支持 |
+| `src/sandbox/sandbox-worker.ts` | 将 `vision` 及回调暴露入全局沙盒作用域上下文中 |
+| `src/core/config.ts` | 将 `"vision"` 添加至 `baseSkills` 白名单列表中 |
+
+---
+
 ## 2026-04-18: AgentSkills 架构分层路由与彻底解耦
 
 实现主 Agent 控制的渐进式模块路由机制（Subagent Progressive Disclosure），大幅降低 Subagent 的上下文负担，并规范化了 AgentSkills 的展示形式与访问入口。
