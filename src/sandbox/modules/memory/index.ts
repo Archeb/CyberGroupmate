@@ -4,7 +4,7 @@
  * 通过 callHost 转发 recall, browseHistory, reflect 调用到 Host 进程。
  */
 
-import type { CapabilityRegistryEnv } from "../capability-registry.js";
+import type { CapabilityRegistryEnv } from "../../capability-registry.js";
 
 export function installMemory(env: CapabilityRegistryEnv) {
     return {

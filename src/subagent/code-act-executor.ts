@@ -21,7 +21,7 @@ import { SandboxPool } from "../sandbox/sandbox-pool.js";
 import { NotificationCenter } from "../event/notification-center.js";
 import { runCodeActSession, SentMessageCollector, type SessionResult, type SentMessageRecord } from "../sandbox/session-runner.js";
 import { loadModuleRegistry, lookupFullDocs, generateBriefOverview, type ModuleEntry } from "../sandbox/modules/module-registry.js";
-import { getAgentSkillsApiBriefs, getAgentSkillsBriefs } from "../sandbox/modules/docs.js";
+import { getAgentSkillsApiBriefs, getAgentSkillsBriefs } from "../sandbox/modules/docs/index.js";
 import { parseAllSkillDocs } from "../sandbox/skill-loader.js";
 import { buildPrefixMap } from "../sandbox/api-intent-extractor.js";
 import { renderPrompt, deriveChatType } from "../main-agent/prompt-renderer.js";

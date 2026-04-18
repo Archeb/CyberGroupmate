@@ -9,8 +9,8 @@
  * - skills.npmInstall(packages): 安装 npm 依赖
  */
 
-import type { CapabilityRegistryEnv } from "../capability-registry.js";
-import { createTelegramClientProxy } from "./telegram.js";
+import type { CapabilityRegistryEnv } from "../../capability-registry.js";
+import { createTelegramClientProxy } from "../telegram/index.js";
 
 /** 供外部注入的 Skill 管理回调 */
 export interface SkillManagerCallbacks {

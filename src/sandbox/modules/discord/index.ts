@@ -7,7 +7,7 @@
  * - 所有 discord.* 方法的 callHost 转发
  */
 
-import type { CapabilityRegistryEnv } from "../capability-registry.js";
+import type { CapabilityRegistryEnv } from "../../capability-registry.js";
 import { resolve as pathResolve } from "node:path";
 import { existsSync } from "node:fs";
 

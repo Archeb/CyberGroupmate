@@ -28,7 +28,7 @@ import { enrichMessages, formatMessageLine, resolveReplyText, type RawMessage } 
 import { loadConfig, resolveComponentProfiles } from "../core/config.js";
 import type { PlatformAdapter } from "../adapter/platform-adapter.js";
 import { generateModuleRoster } from "../sandbox/modules/module-registry.js";
-import { getAgentSkillsRoster } from "../sandbox/modules/docs.js";
+import { getAgentSkillsRoster } from "../sandbox/modules/docs/index.js";
 
 const log = createLogger("attend-handler");
 

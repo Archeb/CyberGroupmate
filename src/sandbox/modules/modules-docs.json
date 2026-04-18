@@ -21,6 +21,27 @@
     ]
   },
   {
+    "name": "cron",
+    "description": "shared/cron.d.ts — 定时任务管理模块类型定义 通过 Host 侧 GlobalState 持久化 cron 任务。 触发时以自然语言任务描述唤醒 agent，由 agent 自主决策执行。",
+    "methods": [
+      {
+        "name": "add",
+        "brief": "添加持久化定时任务。触发时以自然语言任务描述唤醒 agent，agent 在当时的上下文中自主决定如何执行。 ⚠️ taskDescription 必须是详细的自然语言描述，不是代码。 写清楚：要做什么、给谁发、发什么内容、从哪里获取信息等。 agent 会在每次触发时收到这段描述作为新任务。 限制：最短间隔 1 小时，每个群最多 10 个 cron 任务。 一次性定时任务请使用 runtime.remind",
+        "fullDoc": "```typescript\nadd(name: string, cronExpr: string, taskDescription: string): Promise<{ id: string }>\n```\n\n\n添加持久化定时任务。触发时以自然语言任务描述唤醒 agent，agent 在当时的上下文中自主决定如何执行。\n\n⚠️ taskDescription 必须是详细的自然语言描述，不是代码。\n写清楚：要做什么、给谁发、发什么内容、从哪里获取信息等。\nagent 会在每次触发时收到这段描述作为新任务。\n\n限制：最短间隔 1 小时，每个群最多 10 个 cron 任务。\n\n一次性定时任务请使用 runtime.remind\n\n**参数：**\n- `name`: 任务名称（用于显示和管理）\n- `cronExpr`: cron 表达式（最短间隔 1 小时），如 \"0 9 * * *\"（每天 9:00）\n- `taskDescription`: 触发时的自然语言任务描述\n- **返回值**: 创建的任务信息\n\n**示例：**\n```typescript\n// 每天早上 9 点发送早安\nawait cron.add(\"每日早安\", \"0 8 * * *\",\n  \"给群里发一条早安消息，可以根据当天日期说点应景的话\");\n```\n\n```typescript\n// 工作日早 9 点播报新闻\nawait cron.add(\"新闻播报\", \"0 9 * * 1-5\",\n  \"用 tavily 搜索今日科技新闻，整理成简短的播报发送到群里\");\n```"
+      },
+      {
+        "name": "remove",
+        "brief": "移除定时任务",
+        "fullDoc": "```typescript\nremove(id: string): Promise<void>\n```\n\n\n移除定时任务\n\n**参数：**\n- `id`: 任务 ID（由 add 返回）\n\n**示例：**\n```typescript\nawait cron.remove(\"some-task-id\");\n```"
+      },
+      {
+        "name": "list",
+        "brief": "列出当前 chat 的所有定时任务",
+        "fullDoc": "```typescript\nlist(): Promise<Array<{\n        id: string;\n        name: string;\n        cronExpr: string;\n    }>>\n```\n\n\n列出当前 chat 的所有定时任务\n\n**示例：**\n```typescript\nconst tasks = await cron.list();\nfor (const t of tasks) {\n  console.log(`${t.name} (${t.cronExpr})`);\n}\n```"
+      }
+    ]
+  },
+  {
     "name": "discord",
     "description": "discord.d.ts — Discord 平台 API 系统注入的 Discord host proxy 接口。 提供给 Agent 在 sandbox 执行时作为 TypeScript 强类型上下文参考。 平台连接与消息监听由宿主侧 DiscordAdapter 管理。",
     "methods": [
@@ -54,6 +75,146 @@
         "name": "read",
         "brief": "读取指定文档的完整内容 支持精确 slug 匹配和模糊匹配",
         "fullDoc": "```typescript\nread(slug: string): string\n```\n\n\n读取指定文档的完整内容\n支持精确 slug 匹配和模糊匹配\n\n**参数：**\n- `slug`: 文档标识符（不含 .md 后缀的文件名）\n- **返回值**: 文档内容字符串；不存在时返回提示信息"
+      }
+    ]
+  },
+  {
+    "name": "events",
+    "description": "shared/events.d.ts — 事件监听器模块类型定义 注册事件监听器，当匹配的事件到达时在 sandbox 中执行处理代码。 监听器持久化到磁盘，Worker 重启后自动恢复。",
+    "methods": [
+      {
+        "name": "on",
+        "brief": "注册事件监听器。匹配 type 前缀的事件会触发 handlerCode 在 sandbox 中执行。 handler 代码中可通过 `event` 变量访问事件数据。",
+        "fullDoc": "```typescript\non(typePrefix: string, handlerCode: string): string\n```\n\n\n注册事件监听器。匹配 type 前缀的事件会触发 handlerCode 在 sandbox 中执行。\r\nhandler 代码中可通过 `event` 变量访问事件数据。\n\n**参数：**\n- `typePrefix`: 事件类型前缀（如 \"telegram.message\" 匹配所有以此开头的事件）\n- `handlerCode`: 触发时执行的 JavaScript 代码字符串\n- **返回值**: 监听器 ID\n\n**示例：**\n```typescript\n// 监听新消息事件\r\nconst id = events.on(\"telegram.message\", `\r\n  if (event.text?.includes(\"ping\")) {\r\n    runtime.notify({ type: \"system.pong\", from: event.chatId });\r\n  }\r\n`);\r\nconsole.log(\"监听器已注册:\", id);\n```\n\n```typescript\n// 监听所有系统事件\r\nevents.on(\"system.\", `\r\n  console.log(\"系统事件:\", event.type);\r\n`);\n```"
+      },
+      {
+        "name": "off",
+        "brief": "移除监听器",
+        "fullDoc": "```typescript\noff(listenerId: string): void\n```\n\n\n移除监听器\n\n**参数：**\n- `listenerId`: 监听器 ID（由 on 返回）\n\n**示例：**\n```typescript\nevents.off(\"some-listener-id\");\n```"
+      },
+      {
+        "name": "list",
+        "brief": "列出当前所有监听器",
+        "fullDoc": "```typescript\nlist(): Array<{\r\n        id: string;\r\n        typePrefix: string;\r\n    }>\n```\n\n\n列出当前所有监听器\n\n**示例：**\n```typescript\nconst listeners = events.list();\r\nfor (const l of listeners) {\r\n  console.log(`${l.id}: 监听 \"${l.typePrefix}\"`);\r\n}\n```"
+      }
+    ]
+  },
+  {
+    "name": "fs",
+    "description": "filesystem.d.ts — 文件系统操作模块类型定义 所有路径操作限定在 workspace/ 目录下。 支持相对路径（相对于 workspace/）和绝对路径。",
+    "methods": [
+      {
+        "name": "readFile",
+        "brief": "读取文件内容。",
+        "fullDoc": "```typescript\nreadFile(path: string): string\n```\n\n\n读取文件内容。\n\n**参数：**\n- `path`: 文件路径（相对于 workspace/ 或绝对路径）\n- **返回值**: 文件内容字符串（UTF-8）\n\n**示例：**\n```typescript\nconst content = fs.readFile(\"skills/myskill/index.ts\");\nconsole.log(content);\n```"
+      },
+      {
+        "name": "writeFile",
+        "brief": "写入文件。如果目标目录不存在会自动创建。",
+        "fullDoc": "```typescript\nwriteFile(path: string, content: string): void\n```\n\n\n写入文件。如果目标目录不存在会自动创建。\n\n**参数：**\n- `path`: 文件路径\n- `content`: 文件内容\n\n**示例：**\n```typescript\nfs.writeFile(\"notes/todo.md\", \"# TODO\\n- 完成作业\");\n```\n\n```typescript\n// 创建新的 TS Skill\nfs.writeFile(\"skills/weather/index.ts\", `\n  import { fetch } from \"node-fetch\";\n  export const weather = {\n    current: async (city: string) => { ... }\n  };\n`);\n```"
+      },
+      {
+        "name": "appendFile",
+        "brief": "追加写入文件。文件不存在时会自动创建。",
+        "fullDoc": "```typescript\nappendFile(path: string, content: string): void\n```\n\n\n追加写入文件。文件不存在时会自动创建。\n\n**参数：**\n- `path`: 文件路径\n- `content`: 追加的内容\n\n**示例：**\n```typescript\nfs.appendFile(\"logs/activity.log\", `${new Date().toISOString()} 执行了任务\\n`);\n```"
+      },
+      {
+        "name": "readdir",
+        "brief": "列出目录下的文件和子目录名。",
+        "fullDoc": "```typescript\nreaddir(path: string): string[]\n```\n\n\n列出目录下的文件和子目录名。\n\n**参数：**\n- `path`: 目录路径\n- **返回值**: 文件名数组\n\n**示例：**\n```typescript\nconst files = fs.readdir(\"skills\");\nconsole.log(\"已安装的 Skills:\", files);\n```"
+      },
+      {
+        "name": "exists",
+        "brief": "检查文件或目录是否存在。",
+        "fullDoc": "```typescript\nexists(path: string): boolean\n```\n\n\n检查文件或目录是否存在。\n\n**参数：**\n- `path`: 路径\n- **返回值**: 是否存在"
+      },
+      {
+        "name": "unlink",
+        "brief": "删除文件。",
+        "fullDoc": "```typescript\nunlink(path: string): void\n```\n\n\n删除文件。\n\n**参数：**\n- `path`: 文件路径"
+      },
+      {
+        "name": "mkdir",
+        "brief": "创建目录（递归创建，类似 mkdir -p）。",
+        "fullDoc": "```typescript\nmkdir(path: string): void\n```\n\n\n创建目录（递归创建，类似 mkdir -p）。\n\n**参数：**\n- `path`: 目录路径"
+      },
+      {
+        "name": "stat",
+        "brief": "获取文件或目录的状态信息。",
+        "fullDoc": "```typescript\nstat(path: string): {\n        /** 文件大小（字节） */\n        size: number;\n        /** 是否是目录 */\n        isDirectory: boolean;\n        /** 是否是文件 */\n        isFile: boolean;\n        /** 最后修改时间（ISO 字符串） */\n        mtime: string;\n    }\n```\n\n\n获取文件或目录的状态信息。\n\n**参数：**\n- `path`: 路径\n- **返回值**: 状态对象\n\n**示例：**\n```typescript\nconst info = fs.stat(\"skills/tavily/index.ts\");\nconsole.log(`文件大小: ${info.size} bytes, 最后修改: ${info.mtime}`);\n```"
+      }
+    ]
+  },
+  {
+    "name": "http",
+    "description": "shared/http.d.ts — HTTP Webhook 模块类型定义 注册 HTTP webhook 端点，外部系统通过 HTTP POST 触发 sandbox 代码执行。 Webhook 持久化到磁盘，Worker 重启后自动恢复。",
+    "methods": [
+      {
+        "name": "onWebhook",
+        "brief": "注册 webhook 端点。 外部可通过 POST /webhook/{path} 触发 handler 代码执行。 handler 代码中可通过 `request` 变量访问请求数据。",
+        "fullDoc": "```typescript\nonWebhook(path: string, handlerCode: string): Promise<string>\n```\n\n\n注册 webhook 端点。\r\n外部可通过 POST /webhook/{path} 触发 handler 代码执行。\r\nhandler 代码中可通过 `request` 变量访问请求数据。\n\n**参数：**\n- `path`: Webhook 路径（唯一标识，不含前缀斜杠）\n- `handlerCode`: 收到请求时执行的 JavaScript 代码字符串\n- **返回值**: webhook ID\n\n**示例：**\n```typescript\n// 注册一个接收 GitHub Push 事件的 webhook\r\nconst id = await http.onWebhook(\"github-push\", `\r\n  const payload = JSON.parse(request.body);\r\n  const repo = payload.repository?.full_name ?? \"unknown\";\r\n  await telegram.sendText(chatId, \"📦 Push to \" + repo + \": \" + payload.head_commit?.message);\r\n`);\r\nconsole.log(\"Webhook 已注册:\", id);\r\nconsole.log(\"URL: /webhook/github-push\");\n```"
+      },
+      {
+        "name": "removeWebhook",
+        "brief": "移除 webhook",
+        "fullDoc": "```typescript\nremoveWebhook(webhookId: string): Promise<void>\n```\n\n\n移除 webhook\n\n**参数：**\n- `webhookId`: webhook ID（由 onWebhook 返回）\n\n**示例：**\n```typescript\nawait http.removeWebhook(\"some-webhook-id\");\n```"
+      },
+      {
+        "name": "listWebhooks",
+        "brief": "列出当前所有 webhook",
+        "fullDoc": "```typescript\nlistWebhooks(): Promise<Array<{ id: string; path: string }>>\n```\n\n\n列出当前所有 webhook\n\n**示例：**\n```typescript\nconst hooks = await http.listWebhooks();\r\nfor (const h of hooks) {\r\n  console.log(`${h.id}: POST /webhook/${h.path}`);\r\n}\n```"
+      }
+    ]
+  },
+  {
+    "name": "kv",
+    "description": "shared/kv.d.ts — 持久化键值存储模块类型定义 简单的 per-chat 键值存储，数据持久化到 SQLite。 比 ctx 更正式的存储方式，支持 TTL 过期。",
+    "methods": [
+      {
+        "name": "get",
+        "brief": "读取键值",
+        "fullDoc": "```typescript\nget(key: string): Promise<string | null>\n```\n\n\n读取键值\n\n**参数：**\n- `key`: 键名\n- **返回值**: 值字符串，不存在时返回 null\n\n**示例：**\n```typescript\nconst token = await kv.get(\"api_token\");\r\nif (token) {\r\n  console.log(\"已有 token\");\r\n}\n```"
+      },
+      {
+        "name": "set",
+        "brief": "写入键值",
+        "fullDoc": "```typescript\nset(key: string, value: string, ttlSeconds?: number): Promise<void>\n```\n\n\n写入键值\n\n**参数：**\n- `key`: 键名\n- `value`: 值（字符串）\n- `ttlSeconds`: 可选的过期时间（秒）。不设置则永不过期。\n\n**示例：**\n```typescript\nawait kv.set(\"last_check\", new Date().toISOString());\n```\n\n```typescript\n// 设置 1 小时后过期的缓存\r\nawait kv.set(\"weather_cache\", JSON.stringify(data), 3600);\n```"
+      },
+      {
+        "name": "del",
+        "brief": "删除键",
+        "fullDoc": "```typescript\ndel(key: string): Promise<void>\n```\n\n\n删除键\n\n**参数：**\n- `key`: 键名\n\n**示例：**\n```typescript\nawait kv.del(\"temp_data\");\n```"
+      },
+      {
+        "name": "keys",
+        "brief": "列出键名（可按前缀过滤）",
+        "fullDoc": "```typescript\nkeys(prefix?: string): Promise<string[]>\n```\n\n\n列出键名（可按前缀过滤）\n\n**参数：**\n- `prefix`: 可选的键名前缀\n- **返回值**: 匹配的键名列表\n\n**示例：**\n```typescript\nconst keys = await kv.keys(\"cache_\");\r\nconsole.log(\"缓存键:\", keys);\n```"
+      }
+    ]
+  },
+  {
+    "name": "mcp",
+    "description": "mcp-bridge.d.ts — MCP Server 连接器类型定义 连接外部 MCP (Model Context Protocol) Server，自动发现并代理其工具。 支持 stdio 和 Streamable HTTP 两种传输。",
+    "methods": [
+      {
+        "name": "connect",
+        "brief": "连接到一个 MCP Server。 根据配置使用 stdio 或 Streamable HTTP 建立连接，自动发现所有 tools。",
+        "fullDoc": "```typescript\nconnect(config: {\n        /** 显示名称，也用作 tool 命名空间 */\n        name: string;\n        /** 传输方式。省略时：有 url 则视为 streamable-http，否则视为 stdio */\n        transport?: \"stdio\" | \"streamable-http\";\n        /** stdio 启动命令 */\n        command?: string;\n        /** stdio 命令参数 */\n        args?: string[];\n        /** stdio 环境变量（如 API keys） */\n        env?: Record<string, string>;\n        /** Streamable HTTP endpoint */\n        url?: string;\n        /** Streamable HTTP 附加请求头（如 Authorization） */\n        headers?: Record<string, string>;\n    }): Promise<{\n        name: string;\n        tools: Array<{ name: string; description: string }>;\n        /** 调用指定 tool */\n        call(toolName: string, args?: Record<string, unknown>): Promise<unknown>;\n    }>\n```\n\n\n连接到一个 MCP Server。\n根据配置使用 stdio 或 Streamable HTTP 建立连接，自动发现所有 tools。\n\n**参数：**\n- `config`: Server 配置\n- **返回值**: 包含 tools 列表和 call 方法的代理对象\n\n**示例：**\n```typescript\n// 连接 GitHub MCP Server\nconst github = await mcp.connect({\n  name: \"github\",\n  transport: \"streamable-http\",\n  url: \"https://example.com/mcp\",\n  headers: { Authorization: \"Bearer xxx\" }\n});\nconsole.log(\"可用工具:\", github.tools);\n\n// 调用 tool\nconst repos = await github.call(\"search_repositories\", { query: \"mcp typescript\" });\nconsole.log(repos);\n```"
+      },
+      {
+        "name": "disconnect",
+        "brief": "断开连接并清理 MCP Server 子进程",
+        "fullDoc": "```typescript\ndisconnect(name: string): Promise<void>\n```\n\n\n断开连接并清理 MCP Server 子进程\n\n**参数：**\n- `name`: 连接时指定的 name"
+      },
+      {
+        "name": "list",
+        "brief": "列出所有已连接的 MCP Servers 及其工具",
+        "fullDoc": "```typescript\nlist(): Array<{\n        name: string;\n        transport: \"stdio\" | \"streamable-http\";\n        url?: string;\n        tools: string[];\n        running: boolean;\n    }>\n```\n\n\n列出所有已连接的 MCP Servers 及其工具\n\n**示例：**\n```typescript\nconst servers = mcp.list();\nfor (const s of servers) {\n  console.log(`${s.name}: ${s.tools.join(\", \")} (running: ${s.running})`);\n}\n```"
+      },
+      {
+        "name": "call",
+        "brief": "直接调用指定 server 的 tool（无需先调用 connect 返回的代理对象）",
+        "fullDoc": "```typescript\ncall(serverName: string, toolName: string, args?: Record<string, unknown>): Promise<unknown>\n```\n\n\n直接调用指定 server 的 tool（无需先调用 connect 返回的代理对象）\n\n**参数：**\n- `serverName`: MCP Server 名称\n- `toolName`: 工具名称\n- `args`: 工具参数"
       }
     ]
   },
@@ -136,39 +297,13 @@
     ]
   },
   {
-    "name": "scene",
-    "description": "shared/scene.d.ts — 所有 scene 共享的场景信息能力 agent 不再主动切换场景，框架根据角色自动注入对应的 API。",
-    "methods": [
-      {
-        "name": "current",
-        "brief": "当前所在场景名称（框架自动设置）",
-        "fullDoc": "```typescript\ncurrent: string\n```\n\n\n当前所在场景名称（框架自动设置）"
-      },
-      {
-        "name": "list",
-        "brief": "列出所有可用场景及简介",
-        "fullDoc": "```typescript\nlist(): void\n```\n\n\n列出所有可用场景及简介"
-      },
-      {
-        "name": "showFullTypes",
-        "brief": "展示当前场景的完整类型定义（L2）",
-        "fullDoc": "```typescript\nshowFullTypes(): void\n```\n\n\n展示当前场景的完整类型定义（L2）"
-      }
-    ]
-  },
-  {
     "name": "skills",
     "description": "shared/skills.d.ts — Skills 高层能力 + 管理接口",
     "methods": [
       {
-        "name": "memory.recallAndSummarize",
-        "brief": "检索记忆并针对查询生成结构化总结",
-        "fullDoc": "```typescript\nrecallAndSummarize(query: string, options?: Record<string, unknown>): Promise<unknown>\n```\n\n\n检索记忆并针对查询生成结构化总结"
-      },
-      {
-        "name": "memory.browseForAnswer",
-        "brief": "主动搜索多渠道历史档案以详细回答复杂问题",
-        "fullDoc": "```typescript\nbrowseForAnswer(request: Record<string, unknown>): Promise<unknown>\n```\n\n\n主动搜索多渠道历史档案以详细回答复杂问题"
+        "name": "install",
+        "brief": "安装或创建一个新 Skill 的指导说明（实际上不会自动执行代码动作，而是返回具体的操作步骤指南）",
+        "fullDoc": "```typescript\ninstall(name: string): string\n```\n\n\n安装或创建一个新 Skill 的指导说明（实际上不会自动执行代码动作，而是返回具体的操作步骤指南）\n\n**参数：**\n- `name`: 拟创建的 Skill 名称\n- **返回值**: 怎样按照格式存放文件来创建 skill 的说明文档"
       },
       {
         "name": "list",
@@ -349,175 +484,15 @@
     ]
   },
   {
-    "name": "cron",
-    "description": "shared/cron.d.ts — 定时任务管理模块类型定义 通过 Host 侧 GlobalState 持久化 cron 任务。 触发时以自然语言任务描述唤醒 agent，由 agent 自主决策执行。",
-    "methods": [
-      {
-        "name": "add",
-        "brief": "添加持久化定时任务。触发时以自然语言任务描述唤醒 agent，agent 在当时的上下文中自主决定如何执行。 ⚠️ taskDescription 必须是详细的自然语言描述，不是代码。 写清楚：要做什么、给谁发、发什么内容、从哪里获取信息等。 agent 会在每次触发时收到这段描述作为新任务。 限制：最短间隔 1 小时，每个群最多 10 个 cron 任务。 一次性定时任务请使用 runtime.remind",
-        "fullDoc": "```typescript\nadd(name: string, cronExpr: string, taskDescription: string): Promise<{ id: string }>\n```\n\n\n添加持久化定时任务。触发时以自然语言任务描述唤醒 agent，agent 在当时的上下文中自主决定如何执行。\n\n⚠️ taskDescription 必须是详细的自然语言描述，不是代码。\n写清楚：要做什么、给谁发、发什么内容、从哪里获取信息等。\nagent 会在每次触发时收到这段描述作为新任务。\n\n限制：最短间隔 1 小时，每个群最多 10 个 cron 任务。\n\n一次性定时任务请使用 runtime.remind\n\n**参数：**\n- `name`: 任务名称（用于显示和管理）\n- `cronExpr`: cron 表达式（最短间隔 1 小时），如 \"0 9 * * *\"（每天 9:00）\n- `taskDescription`: 触发时的自然语言任务描述\n- **返回值**: 创建的任务信息\n\n**示例：**\n```typescript\n// 每天早上 9 点发送早安\nawait cron.add(\"每日早安\", \"0 8 * * *\",\n  \"给群里发一条早安消息，可以根据当天日期说点应景的话\");\n```\n\n```typescript\n// 工作日早 9 点播报新闻\nawait cron.add(\"新闻播报\", \"0 9 * * 1-5\",\n  \"用 tavily 搜索今日科技新闻，整理成简短的播报发送到群里\");\n```"
-      },
-      {
-        "name": "remove",
-        "brief": "移除定时任务",
-        "fullDoc": "```typescript\nremove(id: string): Promise<void>\n```\n\n\n移除定时任务\n\n**参数：**\n- `id`: 任务 ID（由 add 返回）\n\n**示例：**\n```typescript\nawait cron.remove(\"some-task-id\");\n```"
-      },
-      {
-        "name": "list",
-        "brief": "列出当前 chat 的所有定时任务",
-        "fullDoc": "```typescript\nlist(): Promise<Array<{\n        id: string;\n        name: string;\n        cronExpr: string;\n    }>>\n```\n\n\n列出当前 chat 的所有定时任务\n\n**示例：**\n```typescript\nconst tasks = await cron.list();\nfor (const t of tasks) {\n  console.log(`${t.name} (${t.cronExpr})`);\n}\n```"
-      }
-    ]
-  },
-  {
-    "name": "events",
-    "description": "shared/events.d.ts — 事件监听器模块类型定义 注册事件监听器，当匹配的事件到达时在 sandbox 中执行处理代码。 监听器持久化到磁盘，Worker 重启后自动恢复。",
-    "methods": [
-      {
-        "name": "on",
-        "brief": "注册事件监听器。匹配 type 前缀的事件会触发 handlerCode 在 sandbox 中执行。 handler 代码中可通过 `event` 变量访问事件数据。",
-        "fullDoc": "```typescript\non(typePrefix: string, handlerCode: string): string\n```\n\n\n注册事件监听器。匹配 type 前缀的事件会触发 handlerCode 在 sandbox 中执行。\r\nhandler 代码中可通过 `event` 变量访问事件数据。\n\n**参数：**\n- `typePrefix`: 事件类型前缀（如 \"telegram.message\" 匹配所有以此开头的事件）\n- `handlerCode`: 触发时执行的 JavaScript 代码字符串\n- **返回值**: 监听器 ID\n\n**示例：**\n```typescript\n// 监听新消息事件\r\nconst id = events.on(\"telegram.message\", `\r\n  if (event.text?.includes(\"ping\")) {\r\n    runtime.notify({ type: \"system.pong\", from: event.chatId });\r\n  }\r\n`);\r\nconsole.log(\"监听器已注册:\", id);\n```\n\n```typescript\n// 监听所有系统事件\r\nevents.on(\"system.\", `\r\n  console.log(\"系统事件:\", event.type);\r\n`);\n```"
-      },
-      {
-        "name": "off",
-        "brief": "移除监听器",
-        "fullDoc": "```typescript\noff(listenerId: string): void\n```\n\n\n移除监听器\n\n**参数：**\n- `listenerId`: 监听器 ID（由 on 返回）\n\n**示例：**\n```typescript\nevents.off(\"some-listener-id\");\n```"
-      },
-      {
-        "name": "list",
-        "brief": "列出当前所有监听器",
-        "fullDoc": "```typescript\nlist(): Array<{\r\n        id: string;\r\n        typePrefix: string;\r\n    }>\n```\n\n\n列出当前所有监听器\n\n**示例：**\n```typescript\nconst listeners = events.list();\r\nfor (const l of listeners) {\r\n  console.log(`${l.id}: 监听 \"${l.typePrefix}\"`);\r\n}\n```"
-      }
-    ]
-  },
-  {
-    "name": "fs",
-    "description": "filesystem.d.ts — 文件系统操作模块类型定义 所有路径操作限定在 workspace/ 目录下。 支持相对路径（相对于 workspace/）和绝对路径。",
-    "methods": [
-      {
-        "name": "readFile",
-        "brief": "读取文件内容。",
-        "fullDoc": "```typescript\nreadFile(path: string): string\n```\n\n\n读取文件内容。\n\n**参数：**\n- `path`: 文件路径（相对于 workspace/ 或绝对路径）\n- **返回值**: 文件内容字符串（UTF-8）\n\n**示例：**\n```typescript\nconst content = fs.readFile(\"skills/myskill/index.ts\");\nconsole.log(content);\n```"
-      },
-      {
-        "name": "writeFile",
-        "brief": "写入文件。如果目标目录不存在会自动创建。",
-        "fullDoc": "```typescript\nwriteFile(path: string, content: string): void\n```\n\n\n写入文件。如果目标目录不存在会自动创建。\n\n**参数：**\n- `path`: 文件路径\n- `content`: 文件内容\n\n**示例：**\n```typescript\nfs.writeFile(\"notes/todo.md\", \"# TODO\\n- 完成作业\");\n```\n\n```typescript\n// 创建新的 TS Skill\nfs.writeFile(\"skills/weather/index.ts\", `\n  import { fetch } from \"node-fetch\";\n  export const weather = {\n    current: async (city: string) => { ... }\n  };\n`);\n```"
-      },
-      {
-        "name": "appendFile",
-        "brief": "追加写入文件。文件不存在时会自动创建。",
-        "fullDoc": "```typescript\nappendFile(path: string, content: string): void\n```\n\n\n追加写入文件。文件不存在时会自动创建。\n\n**参数：**\n- `path`: 文件路径\n- `content`: 追加的内容\n\n**示例：**\n```typescript\nfs.appendFile(\"logs/activity.log\", `${new Date().toISOString()} 执行了任务\\n`);\n```"
-      },
-      {
-        "name": "readdir",
-        "brief": "列出目录下的文件和子目录名。",
-        "fullDoc": "```typescript\nreaddir(path: string): string[]\n```\n\n\n列出目录下的文件和子目录名。\n\n**参数：**\n- `path`: 目录路径\n- **返回值**: 文件名数组\n\n**示例：**\n```typescript\nconst files = fs.readdir(\"skills\");\nconsole.log(\"已安装的 Skills:\", files);\n```"
-      },
-      {
-        "name": "exists",
-        "brief": "检查文件或目录是否存在。",
-        "fullDoc": "```typescript\nexists(path: string): boolean\n```\n\n\n检查文件或目录是否存在。\n\n**参数：**\n- `path`: 路径\n- **返回值**: 是否存在"
-      },
-      {
-        "name": "unlink",
-        "brief": "删除文件。",
-        "fullDoc": "```typescript\nunlink(path: string): void\n```\n\n\n删除文件。\n\n**参数：**\n- `path`: 文件路径"
-      },
-      {
-        "name": "mkdir",
-        "brief": "创建目录（递归创建，类似 mkdir -p）。",
-        "fullDoc": "```typescript\nmkdir(path: string): void\n```\n\n\n创建目录（递归创建，类似 mkdir -p）。\n\n**参数：**\n- `path`: 目录路径"
-      },
-      {
-        "name": "stat",
-        "brief": "获取文件或目录的状态信息。",
-        "fullDoc": "```typescript\nstat(path: string): {\n        /** 文件大小（字节） */\n        size: number;\n        /** 是否是目录 */\n        isDirectory: boolean;\n        /** 是否是文件 */\n        isFile: boolean;\n        /** 最后修改时间（ISO 字符串） */\n        mtime: string;\n    }\n```\n\n\n获取文件或目录的状态信息。\n\n**参数：**\n- `path`: 路径\n- **返回值**: 状态对象\n\n**示例：**\n```typescript\nconst info = fs.stat(\"skills/tavily/index.ts\");\nconsole.log(`文件大小: ${info.size} bytes, 最后修改: ${info.mtime}`);\n```"
-      }
-    ]
-  },
-  {
-    "name": "http",
-    "description": "shared/http.d.ts — HTTP Webhook 模块类型定义 注册 HTTP webhook 端点，外部系统通过 HTTP POST 触发 sandbox 代码执行。 Webhook 持久化到磁盘，Worker 重启后自动恢复。",
-    "methods": [
-      {
-        "name": "onWebhook",
-        "brief": "注册 webhook 端点。 外部可通过 POST /webhook/{path} 触发 handler 代码执行。 handler 代码中可通过 `request` 变量访问请求数据。",
-        "fullDoc": "```typescript\nonWebhook(path: string, handlerCode: string): Promise<string>\n```\n\n\n注册 webhook 端点。\r\n外部可通过 POST /webhook/{path} 触发 handler 代码执行。\r\nhandler 代码中可通过 `request` 变量访问请求数据。\n\n**参数：**\n- `path`: Webhook 路径（唯一标识，不含前缀斜杠）\n- `handlerCode`: 收到请求时执行的 JavaScript 代码字符串\n- **返回值**: webhook ID\n\n**示例：**\n```typescript\n// 注册一个接收 GitHub Push 事件的 webhook\r\nconst id = await http.onWebhook(\"github-push\", `\r\n  const payload = JSON.parse(request.body);\r\n  const repo = payload.repository?.full_name ?? \"unknown\";\r\n  await telegram.sendText(chatId, \"📦 Push to \" + repo + \": \" + payload.head_commit?.message);\r\n`);\r\nconsole.log(\"Webhook 已注册:\", id);\r\nconsole.log(\"URL: /webhook/github-push\");\n```"
-      },
-      {
-        "name": "removeWebhook",
-        "brief": "移除 webhook",
-        "fullDoc": "```typescript\nremoveWebhook(webhookId: string): Promise<void>\n```\n\n\n移除 webhook\n\n**参数：**\n- `webhookId`: webhook ID（由 onWebhook 返回）\n\n**示例：**\n```typescript\nawait http.removeWebhook(\"some-webhook-id\");\n```"
-      },
-      {
-        "name": "listWebhooks",
-        "brief": "列出当前所有 webhook",
-        "fullDoc": "```typescript\nlistWebhooks(): Promise<Array<{ id: string; path: string }>>\n```\n\n\n列出当前所有 webhook\n\n**示例：**\n```typescript\nconst hooks = await http.listWebhooks();\r\nfor (const h of hooks) {\r\n  console.log(`${h.id}: POST /webhook/${h.path}`);\r\n}\n```"
-      }
-    ]
-  },
-  {
-    "name": "kv",
-    "description": "shared/kv.d.ts — 持久化键值存储模块类型定义 简单的 per-chat 键值存储，数据持久化到 SQLite。 比 ctx 更正式的存储方式，支持 TTL 过期。",
-    "methods": [
-      {
-        "name": "get",
-        "brief": "读取键值",
-        "fullDoc": "```typescript\nget(key: string): Promise<string | null>\n```\n\n\n读取键值\n\n**参数：**\n- `key`: 键名\n- **返回值**: 值字符串，不存在时返回 null\n\n**示例：**\n```typescript\nconst token = await kv.get(\"api_token\");\r\nif (token) {\r\n  console.log(\"已有 token\");\r\n}\n```"
-      },
-      {
-        "name": "set",
-        "brief": "写入键值",
-        "fullDoc": "```typescript\nset(key: string, value: string, ttlSeconds?: number): Promise<void>\n```\n\n\n写入键值\n\n**参数：**\n- `key`: 键名\n- `value`: 值（字符串）\n- `ttlSeconds`: 可选的过期时间（秒）。不设置则永不过期。\n\n**示例：**\n```typescript\nawait kv.set(\"last_check\", new Date().toISOString());\n```\n\n```typescript\n// 设置 1 小时后过期的缓存\r\nawait kv.set(\"weather_cache\", JSON.stringify(data), 3600);\n```"
-      },
-      {
-        "name": "del",
-        "brief": "删除键",
-        "fullDoc": "```typescript\ndel(key: string): Promise<void>\n```\n\n\n删除键\n\n**参数：**\n- `key`: 键名\n\n**示例：**\n```typescript\nawait kv.del(\"temp_data\");\n```"
-      },
-      {
-        "name": "keys",
-        "brief": "列出键名（可按前缀过滤）",
-        "fullDoc": "```typescript\nkeys(prefix?: string): Promise<string[]>\n```\n\n\n列出键名（可按前缀过滤）\n\n**参数：**\n- `prefix`: 可选的键名前缀\n- **返回值**: 匹配的键名列表\n\n**示例：**\n```typescript\nconst keys = await kv.keys(\"cache_\");\r\nconsole.log(\"缓存键:\", keys);\n```"
-      }
-    ]
-  },
-  {
-    "name": "mcp",
-    "description": "mcp-bridge.d.ts — MCP Server 连接器类型定义 连接外部 MCP (Model Context Protocol) Server，自动发现并代理其工具。 支持 stdio 和 Streamable HTTP 两种传输。",
-    "methods": [
-      {
-        "name": "connect",
-        "brief": "连接到一个 MCP Server。 根据配置使用 stdio 或 Streamable HTTP 建立连接，自动发现所有 tools。",
-        "fullDoc": "```typescript\nconnect(config: {\n        /** 显示名称，也用作 tool 命名空间 */\n        name: string;\n        /** 传输方式。省略时：有 url 则视为 streamable-http，否则视为 stdio */\n        transport?: \"stdio\" | \"streamable-http\";\n        /** stdio 启动命令 */\n        command?: string;\n        /** stdio 命令参数 */\n        args?: string[];\n        /** stdio 环境变量（如 API keys） */\n        env?: Record<string, string>;\n        /** Streamable HTTP endpoint */\n        url?: string;\n        /** Streamable HTTP 附加请求头（如 Authorization） */\n        headers?: Record<string, string>;\n    }): Promise<{\n        name: string;\n        tools: Array<{ name: string; description: string }>;\n        /** 调用指定 tool */\n        call(toolName: string, args?: Record<string, unknown>): Promise<unknown>;\n    }>\n```\n\n\n连接到一个 MCP Server。\n根据配置使用 stdio 或 Streamable HTTP 建立连接，自动发现所有 tools。\n\n**参数：**\n- `config`: Server 配置\n- **返回值**: 包含 tools 列表和 call 方法的代理对象\n\n**示例：**\n```typescript\n// 连接 GitHub MCP Server\nconst github = await mcp.connect({\n  name: \"github\",\n  transport: \"streamable-http\",\n  url: \"https://example.com/mcp\",\n  headers: { Authorization: \"Bearer xxx\" }\n});\nconsole.log(\"可用工具:\", github.tools);\n\n// 调用 tool\nconst repos = await github.call(\"search_repositories\", { query: \"mcp typescript\" });\nconsole.log(repos);\n```"
-      },
-      {
-        "name": "disconnect",
-        "brief": "断开连接并清理 MCP Server 子进程",
-        "fullDoc": "```typescript\ndisconnect(name: string): Promise<void>\n```\n\n\n断开连接并清理 MCP Server 子进程\n\n**参数：**\n- `name`: 连接时指定的 name"
-      },
-      {
-        "name": "list",
-        "brief": "列出所有已连接的 MCP Servers 及其工具",
-        "fullDoc": "```typescript\nlist(): Array<{\n        name: string;\n        transport: \"stdio\" | \"streamable-http\";\n        url?: string;\n        tools: string[];\n        running: boolean;\n    }>\n```\n\n\n列出所有已连接的 MCP Servers 及其工具\n\n**示例：**\n```typescript\nconst servers = mcp.list();\nfor (const s of servers) {\n  console.log(`${s.name}: ${s.tools.join(\", \")} (running: ${s.running})`);\n}\n```"
-      },
-      {
-        "name": "call",
-        "brief": "直接调用指定 server 的 tool（无需先调用 connect 返回的代理对象）",
-        "fullDoc": "```typescript\ncall(serverName: string, toolName: string, args?: Record<string, unknown>): Promise<unknown>\n```\n\n\n直接调用指定 server 的 tool（无需先调用 connect 返回的代理对象）\n\n**参数：**\n- `serverName`: MCP Server 名称\n- `toolName`: 工具名称\n- `args`: 工具参数"
-      }
-    ]
-  },
-  {
     "name": "vision",
-    "description": "vision.d.ts \u2014 Vision \u89c6\u89c9\u6a21\u5757 \u63d0\u4f9b\u56fe\u7247\u8bc6\u522b\u80fd\u529b\uff0c\u8ba9 Agent \u53ef\u4ee5\u201c\u770b\u5230\u201dworkspace \u5185\u7684\u56fe\u7247\u6587\u4ef6\u5e76\u7406\u89e3\u5176\u5185\u5bb9\u3002",
+    "description": "modules/vision.d.ts — Vision 视觉模块类型定义 提供图片识别能力，让 Agent 可以\"看到\"图片并理解其内容。 图片路径限定在 workspace/ 目录下。 vision: VisionModule — 全局可用",
     "methods": [
       {
         "name": "see",
-        "brief": "\u770b\u56fe\uff1a\u8bfb\u53d6\u4e00\u5f20\u6216\u591a\u5f20\u56fe\u7247\u6587\u4ef6\uff0c\u4f7f\u7528 Vision LLM \u8fd4\u56de\u6bcf\u5f20\u56fe\u7247\u7684\u8be6\u7ec6\u6587\u5b57\u63cf\u8ff0\u3002\u652f\u6301 JPEG\u3001PNG\u3001WebP \u7b49\u683c\u5f0f\u3002\u8def\u5f84\u9650\u5b9a\u5728 workspace/ \u4e0b\u3002",
-        "fullDoc": "```typescript\nsee(...imagePaths: string[]): Promise<string[]>\n```\n\n\n\u770b\u56fe\uff1a\u8bfb\u53d6\u4e00\u5f20\u6216\u591a\u5f20\u56fe\u7247\u6587\u4ef6\uff0c\u8fd4\u56de\u6bcf\u5f20\u56fe\u7247\u7684\u6587\u5b57\u63cf\u8ff0\u3002\n\u4f7f\u7528 Vision LLM \u5206\u6790\u56fe\u7247\u5185\u5bb9\uff0c\u652f\u6301 JPEG\u3001PNG\u3001WebP \u7b49\u5e38\u89c1\u683c\u5f0f\u3002\n\n**\u53c2\u6570\uff1a**\n- `imagePaths`: \u56fe\u7247\u6587\u4ef6\u8def\u5f84\uff08\u652f\u6301\u7edd\u5bf9\u8def\u5f84\u6216\u76f8\u5bf9\u4e8e workspace/ \u7684\u76f8\u5bf9\u8def\u5f84\uff09\uff0c\u53ef\u4f20\u5165\u591a\u4e2a\u53c2\u6570\n- **\u8fd4\u56de\u503c**: \u6bcf\u5f20\u56fe\u7247\u7684\u8be6\u7ec6\u6587\u5b57\u63cf\u8ff0\u6570\u7ec4\uff08\u4e0e\u8f93\u5165\u8def\u5f84\u4e00\u4e00\u5bf9\u5e94\uff09\n\n**\u793a\u4f8b\uff1a**\n```typescript\n// \u67e5\u770b\u5355\u5f20\u56fe\u7247\nconst [desc] = await vision.see(\"screenshots/page.png\");\nconsole.log(desc);\n```\n\n```typescript\n// \u540c\u65f6\u67e5\u770b\u591a\u5f20\u56fe\u7247\nconst descriptions = await vision.see(\"img1.jpg\", \"img2.png\", \"data/chart.png\");\ndescriptions.forEach((d, i) => console.log(`\u56fe\u7247${i+1}: ${d}`));\n```"
+        "brief": "看图：读取一张或多张图片文件，返回每张图片的文字描述。 使用 Vision LLM 分析图片内容，支持 JPEG、PNG、WebP 等常见格式。",
+        "fullDoc": "```typescript\nsee(...imagePaths: string[]): Promise<string[]>\n```\n\n\n看图：读取一张或多张图片文件，返回每张图片的文字描述。\n使用 Vision LLM 分析图片内容，支持 JPEG、PNG、WebP 等常见格式。\n\n**参数：**\n- `imagePaths`: 图片文件路径（支持绝对路径或相对于 workspace/ 的相对路径），可传入多个参数\n- **返回值**: 每张图片的详细文字描述数组（与输入路径一一对应）\n\n**示例：**\n```typescript\n// 查看单张图片\nconst [desc] = await vision.see(\"screenshots/page.png\");\nconsole.log(desc);\n```\n\n```typescript\n// 同时查看多张图片\nconst descriptions = await vision.see(\"img1.jpg\", \"img2.png\", \"data/chart.png\");\ndescriptions.forEach((d, i) => console.log(`图片${i+1}: ${d}`));\n```"
       }
-    ]
+    ],
+    "typeDefs": "interface VisionModule {\n    /**\n     * 看图：读取一张或多张图片文件，返回每张图片的文字描述。\n     * 使用 Vision LLM 分析图片内容，支持 JPEG、PNG、WebP 等常见格式。\n     *\n     * @param imagePaths - 图片文件路径（支持绝对路径或相对于 workspace/ 的相对路径），可传入多个参数\n     * @returns 每张图片的详细文字描述数组（与输入路径一一对应）\n     *\n     * @example\n     * // 查看单张图片\n     * const [desc] = await vision.see(\"screenshots/page.png\");\n     * console.log(desc);\n     *\n     * @example\n     * // 同时查看多张图片\n     * const descriptions = await vision.see(\"img1.jpg\", \"img2.png\", \"data/chart.png\");\n     * descriptions.forEach((d, i) => console.log(`图片${i+1}: ${d}`));\n     */\n    see(...imagePaths: string[]): Promise<string[]>;\n}"
   }
 ]
