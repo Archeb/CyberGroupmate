@@ -46,6 +46,28 @@ declare const runtime: {
     workspace(): string;
 
     /**
+     * 运行时环境变量管理。
+     *
+     * 与 Dashboard 配置页使用同一份 config.env_vars 存储，修改会实时应用到 host 与 sandbox。
+     */
+    env: {
+        /** 列出所有受管环境变量 */
+        list(): Promise<Array<{ key: string; value: string; scope: "both" | "host" | "sandbox" }>>;
+
+        /** 查询单个环境变量，不存在返回 null */
+        get(key: string): Promise<{ key: string; value: string; scope: "both" | "host" | "sandbox" } | null>;
+
+        /**
+         * 新增或覆盖环境变量。
+         * @param scope - both(默认)/host/sandbox
+         */
+        set(key: string, value: string, scope?: "both" | "host" | "sandbox"): Promise<{ ok: true; key: string; value: string; scope: "both" | "host" | "sandbox" }>;
+
+        /** 删除环境变量（不存在时安全返回） */
+        delete(key: string): Promise<{ ok: true; deleted: boolean }>;
+    };
+
+    /**
      * 设置一次性定时提醒（自然语言）。到期后 agent 将被唤醒并收到 description 作为新任务。重复定时提醒请用 cron
      *
      * ⚠️ description 必须是详细的自然语言描述，不是代码。

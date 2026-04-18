@@ -14,6 +14,7 @@ import type { FeedbackLoop } from "../pipeline/feedback-loop.js";
 import type { TokenStatsCollector } from "./token-stats.js";
 import type { MediaDownloader } from "../core/media-downloader.js";
 import type { PlatformAdapter } from "../adapter/platform-adapter.js";
+import type { AppConfig } from "../core/config.js";
 
 /** Dashboard 需要的所有组件引用 */
 export interface DashboardDeps {
@@ -31,6 +32,8 @@ export interface DashboardDeps {
     mediaDownloader?: MediaDownloader;
     /** 平台 adapter 引用（用于 mute 等控制操作） */
     adapters?: PlatformAdapter[];
+    /** Dashboard 保存配置后的回调（用于热应用） */
+    onConfigSaved?: (config: AppConfig) => Promise<void> | void;
 }
 
 /** Dashboard 配置 */

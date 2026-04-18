@@ -834,7 +834,7 @@ export function createApiRouter(deps: DashboardDeps, bridge: EventBridge): Route
         }
     });
 
-    router.put("/config", (req, res) => {
+    router.put("/config", async (req, res) => {
         try {
             const newConfig = req.body;
             const validation = validateConfig(newConfig);
@@ -846,6 +846,9 @@ export function createApiRouter(deps: DashboardDeps, bridge: EventBridge): Route
             if (!result.ok) {
                 res.status(500).json({ ok: false, error: result.error });
                 return;
+            }
+            if (deps.onConfigSaved) {
+                await deps.onConfigSaved(newConfig);
             }
             log.info("配置已保存并热重载");
             res.json({ ok: true });

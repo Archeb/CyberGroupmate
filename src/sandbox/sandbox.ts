@@ -25,6 +25,14 @@ const __dirname = dirname(__filename);
 
 const log = createLogger("sandbox");
 
+function isValidEnvKey(key: string): boolean {
+    return /^[A-Za-z_][A-Za-z0-9_]*$/.test(key);
+}
+
+function shellQuote(value: string): string {
+    return `'${value.replace(/'/g, `'"'"'`)}'`;
+}
+
 export function buildEnhancedShellPath(projectRoot: string, existingPath: string): string {
     const skillsBinDir = join(projectRoot, "workspace", "skills", "node_modules", ".bin");
     const pathEntries = [
@@ -131,6 +139,56 @@ export class Sandbox extends EventEmitter {
         this.chatId = chatId ?? "default";
         this.sandboxEnv = sandboxEnv ?? {};
         this.hostOnlyKeys = hostOnlyKeys ?? [];
+    }
+
+    /**
+     * 热更新 sandbox 可见环境变量（对现有 worker + PTY 即时生效，并影响后续重启）
+     */
+    async applyManagedEnv(sandboxVisibleEnv: Record<string, string>, managedKeys: string[]): Promise<void> {
+        this.sandboxEnv = { ...sandboxVisibleEnv };
+        this.hostOnlyKeys = managedKeys.filter((k) => !(k in sandboxVisibleEnv));
+
+        if (!this.isAlive()) return;
+
+        const toSet: Record<string, string> = {};
+        const toUnset: string[] = [];
+        for (const key of managedKeys) {
+            if (key in sandboxVisibleEnv) {
+                toSet[key] = String(sandboxVisibleEnv[key]);
+            } else {
+                toUnset.push(key);
+            }
+        }
+
+        const patchCode = `(() => {
+  const setMap = ${JSON.stringify(toSet)};
+  const unsetKeys = ${JSON.stringify(toUnset)};
+  for (const [k, v] of Object.entries(setMap)) process.env[k] = String(v);
+  for (const k of unsetKeys) delete process.env[k];
+})();`;
+
+        try {
+            await this.execute(patchCode, 5000);
+        } catch (err) {
+            log.warn("worker env 热更新失败", { chatId: this.chatId, error: String(err) });
+        }
+
+        const shellLines: string[] = [];
+        for (const [k, v] of Object.entries(toSet)) {
+            if (!isValidEnvKey(k)) continue;
+            shellLines.push(`export ${k}=${shellQuote(String(v))}`);
+        }
+        for (const key of toUnset) {
+            if (!isValidEnvKey(key)) continue;
+            shellLines.push(`unset ${key}`);
+        }
+        if (shellLines.length > 0) {
+            try {
+                await this.executeShell(shellLines.join("\n"), 5000);
+            } catch (err) {
+                log.warn("PTY env 热更新失败", { chatId: this.chatId, error: String(err) });
+            }
+        }
     }
 
     /**
