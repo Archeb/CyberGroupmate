@@ -4,7 +4,7 @@
 
 declare const skills: {
     /**
-     * 安装或创建一个新 Skill 的指导说明（实际上不会自动执行代码动作，而是返回具体的操作步骤指南）
+     * 安装或创建一个新 Skill
      * @param name 拟创建的 Skill 名称
      * @returns 怎样按照格式存放文件来创建 skill 的说明文档
      */

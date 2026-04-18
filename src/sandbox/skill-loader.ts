@@ -22,6 +22,30 @@ import { createLogger } from "../core/logger.js";
 import type { ModuleEntry } from "./modules/module-registry.js";
 
 const log = createLogger("skill-loader");
+
+/**
+ * 解析 SKILL.md 的 YAML frontmatter（name / description）
+ * 与 docs/index.ts parseFrontmatter 保持一致的逻辑。
+ */
+function parseSkillMdFrontmatter(markdown: string): { name?: string; description?: string; body: string } {
+    const match = markdown.match(/^---\s*\r?\n([\s\S]*?)\r?\n---\s*(?:\r?\n)?/);
+    if (!match) return { body: markdown };
+    const fm = match[1];
+    const body = markdown.slice(match[0].length);
+    const name = fm.match(/^name:\s*(.+)$/m)?.[1]?.trim();
+    const description = fm.match(/^description:\s*(.+)$/m)?.[1]?.trim();
+    return { name, description, body };
+}
+
+/**
+ * 将名称转为合法 JS 标识符（与 docs/index.ts 保持一致：不做 camelCase 转换，
+ * 仅替换非法字符为下划线）。
+ */
+function toSafeSkillName(str: string): string {
+    let name = str.replace(/[^a-zA-Z0-9_$]/g, "_");
+    if (/^[0-9]/.test(name)) name = "_" + name;
+    return name;
+}
 /** 基于源码位置定位项目根（src/sandbox/skill-loader.ts → 项目根），不依赖 process.cwd() */
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = resolve(__dirname, "../..");
@@ -34,6 +58,19 @@ export interface LoadedSkill {
     exports: Record<string, unknown>;
     /** d.ts 文件路径（如有） */
     dtsPath?: string;
+    /** 是否为纯 AgentSkill（SKILL.md 驱动，无代码入口） */
+    isAgentSkill?: boolean;
+}
+
+/** discoverSkills 返回的发现结果 */
+export interface DiscoveredSkill {
+    name: string;
+    indexPath: string;
+    dtsPath?: string;
+    /** 纯 AgentSkill 标记 */
+    isAgentSkill?: boolean;
+    /** SKILL.md 路径（纯 AgentSkill 必有） */
+    skillMdPath?: string;
 }
 
 function toSafeIdentifier(str: string): string {
@@ -48,11 +85,11 @@ function toSafeIdentifier(str: string): string {
  *
  * @returns Skill 名称及路径列表
  */
-export function discoverSkills(): Array<{ name: string; indexPath: string; dtsPath?: string }> {
+export function discoverSkills(): DiscoveredSkill[] {
     if (!existsSync(SKILLS_DIR)) return [];
 
     const entries = readdirSync(SKILLS_DIR);
-    const skills: Array<{ name: string; indexPath: string; dtsPath?: string }> = [];
+    const skills: DiscoveredSkill[] = [];
 
     for (const entry of entries) {
         const dirPath = join(SKILLS_DIR, entry);
@@ -68,8 +105,19 @@ export function discoverSkills(): Array<{ name: string; indexPath: string; dtsPa
         const indexPath = existsSync(indexTs) ? indexTs : existsSync(indexJs) ? indexJs : null;
 
         if (!indexPath) {
-            if (!existsSync(skillMd)) {
-                log.warn(`[skill-loader] ⚠ 跳过 ${entry}/: 未找到 index.ts 或 index.js\n`);
+            if (existsSync(skillMd)) {
+                // ═══ 纯 AgentSkill：只有 SKILL.md，无代码入口 ═══
+                // 从 frontmatter 提取名称（与 docs/index.ts 保持一致）
+                try {
+                    const raw = readFileSync(skillMd, "utf-8");
+                    const parsed = parseSkillMdFrontmatter(raw);
+                    const name = parsed.name ? toSafeSkillName(parsed.name) : toSafeSkillName(entry);
+                    skills.push({ name, indexPath: "", isAgentSkill: true, skillMdPath: skillMd });
+                } catch {
+                    skills.push({ name: toSafeSkillName(entry), indexPath: "", isAgentSkill: true, skillMdPath: skillMd });
+                }
+            } else {
+                log.warn(`[skill-loader] ⚠ 跳过 ${entry}/: 未找到 index.ts、index.js 或 SKILL.md\n`);
             }
             continue;
         }
@@ -129,6 +177,37 @@ export async function loadAllSkills(): Promise<LoadedSkill[]> {
     const loaded: LoadedSkill[] = [];
 
     for (const skill of discovered) {
+        // ═══ 纯 AgentSkill：生成虚拟 use() 导出 ═══
+        if (skill.isAgentSkill && skill.skillMdPath) {
+            try {
+                const raw = readFileSync(skill.skillMdPath, "utf-8");
+                const parsed = parseSkillMdFrontmatter(raw);
+                const description = parsed.description || "Agent Skill";
+                const body = parsed.body;
+                const skillName = skill.name;
+
+                loaded.push({
+                    name: skillName,
+                    exports: {
+                        use: () => {
+                            const header = `\n═══ [AgentSkill: ${skillName}] ${description} ═══`;
+                            const footer = `═══ [/${skillName}] ═══\n`;
+                            const content = `${header}\n${body}\n${footer}`;
+                            console.log(content);
+                            return content;
+                        },
+                    },
+                    isAgentSkill: true,
+                });
+                log.info(`[skill-loader] ✅ ${skillName} (AgentSkill) 已加载\n`);
+            } catch (err) {
+                const msg = err instanceof Error ? err.stack ?? err.message : String(err);
+                log.warn(`[skill-loader] ❌ 加载 AgentSkill "${skill.name}" 失败:\n${msg}\n`);
+            }
+            continue;
+        }
+
+        // ═══ 代码型 TS Skill：从 index.ts/js 动态 import ═══
         const exports = await loadSingleSkill(skill.name, skill.indexPath);
         if (exports) {
             loaded.push({
@@ -161,6 +240,29 @@ export function parseAllSkillDocs(): ModuleEntry[] {
     const entries: ModuleEntry[] = [];
 
     for (const skill of discovered) {
+        // ═══ 纯 AgentSkill：从 SKILL.md frontmatter 生成 ModuleEntry ═══
+        if (skill.isAgentSkill && skill.skillMdPath) {
+            try {
+                const raw = readFileSync(skill.skillMdPath, "utf-8");
+                const parsed = parseSkillMdFrontmatter(raw);
+                const description = parsed.description || "Agent Skill";
+                entries.push({
+                    name: skill.name,
+                    description,
+                    methods: [{
+                        name: "use",
+                        brief: `打印并阅读该 Skill 的详细指南。调用方式: await ${skill.name}.use()`,
+                        fullDoc: `调用 \`await ${skill.name}.use()\` 查看完整使用指南。\n\n返回值: string（指南全文）`,
+                    }],
+                });
+            } catch (err) {
+                const msg = err instanceof Error ? err.stack ?? err.message : String(err);
+                log.warn(`解析 AgentSkill "${skill.name}" 的文档失败`, { error: msg });
+            }
+            continue;
+        }
+
+        // ═══ 代码型 TS Skill：从 .d.ts 解析 ═══
         if (!skill.dtsPath) continue;
         try {
             const content = readFileSync(skill.dtsPath, "utf-8");
@@ -262,6 +364,37 @@ export async function reloadAllSkills(): Promise<LoadedSkill[]> {
     const loaded: LoadedSkill[] = [];
 
     for (const skill of discovered) {
+        // ═══ 纯 AgentSkill：重新读取 SKILL.md 并生成新的 use() 闭包 ═══
+        if (skill.isAgentSkill && skill.skillMdPath) {
+            try {
+                const raw = readFileSync(skill.skillMdPath, "utf-8");
+                const parsed = parseSkillMdFrontmatter(raw);
+                const description = parsed.description || "Agent Skill";
+                const body = parsed.body;
+                const skillName = skill.name;
+
+                loaded.push({
+                    name: skillName,
+                    exports: {
+                        use: () => {
+                            const header = `\n═══ [AgentSkill: ${skillName}] ${description} ═══`;
+                            const footer = `═══ [/${skillName}] ═══\n`;
+                            const content = `${header}\n${body}\n${footer}`;
+                            console.log(content);
+                            return content;
+                        },
+                    },
+                    isAgentSkill: true,
+                });
+                log.info(`[skill-loader] ✅ ${skillName} (AgentSkill) 已重载`);
+            } catch (err) {
+                const msg = err instanceof Error ? err.stack ?? err.message : String(err);
+                log.warn(`[skill-loader] ❌ 重载 AgentSkill "${skill.name}" 失败:\n${msg}`);
+            }
+            continue;
+        }
+
+        // ═══ 代码型 TS Skill：绕过 ESM 缓存重新 import ═══
         try {
             // 追加 ?reload=N 绕过 ESM import 缓存
             const fileUrl = pathToFileURL(skill.indexPath).href + `?reload=${reloadCounter}`;
