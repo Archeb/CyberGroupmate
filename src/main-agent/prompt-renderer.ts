@@ -46,6 +46,7 @@ const PROMPT_FILE_MAP: Record<string, string> = {
     FAST_PATH_TASK: "fast-path/subagent-fast-path-task.md",
     CALLBACK: "main-agent/mainagent-callback.md",
     MAIN_SYSTEM: "main-agent/mainagent-main-system.md",
+    GROUNDING: "main-agent/mainagent-grounding.md",
     TOPIC_CLUSTERING: "recording/recording-topic-clustering.md",
     TOPIC_TRIAGE: "recording/recording-topic-triage.md",
 };

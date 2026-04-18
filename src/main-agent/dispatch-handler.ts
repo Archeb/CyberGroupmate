@@ -205,7 +205,10 @@ export function createDispatchHandler(
                     ?? (subagent.stickiness.level === "CORE" ? "随意友好" : "礼貌得体");
                 contextSnapshot.contentDirection = decision.contentDirection ?? "";
 
-
+                // Grounding 查证结果注入（从 attend-handler 并行获取）
+                if (result.groundingContext) {
+                    contextSnapshot.groundingContext = result.groundingContext;
+                }
 
                 // 贴纸查找：根据 suggestedEmojis 查找可发送的贴纸
                 // 按 stickerSendingMode 控制：disallow_all 跳过 / allow_listed 仅已启用 / allow_all（默认）全部

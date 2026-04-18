@@ -17,6 +17,7 @@
   import RecordingPipelineTab from "./config/RecordingPipelineTab.svelte";
   import EnvVarsTab from "./config/EnvVarsTab.svelte";
   import SystemPromptsTab from "./config/SystemPromptsTab.svelte";
+  import GroundingTab from "./config/GroundingTab.svelte";
 
   let config = null;
   let originalConfig = null;
@@ -55,6 +56,7 @@
     { id: "subagent", label: "Subagent", icon: "fa-robot" },
     { id: "recordingPipeline", label: "Recording", icon: "fa-tape" },
     { id: "systemPrompts", label: "System Prompts", icon: "fa-file-lines" },
+    { id: "grounding", label: "Grounding", icon: "fa-globe" },
     { id: "envVars", label: "环境变量", icon: "fa-key" },
   ];
 
@@ -100,6 +102,7 @@
       if (!config.llmRouting.timeouts) config.llmRouting.timeouts = {};
       if (!config.recordingPipeline) config.recordingPipeline = {};
       if (!config.envVars) config.envVars = [];
+      if (!config.grounding) config.grounding = { provider: 'google', apiKey: '' };
       // Adapter 启用状态：根据后端是否返回了有效配置来判断
       // bot 模式看 botToken，userbot 模式看 apiId + apiHash + phone
       telegramEnabled = !!(
@@ -568,6 +571,8 @@
             <RecordingPipelineTab bind:config />
           {:else if currentSection === "envVars"}
             <EnvVarsTab bind:config {pwFocus} {pwBlur} {addEnvVar} {removeEnvVar} />
+          {:else if currentSection === "grounding"}
+            <GroundingTab bind:config {pwFocus} {pwBlur} />
           {:else if currentSection === "systemPrompts"}
             <SystemPromptsTab
               bind:promptsLoading

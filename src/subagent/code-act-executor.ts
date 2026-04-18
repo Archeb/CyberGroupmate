@@ -487,6 +487,8 @@ export class CodeActExecutor {
             availableStickers: ctx.availableStickers && ctx.availableStickers.length > 0
                 ? ctx.availableStickers.map(s => `- ${s.description} (uniqueFileId: ${s.uniqueFileId})`).join("\n")
                 : "",
+            hasGroundingContext: !!ctx.groundingContext,
+            groundingContext: ctx.groundingContext ?? "",
         };
         const taskPrompt = renderPrompt("EXECUTION_TASK", taskVars);
 

@@ -197,10 +197,11 @@
 
   <!-- Sidebar overlay -->
   {#if showSidebar}
-    <div
+    <button
       class="mobile-sidebar-overlay msg-sidebar-overlay"
+      aria-label="关闭侧栏"
       onclick={() => (showSidebar = false)}
-    ></div>
+    ></button>
   {/if}
 
   <!-- Chat list -->

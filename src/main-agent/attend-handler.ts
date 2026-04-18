@@ -29,6 +29,7 @@ import { loadConfig, resolveComponentProfiles } from "../core/config.js";
 import type { PlatformAdapter } from "../adapter/platform-adapter.js";
 import { generateModuleRoster } from "../sandbox/modules/module-registry.js";
 import { getAgentSkillsRoster } from "../sandbox/modules/docs/index.js";
+import { runParallelGrounding } from "./grounding-util.js";
 
 const log = createLogger("attend-handler");
 
@@ -353,7 +354,7 @@ export function createAttendHandler(
                 { role: "user", content: currentTurnPrompt, imageParts: imageParts.length > 0 ? imageParts : undefined },
             ];
 
-            const llmResponse = await callLLMWithFallback(
+            const llmPromise = callLLMWithFallback(
                 messages,
                 resolveComponentProfiles("attend"),
                 {
@@ -361,6 +362,37 @@ export function createAttendHandler(
                     prefill: `让${persona.name}看看，`,
                 },
             );
+
+            // ═══ 并行 Grounding（联网事实查证） ═══
+            const groundingConfig = loadConfig().grounding;
+            const groundingPromise = groundingConfig?.apiKey
+                ? runParallelGrounding(
+                    groundingConfig,
+                    messagesText,
+                    activePersons as any[],
+                )
+                : Promise.resolve(undefined);
+
+            // 同时等待两个异步任务，Grounding 失败不影响主流程
+            const [llmSettled, groundingSettled] = await Promise.allSettled([
+                llmPromise,
+                groundingPromise,
+            ]);
+
+            if (llmSettled.status === "rejected") {
+                throw llmSettled.reason;
+            }
+            const llmResponse = llmSettled.value;
+
+            const groundingContext = groundingSettled.status === "fulfilled"
+                ? groundingSettled.value
+                : undefined;
+            if (groundingContext) {
+                log.info("Grounding 查证结果已获取", {
+                    chatId: entry.chatId,
+                    length: groundingContext.length,
+                });
+            }
 
             // 解析 LLM 返回的 JSON（需兼容 prefill 前缀文本）
             const jsonContent = llmResponse.content.trim();
@@ -402,6 +434,7 @@ export function createAttendHandler(
                 })) : [{ action: "OBSERVE", confidence: 0.3, reason: "LLM 返回格式异常" }],
                 reasoning: parsed.reasoning ?? "",
                 useSkills: Array.isArray(parsed.useSkills) ? parsed.useSkills : undefined,
+                groundingContext,
             };
 
             // ═══ 追加本轮对话到历史（下轮 LLM 可见） ═══
