@@ -15,8 +15,15 @@ import { GoogleGenAI } from "@google/genai";
 import type { GroundingConfig } from "../core/config.js";
 import { renderPrompt } from "./prompt-renderer.js";
 import { createLogger } from "../core/logger.js";
+import { llmEvents } from "../core/llm.js";
+import type { LLMCallEvent, LLMResponseEvent } from "../core/llm.js";
 
 const log = createLogger("grounding");
+
+let _groundingCallId = 0;
+function nextGroundingCallId(): string {
+    return `grounding_${Date.now()}_${++_groundingCallId}`;
+}
 
 // ─── 隐私过滤 ───
 
@@ -94,7 +101,23 @@ async function callGoogleGrounding(
 
     const ai = new GoogleGenAI({ apiKey: config.apiKey });
 
-    const startTime = performance.now();
+    // 发射 llm:call 事件
+    const callId = nextGroundingCallId();
+    const startTime = Date.now();
+    if (llmEvents.listenerCount("llm:call") > 0) {
+        const callEvent: LLMCallEvent = {
+            callId,
+            caller: "grounding-google",
+            model,
+            temperature: 0,
+            maxTokens: 0,
+            provider: "google",
+            messageSummaries: [{ role: "user", contentPreview: promptText.slice(0, 200), imageCount: 0 }],
+            timestamp: new Date().toISOString(),
+        };
+        llmEvents.emit("llm:call", callEvent);
+    }
+
     const response = await ai.models.generateContent({
         model,
         contents: [{ role: "user", parts: [{ text: promptText }] }],
@@ -102,7 +125,7 @@ async function callGoogleGrounding(
             tools: [{ googleSearch: {} }],
         },
     });
-    const elapsed = ((performance.now() - startTime) / 1000).toFixed(2);
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(2);
 
     // Guardrail: 检查是否真的使用了 Google Search
     const metadata = response.candidates?.[0]?.groundingMetadata;
@@ -111,12 +134,33 @@ async function callGoogleGrounding(
         ((metadata.groundingChunks ?? []) as any[]).filter((c: any) => c.web).length > 0
     );
 
+    const text = response.text ?? "";
+    const usage = response.usageMetadata;
+
+    // 发射 llm:response 事件
+    if (llmEvents.listenerCount("llm:response") > 0) {
+        const responseEvent: LLMResponseEvent = {
+            callId,
+            caller: "grounding-google",
+            contentPreview: hasWebResults ? text.slice(0, 500) : "(guardrail: no search results)",
+            contentLength: text.length,
+            usage: usage ? {
+                promptTokens: usage.promptTokenCount,
+                completionTokens: usage.candidatesTokenCount,
+                totalTokens: usage.totalTokenCount,
+            } : undefined,
+            durationMs: Date.now() - startTime,
+            error: hasWebResults ? undefined : "guardrail: no search results, dropped",
+            timestamp: new Date().toISOString(),
+        };
+        llmEvents.emit("llm:response", responseEvent);
+    }
+
     if (!hasWebResults) {
         log.info("Google Grounding 未返回搜索结果，丢弃", { elapsed: `${elapsed}s` });
         return undefined;
     }
 
-    const text = response.text ?? "";
     if (!text) {
         log.info("Google Grounding 返回空文本，丢弃", { elapsed: `${elapsed}s` });
         return undefined;
@@ -131,7 +175,6 @@ async function callGoogleGrounding(
         }
     }
 
-    const usage = response.usageMetadata;
     log.info("Google Grounding 完成", {
         elapsed: `${elapsed}s`,
         model,
@@ -156,7 +199,23 @@ async function callGrokGrounding(
     const baseUrl = (config.baseUrl || "https://api.x.ai/v1").replace(/\/$/, "");
     const model = config.model || "grok-3-mini-fast";
 
-    const startTime = performance.now();
+    // 发射 llm:call 事件
+    const callId = nextGroundingCallId();
+    const startTime = Date.now();
+    if (llmEvents.listenerCount("llm:call") > 0) {
+        const callEvent: LLMCallEvent = {
+            callId,
+            caller: "grounding-grok",
+            model,
+            temperature: 0,
+            maxTokens: 0,
+            provider: "openai",
+            messageSummaries: [{ role: "user", contentPreview: promptText.slice(0, 200), imageCount: 0 }],
+            timestamp: new Date().toISOString(),
+        };
+        llmEvents.emit("llm:call", callEvent);
+    }
+
     const response = await fetch(`${baseUrl}/responses`, {
         method: "POST",
         headers: {
@@ -171,14 +230,26 @@ async function callGrokGrounding(
             tools: [{ type: "web_search" }],
         }),
     });
-    const elapsed = ((performance.now() - startTime) / 1000).toFixed(2);
 
     if (!response.ok) {
         const body = await response.text().catch(() => "");
+        const errMsg = `Grok API ${response.status}: ${body.slice(0, 200)}`;
+        // 发射错误的 llm:response
+        if (llmEvents.listenerCount("llm:response") > 0) {
+            llmEvents.emit("llm:response", {
+                callId,
+                caller: "grounding-grok",
+                contentPreview: "",
+                contentLength: 0,
+                durationMs: Date.now() - startTime,
+                error: errMsg,
+                timestamp: new Date().toISOString(),
+            } as LLMResponseEvent);
+        }
         log.warn("Grok Grounding API 错误", {
             status: response.status,
             body: body.slice(0, 300),
-            elapsed: `${elapsed}s`,
+            elapsed: `${((Date.now() - startTime) / 1000).toFixed(2)}s`,
         });
         return undefined;
     }
@@ -193,23 +264,40 @@ async function callGrokGrounding(
         ?.map((c: any) => c.text)
         ?.join("\n") ?? "";
 
+    // Guardrail: 检查是否真的进行了网络搜索
+    const hasWebSearch = outputItems.some((item: any) => item.type === "web_search_call");
+
+    // 发射 llm:response 事件
+    if (llmEvents.listenerCount("llm:response") > 0) {
+        const responseEvent: LLMResponseEvent = {
+            callId,
+            caller: "grounding-grok",
+            contentPreview: hasWebSearch ? textContent.slice(0, 500) : "(guardrail: no web_search_call)",
+            contentLength: textContent.length,
+            usage: data.usage ? {
+                promptTokens: data.usage.input_tokens,
+                completionTokens: data.usage.output_tokens,
+                totalTokens: (data.usage.input_tokens ?? 0) + (data.usage.output_tokens ?? 0),
+            } : undefined,
+            durationMs: Date.now() - startTime,
+            error: hasWebSearch ? undefined : "guardrail: no web search, dropped",
+            timestamp: new Date().toISOString(),
+        };
+        llmEvents.emit("llm:response", responseEvent);
+    }
+
     if (!textContent) {
-        log.info("Grok Grounding 返回空文本，丢弃", { elapsed: `${elapsed}s` });
+        log.info("Grok Grounding 返回空文本，丢弃", { elapsed: `${((Date.now() - startTime) / 1000).toFixed(2)}s` });
         return undefined;
     }
 
-    // Guardrail: 检查是否真的进行了网络搜索
-    // Grok 在 output 中会有 type: "web_search_call" 的条目
-    const hasWebSearch = outputItems.some((item: any) => item.type === "web_search_call");
-
     if (!hasWebSearch) {
-        log.info("Grok Grounding 未执行网络搜索，丢弃", { elapsed: `${elapsed}s` });
+        log.info("Grok Grounding 未执行网络搜索，丢弃", { elapsed: `${((Date.now() - startTime) / 1000).toFixed(2)}s` });
         return undefined;
     }
 
     // 提取搜索引用
     const sources: string[] = [];
-    // Grok 把 citations 放在 messageItem.content 的 annotations 或顶级
     const annotations = messageItem?.content
         ?.flatMap((c: any) => c.annotations ?? [])
         ?.filter((a: any) => a.type === "url_citation") ?? [];
@@ -219,6 +307,7 @@ async function callGrokGrounding(
         }
     }
 
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(2);
     log.info("Grok Grounding 完成", {
         elapsed: `${elapsed}s`,
         model,
