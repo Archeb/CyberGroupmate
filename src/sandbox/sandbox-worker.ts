@@ -15,7 +15,7 @@ import { dirname } from "node:path";
 import { installCapabilityRegistry, setPlatform } from "./capability-registry.js";
 import { BackgroundManager } from "./background-manager.js";
 import { createPromiseTracker } from "./promise-tracker.js";
-import { docs, buildAgentSkillUseObjects } from "./modules/docs/index.js";
+import { docs } from "./modules/docs/index.js";
 import { filesystem } from "./modules/filesystem/index.js";
 import { mcpBridge, initMcpBridge, autoReconnect as mcpAutoReconnect } from "./modules/mcp-bridge/index.js";
 import { cronModule, setCronCallbacks } from "./modules/cron/index.js";
@@ -31,8 +31,7 @@ import { configureLogger } from "../core/logger.js";
 // ─── 全局 Skills 缓存（Worker 启动时加载一次） ───
 let loadedSkills: LoadedSkill[] = [];
 
-// ─── AgentSkill .use() 对象缓存 ───
-let agentSkillObjects: Array<{ name: string; obj: { use: () => string } }> = [];
+
 
 // ─── 暴露 setPlatform 到全局，供 host 通过 sandbox.execute 调用 ───
 (globalThis as Record<string, unknown>).__setPlatform = setPlatform;
@@ -360,16 +359,8 @@ async function executeCode(id: string, code: string): Promise<void> {
             skillArgValues.push(wrapped);
         }
 
-        // ─── 动态注入 AgentSkill .use() 对象 ───
-        // AgentSkills 与 TS Skills 平级注入，调用 .use() 时打印 SKILL.md 全文
-        for (const agentSkill of agentSkillObjects) {
-            // 避免与 TS Skill 同名冲突：TS Skill 优先
-            if (skillArgNames.includes(agentSkill.name)) continue;
-            skillArgNames.push(agentSkill.name);
-            skillArgValues.push(agentSkill.obj);
-        }
 
-        // 构造参数列表：固定参数 + 平台 API + 动态 Skill 参数（含 TS Skills + AgentSkills）
+        // 构造参数列表：固定参数 + 平台 API + 动态 Skill 参数
         // ctx 保留为纯用户 state bag（LLM 可跨 turn 存取任意属性）
         const fixedArgNames = ["ctx", "runtime", "memory", "scene", "docs", "actions", "skills", "fs", "mcp", "cron", "events", "kv", "http", "vision", "telegram", "discord"];
         const fixedArgValues = [ctx, rt, mem, scene, docs, act, sk, filesystem, mcpBridge, tracker.wrap(cronModule as unknown as Record<string, unknown>), eventsModule, tracker.wrap(kvModule as unknown as Record<string, unknown>), tracker.wrap(httpModule as unknown as Record<string, unknown>), tracker.wrap(visionModule as unknown as Record<string, unknown>), tg, dc];
@@ -483,16 +474,6 @@ async function initWorker(): Promise<void> {
         loadedSkills = [];
     }
 
-    // 加载 AgentSkill .use() 对象
-    try {
-        agentSkillObjects = buildAgentSkillUseObjects();
-        if (agentSkillObjects.length > 0) {
-            printToHost(`[sandbox-worker] ✅ ${agentSkillObjects.length} AgentSkills loaded: ${agentSkillObjects.map(s => s.name).join(', ')}`);
-        }
-    } catch (err) {
-        process.stderr.write(`[sandbox-worker] AgentSkills 加载失败: ${err}\n`);
-        agentSkillObjects = [];
-    }
 
     // 注入 Skill 管理回调（让 skills.list/reload/npmInstall 可用）
     setSkillManagerCallbacks({

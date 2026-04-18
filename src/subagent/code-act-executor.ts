@@ -21,7 +21,6 @@ import { SandboxPool } from "../sandbox/sandbox-pool.js";
 import { NotificationCenter } from "../event/notification-center.js";
 import { runCodeActSession, SentMessageCollector, type SessionResult, type SentMessageRecord } from "../sandbox/session-runner.js";
 import { loadModuleRegistry, lookupFullDocs, generateBriefOverview, type ModuleEntry } from "../sandbox/modules/module-registry.js";
-import { getAgentSkillsApiBriefs, getAgentSkillsBriefs } from "../sandbox/modules/docs/index.js";
 import { parseAllSkillDocs } from "../sandbox/skill-loader.js";
 import { buildPrefixMap } from "../sandbox/api-intent-extractor.js";
 import { renderPrompt, deriveChatType } from "../main-agent/prompt-renderer.js";
@@ -106,15 +105,13 @@ export function loadApiTypeDefs(platform: string = "telegram", allowedModules?: 
                 // 按平台过滤模块
                 const filteredRegistry = registry.filter(mod => !excludedModules.has(mod.name));
 
-                // 生成轻量概览（仅缓存模块部分，不含 agent skills）
+                // 生成轻量概览（包含内置模块 + TS Skills + AgentSkills）
                 moduleBrief = generateBriefOverview(filteredRegistry, allowedModules);
             }
             if (cacheKey) _apiBriefCache.set(cacheKey, moduleBrief);
         }
 
-        // Agent skills 每次从磁盘读取，不缓存，以支持运行时热更新
-        const agentSkills = getAgentSkillsApiBriefs(undefined, allowedModules);
-        return agentSkills ? `${moduleBrief}\n\n${agentSkills}` : moduleBrief;
+        return moduleBrief;
     } catch (err) {
         const errorMsg = err instanceof Error ? err.stack ?? err.message : String(err);
         log.error("loadApiTypeDefs failed", { error: errorMsg });
@@ -467,7 +464,6 @@ export class CodeActExecutor {
             personaName: this.personaName,
             personaDescription: this.personaDescription,
             apiTypeDefs: loadApiTypeDefs(getPlatform(this.chatId), allowedSkills),
-            agentSkillsBrief: getAgentSkillsBriefs(allowedSkills),
         };
         const systemPrompt = renderPrompt("EXECUTION", systemVars);
 

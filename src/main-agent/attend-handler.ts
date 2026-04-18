@@ -28,7 +28,6 @@ import { enrichMessages, formatMessageLine, resolveReplyText, type RawMessage } 
 import { loadConfig, resolveComponentProfiles } from "../core/config.js";
 import type { PlatformAdapter } from "../adapter/platform-adapter.js";
 import { generateModuleRoster } from "../sandbox/modules/module-registry.js";
-import { getAgentSkillsRoster } from "../sandbox/modules/docs/index.js";
 import { runParallelGrounding } from "./grounding-util.js";
 
 const log = createLogger("attend-handler");
@@ -333,15 +332,12 @@ export function createAttendHandler(
             // 平台 adapter 也是 base
             if (currentConfig.telegram) baseSkills.add("telegram");
             if (currentConfig.discord) baseSkills.add("discord");
-            // 注册表中 TS Skills 的 roster（已过滤 baseSkills）
+            // 注册表中所有 Skills 的 roster（已过滤 baseSkills，包含 TS Skills 和 AgentSkills）
             const { getModuleRegistryCache } = await import("../subagent/code-act-executor.js");
-            const tsModuleRoster = generateModuleRoster(getModuleRegistryCache(), baseSkills);
-            // AgentSkills 的 roster（已过滤 baseSkills）
-            const agentSkillsRoster = getAgentSkillsRoster(baseSkills);
-            const combinedRoster = [tsModuleRoster, agentSkillsRoster].filter(Boolean).join("\n");
-            if (combinedRoster) {
+            const moduleRoster = generateModuleRoster(getModuleRegistryCache(), baseSkills);
+            if (moduleRoster) {
                 mainSystemVars.hasAvailableSkills = true;
-                mainSystemVars.availableSkillsRoster = combinedRoster;
+                mainSystemVars.availableSkillsRoster = moduleRoster;
             }
 
             const mainSystemPrompt = renderPrompt("MAIN_SYSTEM", mainSystemVars);
