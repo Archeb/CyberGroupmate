@@ -256,10 +256,13 @@ export function buildAttentionVariables(
 }
 
 /**
- * 从 persona 构建 MAIN_SYSTEM prompt 的变量（纯静态，用于缓存）
+ * 从 persona 构建 MAIN_SYSTEM prompt 的变量（半静态，用于缓存）
  *
  * 动态内容（attentionSummary / recentDecisions / activeTasks / decisionPrompt）
  * 已迁移到 ATTENTION prompt（user message），以确保 system prompt 可被前缀缓存。
+ *
+ * 可指派模块名册（hasAvailableSkills / availableSkillsRoster）在 attend-handler 中
+ * 动态注入到返回的 vars 对象上，避免每次 attend 都在 user message 里重复传输。
  */
 export function buildMainSystemVariables(
     persona: { name: string; description: string },

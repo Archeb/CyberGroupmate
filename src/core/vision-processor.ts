@@ -136,9 +136,9 @@ export async function processMediaBatch(
         if (att.type === "photo" || (att.type === "document" && att.mimeType?.startsWith("image/"))) {
             photos.push(att);
         } else if (att.type === "sticker") {
-            // 跳过 webm 视频贴纸（不收集、不处理）
-            if (att.mimeType === "video/webm") {
-                log.debug("跳过 webm 视频贴纸", { uniqueFileId: att.uniqueFileId });
+            // 跳过动态贴纸（WebM 视频贴纸和 TGS 动画贴纸大模型无法直接识别）
+            if (att.mimeType === "video/webm" || att.mimeType === "application/x-tgsticker") {
+                log.debug("跳过动态贴纸", { uniqueFileId: att.uniqueFileId, mimeType: att.mimeType });
                 continue;
             }
             stickers.push(att);

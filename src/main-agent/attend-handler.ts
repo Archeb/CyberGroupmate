@@ -175,6 +175,7 @@ export function createAttendHandler(
         try {
             // 构建消息原文（所有深度均获取）+ Vision 富化 sticker/photo
             let messagesText = "";
+            const imageParts: Array<{ url: string }> = [];
             {
                 let recentMsgs = memory.getRecentMessages(entry.chatId, messageLimit);
                 recentMsgs.reverse(); // DESC→ASC: LLM 需要时间正序
@@ -252,7 +253,7 @@ export function createAttendHandler(
 
                     const downloadFn = buildDownloadFn(entry.chatId);
 
-                    const { formattedText } = await enrichMessages(rawMessages, {
+                    const { formattedText, imageParts: parsedImageParts } = await enrichMessages(rawMessages, {
                         visionConfig,
                         llmConfig: enrichLlmConfig,
                         visionLlmConfig,
@@ -262,6 +263,9 @@ export function createAttendHandler(
                         mediaDownloader,
                     });
                     messagesText = formattedText;
+                    if (parsedImageParts.length > 0) {
+                        imageParts.push(...parsedImageParts);
+                    }
                 }
             }
 
@@ -315,7 +319,12 @@ export function createAttendHandler(
                     .join("\n");
             }
 
-            // ═══ 可指派模块名册注入（供主 Agent 决策 useSkills） ═══
+            const attentionPrompt = renderPrompt("ATTENTION", promptVars);
+
+            // ➋ 主 Agent 系统 Prompt — 半静态，确保前缀缓存命中 (subagent.md §12.2 ➋)
+            const mainSystemVars = buildMainSystemVariables(persona);
+
+            // ═══ 可指派模块名册注入（放入 system prompt，避免每次 attend 重复占用 token） ═══
             const currentConfig = loadConfig();
             const baseSkills = new Set(currentConfig.subagent?.baseSkills ?? [
                 "runtime", "memory", "docs", "fs", "actions", "skills", "mcp", "cron", "events", "kv", "http",
@@ -330,14 +339,10 @@ export function createAttendHandler(
             const agentSkillsRoster = getAgentSkillsRoster(baseSkills);
             const combinedRoster = [tsModuleRoster, agentSkillsRoster].filter(Boolean).join("\n");
             if (combinedRoster) {
-                promptVars.hasAvailableSkills = true;
-                promptVars.availableSkillsRoster = combinedRoster;
+                mainSystemVars.hasAvailableSkills = true;
+                mainSystemVars.availableSkillsRoster = combinedRoster;
             }
 
-            const attentionPrompt = renderPrompt("ATTENTION", promptVars);
-
-            // ➋ 主 Agent 系统 Prompt — 纯静态，确保前缀缓存命中 (subagent.md §12.2 ➋)
-            const mainSystemVars = buildMainSystemVariables(persona);
             const mainSystemPrompt = renderPrompt("MAIN_SYSTEM", mainSystemVars);
 
             // ➝ 构建 messages: [system, ...历史对话, 当前轮 attend prompt]
@@ -345,7 +350,7 @@ export function createAttendHandler(
             const messages: ChatMessage[] = [
                 { role: "system", content: mainSystemPrompt },
                 ...(mainLoop.getConversationHistory() as ChatMessage[]),
-                { role: "user", content: currentTurnPrompt },
+                { role: "user", content: currentTurnPrompt, imageParts: imageParts.length > 0 ? imageParts : undefined },
             ];
 
             const llmResponse = await callLLMWithFallback(
