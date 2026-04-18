@@ -1,5 +1,35 @@
 # Changelog
 
+## 2026-04-18: 新增 Grounding 联网事实查证功能与事件管道集成
+
+主 Agent `attend-handler` 决策流程现已引入并行的 `Google Grounding` 以及 `Grok Web Search` 支持能力。这使得 Agent 可以针对对话上下文中探讨的真实世界实体或事实事件自动进行查证，并将无缝融入到 CodeAct 子代理的运行环境（Prompt）中以增强事实的准确性，降低幻觉干扰。
+
+### ✨ 核心特性
+
+- **并行查证管线**：内置于 `attend-handler` 流程，通过 `Promise.allSettled` 并行调用，不会因为搜素超时而阻塞主 Agent 快速决策过程。
+- **隐私保护与脱敏过滤器**：内置 `sanitizeForGrounding` 清理逻辑，在把对话丢给搜索引擎和辅助模型查证前，智能抹除用户的 `@mention`, 日期时间戳标记及对身份姓名进行 `User 1` 混淆加密处理，在获得最新信息的同时全面保障内部隐私隔离。
+- **严格的安全阀机制 (Guardrail)**：若未取得外部联网证据（包括 `Google Search` 证据链缺失），该结果将静默丢弃，避免将辅助大模型的空头支票或者废话反向注入进事实系统中。
+- **可视化配置后台对接**：完全集成进 Dashboard 面板中，可在 `Config/Settings` 内自由选择 Grounding 服务提供商 (`google` 或 `grok`)。
+
+### 🐞 测试验证与边缘修复
+- **日志事件下沉修复**：修正早期抛出 LLM 事件 (`llm:call` 及 `llm:response`) 时，使用了诸如 `.slice(0, 200)` 这类暴力截图防止体积过大的代码遗留，保证事件能原样在终端与 Dashboard `LLM Log` 中可读。
+
+### 改动文件清单
+
+| 文件 | 变更目的 |
+|---|---|
+| `src/main-agent/grounding-util.ts` | **[NEW]** 事实查证的主干工具包，包含请求提供商的核心代码，LLM 事实判断记录与 Guardrail 逻辑 |
+| `system-prompts/main-agent/mainagent-grounding.md` | **[NEW]** 辅助提取并辨识事实要点的系统提示模板 |
+| `src/core/config.ts` | 将 `grounding` 的全套 YAML 配置定义、序列化注册进全宇宙大管家 `AppConfig` |
+| `src/dashboard/ui/src/panels/ConfigPanel.svelte` | 在 Config 面板呈现 Grounding 的 UI |
+| `src/main-agent/attend-handler.ts` | 新增加并行的 `runParallelGrounding` 触发管道 |
+| `src/main-agent/dispatch-handler.ts` | 将查证结果塞进 `CodeActReplyTask` |
+| `src/subagent/code-act-executor.ts` | 接盘 `groundingContext` 将之传递给下文引擎模板 |
+| `system-prompts/executor/subagent-execution-task.md` | 增加 Mustache 渲染区 `{{#hasGroundingContext}}` |
+| `src/subagent/types.ts` | `AttendResult` 及 `GroupContextPackage` 等状态增加可选的查证包覆字段 |
+| `src/main-agent/prompt-renderer.ts` | 向注册表暴露 `GROUNDING` |
+---
+
 ## 2026-04-18: Sandbox 增加 vision 模块，支持原生看图能力
 
 新增 `vision.see()` 沙盒 API，允许子代理通过执行代码读取工作区内的图片文件，并调用原生 Vision LLM 管线获取文字描述，与 `message-enricher` 看图逻辑完全对齐。
