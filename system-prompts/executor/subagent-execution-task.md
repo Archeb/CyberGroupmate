@@ -23,7 +23,7 @@
 {{/availableStickers}}
 
 {{#hasGroundingContext}}
-## 事实查证 (Grounding)
+## 事实查证
 以下是通过联网搜索获得的相关事实信息，请在回复中参考（如涉及事实性内容）：
 {{groundingContext}}
 {{/hasGroundingContext}}
