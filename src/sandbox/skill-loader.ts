@@ -36,6 +36,13 @@ export interface LoadedSkill {
     dtsPath?: string;
 }
 
+function toSafeIdentifier(str: string): string {
+    let name = str.replace(/-+([a-zA-Z0-9])/g, (_, letter) => letter.toUpperCase());
+    name = name.replace(/[^a-zA-Z0-9_$]/g, "_");
+    if (/^[0-9]/.test(name)) name = "_" + name;
+    return name;
+}
+
 /**
  * 扫描 workspace/skills/ 目录，发现所有可用的 Skill
  *
@@ -73,7 +80,7 @@ export function discoverSkills(): Array<{ name: string; indexPath: string; dtsPa
         const dtsPath = preferredDts ? join(dirPath, preferredDts)
             : dtsFiles.length > 0 ? join(dirPath, dtsFiles[0]) : undefined;
 
-        skills.push({ name: entry, indexPath, dtsPath });
+        skills.push({ name: toSafeIdentifier(entry), indexPath, dtsPath });
     }
 
     return skills;
