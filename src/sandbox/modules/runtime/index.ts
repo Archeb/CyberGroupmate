@@ -25,6 +25,10 @@ export function installRuntime(env: CapabilityRegistryEnv) {
         notify: env.notifyHost,
         input: env.requestInput,
         print: env.printToHost,
+        resetShell: async () => {
+            if (!_callbacks) throw new Error("Runtime not initialized");
+            await _callbacks.callHost("runtime.resetShell");
+        },
         spawn: env.spawnTask,
         kill: env.killTask,
         ps: env.listTasks,

@@ -259,6 +259,9 @@ async function main(): Promise<void> {
                     return adapter.handleCall(method, args);
                 }
                 switch (method) {
+                    case "runtime.resetShell":
+                        await sandbox.resetShell();
+                        return;
                     case "memory.recall":
                         return memory.recall(args[0] as string, args[1] as any);
                     case "memory.browseHistory":
