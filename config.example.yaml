@@ -344,6 +344,8 @@ metrics:
 #     - events
 #     - kv
 #     - http
+#     - vision
+#     - shell
 #   code_act:
 #     # 最大交互轮次 (30)
 #     max_turns: 30
