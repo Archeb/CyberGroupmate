@@ -36,9 +36,11 @@ function shellQuote(value: string): string {
 export function buildEnhancedShellPath(projectRoot: string, existingPath: string): string {
     const skillsBinDir = join(projectRoot, "workspace", "skills", "node_modules", ".bin");
     const workspaceBinDir = join(projectRoot, "workspace", "node_modules", ".bin");
+    const globalBinDir = join(projectRoot, "workspace", "bin");
     const localBinDir = join(projectRoot, "workspace", ".local", "bin");
     const pathEntries = [
         existsSync(localBinDir) ? localBinDir : "",
+        existsSync(globalBinDir) ? globalBinDir : "",
         existsSync(skillsBinDir) ? skillsBinDir : "",
         existsSync(workspaceBinDir) ? workspaceBinDir : "",
         ...getAgentSkillScriptDirs(projectRoot),
