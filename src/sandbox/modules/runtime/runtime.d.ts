@@ -1,16 +1,22 @@
 /**
- * shared/runtime.d.ts — 所有 scene 共享的 runtime 能力
+ * shared/runtime.d.ts — 系统级能力
  */
 
 declare const runtime: {
     /** 推送事件到通知中心 */
     notify(event: { type: string; [key: string]: unknown }): void;
 
-    /** 请求用户输入 */
+    /** 请求host用户输入 */
     input(prompt: string): Promise<string>;
 
-    /** 直接打印到宿主 */
+    /** 直接打印到host */
     print(msg: string): void;
+
+    /**
+     * 强行重置底层 Shell（终端）进程。
+     * 如果通过 `skills.runCommand` 运行了交互式 CLI 工具导致终端卡死等待输入，LLM 自身无法确认或输入时，可通过调用此 API 强杀卡死的控制台进程并开启新 PTY 终端以恢复服务。
+     */
+    resetShell(): Promise<void>;
 
     /** 启动一个命名后台任务 */
     spawn(name: string, fn: (signal: AbortSignal) => Promise<void>): void;

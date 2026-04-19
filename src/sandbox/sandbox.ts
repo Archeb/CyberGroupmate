@@ -350,6 +350,11 @@ export class Sandbox extends EventEmitter {
             `export PROMPT_COMMAND=""`,
             `export BASH_SILENCE_DEPRECATION_WARNING=1`,
             ``,
+            `# 禁用交互和富文本输出（防 Agent 终端卡死或充斥 ANSI 乱码）`,
+            `export CI=true`,
+            `export NO_COLOR=1`,
+            `export FORCE_COLOR=0`,
+            ``,
             `# pip 持久化：安装到 workspace/.local（跨容器存活）`,
             `export PIP_TARGET="$HOME/.local/lib/python"`,
             `export PYTHONPATH="$HOME/.local/lib/python:$PYTHONPATH"`,
@@ -357,7 +362,7 @@ export class Sandbox extends EventEmitter {
             ``,
             `# Aliases — 常用工具快捷入口`,
             `alias npm="npm --prefix $HOME"`,
-            `alias npx="npx --prefix $HOME"`,
+            `alias npx="npx -y --prefix $HOME"`,
             `alias pip="pip install --target $PIP_TARGET"`,
             `alias pip3="pip3 install --target $PIP_TARGET"`,
             `alias node="node"`,
@@ -369,7 +374,7 @@ export class Sandbox extends EventEmitter {
         writeFileSync(bashrcPath, bashrcContent, "utf-8");
 
         this.ptyProcess = pty.spawn("/bin/bash", ["--rcfile", bashrcPath], {
-            name: "xterm-256color",
+            name: "dumb",
             cols: 200,
             rows: 50,
             cwd: this.shellHome,
@@ -605,6 +610,10 @@ export class Sandbox extends EventEmitter {
                 output = outputLines.slice(skipCount).join("\n").trim();
             }
 
+            // 剥离残余的 ANSI 控制符（兜底防御，防止输出夹带不可见字符扰乱 LLM）
+            // eslint-disable-next-line no-control-regex
+            output = output.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "");
+
             // 附加 cwd 信息
             const finalOutput = output
                 ? `${output}\n[cwd: ${cwd}]`
@@ -675,6 +684,28 @@ export class Sandbox extends EventEmitter {
                 }
             }, 3000);
         });
+    }
+
+    /**
+     * 强行重置底层 Shell（PTY）进程，清理执行状态。
+     * 用于从由于交互提示或死循环导致的卡死中恢复。
+     */
+    async resetShell(): Promise<void> {
+        if (this.pendingShellRequest) {
+            const { resolve, timer } = this.pendingShellRequest;
+            if (timer) clearTimeout(timer);
+            resolve({ output: "[⚠ Shell 进程由于卡死已被强行重置]", error: true });
+            this.pendingShellRequest = null;
+        }
+
+        if (this.ptyProcess) {
+            try {
+                this.ptyProcess.kill();
+            } catch { /* ignore */ }
+            this.ptyProcess = null;
+        }
+
+        await this.startPty();
     }
 
     // ─── 事件监听器管理 ───
