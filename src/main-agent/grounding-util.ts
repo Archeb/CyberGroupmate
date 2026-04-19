@@ -184,9 +184,6 @@ async function callGoogleGrounding(
 
     // 返回结构化文本
     let result = text;
-    if (sources.length > 0) {
-        result += "\n\n### 来源\n" + sources.join("\n");
-    }
     return result;
 }
 
@@ -318,9 +315,6 @@ async function callGrokGrounding(
     });
 
     let result = textContent;
-    if (sources.length > 0) {
-        result += "\n\n### 来源\n" + sources.join("\n");
-    }
     return result;
 }
 

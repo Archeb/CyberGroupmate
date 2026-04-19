@@ -35,8 +35,12 @@ function shellQuote(value: string): string {
 
 export function buildEnhancedShellPath(projectRoot: string, existingPath: string): string {
     const skillsBinDir = join(projectRoot, "workspace", "skills", "node_modules", ".bin");
+    const workspaceBinDir = join(projectRoot, "workspace", "node_modules", ".bin");
+    const localBinDir = join(projectRoot, "workspace", ".local", "bin");
     const pathEntries = [
+        existsSync(localBinDir) ? localBinDir : "",
         existsSync(skillsBinDir) ? skillsBinDir : "",
+        existsSync(workspaceBinDir) ? workspaceBinDir : "",
         ...getAgentSkillScriptDirs(projectRoot),
         existingPath,
     ].filter(Boolean);
@@ -344,9 +348,16 @@ export class Sandbox extends EventEmitter {
             `export PROMPT_COMMAND=""`,
             `export BASH_SILENCE_DEPRECATION_WARNING=1`,
             ``,
+            `# pip 持久化：安装到 workspace/.local（跨容器存活）`,
+            `export PIP_TARGET="$HOME/.local/lib/python"`,
+            `export PYTHONPATH="$HOME/.local/lib/python:$PYTHONPATH"`,
+            `export PATH="$HOME/.local/bin:$PATH"`,
+            ``,
             `# Aliases — 常用工具快捷入口`,
             `alias npm="npm --prefix $HOME"`,
             `alias npx="npx --prefix $HOME"`,
+            `alias pip="pip install --target $PIP_TARGET"`,
+            `alias pip3="pip3 install --target $PIP_TARGET"`,
             `alias node="node"`,
             `alias tsx="npx tsx"`,
             `alias git="git -C $HOME"`,

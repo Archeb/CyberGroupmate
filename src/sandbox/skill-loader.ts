@@ -252,7 +252,7 @@ export function parseAllSkillDocs(): ModuleEntry[] {
                     methods: [{
                         name: "use",
                         brief: `打印并阅读该 Skill 的详细指南。调用方式: await ${skill.name}.use()`,
-                        fullDoc: `调用 \`await ${skill.name}.use()\` 查看完整使用指南。\n\n返回值: string（指南全文）`,
+                        fullDoc: "",  // use() 本身即自文档（调用后输出 SKILL.md 全文），无需 two-pass 注入
                     }],
                 });
             } catch (err) {
