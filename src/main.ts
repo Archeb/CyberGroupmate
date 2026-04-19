@@ -259,9 +259,22 @@ async function main(): Promise<void> {
                     return adapter.handleCall(method, args);
                 }
                 switch (method) {
-                    case "runtime.resetShell":
-                        await sandbox.resetShell();
+                    case "shell.listTabs":
+                        return sandbox.listShellTabs();
+                    case "shell.detach":
+                        return sandbox.detachDefaultTab(String(args[0]));
+                    case "shell.read":
+                        return sandbox.readShellTab(
+                            args[0] != null ? String(args[0]) : undefined,
+                            args[1] != null ? Number(args[1]) : undefined,
+                        );
+                    case "shell.sendInput":
+                        sandbox.sendShellInput(String(args[0]), args[1] != null ? String(args[1]) : undefined);
                         return;
+                    case "shell.kill":
+                        return sandbox.killShellTab(args[0] != null ? String(args[0]) : undefined);
+                    case "shell.cwd":
+                        return sandbox.getShellCwd();
                     case "memory.recall":
                         return memory.recall(args[0] as string, args[1] as any);
                     case "memory.browseHistory":

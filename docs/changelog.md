@@ -1,5 +1,30 @@
 # Changelog
 
+## 2026-04-19: Sandbox \`shell\` 模块升级：支持 Multi-Tab 与长时任务后台运行
+
+将 Sandbox 的终端环境从单 PTY（伪终端）阻塞架构重构为支持 \`detach\` / \`attach\` 后台管理的 Multi-Tab 架构，显著提升了 Agent 运行耗时命令（如开发服务器、编译任务）且不阻塞主线程的能力。
+
+### ✨ 核心特性
+
+- **Multi-Tab 终端管理**：实现了类似 \`tmux\` 的多标签页终端模型。所有标准命令优先在 \`default\` tab 执行，Agent 可按需将卡住/耗时的终端推入后台（重命名 tab），并立刻获得一个新的 \`default\` 终端。
+- **后台服务流式读取**：无论是前端 dev server 还是后端监听服务，通过新的 \`shell.read('tabId')\` 方法可随时回溯指定容器后台最新 500 行的滚动缓冲日志。
+- **交互式 CLI 的高层控制**：当面临 y/N 确认框、登录弹窗而陷入僵死状态时，Agent 可通过 \`shell.sendInput()\` 注入键盘操作、或者是使用 \`shell.kill()\` 强制安全回收服务容器。
+- **高鲁棒性的输出层**：在 \`.bashrc\` 级别实施了强化，注入 \`CI=true\` / \`NO_COLOR=1\` 及 PTY Dumb Mode，并辅以全局 ANSI 控制符正则表达式清洗，保证输出给 LLM 的 CLI 行文本不再被富文本与进度条转义串污染。
+- **持久化隔离与缓存重置**：通过为各会话独立生成 \`.bashrc\` 缓存并且构建 \`$HOME/.local/bin\` 级别的 Pip / Npm prefix 持久化软链路线，确保 Python / Nodejs 此类常用全局库能跨实例存活。
+
+### 改动文件清单
+
+| 文件 | 变更目的 |
+|---|---|
+| \`src/sandbox/modules/shell/shell.d.ts\` | **[NEW]** Multi-Tab Shell API 类型定义 (\`listTabs\`, \`detach\`, \`read\`, \`sendInput\`, \`kill\`, \`cwd\`) |
+| \`src/sandbox/modules/shell/index.ts\` | **[NEW]** Worker 侧负责代理方法调用的垫片实现 |
+| \`src/sandbox/sandbox.ts\` | **[REFACTOR]** 核心：替换 \`ptyProcess\` 为 \`Map<string, PtyTab>\`；重构了 PTY 启动过程、添加滚动缓冲流及处理因卡死导致未接通 sentinel 挂起事件重入恢复逻辑的顶层支持 |
+| \`src/sandbox/sandbox-worker.ts\` | 将 \`shell\` 对象作为顶级注入组装进沙盒代码解析函数的白名单中 |
+| \`src/main.ts\` | 在 Host 监听器中注册配套处理 \`shell.*\` 这 6 个功能的 IPC 节点路由通信 |
+| \`src/sandbox/modules/runtime/*\` | 从 \`runtime\` 接口中除去了之前临时作为补丁职责僭越的 \`resetShell\` |
+
+---
+
 ## 2026-04-18: 新增 Grounding 联网事实查证功能与事件管道集成
 
 主 Agent `attend-handler` 决策流程现已引入并行的 `Google Grounding` 以及 `Grok Web Search` 支持能力。这使得 Agent 可以针对对话上下文中探讨的真实世界实体或事实事件自动进行查证，并将无缝融入到 CodeAct 子代理的运行环境（Prompt）中以增强事实的准确性，降低幻觉干扰。
