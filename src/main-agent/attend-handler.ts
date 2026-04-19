@@ -327,7 +327,7 @@ export function createAttendHandler(
             // ═══ 可指派模块名册注入（放入 system prompt，避免每次 attend 重复占用 token） ═══
             const currentConfig = loadConfig();
             const baseSkills = new Set(currentConfig.subagent?.baseSkills ?? [
-                "runtime", "memory", "docs", "fs", "actions", "skills", "mcp", "cron", "events", "kv", "http", "vision",
+                "runtime", "memory", "docs", "fs", "actions", "skills", "mcp", "cron", "events", "kv", "http", "vision", "shell",
             ]);
             // 平台 adapter 也是 base
             if (currentConfig.telegram) baseSkills.add("telegram");

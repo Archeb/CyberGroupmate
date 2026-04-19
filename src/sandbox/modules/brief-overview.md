@@ -77,11 +77,11 @@ memory.d.ts — Memory V2 Agent API 类型定义 记忆系统 V2 接口。Agent 
 - `reflect`: 对指定群组进行反思总结 读取上次反思以来的 topics 和 interactions，生成结构化总结
 
 ## runtime
-shared/runtime.d.ts — 所有 scene 共享的 runtime 能力
+shared/runtime.d.ts — 系统级能力
 
 - `notify`: 推送事件到通知中心
-- `input`: 请求用户输入
-- `print`: 直接打印到宿主
+- `input`: 请求host用户输入
+- `print`: 直接打印到host
 - `spawn`: 启动一个命名后台任务
 - `spawnPersistent`: 启动持久化后台任务（Worker 重启后自动恢复）。 代码以字符串形式存储，触发时在 sandbox 中执行。 代码中可通过 `signal` 变量访问 AbortSignal。
 - `kill`: 停止一个后台任务（同时清除持久化记录）
@@ -94,10 +94,20 @@ shared/runtime.d.ts — 所有 scene 共享的 runtime 能力
 - `env.delete`: 删除环境变量（不存在时安全返回）
 - `remind`: 设置一次性定时提醒（自然语言）。到期后 agent 将被唤醒并收到 description 作为新任务。重复定时提醒请用 cron ⚠️ description 必须是详细的自然语言描述，不是代码。 写清楚：要做什么、给谁发、发什么内容、如何获取信息等。 限制：最短 1 分钟，最长 365 天，每个群最多 10 个活跃提醒。
 
+## shell
+shell.d.ts — 终端 Tab 管理模块 提供类似 tmux/terminal tabs 的多终端管理能力。 主终端 "default" 是所有 ```bash``` 代码块的执行目标。 当主终端被长时间运行的服务阻塞时，可以将其 detach 到后台并获得全新主终端。
+
+- `listTabs`: 列出所有存活的终端 Tab 及其状态。
+- `detach`: 分离当前主终端到后台，并立刻获得一个全新的 default 终端。 当主终端被长时间运行的命令（如 `npm run dev`）阻塞时： 1. 当前 default 终端被重命名为 newTabId 并移入后台 2. 系统自动创建全新的 default 终端 3. 后续 ```bash``` 代码块将在新终端中执行
+- `read`: 读取指定终端的输出历史。 用于排查超时命令的残留输出，或查看后台服务日志。 默认读取 default 终端，可指定 tabId 读取后台终端。
+- `sendInput`: 向指定终端注入按键输入。 用于应对交互式 CLI 的确认提示（如 "Is this ok? (y/N)"）。 也可发送 Ctrl+C（"\x03"）来优雅地中断进程。
+- `kill`: 销毁指定终端中的所有进程并回收该 tab。 如果销毁的是 default 终端，会自动创建新的 default。
+- `cwd`: 获取当前主终端的工作目录。
+
 ## skills
 shared/skills.d.ts — Skills 高层能力 + 管理接口
 
-- `install`: 安装或创建一个新 Skill 的指导说明（实际上不会自动执行代码动作，而是返回具体的操作步骤指南）
+- `install`: 安装或创建一个新 Skill
 - `list`: 列出当前已加载的 Skills 名称
 - `reload`: 热重载所有 Skills。在 workspace/skills/ 下创建/修改文件后调用。
 - `npmInstall`: 安装 npm 包到 workspace/skills/ 目录

@@ -242,7 +242,7 @@
   },
   {
     "name": "runtime",
-    "description": "shared/runtime.d.ts — 所有 scene 共享的 runtime 能力",
+    "description": "shared/runtime.d.ts — 系统级能力",
     "methods": [
       {
         "name": "notify",
@@ -251,13 +251,13 @@
       },
       {
         "name": "input",
-        "brief": "请求用户输入",
-        "fullDoc": "```typescript\ninput(prompt: string): Promise<string>\n```\n\n\n请求用户输入"
+        "brief": "请求host用户输入",
+        "fullDoc": "```typescript\ninput(prompt: string): Promise<string>\n```\n\n\n请求host用户输入"
       },
       {
         "name": "print",
-        "brief": "直接打印到宿主",
-        "fullDoc": "```typescript\nprint(msg: string): void\n```\n\n\n直接打印到宿主"
+        "brief": "直接打印到host",
+        "fullDoc": "```typescript\nprint(msg: string): void\n```\n\n\n直接打印到host"
       },
       {
         "name": "spawn",
@@ -317,13 +317,49 @@
     ]
   },
   {
+    "name": "shell",
+    "description": "shell.d.ts — 终端 Tab 管理模块 提供类似 tmux/terminal tabs 的多终端管理能力。 主终端 \"default\" 是所有 ```bash``` 代码块的执行目标。 当主终端被长时间运行的服务阻塞时，可以将其 detach 到后台并获得全新主终端。",
+    "methods": [
+      {
+        "name": "listTabs",
+        "brief": "列出所有存活的终端 Tab 及其状态。",
+        "fullDoc": "```typescript\nlistTabs(): Promise<Array<{\n        id: string;\n        state: \"idle\" | \"busy\";\n        recentOutput: string;\n    }>>\n```\n\n\n列出所有存活的终端 Tab 及其状态。\n\n**参数：**\n- **返回值**: 每个 tab 的 id、状态和最近输出预览\n\n**示例：**\n```typescript\nconst tabs = await shell.listTabs();\n// [{ id: \"default\", state: \"idle\", recentOutput: \"...\" },\n//  { id: \"web-server\", state: \"busy\", recentOutput: \"Listening on :3000\" }]\n```"
+      },
+      {
+        "name": "detach",
+        "brief": "分离当前主终端到后台，并立刻获得一个全新的 default 终端。 当主终端被长时间运行的命令（如 `npm run dev`）阻塞时： 1. 当前 default 终端被重命名为 newTabId 并移入后台 2. 系统自动创建全新的 default 终端 3. 后续 ```bash``` 代码块将在新终端中执行",
+        "fullDoc": "```typescript\ndetach(newTabId: string): Promise<void>\n```\n\n\n分离当前主终端到后台，并立刻获得一个全新的 default 终端。\n\n当主终端被长时间运行的命令（如 `npm run dev`）阻塞时：\n1. 当前 default 终端被重命名为 newTabId 并移入后台\n2. 系统自动创建全新的 default 终端\n3. 后续 ```bash``` 代码块将在新终端中执行\n\n**参数：**\n- `newTabId`: 后台标签名（如 \"web-server\"、\"db\"）\n\n**示例：**\n```typescript\n// 启动 dev server（会超时，但进程仍在运行）\n// ```bash\n// npm run dev\n// ```\n// 收到 [⚠ Command timed out]\n\n// 将被阻塞的终端移到后台，释放主通道\nawait shell.detach(\"dev-server\");\n\n// 现在可以继续在新的 default 终端工作\n```"
+      },
+      {
+        "name": "read",
+        "brief": "读取指定终端的输出历史。 用于排查超时命令的残留输出，或查看后台服务日志。 默认读取 default 终端，可指定 tabId 读取后台终端。",
+        "fullDoc": "```typescript\nread(tabId?: string, lines?: number): Promise<string>\n```\n\n\n读取指定终端的输出历史。\n\n用于排查超时命令的残留输出，或查看后台服务日志。\n默认读取 default 终端，可指定 tabId 读取后台终端。\n\n**参数：**\n- `tabId`: 终端标签 ID（默认 \"default\"）\n- `lines`: 返回最近 N 行（默认 50）\n\n**示例：**\n```typescript\n// 查看 dev-server 的运行日志\nconst logs = await shell.read(\"dev-server\", 20);\nconsole.log(logs);\n```"
+      },
+      {
+        "name": "sendInput",
+        "brief": "向指定终端注入按键输入。 用于应对交互式 CLI 的确认提示（如 \"Is this ok? (y/N)\"）。 也可发送 Ctrl+C（\"\\x03\"）来优雅地中断进程。",
+        "fullDoc": "```typescript\nsendInput(input: string, tabId?: string): Promise<void>\n```\n\n\n向指定终端注入按键输入。\n\n用于应对交互式 CLI 的确认提示（如 \"Is this ok? (y/N)\"）。\n也可发送 Ctrl+C（\"\\x03\"）来优雅地中断进程。\n\n**参数：**\n- `input`: 要发送的文本（如 \"y\\n\"、\"\\x03\"）\n- `tabId`: 目标终端（默认 \"default\"）\n\n**示例：**\n```typescript\n// 对交互提示输入 y\nawait shell.sendInput(\"y\\n\");\n```\n\n```typescript\n// 向后台服务发送 Ctrl+C 停止它\nawait shell.sendInput(\"\\x03\", \"dev-server\");\n```"
+      },
+      {
+        "name": "kill",
+        "brief": "销毁指定终端中的所有进程并回收该 tab。 如果销毁的是 default 终端，会自动创建新的 default。",
+        "fullDoc": "```typescript\nkill(tabId?: string): Promise<void>\n```\n\n\n销毁指定终端中的所有进程并回收该 tab。\n如果销毁的是 default 终端，会自动创建新的 default。\n\n**参数：**\n- `tabId`: 要销毁的终端（默认 \"default\"）\n\n**示例：**\n```typescript\n// 强制结束并回收一个后台终端\nawait shell.kill(\"dev-server\");\n\n// 重置卡死的主终端\nawait shell.kill();\n```"
+      },
+      {
+        "name": "cwd",
+        "brief": "获取当前主终端的工作目录。",
+        "fullDoc": "```typescript\ncwd(): Promise<string>\n```\n\n\n获取当前主终端的工作目录。"
+      }
+    ]
+  },
+  {
     "name": "skills",
     "description": "shared/skills.d.ts — Skills 高层能力 + 管理接口",
     "methods": [
       {
         "name": "install",
-        "brief": "安装或创建一个新 Skill 的指导说明（实际上不会自动执行代码动作，而是返回具体的操作步骤指南）",
-        "fullDoc": "```typescript\ninstall(name: string): string\n```\n\n\n安装或创建一个新 Skill 的指导说明（实际上不会自动执行代码动作，而是返回具体的操作步骤指南）\n\n**参数：**\n- `name`: 拟创建的 Skill 名称\n- **返回值**: 怎样按照格式存放文件来创建 skill 的说明文档"
+        "brief": "安装或创建一个新 Skill",
+        "fullDoc": "```typescript\ninstall(name: string): string\n```\n\n\n安装或创建一个新 Skill\n\n**参数：**\n- `name`: 拟创建的 Skill 名称\n- **返回值**: 怎样按照格式存放文件来创建 skill 的说明文档"
       },
       {
         "name": "list",
