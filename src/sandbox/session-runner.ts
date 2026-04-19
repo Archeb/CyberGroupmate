@@ -200,18 +200,26 @@ function isBashLang(lang: string): boolean {
 /**
  * 截断 LLM 输出：只保留第一个完整代码块及其前面的自然语言，
  * 丢弃第一个代码块结束围栏之后的所有内容。
- * 如果没有完整的代码块，则原样返回。
+ * （如果截断前有 <end_turn> 但被截断了，则补回 <end_turn>）
  */
-export function trimAfterFirstCodeBlock(response: string): string {
+export function trimAfterFirstCodeBlock(response: string, hasEndTurn: boolean = false): string {
     // 非贪婪匹配第一个完整代码块（含闭合 ```）
     const firstBlockRe = new RegExp(
         "```(?:" + CODE_FENCE_LANGS + ")\\s*\\n[\\s\\S]*?```"
     );
     const m = firstBlockRe.exec(response);
-    if (!m) return response; // 没有完整代码块，原样返回
-
-    // 保留：从开头到第一个代码块闭合围栏的末尾
-    return response.slice(0, m.index + m[0].length);
+    
+    let trimmed = response;
+    if (m) {
+        // 保留：从开头到第一个代码块闭合围栏的末尾
+        trimmed = response.slice(0, m.index + m[0].length);
+    }
+    
+    if (hasEndTurn && !trimmed.includes(END_TURN_MARKER)) {
+        trimmed += "\n" + END_TURN_MARKER;
+    }
+    
+    return trimmed;
 }
 
 /**
@@ -383,17 +391,15 @@ export async function runCodeActSession(
 
         // ─── 检测 <end_turn> 显式终止标记 ───
         let hasEndTurn = rawAssistantText.includes(END_TURN_MARKER);
-        const strippedText = hasEndTurn
-            ? rawAssistantText.replace(END_TURN_MARKER, "").trimEnd()
-            : rawAssistantText;
 
         // ─── 截断：只保留第一个完整代码块及其前面的文本 ───
-        const assistantText = trimAfterFirstCodeBlock(strippedText);
-        if (assistantText.length < strippedText.length) {
+        // （不再提取并丢弃 <end_turn>，让它保留在上下文中作为 Few-shot）
+        const assistantText = trimAfterFirstCodeBlock(rawAssistantText, hasEndTurn);
+        if (assistantText.length < rawAssistantText.length) {
             log.info(`Turn ${turnNum}: 截断模型输出`, {
-                before: strippedText.length,
+                before: rawAssistantText.length,
                 after: assistantText.length,
-                discarded: strippedText.length - assistantText.length,
+                discarded: rawAssistantText.length - assistantText.length,
             });
         }
         messages.push({ role: "assistant", content: assistantText });
@@ -541,10 +547,7 @@ ${fullDocs}
                             // ─── Pass 2: 检测 <end_turn> ───
                             const pass2Raw = pass2Response.content;
                             const pass2HasEndTurn = pass2Raw.includes(END_TURN_MARKER);
-                            const pass2Stripped = pass2HasEndTurn
-                                ? pass2Raw.replace(END_TURN_MARKER, "").trimEnd()
-                                : pass2Raw;
-                            const pass2Text = trimAfterFirstCodeBlock(pass2Stripped);
+                            const pass2Text = trimAfterFirstCodeBlock(pass2Raw, pass2HasEndTurn);
                             hasEndTurn = pass2HasEndTurn; // Pass 2 覆盖 Pass 1 的终止信号
 
                             messages.push({ role: "assistant", content: pass2Text });
