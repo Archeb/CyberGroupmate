@@ -810,8 +810,29 @@ export function createApiRouter(deps: DashboardDeps, bridge: EventBridge): Route
     });
 
     // ─── Token Stats ───
-    router.get("/token-stats", (_req, res) => {
-        res.json(deps.tokenStats.getStats());
+    router.get("/token-stats", (req, res) => {
+        const groupBy = qs(req.query.groupBy) || "model";
+        const period = qs(req.query.period) || "all";
+        const from = qs(req.query.from) || undefined;
+        const to = qs(req.query.to) || undefined;
+        const sortBy = qs(req.query.sortBy) || "cost";
+        const sortDir = qs(req.query.sortDir) || "desc";
+        const filterModel = qs(req.query.filterModel) || undefined;
+        const filterCaller = qs(req.query.filterCaller) || undefined;
+        res.json(deps.tokenStats.query({
+            groupBy: groupBy as any,
+            period: period as any,
+            from,
+            to,
+            sortBy: sortBy as any,
+            sortDir: sortDir as any,
+            filterModel,
+            filterCaller,
+        }));
+    });
+
+    router.get("/token-stats/meta", (_req, res) => {
+        res.json(deps.tokenStats.listMeta());
     });
 
     router.post("/token-stats/reset", (_req, res) => {

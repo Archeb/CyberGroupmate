@@ -237,7 +237,7 @@ export class EventBridge {
             const model = callIdToModel.get(data.callId) ?? "unknown";
             callIdToModel.delete(data.callId);
             if (data.usage && !data.error) {
-                this.deps.tokenStats.record(model, data.usage);
+                this.deps.tokenStats.record(model, data.caller ?? "unknown", data.usage);
             }
         });
 
