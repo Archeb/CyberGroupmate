@@ -405,9 +405,15 @@ export function createAttendHandler(
 
             // ➝ 构建 messages: [system, ...历史对话, 当前轮 attend prompt]
             const currentTurnPrompt = `${attentionPrompt}`;
+            const history = mainLoop.getConversationHistory() as ChatMessage[];
+            const historyWithCache = history.map((msg, i) =>
+                i === history.length - 1
+                    ? { ...msg, cacheBreakpoint: true }
+                    : msg
+            );
             const messages: ChatMessage[] = [
                 { role: "system", content: mainSystemPrompt },
-                ...(mainLoop.getConversationHistory() as ChatMessage[]),
+                ...historyWithCache,
                 { role: "user", content: currentTurnPrompt, imageParts: imageParts.length > 0 ? imageParts : undefined },
             ];
 

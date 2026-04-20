@@ -490,14 +490,20 @@ export class CodeActExecutor {
 
         // ═══ Fix 2: 构建 messages 时注入历史 session 上下文 ═══
         const messages: ChatMessage[] = [
-            { role: "system", content: systemPrompt },
+            { role: "system", content: systemPrompt, cacheBreakpoint: true },
         ];
 
         // 注入历史 session（如果有）
         if (this.session.length > 0) {
             // 将历史 session 消息作为 LLM 上下文注入
-            for (const msg of this.session) {
-                messages.push({ role: msg.role, content: msg.content });
+            for (let i = 0; i < this.session.length; i++) {
+                const msg = this.session[i];
+                const isLast = i === this.session.length - 1;
+                messages.push({
+                    role: msg.role,
+                    content: msg.content,
+                    ...(isLast ? { cacheBreakpoint: true } : {}),
+                });
             }
         }
 

@@ -19,6 +19,12 @@ export interface ChatMessage {
     scope?: string;
     /** 多模态图片附件（仅 role=user 生效） */
     imageParts?: ImagePart[];
+    /**
+     * 缓存断点标记：provider 会在此消息处设置缓存边界。
+     * Anthropic -> cache_control: { type: "ephemeral" }
+     * OpenAI/Google -> 忽略（依赖隐式前缀缓存）
+     */
+    cacheBreakpoint?: boolean;
 }
 
 /** LLM 调用结果 */
