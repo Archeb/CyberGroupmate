@@ -1106,6 +1106,7 @@ async function main(): Promise<void> {
                 mediaDownloader: sharedMediaDownloader,
                 adapters,
                 onConfigSaved: async (config) => {
+                    tokenStats.setProfiles(config.llmProfiles ?? {});
                     const normalized = normalizeEnvVars(config.envVars);
                     currentEnvPlan = buildEnvPlan(normalized);
                     applyHostManagedEnv(currentEnvPlan);
