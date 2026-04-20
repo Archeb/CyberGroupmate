@@ -40,15 +40,18 @@ export interface MainAgentLoopConfig {
     maxAttendsPerTick: number;
     /** Cosine Decay 周期。默认 20 */
     cosineDecayCyclePeriod: number;
-    /** 主 Agent LLM 对话历史最大消息数（不含 system）。默认 30 */
-    maxHistoryMessages: number;
+    /** Compaction 后保留的最近消息条数。默认 10 */
+    retainAfterCompact: number;
+    /** 紧急截断硬上限（仅当 compact 失败/未配置时生效）。默认 100 */
+    hardCapMessages: number;
 }
 
 const DEFAULT_LOOP_CONFIG: MainAgentLoopConfig = {
     pollInterval: DEFAULT_SUBAGENT_CONFIG.pollInterval,
     maxAttendsPerTick: 3,
     cosineDecayCyclePeriod: 20,
-    maxHistoryMessages: 30,
+    retainAfterCompact: 10,
+    hardCapMessages: 100,
 };
 
 /**
@@ -84,9 +87,16 @@ export class MainAgentLoop {
     /**
      * 主 Agent LLM 对话历史
      * 按时间顺序存放：attend 上下文 (user) → 决策 (assistant) → callback (user) → ...
-     * 超过 maxHistoryMessages 时先截断，后使用 LLM compact。
+     * 使用 LLM compact 作为唯一的历史管理机制，硬上限截断仅作安全网。
      */
     private conversationHistory: ChatMessage[] = [];
+
+    /**
+     * 同群消息增量追踪：chatId → 上次存入历史的最新 messageId。
+     * 用于 attend-handler 构建增量历史记录，避免跨轮次重复存储相同消息。
+     * Compaction 成功后重置。
+     */
+    private lastStoredMsgId = new Map<string, string>();
 
 
     /** 外部 attend handler（由 main.ts 集成注入） */
@@ -348,9 +358,9 @@ export class MainAgentLoop {
                     await this.dispatchHandler(result);
                 }
 
-                // ─── Phase 6.5: dispatch 完成后 compact 对话历史 ───
-                // 从 appendToHistory 移至此处，避免在 attend 阶段 compact 延迟任务分派
-                await this.compactHistoryIfNeeded();
+                // ─── Phase 6.5: dispatch 完成后管理对话历史 ───
+                // 统一入口：token 超预算时 compact，硬上限截断作安全网
+                await this.manageHistory();
             }
 
             // 更新 subagent attend 状态
@@ -428,48 +438,82 @@ export class MainAgentLoop {
     /**
      * 追加消息到主 Agent 对话历史。
      *
-     * 超限时进行 Layer 1 确定性截断（保留最近 maxHistoryMessages 条）。
-     * Layer 2 LLM compact 由 compactHistoryIfNeeded() 在任务完成后触发，
-     * 避免在 attend/dispatch 阶段因 compact 延迟任务分派。
+     * 仅做 push，不截断。历史管理由 manageHistory() 统一处理。
      */
     async appendToHistory(msg: ChatMessage): Promise<void> {
         this.conversationHistory.push(msg);
-
-        // Layer 1: 基础截断
-        if (this.conversationHistory.length > this.config.maxHistoryMessages) {
-            this.conversationHistory = this.conversationHistory.slice(
-                -this.config.maxHistoryMessages,
-            );
-        }
     }
 
     /**
-     * 检查并执行对话历史的 LLM compact（Layer 2）。
+     * 统一的对话历史管理入口。
      *
      * 应在任务完成后（dispatch 之后）调用，避免 compact 延迟任务分派。
-     * 如果 token 总量未超预算，不做任何操作。
+     *
+     * 流程：
+     * 1. token 超预算 → 触发 LLM compaction，压缩旧消息为 briefing
+     * 2. compaction 成功后重置消息增量追踪
+     * 3. compaction 失败/未配置且消息数超硬上限 → 紧急截断（安全网）
      */
-    async compactHistoryIfNeeded(): Promise<void> {
+    async manageHistory(): Promise<void> {
         const compactConfigs = resolveComponentProfiles("compact");
-        if (compactConfigs.length === 0) return;
-        if (!shouldCompact(this.conversationHistory, undefined, compactConfigs[0])) return;
 
-        try {
-            log.info("主 Agent 对话历史 compact: token 超预算", {
-                messageCount: this.conversationHistory.length,
-            });
-            this.conversationHistory = await contextManagerCompact(
-                this.conversationHistory,
-                compactConfigs,
+        // ─── 尝试 LLM Compaction ───
+        if (compactConfigs.length > 0 && shouldCompact(this.conversationHistory, undefined, compactConfigs[0])) {
+            try {
+                log.info("主 Agent 对话历史 compact: token 超预算", {
+                    messageCount: this.conversationHistory.length,
+                });
+                this.conversationHistory = await contextManagerCompact(
+                    this.conversationHistory,
+                    compactConfigs,
+                );
+                // Compaction 成功 → 重置消息增量追踪
+                // 旧消息已被压缩为 briefing，下次 attend 需存完整消息
+                this.lastStoredMsgId.clear();
+                log.info("主 Agent 对话历史 compact 完成", {
+                    afterCount: this.conversationHistory.length,
+                    deltaTrackingReset: true,
+                });
+                return;
+            } catch (err) {
+                log.warn("主 Agent 对话历史 compact 失败，检查硬上限", {
+                    error: String(err),
+                });
+            }
+        }
+
+        // ─── 安全网：硬上限截断 ───
+        // 仅当 compaction 失败/未配置且消息数过多时触发
+        if (this.conversationHistory.length > this.config.hardCapMessages) {
+            const before = this.conversationHistory.length;
+            this.conversationHistory = this.conversationHistory.slice(
+                -this.config.retainAfterCompact,
             );
-            log.info("主 Agent 对话历史 compact 完成", {
-                afterCount: this.conversationHistory.length,
-            });
-        } catch (err) {
-            log.warn("主 Agent 对话历史 compact 失败", {
-                error: String(err),
+            // 硬截断也需要重置增量追踪
+            this.lastStoredMsgId.clear();
+            log.warn("主 Agent 对话历史硬上限截断（安全网）", {
+                before,
+                after: this.conversationHistory.length,
+                hardCap: this.config.hardCapMessages,
             });
         }
+    }
+
+    // ─── 消息增量追踪 ───
+
+    /**
+     * 获取指定 chatId 上次存入历史的最新 messageId。
+     * 用于 attend-handler 计算增量消息。
+     */
+    getLastStoredMsgId(chatId: string): string | undefined {
+        return this.lastStoredMsgId.get(chatId);
+    }
+
+    /**
+     * 更新指定 chatId 的最新存储 messageId。
+     */
+    setLastStoredMsgId(chatId: string, msgId: string): void {
+        this.lastStoredMsgId.set(chatId, msgId);
     }
 
     /**

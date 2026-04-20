@@ -42,6 +42,65 @@ function buildObserve(chatId: string): AttendResult {
     };
 }
 
+/**
+ * 构建精简的历史 attend 记录（仅标题 + 增量消息）。
+ *
+ * 剥离所有瞬态段落（活跃参与者、聊天画像、话题注册表、全局状态快照、
+ * 决策记录、任务列表、FastPath 历史等），仅保留 chatId 标识和增量消息原文。
+ *
+ * 增量逻辑：通过 mainLoop 的 per-chatId 追踪，只存储上次未见过的新消息。
+ * compaction 后追踪被重置，自动退化为全量存储。
+ */
+function buildHistoricalAttendEntry(
+    chatId: string,
+    chatTitle: string | undefined,
+    depth: number,
+    rawMessages: RawMessage[],
+    mainLoop: MainAgentLoop,
+): string {
+    const header = `═══ Attend: ${chatTitle ?? chatId} (${getRawId(chatId)}) [L${depth}] ═══`;
+
+    if (rawMessages.length === 0) {
+        return `${header}\n(无消息)`;
+    }
+
+    // 计算增量：找到 lastStoredMsgId 在 rawMessages 中的位置
+    const lastStoredId = mainLoop.getLastStoredMsgId(chatId);
+    let deltaStartIdx = 0;
+
+    if (lastStoredId) {
+        const lastIdx = rawMessages.findIndex(m => m.id === lastStoredId);
+        if (lastIdx >= 0) {
+            deltaStartIdx = lastIdx + 1;
+        }
+        // lastStoredId 不在当前消息列表中 → 存全量
+        // （可能间隔太久，旧消息已滑出窗口）
+    }
+
+    const deltaMessages = rawMessages.slice(deltaStartIdx);
+
+    // 更新追踪到最新消息 ID
+    const newestMsg = rawMessages[rawMessages.length - 1];
+    if (newestMsg?.id) {
+        mainLoop.setLastStoredMsgId(chatId, newestMsg.id);
+    }
+
+    if (deltaMessages.length === 0) {
+        return `${header}\n(无新消息)`;
+    }
+
+    // 格式化增量消息（使用 formatMessageLine，不含 vision 富化）
+    const deltaText = deltaMessages
+        .map(m => formatMessageLine(m, { includeMediaTags: true }))
+        .join("\n");
+
+    const deltaNote = deltaStartIdx > 0
+        ? `(增量: ${deltaMessages.length} 条新消息，前 ${deltaStartIdx} 条已在历史中)`
+        : `(${deltaMessages.length} 条消息)`;
+
+    return `${header}\n${deltaNote}\n${deltaText}`;
+}
+
 /** Attend handler 依赖 */
 export interface AttendHandlerDeps {
     memory: MemoryStoreV2;
@@ -175,6 +234,7 @@ export function createAttendHandler(
         try {
             // 构建消息原文（所有深度均获取）+ Vision 富化 sticker/photo
             let messagesText = "";
+            let rawMessagesForHistory: RawMessage[] = [];
             const imageParts: Array<{ url: string }> = [];
             {
                 let recentMsgs = memory.getRecentMessages(entry.chatId, messageLimit);
@@ -263,6 +323,7 @@ export function createAttendHandler(
                         mediaDownloader,
                     });
                     messagesText = formattedText;
+                    rawMessagesForHistory = rawMessages;
                     if (parsedImageParts.length > 0) {
                         imageParts.push(...parsedImageParts);
                     }
@@ -433,8 +494,17 @@ export function createAttendHandler(
                 groundingContext,
             };
 
-            // ═══ 追加本轮对话到历史（下轮 LLM 可见） ═══
-            await mainLoop.appendToHistory({ role: "user", content: currentTurnPrompt });
+            // ═══ 追加本轮对话到历史（精简版：仅标题 + 增量消息） ═══
+            // 当前轮完整 prompt 发给 LLM 决策（上方），但存入历史的是精简版
+            // → 剥离瞬态段落 + 同群消息增量存储，大幅减少历史 token 量
+            const historicalContent = buildHistoricalAttendEntry(
+                entry.chatId,
+                contextPkg.chatTitle ?? groupModel?.chatTitle,
+                depth,
+                rawMessagesForHistory,
+                mainLoop,
+            );
+            await mainLoop.appendToHistory({ role: "user", content: historicalContent });
             await mainLoop.appendToHistory({ role: "assistant", content: jsonContent });
 
 
