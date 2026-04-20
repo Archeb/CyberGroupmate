@@ -5,8 +5,8 @@
  * 将结果回写到 memory，并生成系统通知。
  *
  * 追问检测 (architecture_v2.md §3 Q3 路径 5)：
- * Agent 发言后开启一个短窗口（默认 90 秒），在窗口期内收到同群
- * 用户消息时立即触发 onFollowUpDetected 回调，将该群入队 Q3。
+ * Agent 发言后开启一个短窗口（默认 120 秒）收集同群用户消息。
+ * 窗口内累计达到阈值（默认 10 条）立即触发；否则窗口结束时如有收集到消息也触发。
  * 每个 chatId 同时只维护一个窗口，新 Agent 消息会刷新窗口。
  */
 
@@ -39,6 +39,9 @@ interface PendingFeedback {
 interface FollowUpWindow {
     sentAtMs: number;
     agentMsgId?: string;
+    messageCount: number;
+    triggerTexts: string[];
+    lastMessageText: string;
     timer: ReturnType<typeof setTimeout>;
 }
 
@@ -54,7 +57,8 @@ export class FeedbackLoop {
      * @param registryLookup - 按 chatId 查找 per-group TopicRegistry
      * @param evaluationDelayMs - 评估延迟
      * @param onFollowUpDetected - 追问检测回调：chatId + 触发消息文本
-     * @param followUpWindowMs - 追问窗口时长（默认 90 秒）
+     * @param followUpWindowMs - 追问收集窗口时长（默认 120 秒）
+     * @param followUpTriggerCount - 窗口内触发阈值（默认 10 条）
      */
     constructor(
         private memory: MemoryStoreV2,
@@ -62,7 +66,8 @@ export class FeedbackLoop {
         private registryLookup: (chatId: string) => TopicRegistry | null,
         private evaluationDelayMs: number = 3 * 60 * 1000,
         private onFollowUpDetected?: (chatId: string, triggerMessageText: string) => void,
-        private followUpWindowMs: number = 90_000,
+        private followUpWindowMs: number = 120_000,
+        private followUpTriggerCount: number = 10,
     ) {}
 
     recordAgentMessage(event: AgentMessageSentEvent): void {
@@ -108,18 +113,22 @@ export class FeedbackLoop {
             }
 
             const windowTimer = setTimeout(() => {
-                this.followUpWindows.delete(event.chatId);
+                this.finalizeFollowUpWindow(event.chatId, "timeout");
             }, this.followUpWindowMs);
 
             this.followUpWindows.set(event.chatId, {
                 sentAtMs,
                 agentMsgId: event.messageId,
+                messageCount: 0,
+                triggerTexts: [],
+                lastMessageText: "",
                 timer: windowTimer,
             });
 
             log.debug("追问窗口已开启", {
                 chatId: event.chatId,
                 windowMs: this.followUpWindowMs,
+                triggerCount: this.followUpTriggerCount,
                 agentMsgId: event.messageId,
             });
         }
@@ -129,7 +138,7 @@ export class FeedbackLoop {
      * 检查追问 — 由 NC onPush Hook 在每条群消息到达时调用
      *
      * 如果该 chatId 处于追问窗口内且发言者不是 agent，
-     * 触发 onFollowUpDetected 回调并关闭窗口（单次触发）。
+     * 则把消息纳入收集；达到阈值后立即触发。
      */
     checkFollowUp(chatId: string, userId: string, text: string): void {
         const window = this.followUpWindows.get(chatId);
@@ -138,31 +147,45 @@ export class FeedbackLoop {
         // 排除 agent 自身的消息（可能是多条连续发送）
         if (userId === "agent" || userId === "self" || userId === "") return;
 
-        // 检测到追问：关闭窗口，触发回调
-        clearTimeout(window.timer);
-        this.followUpWindows.delete(chatId);
+        window.messageCount += 1;
+        window.lastMessageText = text;
+        const compactText = text.trim();
+        if (compactText && window.triggerTexts.length < 3) {
+            window.triggerTexts.push(compactText.slice(0, 80));
+        }
 
-        log.info("追问检测触发", {
+        if (window.messageCount >= this.followUpTriggerCount) {
+            this.finalizeFollowUpWindow(chatId, "threshold");
+            return;
+        }
+
+        log.debug("追问消息已收集", {
             chatId,
             userId,
-            textPreview: text.slice(0, 50),
+            textPreview: compactText.slice(0, 50),
+            messageCount: window.messageCount,
+            triggerCount: this.followUpTriggerCount,
             windowAge: Date.now() - window.sentAtMs,
             agentMsgId: window.agentMsgId,
         });
-
-        this.onFollowUpDetected?.(chatId, text);
     }
 
     /**
      * 获取当前活跃的追问检测窗口（Dashboard 用）
      */
-    getActiveWindows(): Array<{ chatId: string; sentAtMs: number; agentMsgId?: string; remainingMs: number }> {
+    getActiveWindows(): Array<{ chatId: string; sentAtMs: number; agentMsgId?: string; remainingMs: number; messageCount: number }> {
         const now = Date.now();
-        const result: Array<{ chatId: string; sentAtMs: number; agentMsgId?: string; remainingMs: number }> = [];
+        const result: Array<{ chatId: string; sentAtMs: number; agentMsgId?: string; remainingMs: number; messageCount: number }> = [];
         for (const [chatId, w] of this.followUpWindows) {
             const elapsed = now - w.sentAtMs;
             const remaining = Math.max(0, this.followUpWindowMs - elapsed);
-            result.push({ chatId, sentAtMs: w.sentAtMs, agentMsgId: w.agentMsgId, remainingMs: remaining });
+            result.push({
+                chatId,
+                sentAtMs: w.sentAtMs,
+                agentMsgId: w.agentMsgId,
+                remainingMs: remaining,
+                messageCount: w.messageCount,
+            });
         }
         return result;
     }
@@ -219,5 +242,46 @@ export class FeedbackLoop {
                 error: String(err),
             });
         }
+    }
+
+    private finalizeFollowUpWindow(chatId: string, reason: "threshold" | "timeout"): void {
+        const window = this.followUpWindows.get(chatId);
+        if (!window) return;
+
+        clearTimeout(window.timer);
+        this.followUpWindows.delete(chatId);
+
+        if (window.messageCount <= 0) {
+            log.debug("追问窗口结束（无消息）", {
+                chatId,
+                reason,
+                windowAge: Date.now() - window.sentAtMs,
+                agentMsgId: window.agentMsgId,
+            });
+            return;
+        }
+
+        const triggerText = this.buildFollowUpTriggerText(window);
+        log.info("追问检测触发", {
+            chatId,
+            reason,
+            messageCount: window.messageCount,
+            triggerCount: this.followUpTriggerCount,
+            textPreview: triggerText.slice(0, 50),
+            windowAge: Date.now() - window.sentAtMs,
+            agentMsgId: window.agentMsgId,
+        });
+
+        this.onFollowUpDetected?.(chatId, triggerText);
+    }
+
+    private buildFollowUpTriggerText(window: FollowUpWindow): string {
+        if (window.triggerTexts.length === 0) {
+            return window.lastMessageText || `[follow-up] ${window.messageCount} messages collected`;
+        }
+        if (window.messageCount <= 1) {
+            return window.triggerTexts[0] ?? window.lastMessageText;
+        }
+        return `[follow-up x${window.messageCount}] ${window.triggerTexts.join(" | ")}`;
     }
 }
