@@ -33,6 +33,8 @@ export async function callAnthropic(
 
     // 组装 API 消息列表
     const apiMessages = nonSystemMsgs.map((m) => {
+        const hasCacheBreakpoint = !!m.cacheBreakpoint;
+
         // 有 imageParts 时组装为 Anthropic 多模态格式
         if (m.imageParts && m.imageParts.length > 0 && m.role === "user") {
             const parts: Array<Record<string, unknown>> = [
@@ -61,8 +63,24 @@ export async function callAnthropic(
                     });
                 }
             }
+            if (hasCacheBreakpoint && parts.length > 0) {
+                const lastPart = parts[parts.length - 1] as Record<string, unknown>;
+                lastPart.cache_control = { type: "ephemeral" };
+            }
             return { role: m.role, content: parts };
         }
+
+        if (hasCacheBreakpoint) {
+            return {
+                role: m.role,
+                content: [{
+                    type: "text",
+                    text: m.content,
+                    cache_control: { type: "ephemeral" },
+                }],
+            };
+        }
+
         return { role: m.role, content: m.content };
     });
 
@@ -83,7 +101,11 @@ export async function callAnthropic(
     };
 
     if (systemMsg) {
-        body.system = systemMsg.content;
+        body.system = [{
+            type: "text",
+            text: systemMsg.content,
+            cache_control: { type: "ephemeral" },
+        }];
     }
 
     const response = await fetch(url, {
