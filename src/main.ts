@@ -40,6 +40,7 @@ import { createLogger } from "./core/logger.js";
 import { setGlobalTimezone, getGlobalTimezone } from "./core/timezone.js";
 import { TelegramAdapter } from "./adapter/telegram-adapter.js";
 import { DiscordAdapter } from "./adapter/discord-adapter.js";
+import { OneBotAdapter } from "./adapter/onebot-adapter.js";
 import type { PlatformAdapter } from "./adapter/platform-adapter.js";
 
 import { SubagentManager } from "./subagent/subagent-manager.js";
@@ -209,6 +210,13 @@ async function main(): Promise<void> {
         log.info("Discord 配置", {
             botToken: appConfig.discord.botToken ? "✓" : "✗",
             applicationId: appConfig.discord.applicationId ? "✓" : "✗",
+        });
+    }
+    if (appConfig.onebot) {
+        log.info("OneBot 配置", {
+            wsUrl: appConfig.onebot.wsUrl ? "✓" : "✗",
+            selfId: appConfig.onebot.selfId ? "✓" : "✗",
+            whitelist: appConfig.onebot.whitelist?.enabled ? "on" : "off",
         });
     }
 
@@ -597,8 +605,13 @@ async function main(): Promise<void> {
         adapters.push(discordAdapter);
     }
 
+    if (appConfig.onebot) {
+        const onebotAdapter = new OneBotAdapter(appConfig.onebot, nc);
+        adapters.push(onebotAdapter);
+    }
+
     if (adapters.length === 0) {
-        throw new Error("至少需要配置一个平台 adapter（telegram 或 discord）");
+        throw new Error("至少需要配置一个平台 adapter（telegram / discord / onebot）");
     }
 
     // 通用路由函数

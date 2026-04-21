@@ -15,7 +15,7 @@
  */
 
 /** 支持的平台名称 */
-export type PlatformName = "telegram" | "discord";
+export type PlatformName = "telegram" | "discord" | "onebot";
 
 /** parseChatId 的返回结构 */
 export interface ParsedChatId {
@@ -35,7 +35,7 @@ export interface ParsedChatId {
     channelId?: string;
 }
 
-const VALID_PLATFORMS = new Set<string>(["telegram", "discord"]);
+const VALID_PLATFORMS = new Set<string>(["telegram", "discord", "onebot"]);
 
 /**
  * 创建 composite chatId。
@@ -148,6 +148,13 @@ export function isTelegram(compositeId: string): boolean {
 }
 
 /**
+ * 判断 composite chatId 是否为 OneBot 平台。
+ */
+export function isOneBot(compositeId: string): boolean {
+    return compositeId.startsWith("onebot:");
+}
+
+/**
  * 获取 GroupModel 的存储 key。
  *
  * Discord guild == group：同一 Guild 下的不同 Channel 共享 GroupModel。
@@ -208,10 +215,10 @@ export function fileNameToChatId(fileName: string): string {
 
     const rest = base.slice(underscoreIdx + 1);
 
-    // Telegram: 直接还原 — telegram_-1001234567 → telegram:-1001234567
+    // Telegram / OneBot: 直接还原 — telegram_-1001234567 → telegram:-1001234567
     // 注意 Telegram chatId 可能包含负号，不会与 _ 冲突
-    if (platform === "telegram") {
-        return `telegram:${rest}`;
+    if (platform === "telegram" || platform === "onebot") {
+        return `${platform}:${rest}`;
     }
 
     // Discord: 需要将 _ 还原为 : — discord_guild_chan → discord:guild:chan
