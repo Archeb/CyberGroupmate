@@ -158,18 +158,27 @@
     <div class="divider text-xs opacity-50 my-3">
       <i class="fa-solid fa-chart-bar mr-1"></i>实时状态
     </div>
-    <div class="grid grid-cols-3 gap-2 text-center">
-      <div class="stat-card">
-        <div class="text-2xl font-bold">{stats.activeConcurrency}</div>
-        <div class="text-xs opacity-50">活跃并发</div>
+    <div class="grid grid-cols-3 gap-3 text-center">
+      <div class="stat-card" class:stat-active={stats.activeConcurrency > 0}>
+        <div class="stat-icon"><i class="fa-solid fa-bolt"></i></div>
+        <div class="stat-value">{stats.activeConcurrency}</div>
+        <div class="stat-label">活跃并发</div>
+        {#if config.rateLimiting.maxConcurrency > 0}
+          <div class="stat-limit">/ {config.rateLimiting.maxConcurrency}</div>
+        {/if}
       </div>
-      <div class="stat-card">
-        <div class="text-2xl font-bold">{stats.queueLength}</div>
-        <div class="text-xs opacity-50">排队中</div>
+      <div class="stat-card" class:stat-warning={stats.queueLength > 0}>
+        <div class="stat-icon"><i class="fa-solid fa-hourglass-half"></i></div>
+        <div class="stat-value">{stats.queueLength}</div>
+        <div class="stat-label">排队中</div>
       </div>
-      <div class="stat-card">
-        <div class="text-2xl font-bold">{stats.recentRPM}</div>
-        <div class="text-xs opacity-50">近 1min 请求</div>
+      <div class="stat-card" class:stat-active={stats.recentRPM > 0}>
+        <div class="stat-icon"><i class="fa-solid fa-chart-line"></i></div>
+        <div class="stat-value">{stats.recentRPM}</div>
+        <div class="stat-label">近 1min 请求</div>
+        {#if config.rateLimiting.requestsPerMinute > 0}
+          <div class="stat-limit">/ {config.rateLimiting.requestsPerMinute}</div>
+        {/if}
       </div>
     </div>
     {#if Object.keys(stats.perProfile).length > 0}
@@ -201,8 +210,42 @@
 
 <style>
   .stat-card {
-    background: oklch(0.25 0 0);
-    border-radius: 0.5rem;
-    padding: 0.5rem;
+    background: oklch(0.22 0.01 260);
+    border: 1px solid oklch(0.35 0.02 260);
+    border-radius: 0.75rem;
+    padding: 0.75rem 0.5rem;
+    transition: all 0.3s ease;
+  }
+  .stat-card.stat-active {
+    background: oklch(0.22 0.04 160);
+    border-color: oklch(0.45 0.1 160);
+  }
+  .stat-card.stat-warning {
+    background: oklch(0.22 0.04 60);
+    border-color: oklch(0.5 0.12 60);
+  }
+  .stat-icon {
+    font-size: 0.75rem;
+    opacity: 0.5;
+    margin-bottom: 0.25rem;
+  }
+  .stat-active .stat-icon { opacity: 0.8; color: oklch(0.75 0.15 160); }
+  .stat-warning .stat-icon { opacity: 0.8; color: oklch(0.75 0.15 60); }
+  .stat-value {
+    font-size: 1.75rem;
+    font-weight: 700;
+    line-height: 1;
+    margin-bottom: 0.15rem;
+  }
+  .stat-active .stat-value { color: oklch(0.8 0.15 160); }
+  .stat-warning .stat-value { color: oklch(0.8 0.15 60); }
+  .stat-label {
+    font-size: 0.7rem;
+    opacity: 0.5;
+  }
+  .stat-limit {
+    font-size: 0.65rem;
+    opacity: 0.35;
+    margin-top: 0.1rem;
   }
 </style>
