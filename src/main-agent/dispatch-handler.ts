@@ -70,8 +70,12 @@ export function createDispatchHandler(
         const adapter = adapterList.find(a => chatId.startsWith(a.platform + ":"));
         if (!adapter) return undefined;
         return async (fileId: string, _chatId?: string, _messageId?: string, _uniqueFileId?: string): Promise<Buffer> => {
-            const result = await adapter.handleCall(`${adapter.platform}.downloadMedia`, [fileId, _chatId, _messageId, _uniqueFileId]) as { buffer: string; size: number };
-            return Buffer.from(result.buffer, "base64");
+            const result = await adapter.handleCall(`${adapter.platform}.downloadMedia`, [fileId]);
+            if (Buffer.isBuffer(result)) return result;
+            if (result && typeof result === "object" && "buffer" in result) {
+                return Buffer.from((result as { buffer: string }).buffer, "base64");
+            }
+            throw new Error(`downloadMedia: unexpected result type: ${typeof result}`);
         };
     };
 
