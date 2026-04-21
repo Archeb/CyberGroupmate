@@ -172,6 +172,11 @@ async function main(): Promise<void> {
 
     const appConfig = loadConfig();
 
+    // ─── Rate Limiter 初始化 ───
+    const { rateLimiter } = await import("./core/llm-rate-limiter.js");
+    if (appConfig.rateLimiting) {
+        rateLimiter.updateConfig(appConfig.rateLimiting);
+    }
 
     // ─── 全局时区初始化 ───
     setGlobalTimezone(appConfig.timezone);
@@ -1105,6 +1110,9 @@ async function main(): Promise<void> {
                 adapters,
                 onConfigSaved: async (config) => {
                     tokenStats.setProfiles(config.llmProfiles ?? {});
+                    if (config.rateLimiting) {
+                        rateLimiter.updateConfig(config.rateLimiting);
+                    }
                     const normalized = normalizeEnvVars(config.envVars);
                     currentEnvPlan = buildEnvPlan(normalized);
                     applyHostManagedEnv(currentEnvPlan);

@@ -428,6 +428,8 @@ export interface AppConfig {
     mcpServers?: McpServerPreConfig[];
     /** Grounding（联网事实查证）配置 */
     grounding?: GroundingConfig;
+    /** LLM 请求限速配置 */
+    rateLimiting?: import("./llm-rate-limiter.js").RateLimitConfig;
 }
 
 // ─── 默认值 ───
@@ -598,6 +600,7 @@ export function loadConfig(configPath?: string, forceReload?: boolean): AppConfi
         metrics: parseMetricsConfig(fileConfig),
         mcpServers: parseMcpServersConfig(fileConfig),
         grounding: parseGroundingConfig(fileConfig),
+        rateLimiting: parseRateLimitingConfig(fileConfig),
     };
 
     _cached = config;
@@ -871,6 +874,29 @@ function parseGroundingConfig(fileConfig: Record<string, unknown>): GroundingCon
         apiKey,
         baseUrl: str(raw.base_url),
         model: str(raw.model),
+    };
+}
+
+// ─── Rate Limiting 配置解析 ───
+
+function parseRateLimitingConfig(fileConfig: Record<string, unknown>): import("./llm-rate-limiter.js").RateLimitConfig | undefined {
+    const raw = fileConfig.rate_limiting as Record<string, unknown> | undefined;
+    if (!raw || typeof raw !== "object") return undefined;
+    const perProfileRaw = (raw.per_profile ?? {}) as Record<string, Record<string, unknown>>;
+    const perProfile: Record<string, { maxConcurrency?: number; requestsPerMinute?: number }> = {};
+    for (const [name, val] of Object.entries(perProfileRaw)) {
+        if (typeof val === "object" && val !== null) {
+            perProfile[name] = {
+                maxConcurrency: val.max_concurrency != null ? num(val.max_concurrency, 0) : undefined,
+                requestsPerMinute: val.requests_per_minute != null ? num(val.requests_per_minute, 0) : undefined,
+            };
+        }
+    }
+    return {
+        enabled: raw.enabled === true,
+        maxConcurrency: num(raw.max_concurrency, 0),
+        requestsPerMinute: num(raw.requests_per_minute, 0),
+        perProfile: Object.keys(perProfile).length > 0 ? perProfile : undefined,
     };
 }
 
@@ -1347,6 +1373,25 @@ export function serializeConfigToObject(config: AppConfig): Record<string, unkno
         if (config.grounding.baseUrl) g.base_url = config.grounding.baseUrl;
         if (config.grounding.model) g.model = config.grounding.model;
         obj.grounding = g;
+    }
+
+    // rate_limiting
+    if (config.rateLimiting) {
+        const rl: Record<string, unknown> = {
+            enabled: config.rateLimiting.enabled,
+            max_concurrency: config.rateLimiting.maxConcurrency,
+            requests_per_minute: config.rateLimiting.requestsPerMinute,
+        };
+        if (config.rateLimiting.perProfile && Object.keys(config.rateLimiting.perProfile).length > 0) {
+            const pp: Record<string, Record<string, unknown>> = {};
+            for (const [name, val] of Object.entries(config.rateLimiting.perProfile)) {
+                pp[name] = {};
+                if (val.maxConcurrency != null) pp[name].max_concurrency = val.maxConcurrency;
+                if (val.requestsPerMinute != null) pp[name].requests_per_minute = val.requestsPerMinute;
+            }
+            rl.per_profile = pp;
+        }
+        obj.rate_limiting = rl;
     }
 
     return obj;

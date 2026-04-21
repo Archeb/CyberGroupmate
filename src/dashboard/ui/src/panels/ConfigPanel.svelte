@@ -19,6 +19,7 @@
   import EnvVarsTab from "./config/EnvVarsTab.svelte";
   import SystemPromptsTab from "./config/SystemPromptsTab.svelte";
   import GroundingTab from "./config/GroundingTab.svelte";
+  import RateLimitingTab from "./config/RateLimitingTab.svelte";
 
   let config = null;
   let originalConfig = null;
@@ -60,6 +61,7 @@
     { id: "recordingPipeline", label: "Recording", icon: "fa-tape" },
     { id: "systemPrompts", label: "System Prompts", icon: "fa-file-lines" },
     { id: "grounding", label: "Grounding", icon: "fa-globe" },
+    { id: "rateLimiting", label: "请求限速", icon: "fa-gauge-high" },
     { id: "envVars", label: "环境变量", icon: "fa-key" },
   ];
 
@@ -106,6 +108,8 @@
       if (!config.recordingPipeline) config.recordingPipeline = {};
       if (!config.envVars) config.envVars = [];
       if (!config.grounding) config.grounding = { provider: 'google', apiKey: '' };
+      if (!config.rateLimiting) config.rateLimiting = { enabled: false, maxConcurrency: 0, requestsPerMinute: 0, perProfile: {} };
+      if (!config.rateLimiting.perProfile) config.rateLimiting.perProfile = {};
       // Adapter 启用状态：根据后端是否返回了有效配置来判断
       // bot 模式看 botToken，userbot 模式看 apiId + apiHash + phone
       telegramEnabled = !!(
@@ -595,6 +599,8 @@
             <RecordingPipelineTab bind:config />
           {:else if currentSection === "envVars"}
             <EnvVarsTab bind:config {pwFocus} {pwBlur} {addEnvVar} {removeEnvVar} />
+          {:else if currentSection === "rateLimiting"}
+            <RateLimitingTab bind:config profileNames={Object.keys(config.llmProfiles ?? {})} />
           {:else if currentSection === "grounding"}
             <GroundingTab bind:config {pwFocus} {pwBlur} />
           {:else if currentSection === "systemPrompts"}

@@ -18,6 +18,8 @@ export { type ImagePart, type ChatMessage, type LLMResponse } from "./llm/types.
 import type { LLMConfig } from "./config.js";
 import type { ChatMessage, LLMResponse } from "./llm/types.js";
 import { getOrCreatePool } from "./llm-pool.js";
+import { rateLimiter } from "./llm-rate-limiter.js";
+import { loadConfig } from "./config.js";
 import { createLogger } from "./logger.js";
 import { EventEmitter } from "node:events";
 
@@ -126,6 +128,8 @@ export interface LLMCallOptions {
     stop?: string[];
     /** 请求超时（毫秒）。来自 llmRouting.timeouts[component]，未设置则使用默认 60000 */
     timeoutMs?: number;
+    /** Profile 名称（用于限速器按 profile 限速） */
+    profileName?: string;
 }
 
 let _callIdCounter = 0;
@@ -299,6 +303,33 @@ async function callLLMWithPool(
  * 单 key 模式调用（原有 callLLM 逻辑，含内部 3 次重试）
  */
 async function callLLMSingleKey(
+    messages: ChatMessage[],
+    config: LLMConfig,
+    options?: LLMCallOptions,
+): Promise<LLMResponse> {
+    // ── Rate Limiting ──
+    // Auto-detect profile name by matching config object against loaded profiles
+    let profileName = options?.profileName;
+    if (!profileName) {
+        try {
+            const appConfig = loadConfig();
+            for (const [name, p] of Object.entries(appConfig.llmProfiles)) {
+                if (p === config || (p.model === config.model && p.baseUrl === config.baseUrl && p.apiKey === config.apiKey)) {
+                    profileName = name;
+                    break;
+                }
+            }
+        } catch {}
+    }
+    const releaseSlot = await rateLimiter.acquire(profileName);
+    try {
+        return await _callLLMSingleKeyInner(messages, config, options);
+    } finally {
+        releaseSlot();
+    }
+}
+
+async function _callLLMSingleKeyInner(
     messages: ChatMessage[],
     config: LLMConfig,
     options?: LLMCallOptions,
