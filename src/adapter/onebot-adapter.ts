@@ -9,10 +9,12 @@ import type { NotificationCenter } from "../event/notification-center.js";
 import type { OneBotConfig } from "../core/config.js";
 import type { PlatformAdapter } from "./platform-adapter.js";
 import type { MediaDownloader } from "../core/media-downloader.js";
+import { ensureSupportedFormat } from "../core/vision-processor.js";
 import { composeChatId, ensureCompositeId, parseChatId } from "../core/chat-id.js";
 import { createLogger } from "../core/logger.js";
 import { WebSocket } from "ws";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import path from "node:path";
 
 const log = createLogger("onebot-adapter");
@@ -358,12 +360,10 @@ export class OneBotAdapter implements PlatformAdapter {
             if (!looksLikeDirectFile && this.mediaDownloader) {
                 const cachedPath = this.mediaDownloader.getExistingPath(trimmed);
                 if (cachedPath) {
-                    if (cachedPath.toLowerCase().endsWith(".webm") || cachedPath.toLowerCase().endsWith(".tgs")) {
-                        throw new Error(`sendSticker: 暂不支持将动态 TG 贴纸转发到 QQ (${path.basename(cachedPath)})`);
-                    }
                     file = cachedPath;
                 }
             }
+            file = await this.normalizeOutgoingImageFile(file, { rejectAnimatedSticker: true });
         } else if (sticker && typeof sticker === "object") {
             const rec = sticker as Record<string, unknown>;
             let resolvedFile = rec.file;
@@ -373,14 +373,9 @@ export class OneBotAdapter implements PlatformAdapter {
                 if (cachedPath) resolvedFile = cachedPath;
             }
             if (typeof resolvedFile === "string") {
-                const cachedPath = this.mediaDownloader?.getExistingPath(resolvedFile);
-                if (cachedPath) {
-                    if (cachedPath.toLowerCase().endsWith(".webm") || cachedPath.toLowerCase().endsWith(".tgs")) {
-                        throw new Error(`sendSticker: 暂不支持将动态 TG 贴纸转发到 QQ (${path.basename(cachedPath)})`);
-                    }
-                    resolvedFile = cachedPath;
-                }
+                resolvedFile = this.mediaDownloader?.getExistingPath(resolvedFile) ?? resolvedFile;
             }
+            resolvedFile = await this.normalizeOutgoingImageFile(resolvedFile, { rejectAnimatedSticker: true });
             file = { ...rec, file: resolvedFile };
         }
 
@@ -395,6 +390,82 @@ export class OneBotAdapter implements PlatformAdapter {
                 type: "photo",
             };
         return this.sendMedia(chatId, payload, opts);
+    }
+
+    private async normalizeOutgoingImageFile(file: unknown, options?: { rejectAnimatedSticker?: boolean }): Promise<unknown> {
+        if (typeof file !== "string") return file;
+
+        const resolvedPath = this.resolveFileReferenceToPath(file);
+        if (!resolvedPath) return file;
+
+        const lowerPath = resolvedPath.toLowerCase();
+        if (options?.rejectAnimatedSticker && (lowerPath.endsWith(".webm") || lowerPath.endsWith(".tgs"))) {
+            throw new Error(`sendSticker: 暂不支持将动态 TG 贴纸转发到 QQ (${path.basename(resolvedPath)})`);
+        }
+
+        const mimeType = this.inferImageMimeType(resolvedPath);
+        if (!mimeType || mimeType === "image/jpeg" || mimeType === "image/png") {
+            return resolvedPath;
+        }
+
+        const rawBuffer = readFileSync(resolvedPath);
+        const { buffer: convertedBuffer, mimeType: convertedMimeType } = await ensureSupportedFormat(rawBuffer, mimeType);
+        if (convertedMimeType === mimeType) {
+            return resolvedPath;
+        }
+
+        return this.writeOutgoingConvertedImage(resolvedPath, convertedBuffer, convertedMimeType);
+    }
+
+    private resolveFileReferenceToPath(file: string): string | null {
+        if (file.startsWith("http://") || file.startsWith("https://") || file.startsWith("base64://")) {
+            return null;
+        }
+        if (file.startsWith("file://")) {
+            return path.resolve(file.slice("file://".length));
+        }
+        const normalized = path.isAbsolute(file) ? path.resolve(file) : this.resolveWorkspacePath(file);
+        return existsSync(normalized) ? normalized : null;
+    }
+
+    private inferImageMimeType(filePath: string): string | null {
+        const ext = path.extname(filePath).toLowerCase();
+        switch (ext) {
+            case ".jpg":
+            case ".jpeg":
+                return "image/jpeg";
+            case ".png":
+                return "image/png";
+            case ".webp":
+                return "image/webp";
+            case ".bmp":
+                return "image/bmp";
+            case ".gif":
+                return "image/gif";
+            case ".tif":
+            case ".tiff":
+                return "image/tiff";
+            case ".avif":
+                return "image/avif";
+            default:
+                return null;
+        }
+    }
+
+    private writeOutgoingConvertedImage(sourcePath: string, buffer: Buffer, mimeType: string): string {
+        const stat = statSync(sourcePath);
+        const ext = mimeType === "image/jpeg" ? ".jpg" : ".png";
+        const hash = createHash("sha1")
+            .update(`${sourcePath}:${stat.size}:${stat.mtimeMs}:${mimeType}`)
+            .digest("hex")
+            .slice(0, 16);
+        const outDir = path.resolve(process.cwd(), "workspace", "Downloads", "other", "qq-converted");
+        mkdirSync(outDir, { recursive: true });
+        const outPath = path.join(outDir, `${path.basename(sourcePath, path.extname(sourcePath))}_${hash}${ext}`);
+        if (!existsSync(outPath)) {
+            writeFileSync(outPath, buffer);
+        }
+        return outPath;
     }
 
     private async sendFace(chatId: string, faceId: string, opts: Record<string, unknown>): Promise<unknown> {
@@ -444,6 +515,9 @@ export class OneBotAdapter implements PlatformAdapter {
 
         const type = String(media.type ?? "");
         let file = media.file;
+        if ((type === "photo" || type === "image") && typeof file === "string") {
+            file = await this.normalizeOutgoingImageFile(file);
+        }
         if (typeof file === "string") {
             if (!(file.startsWith("http://") || file.startsWith("https://") || file.startsWith("base64://") || file.startsWith("file://"))) {
                 file = `file://${this.resolveWorkspacePath(file)}`;
