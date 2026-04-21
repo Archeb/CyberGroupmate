@@ -10,6 +10,18 @@
 </p>
 <div class="cfg-grid-2">
   <label class="cfg-field"
+    ><span class="cfg-label">Attend 媒体策略</span>
+    <select
+      class="select select-xs select-bordered w-full"
+      bind:value={config.vision.attendMode}
+    >
+      <option value={undefined}>默认 (disable)</option>
+      <option value="disable">disable（禁用媒体富化）</option>
+      <option value="describe">describe（仅文字描述）</option>
+      <option value="vision">vision（看图 + 内联图片）</option>
+    </select></label
+  >
+  <label class="cfg-field"
     ><span class="cfg-label">压缩阈值 (px)</span>
     <input
       type="number"

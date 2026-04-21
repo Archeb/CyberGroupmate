@@ -279,6 +279,8 @@ export interface SubagentExternalConfig {
 
 /** Vision 处理配置 */
 export interface VisionConfig {
+    /** attend-handler 媒体策略：vision=看图(内联图片)、describe=仅文字描述、disable=禁用媒体富化。默认 disable */
+    attendMode?: "vision" | "describe" | "disable";
     /** 以 file 形式发送的大图压缩阈值（长边像素）。默认 1024 */
     maxImageSize?: number;
     /** 单轮上下文最多内联几张图片，超出走 vision 描述。默认 3 */
@@ -815,6 +817,7 @@ function parseVisionConfig(fileConfig: Record<string, unknown>): VisionConfig | 
     const raw = fileConfig.vision as Record<string, unknown> | undefined;
     if (!raw || typeof raw !== "object") return undefined;
     return {
+        attendMode: (str(raw.attend_mode) as VisionConfig["attendMode"]) ?? undefined,
         maxImageSize: raw.max_image_size != null ? num(raw.max_image_size, 1024) : undefined,
         maxImagesPerContext: raw.max_images_per_context != null ? num(raw.max_images_per_context, 3) : undefined,
         stickerMode: (str(raw.sticker_mode) as VisionConfig["stickerMode"]) ?? undefined,
@@ -1154,6 +1157,7 @@ export function serializeConfigToObject(config: AppConfig): Record<string, unkno
     // vision
     if (config.vision) {
         const v: Record<string, unknown> = {};
+        if (config.vision.attendMode != null) v.attend_mode = config.vision.attendMode;
         if (config.vision.maxImageSize != null) v.max_image_size = config.vision.maxImageSize;
         if (config.vision.maxImagesPerContext != null) v.max_images_per_context = config.vision.maxImagesPerContext;
         if (config.vision.stickerMode != null) v.sticker_mode = config.vision.stickerMode;

@@ -120,6 +120,11 @@ llm_routing:
 # 控制图片和贴纸的处理行为。需要配合 llm_routing.vision 或 llm_profiles 中设置 vision: true 使用。
 # 所有字段可选，缺省使用括号内默认值
 # vision:
+#   # Attend Handler 媒体策略（默认 disable）：
+#   #   vision   — 看图（内联 imageParts 给 attend LLM，需 attend profile 设置 vision: true）
+#   #   describe — 仅做媒体文字描述，不内联图片
+#   #   disable  — 禁用媒体富化（只保留媒体标签）
+#   attend_mode: disable
 #   # 以 file 形式发送的大图压缩阈值（长边像素）(1024)
 #   max_image_size: 1024
 #   # 单轮上下文最多内联几张图片，超出走 vision 描述 (3)
