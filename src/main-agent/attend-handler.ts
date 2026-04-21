@@ -329,10 +329,10 @@ export function createAttendHandler(
                         // 使用 enrichMessages 进行 Vision 富化（下载并分析 sticker/photo/gif 等所有带附件消息）
                         const visionConfig = currentConfig.vision;
                         const visionLlmConfig = currentConfig.llmRouting.vision
-                            ? resolveComponentProfiles("vision", currentConfig)[0]
+                            ? resolveComponentProfiles("vision", currentConfig)
                             : undefined;
                         // 使用 vision tier LLM 进行媒体富化，而非 attend LLM
-                        const enrichLlmConfig = visionLlmConfig ?? attendProfiles[0];
+                        const enrichLlmConfig = visionLlmConfig?.[0] ?? attendProfiles[0];
 
                         const downloadFn = buildDownloadFn(entry.chatId);
 
@@ -344,6 +344,7 @@ export function createAttendHandler(
                             stickerCache: memory,
                             chatId: entry.chatId,
                             mediaDownloader,
+                            forceTextDescriptions: effectiveAttendVisionMode === "describe",
                         });
                         messagesText = formattedText;
                         if (effectiveAttendVisionMode === "vision" && parsedImageParts.length > 0) {

@@ -106,6 +106,11 @@ const photoDescriptionCache = new Map<string, string>();
 
 // ─── 核心处理函数 ───
 
+export interface ProcessMediaBatchOptions {
+    /** 强制走文本描述路径，不内联图片到主 LLM（attend describe 模式使用） */
+    forceTextDescriptions?: boolean;
+}
+
 /**
  * 批量处理一组消息中的媒体附件
  *
@@ -115,6 +120,8 @@ const photoDescriptionCache = new Map<string, string>();
  * @param visionLlmConfig 独立 vision tier 配置
  * @param downloadFn 图片下载函数（委托给 adapter）
  * @param stickerCache sticker 描述缓存
+ * @param mediaDownloader 媒体下载管理器
+ * @param options 额外处理选项
  */
 export async function processMediaBatch(
     attachments: MediaAttachment[],
@@ -124,6 +131,7 @@ export async function processMediaBatch(
     downloadFn?: DownloadFn,
     stickerCache?: StickerCache,
     mediaDownloader?: MediaDownloader,
+    options?: ProcessMediaBatchOptions,
 ): Promise<ProcessedMedia[]> {
     const maxImages = config?.maxImagesPerContext ?? DEFAULT_MAX_IMAGES;
     const results: ProcessedMedia[] = [];
@@ -150,7 +158,8 @@ export async function processMediaBatch(
     }
 
     // 确定处理路径
-    const isPathA = llmConfig.vision === true;
+    // forceTextDescriptions=true 时强制走文本描述（attend describe 模式），不内联 base64
+    const isPathA = !options?.forceTextDescriptions && llmConfig.vision === true;
     const isPathB = !isPathA && !!visionLlmConfigs?.length;
     // 如果既不是 A 也不是 B，就是 C
 
@@ -463,7 +472,7 @@ export async function describeImage(
     ];
 
     const response = await callLLMWithFallback(messages, visionConfigs, { caller: "vision", timeoutMs: resolveComponentTimeout("vision") });
-    return response.content.trim();
+    return normalizeVisionDescription(response.content);
 }
 
 /**
@@ -502,11 +511,21 @@ async function describeSticker(
         const jsonStr = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
         const parsed = JSON.parse(jsonStr);
         return {
-            description: String(parsed.description ?? raw),
+            description: normalizeVisionDescription(String(parsed.description ?? raw)),
             emoji: typeof parsed.emoji === "string" ? parsed.emoji : undefined,
         };
     } catch {
         log.debug("describeSticker: JSON 解析失败，使用原始文本", { raw: raw.slice(0, 100) });
-        return { description: raw };
+        return { description: normalizeVisionDescription(raw) };
     }
+}
+
+/**
+ * 规范化 vision LLM 的输出：去除 markdown 代码围栏，将换行折叠为空格
+ */
+function normalizeVisionDescription(raw: string): string {
+    const trimmed = raw.trim();
+    const fenceMatch = trimmed.match(/^```(?:[a-zA-Z0-9_-]+)?\s*\n?([\s\S]*?)\n?```$/);
+    const unfenced = fenceMatch?.[1] ?? trimmed;
+    return unfenced.replace(/\s*\n+\s*/g, " ").trim();
 }

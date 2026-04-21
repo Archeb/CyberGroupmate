@@ -79,6 +79,8 @@ export interface EnrichOptions {
     mediaTypes?: Array<"photo" | "sticker" | "video" | "document" | "animation" | "other">;
     /** 是否启用 URL OpenGraph 预览（默认 true） */
     enableOgPreview?: boolean;
+    /** 强制走文本描述路径，不内联图片到主 LLM（attend describe 模式使用） */
+    forceTextDescriptions?: boolean;
 }
 
 /** 富化结果 */
@@ -123,6 +125,7 @@ export async function enrichMessages(
                 options.downloadFn,
                 options.stickerCache,
                 options.mediaDownloader,
+                { forceTextDescriptions: options.forceTextDescriptions },
             );
             // 将处理结果写回 messages
             for (const pm of processed) {
@@ -398,7 +401,8 @@ export function formatMessages(
                     textPart = textPart ? `${textPart} [📷 图片${imageParts.length}]${fileHint}` : `[📷 图片${imageParts.length}]${fileHint}`;
                 } else if (pm.filePath && pm.description) {
                     // 有文件路径 + 描述（video/document/animation 或 vision 描述的图片）
-                    textPart = textPart ? `${textPart} ${pm.description} 文件: ${pm.filePath}` : `${pm.description} 文件: ${pm.filePath}`;
+                    const mediaText = `[📷 图片描述: ${pm.description}] 文件: ${pm.filePath}`;
+                    textPart = textPart ? `${textPart} ${mediaText}` : mediaText;
                 } else if (pm.filePath) {
                     // 仅有文件路径
                     textPart = textPart ? `${textPart} [📎 文件: ${pm.filePath}]` : `[📎 文件: ${pm.filePath}]`;
