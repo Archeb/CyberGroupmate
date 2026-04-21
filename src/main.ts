@@ -611,7 +611,28 @@ async function main(): Promise<void> {
     }
 
     if (appConfig.onebot) {
-        const onebotAdapter = new OneBotAdapter(appConfig.onebot, nc, sharedMediaDownloader);
+        let stickerStealer: import("./core/sticker-stealer.js").StickerStealer | undefined;
+        if (appConfig.onebot.stickerSteal?.enabled) {
+            const { StickerStealer } = await import("./core/sticker-stealer.js");
+            const visionConfigs = resolveComponentProfiles("vision", appConfig);
+            stickerStealer = new StickerStealer({
+                dbPath: join(DATA_DIR, "onebot-sticker-steal.db"),
+                mediaDownloader: sharedMediaDownloader,
+                memory,
+                visionConfigs,
+                config: {
+                    enabled: true,
+                    occurrenceThreshold: appConfig.onebot.stickerSteal.occurrenceThreshold ?? 3,
+                    skipVlmConfirm: appConfig.onebot.stickerSteal.skipVlmConfirm ?? false,
+                },
+                visionConfig: appConfig.vision,
+            });
+            log.info("偷表情包已启用", {
+                occurrenceThreshold: appConfig.onebot.stickerSteal.occurrenceThreshold ?? 3,
+                skipVlmConfirm: appConfig.onebot.stickerSteal.skipVlmConfirm ?? false,
+            });
+        }
+        const onebotAdapter = new OneBotAdapter(appConfig.onebot, nc, sharedMediaDownloader, stickerStealer);
         adapters.push(onebotAdapter);
     }
 

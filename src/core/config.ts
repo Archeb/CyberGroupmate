@@ -185,6 +185,15 @@ export interface OneBotConfig {
         minDelay: number;
         maxDelay: number;
     };
+    /** 偷表情包配置 */
+    stickerSteal?: {
+        /** 总开关 */
+        enabled: boolean;
+        /** 图片出现次数阈值，达到后触发 VLM 确认（默认 3） */
+        occurrenceThreshold?: number;
+        /** 跳过 VLM 确认，达到阈值直接保存（默认 false） */
+        skipVlmConfirm?: boolean;
+    };
 }
 
 export interface ReflectionExternalConfig {
@@ -570,6 +579,7 @@ export function loadConfig(configPath?: string, forceReload?: boolean): AppConfi
             selfId: str(fileOB.self_id) ?? "",
             whitelist: parseOneBotWhitelist(fileOB),
             humanizedDelay: parseOneBotHumanizedDelay(fileOB),
+            stickerSteal: parseOneBotStickerSteal(fileOB),
         } : undefined,
         notification: {
             mentionKeywords: Array.isArray(fileNotification.mention_keywords)
@@ -1057,6 +1067,16 @@ function parseOneBotHumanizedDelay(fileOB: Record<string, unknown>): OneBotConfi
         msPerChar: typeof raw.ms_per_char === "number" ? raw.ms_per_char : 50,
         minDelay: typeof raw.min_delay === "number" ? raw.min_delay : 500,
         maxDelay: typeof raw.max_delay === "number" ? raw.max_delay : 5000,
+    };
+}
+
+function parseOneBotStickerSteal(fileOB: Record<string, unknown>): OneBotConfig["stickerSteal"] | undefined {
+    const raw = fileOB.sticker_steal as Record<string, unknown> | undefined;
+    if (!raw || typeof raw !== "object") return undefined;
+    return {
+        enabled: raw.enabled === true,
+        occurrenceThreshold: typeof raw.occurrence_threshold === "number" ? raw.occurrence_threshold : 3,
+        skipVlmConfirm: raw.skip_vlm_confirm === true,
     };
 }
 

@@ -104,6 +104,63 @@ export async function ensureSupportedFormat(
 /** 图片描述内存缓存（Path B）: uniqueFileId → description */
 const photoDescriptionCache = new Map<string, string>();
 
+// ─── 表情包检测 ───
+
+/** 表情包尺寸阈值：宽高均 ≤ 此值的图片视为候选表情包 */
+const MEME_MAX_DIMENSION = 512;
+/** 最小尺寸，过小的缩略图不算 */
+const MEME_MIN_DIMENSION = 48;
+
+/**
+ * 判断一张图片是否可能是表情包（基于尺寸启发式）
+ */
+function looksLikeMeme(att: MediaAttachment): boolean {
+    if (!att.width || !att.height) return false;
+    if (att.fileName) return false;
+    const maxDim = Math.max(att.width, att.height);
+    const minDim = Math.min(att.width, att.height);
+    return maxDim <= MEME_MAX_DIMENSION && minDim >= MEME_MIN_DIMENSION;
+}
+
+/**
+ * 调用 Vision LLM 分析图片是否为表情包/梗图，如果是则返回描述和 emoji
+ */
+export async function classifyAndDescribeMeme(
+    imageBuffer: Buffer,
+    mimeType: string,
+    visionConfigs: LLMConfig[],
+): Promise<{ isMeme: boolean; description?: string; emoji?: string }> {
+    const b64 = imageBuffer.toString("base64");
+    const dataUri = `data:${mimeType};base64,${b64}`;
+
+    const messages: ChatMessage[] = [
+        {
+            role: "user",
+            content: `判断这张图片是否是表情包/梗图/搞笑图片（通常含有夸张表情、配文、emoji 风格画面、或网络流行梗元素）。
+
+请用以下 JSON 格式回复（仅返回 JSON）：
+- 如果是表情包：{"isMeme": true, "description": "简短描述表情包含义和情绪", "emoji": "最贴切的单个emoji"}
+- 如果不是：{"isMeme": false}`,
+            imageParts: [{ url: dataUri }],
+        },
+    ];
+
+    const response = await callLLMWithFallback(messages, visionConfigs, { caller: "vision-meme", timeoutMs: resolveComponentTimeout("vision") });
+    const raw = response.content.trim();
+    try {
+        const jsonStr = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
+        const parsed = JSON.parse(jsonStr);
+        return {
+            isMeme: !!parsed.isMeme,
+            description: parsed.description ? String(parsed.description) : undefined,
+            emoji: typeof parsed.emoji === "string" ? parsed.emoji : undefined,
+        };
+    } catch {
+        log.debug("classifyAndDescribeMeme: JSON 解析失败", { raw: raw.slice(0, 100) });
+        return { isMeme: false };
+    }
+}
+
 // ─── 核心处理函数 ───
 
 /**
@@ -251,6 +308,52 @@ export async function processMediaBatch(
 
     const photoResults = await Promise.all(photoTasks);
     results.push(...photoResults);
+
+    // ─── 表情包自动收集：对尺寸符合的图片做 meme 分类 ───
+    if (stickerCache && downloadFn && (isPathA || isPathB) && mediaDownloader) {
+        const visionCfgs = isPathA ? [llmConfig] : visionLlmConfigs!;
+        for (let i = 0; i < photos.length; i++) {
+            const photo = photos[i];
+            if (!looksLikeMeme(photo)) continue;
+            const cached = stickerCache.getStickerDescription(photo.uniqueFileId);
+            if (cached) continue;
+
+            try {
+                let buf: Buffer;
+                const stored = pathBBuffers.get(photo.uniqueFileId);
+                if (stored) {
+                    buf = stored.buffer;
+                } else {
+                    buf = await downloadFn(photo.fileId, photo.chatId, photo.messageId, photo.uniqueFileId);
+                }
+                const { buffer: convBuf, mimeType: convMime } = await ensureSupportedFormat(buf, photo.mimeType ?? "image/jpeg");
+                const memeResult = await classifyAndDescribeMeme(convBuf, convMime, visionCfgs);
+                if (memeResult.isMeme && memeResult.description) {
+                    mediaDownloader.saveMedia(buf, {
+                        chatId: photo.chatId,
+                        messageId: photo.messageId,
+                        uniqueFileId: photo.uniqueFileId,
+                        mediaType: "sticker",
+                        mimeType: photo.mimeType ?? "image/jpeg",
+                    });
+                    const newDefault = config?.newStickerDefault !== "disabled";
+                    stickerCache.setStickerDescription(
+                        photo.uniqueFileId,
+                        memeResult.description,
+                        memeResult.emoji,
+                        newDefault,
+                    );
+                    log.info("自动收集图片表情包", {
+                        uniqueFileId: photo.uniqueFileId,
+                        description: memeResult.description,
+                        emoji: memeResult.emoji,
+                    });
+                }
+            } catch (err) {
+                log.debug("表情包分类失败，跳过", { uniqueFileId: photo.uniqueFileId, error: String(err) });
+            }
+        }
+    }
 
     // ─── 保存 photo/sticker 到磁盘（如果有 mediaDownloader） ───
     if (mediaDownloader && downloadFn) {

@@ -9,6 +9,7 @@ import type { NotificationCenter } from "../event/notification-center.js";
 import type { OneBotConfig } from "../core/config.js";
 import type { PlatformAdapter } from "./platform-adapter.js";
 import type { MediaDownloader } from "../core/media-downloader.js";
+import type { StickerStealer } from "../core/sticker-stealer.js";
 import { composeChatId, ensureCompositeId, parseChatId } from "../core/chat-id.js";
 import { createLogger } from "../core/logger.js";
 import { WebSocket } from "ws";
@@ -73,6 +74,7 @@ export class OneBotAdapter implements PlatformAdapter {
         private config: OneBotConfig,
         private nc: NotificationCenter,
         private mediaDownloader?: MediaDownloader,
+        private stickerStealer?: StickerStealer,
     ) {}
 
     async start(): Promise<void> {
@@ -504,6 +506,19 @@ export class OneBotAdapter implements PlatformAdapter {
 
         const normalized = this.normalizeIncomingMessage(event);
         if (!normalized) return;
+
+        if (normalized.mediaInfo?.type === "photo" && this.stickerStealer && this.config.stickerSteal?.enabled) {
+            const mi = normalized.mediaInfo;
+            this.stickerStealer.processImage({
+                uniqueFileId: mi.uniqueFileId,
+                fileId: mi.fileId,
+                url: mi.url,
+                chatId: normalized.chatId,
+                messageId: normalized.messageId,
+            }).catch(err => {
+                log.debug("偷表情包处理失败", { uniqueFileId: mi.uniqueFileId, error: String(err) });
+            });
+        }
 
         this.nc.push({
             type: "nc.message",
