@@ -606,7 +606,7 @@ async function main(): Promise<void> {
     }
 
     if (appConfig.onebot) {
-        const onebotAdapter = new OneBotAdapter(appConfig.onebot, nc);
+        const onebotAdapter = new OneBotAdapter(appConfig.onebot, nc, sharedMediaDownloader);
         adapters.push(onebotAdapter);
     }
 
