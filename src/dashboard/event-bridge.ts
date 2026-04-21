@@ -188,9 +188,20 @@ export class EventBridge {
     }
 
     private hookNC(): void {
-        // NC 消息事件
+        // NC 消息事件 + Adapter 状态事件
         this.deps.nc.onPush(event => {
             const type = String(event.type ?? "");
+
+            // Adapter 状态广播到 dashboard
+            if (type === "system.adapter_status") {
+                this.broadcast({
+                    type: "adapter:status",
+                    timestamp: new Date().toISOString(),
+                    data: event,
+                });
+                return;
+            }
+
             if (type !== "nc.message") return;
             this.broadcast({
                 type: "nc:message",
