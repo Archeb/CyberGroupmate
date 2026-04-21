@@ -3,8 +3,8 @@
  *
  * 两类更新方式：
  * 1. scrape 时（pull）：遍历 SubagentManager 读取当前快照，更新 Gauge 类指标
- * 2. 事件时（push）：onMessage/onAttend/onFastPathReply 从 main.ts NC hook 调用，
- *    更新 Counter 类指标（消息总量、attend 次数、FastPath 回复次数）
+ * 2. 事件时（push）：onMessage/onAttend 从 main.ts NC hook 调用，
+ *    更新 Counter 类指标（消息总量、attend 次数）
  */
 
 import type { SubagentManager } from "../../subagent/subagent-manager.js";
@@ -16,7 +16,6 @@ import {
     groupStickiness,
     groupBufferSize,
     groupTopicCount,
-    groupFastPathRepliesTotal,
     groupCodeActQueueSize,
     groupLastAttendAgeSeconds,
 } from "../registry.js";
@@ -109,16 +108,8 @@ export class GroupCollector {
 
     /**
      * 主 Agent attend 并完成决策时调用。
-     * decision: REPLY | DEFER | OBSERVE | FAST_PATH_AUTH
      */
     onAttend(chatId: string, decision: string): void {
         groupAttendsTotal.inc({ chat_id: chatId, decision });
-    }
-
-    /**
-     * FastPath 快回复实际发送时调用。
-     */
-    onFastPathReply(chatId: string): void {
-        groupFastPathRepliesTotal.inc({ chat_id: chatId });
     }
 }

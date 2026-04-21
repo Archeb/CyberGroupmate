@@ -15,14 +15,12 @@ describe("S7: GroupStickiness", () => {
         const s = createStickiness("CORE");
         assert.equal(s.level, "CORE");
         assert.equal(s.priorityMultiplier, 1.0);
-        assert.equal(s.fastPathEligible, true);
     });
 
     it("#2 createStickiness STRANGER", () => {
         const s = createStickiness("STRANGER");
         assert.equal(s.level, "STRANGER");
         assert.equal(s.priorityMultiplier, 0.2);
-        assert.equal(s.fastPathEligible, false);
     });
 
     it("#3 evaluateStickiness: null → STRANGER", () => {

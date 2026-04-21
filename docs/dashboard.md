@@ -71,7 +71,7 @@ WebSocket 实时推送也使用同一 Token 认证。
 实时查看主 Agent 动态注意力队列的排序状态。
 
 - 按优先级排序显示所有条目
-- 显示来源（OBSERVER_ALERT / FAST_PATH_REQUEST / DIGEST_UPDATE）
+- 显示来源（OBSERVER_ALERT / DIGEST_UPDATE）
 - Stickiness 亲密度等级、新消息数、话题数
 - 阻塞状态标记
 - 已出队历史记录（折叠显示最近 50 条）
@@ -130,7 +130,7 @@ WebSocket 实时推送也使用同一 Token 认证。
 - **全局状态 (GlobalState)**：任务列表、待处理 follow-up、注意力摘要（JSON 高亮展示）
 - **SandboxPool 状态**：总实例数 / 使用中 / 空闲，每个实例的 chatId 和状态
 - **追问检测窗口 (FeedbackLoop)**：当前哪些群处于追问检测窗口、剩余时间
-- **群组概览表**：所有群的 Stickiness 等级、Engagement 分数、Observer 缓冲区大小、attend 次数、FastPath 授权状态
+- **群组概览表**：所有群的 Stickiness 等级、Engagement 分数、Observer 缓冲区大小、attend 次数
 - **最近 Callbacks (Q5)**：Subagent 执行回调结果（状态、类型、摘要、耗时）
 
 ---
@@ -206,7 +206,6 @@ WebSocket 实时推送也使用同一 Token 认证。
 | GET | `/api/codeact/:chatId` | CodeAct session |
 | POST | `/api/codeact/:chatId/cancel` | 取消执行 |
 | GET | `/api/sandbox/pool` | SandboxPool 状态 |
-| POST | `/api/fastpath/:chatId/revoke` | 撤销 FastPath |
 | GET | `/api/feedbackloop` | 追问窗口 |
 | GET | `/api/main-agent/history` | 主 Agent 对话历史 |
 | GET | `/api/callbacks` | Q5 回调队列 |

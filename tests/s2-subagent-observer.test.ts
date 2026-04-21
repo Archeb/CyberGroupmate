@@ -112,7 +112,6 @@ describe("S2: SubagentManager + Observer", () => {
             const obs = new Observer("chat1", {
                 engagementWindowMs: 60000,
                 alertEngagementThreshold: 60,
-                fastPathEngagementThreshold: 70,
                 mentionKeywords: [],
             });
 
@@ -128,7 +127,11 @@ describe("S2: SubagentManager + Observer", () => {
             assert.ok(highScore > 30, `高频多人应高分, 实际: ${highScore}`);
 
             // 低频 → 低分
-            const obs2 = new Observer("chat2", { engagementWindowMs: 60000, alertEngagementThreshold: 60, fastPathEngagementThreshold: 70, mentionKeywords: [] });
+            const obs2 = new Observer("chat2", {
+                engagementWindowMs: 60000,
+                alertEngagementThreshold: 60,
+                mentionKeywords: [],
+            });
             obs2.onMessage(mockEvent({ chatId: "chat2", userId: "u1", text: "hi" }));
             const lowScore = obs2.getEngagementScore();
             assert.ok(lowScore < highScore, `单条消息应低于多条, low=${lowScore}, high=${highScore}`);
@@ -138,7 +141,6 @@ describe("S2: SubagentManager + Observer", () => {
             const obs = new Observer("chat1", {
                 engagementWindowMs: 60000,
                 alertEngagementThreshold: 10, // 降低阈值方便测试
-                fastPathEngagementThreshold: 70,
                 mentionKeywords: [],
             });
 
@@ -161,7 +163,6 @@ describe("S2: SubagentManager + Observer", () => {
             const obs = new Observer("chat1", {
                 engagementWindowMs: 60000,
                 alertEngagementThreshold: 99, // 极高阈值
-                fastPathEngagementThreshold: 70,
                 mentionKeywords: [],
             });
 
@@ -281,14 +282,22 @@ describe("S2: SubagentManager + Observer", () => {
         // ─── Edge cases ───
 
         it("#16 Observer: zero messages → engagement=0", () => {
-            const obs = new Observer("g1", { engagementWindowMs: 60000, alertEngagementThreshold: 60, fastPathEngagementThreshold: 70, mentionKeywords: [] });
+            const obs = new Observer("g1", {
+                engagementWindowMs: 60000,
+                alertEngagementThreshold: 60,
+                mentionKeywords: [],
+            });
             assert.equal(obs.getEngagementScore(), 0);
             assert.equal(obs.checkAlert(), null);
             assert.equal(obs.getTotalMessageCount(), 0);
         });
 
         it("#17 Observer: engagement capped at 100", () => {
-            const obs = new Observer("g1", { engagementWindowMs: 60000, alertEngagementThreshold: 60, fastPathEngagementThreshold: 70, mentionKeywords: [] });
+            const obs = new Observer("g1", {
+                engagementWindowMs: 60000,
+                alertEngagementThreshold: 60,
+                mentionKeywords: [],
+            });
             for (let i = 0; i < 200; i++) {
                 obs.onMessage(mockEvent({ chatId: "g1", userId: `u${i % 20}`, text: `msg ${i}` }));
             }

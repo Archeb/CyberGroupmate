@@ -7,7 +7,7 @@
  * Phase 3: dequeue 最高优先级群组
  * Phase 4: 构建 GroupContextPackage
  * Phase 5: 主 Agent 决策
- * Phase 6: 分派 CodeActReplyTask / FastPath
+ * Phase 6: 分派 CodeActReplyTask
  * Phase 7: 更新 Q3 状态
  *
  * 参考设计：subagent.md §8, subtask.md S5
@@ -243,7 +243,7 @@ export class MainAgentLoop {
         }
 
         // ═══ Phase 2: 动态队列评估 (Q3) ═══
-        // 入队条件：FastPath 请求 或 triage-engage（RecordingPipeline 话题介入）
+        // 入队条件：triage-engage（RecordingPipeline 话题介入）。
         // Observer 告警（engagement 超阈值）不作为入队触发——engagement 仅用于 Q3 内部优先级排序。
         // 直接寻址（@mention/DM/文本提及）由 main.ts nc.onPush 即时入队，不经过 Phase 2。
         for (const sa of this.subagentManager.getAllSubagents()) {

@@ -4,7 +4,7 @@
  * Validates that:
  * 1. The /metrics endpoint produces valid, scrapable Prometheus exposition format
  * 2. No configuration issues prevent deployment
- * 3. The attend and FastPath hooks are properly wired
+ * 3. The attend hook is properly wired
  * 4. GroupCollector is resilient to broken subagents
  */
 
@@ -334,32 +334,6 @@ describe("Metrics Deployment Verification", () => {
                 "main.ts should use setOnAttendComplete callback",
             );
         });
-
-        it("#17 main.ts FastPath hook uses scene field instead of viaFastPath", () => {
-            const mainSource = readFileSync(join(projectRoot, "src/main.ts"), "utf-8");
-
-            // Should NOT check viaFastPath
-            assert.ok(
-                !mainSource.includes("viaFastPath"),
-                "main.ts should not check viaFastPath (never set)",
-            );
-
-            // Should check scene === "fastpath"
-            assert.ok(
-                mainSource.includes('scene === "fastpath"'),
-                "main.ts should check scene === 'fastpath'",
-            );
-        });
-
-        it("#18 dispatch-handler sets scene: 'fastpath' on NC events", () => {
-            const dispatchSource = readFileSync(
-                join(projectRoot, "src/main-agent/dispatch-handler.ts"), "utf-8"
-            );
-            assert.ok(
-                dispatchSource.includes('scene: "fastpath"'),
-                "dispatch-handler should set scene: 'fastpath' on FastPath NC events",
-            );
-        });
     });
 
     // ═══ 4. GroupCollector Resilience ═══
@@ -394,17 +368,6 @@ describe("Metrics Deployment Verification", () => {
 
             // Should NOT throw even with a broken subagent
             assert.doesNotThrow(() => collector.collect());
-        });
-
-        it("#20 onMessage/onAttend/onFastPathReply don't throw on invalid chatId", async () => {
-            const { GroupCollector } = await import("../src/metrics/collectors/group-collector.js");
-            const collector = new GroupCollector({
-                subagentManager: { getAllSubagents: () => [] } as any,
-            });
-
-            assert.doesNotThrow(() => collector.onMessage(""));
-            assert.doesNotThrow(() => collector.onAttend("", "OBSERVE"));
-            assert.doesNotThrow(() => collector.onFastPathReply(""));
         });
     });
 

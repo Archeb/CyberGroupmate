@@ -92,7 +92,7 @@ export interface EmbeddingConfig {
 }
 
 /** 组件路由中可配置超时的组件名 */
-export type RoutingComponentKey = 'attend' | 'session' | 'fast_path' | 'recording_cluster' | 'recording_triage' | 'reflection' | 'compact' | 'memory' | 'vision';
+export type RoutingComponentKey = 'attend' | 'session' | 'recording_cluster' | 'recording_triage' | 'reflection' | 'compact' | 'memory' | 'vision';
 
 /** 组件级 LLM 路由 — 每个组件可指定一个或多个 profile（fallback chain） */
 export interface LLMRoutingConfig {
@@ -100,8 +100,6 @@ export interface LLMRoutingConfig {
     attend?: string | string[];
     /** CodeAct 多轮交互（session-runner） */
     session?: string | string[];
-    /** 快速回复（fast-path-handler） */
-    fast_path?: string | string[];
     /** 话题聚类（recording-pipeline Step 1） */
     recording_cluster?: string | string[];
     /** 话题摘要 + Triage（recording-pipeline Step 2） */
@@ -217,11 +215,6 @@ export interface SubagentExternalConfig {
     alertEngagementThreshold?: number;
     cosineDecay?: {
         defaultCyclePeriod?: number;
-    };
-    fastPath?: {
-        defaultMaxReplies?: number;
-        defaultExpiresMinutes?: number;
-        engagementThreshold?: number;
     };
     stickiness?: Record<string, {
         priorityMultiplier?: number;
@@ -470,7 +463,7 @@ export function loadConfig(configPath?: string, forceReload?: boolean): AppConfi
     // 解析 per-component timeouts
     const rawTimeouts = (fileRouting.timeouts ?? {}) as Record<string, unknown>;
     const parsedTimeouts: LLMRoutingConfig['timeouts'] = {};
-    for (const key of ['attend', 'session', 'fast_path', 'recording_cluster', 'recording_triage', 'recording', 'reflection', 'compact', 'memory', 'vision'] as const) {
+    for (const key of ['attend', 'session', 'recording_cluster', 'recording_triage', 'recording', 'reflection', 'compact', 'memory', 'vision'] as const) {
         if (rawTimeouts[key] != null) {
             parsedTimeouts[key] = num(rawTimeouts[key], 60000);
         }
@@ -481,7 +474,6 @@ export function loadConfig(configPath?: string, forceReload?: boolean): AppConfi
     const llmRouting: LLMRoutingConfig = {
         attend: parseRoutingValue(fileRouting.attend),
         session: parseRoutingValue(fileRouting.session),
-        fast_path: parseRoutingValue(fileRouting.fast_path),
         recording_cluster: parseRoutingValue(fileRouting.recording_cluster) ?? recordingFallback,
         recording_triage: parseRoutingValue(fileRouting.recording_triage) ?? recordingFallback,
         reflection: parseRoutingValue(fileRouting.reflection),
@@ -727,7 +719,6 @@ function parseSubagentConfig(fileConfig: Record<string, unknown>): SubagentExter
     const raw = fileConfig.subagent as Record<string, unknown> | undefined;
     if (!raw || typeof raw !== "object") return undefined;
 
-    const rawFP = (raw.fast_path ?? {}) as Record<string, unknown>;
     const rawStick = (raw.stickiness ?? {}) as Record<string, unknown>;
     const rawStickT = (raw.stickiness_thresholds ?? {}) as Record<string, unknown>;
     const rawUpgrade = (rawStickT.upgrade ?? {}) as Record<string, unknown>;
@@ -760,11 +751,6 @@ function parseSubagentConfig(fileConfig: Record<string, unknown>): SubagentExter
         alertEngagementThreshold: raw.alert_engagement_threshold != null ? num(raw.alert_engagement_threshold, 60) : undefined,
         cosineDecay: Object.keys(rawCD).length > 0 ? {
             defaultCyclePeriod: rawCD.default_cycle_period != null ? num(rawCD.default_cycle_period, 20) : undefined,
-        } : undefined,
-        fastPath: Object.keys(rawFP).length > 0 ? {
-            defaultMaxReplies: rawFP.default_max_replies != null ? num(rawFP.default_max_replies, 3) : undefined,
-            defaultExpiresMinutes: rawFP.default_expires_minutes != null ? num(rawFP.default_expires_minutes, 5) : undefined,
-            engagementThreshold: rawFP.engagement_threshold != null ? num(rawFP.engagement_threshold, 70) : undefined,
         } : undefined,
         stickiness: Object.keys(stickinessDefaults).length > 0 ? stickinessDefaults : undefined,
         stickinessThresholds: Object.keys(rawStickT).length > 0 ? {
@@ -1199,13 +1185,6 @@ export function serializeConfigToObject(config: AppConfig): Record<string, unkno
         if (sa.pollInterval != null) s.poll_interval = sa.pollInterval;
         if (sa.alertEngagementThreshold != null) s.alert_engagement_threshold = sa.alertEngagementThreshold;
         if (sa.cosineDecay) s.cosine_decay = { default_cycle_period: sa.cosineDecay.defaultCyclePeriod };
-        if (sa.fastPath) {
-            s.fast_path = {
-                default_max_replies: sa.fastPath.defaultMaxReplies,
-                default_expires_minutes: sa.fastPath.defaultExpiresMinutes,
-                engagement_threshold: sa.fastPath.engagementThreshold,
-            };
-        }
         if (sa.stickiness) {
             const stick: Record<string, unknown> = {};
             for (const [level, cfg] of Object.entries(sa.stickiness)) {

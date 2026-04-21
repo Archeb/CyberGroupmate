@@ -3,11 +3,11 @@
  *
  * 系统入口点。管理 agent 的完整生命周期：
  * PlatformAdapter → NC → MessageLogWriter + GroupDispatcher → Observer → Q3
- * → MainAgentLoop → DecisionMaker → CodeActExecutor/FastPath → Q5 → GlobalState
+ * → MainAgentLoop → DecisionMaker → CodeActExecutor → Q5 → GlobalState
  *
  * 架构切换自 subagent.md v0.5.0:
  * - 主 Agent: 快层·决策者，拥有全局上下文，串行轮询 Q3 做出决策
- * - Subagent: 慢层·执行者，per-group Observer + CodeActExecutor + FastPath
+ * - Subagent: 慢层·执行者，per-group Observer + CodeActExecutor
  */
 
 import { NotificationCenter, type NotificationEvent } from "./event/notification-center.js";
@@ -49,8 +49,6 @@ import { MainAgentLoop } from "./main-agent/main-agent-loop.js";
 import { GlobalState } from "./main-agent/global-state.js";
 import { createAttendHandler } from "./main-agent/attend-handler.js";
 import { createDispatchHandler } from "./main-agent/dispatch-handler.js";
-import type { FastPathEvent } from "./subagent/fast-path-handler.js";
-import { FastPathHandler } from "./subagent/fast-path-handler.js";
 import { evaluateStickiness, createStickiness, updateStickiness } from "./subagent/stickiness.js";
 import { matchesCron, validateCronMinInterval } from "./core/cron-matcher.js";
 
@@ -619,7 +617,6 @@ async function main(): Promise<void> {
         observerConfig: {
             engagementWindowMs: 5 * 60 * 1000,
             alertEngagementThreshold: appConfig.subagent?.alertEngagementThreshold ?? 60,
-            fastPathEngagementThreshold: appConfig.subagent?.fastPath?.engagementThreshold ?? 70,
             mentionKeywords: appConfig.notification?.mentionKeywords ?? [],
         },
         recordingDeps: {
@@ -872,20 +869,6 @@ async function main(): Promise<void> {
             });
         }
 
-        // Fix 7: FastPath 触发路径 — 消息到达时检查是否有已授权的 FastPath
-        const fp = sub.fastPathHandler as FastPathHandler | null;
-        if (fp && fp.isAuthorized()) {
-            const fpEvent: FastPathEvent = {
-                chatId,
-                messageId: String(event.messageId ?? event.id ?? ""),
-                userId: String(event.userId ?? event.user_id ?? event.senderId ?? ""),
-                text: String(event.text ?? event.message ?? ""),
-                timestamp: String(event.timestamp ?? new Date().toISOString()),
-            };
-            fp.handle(fpEvent).catch(err => {
-                log.warn("FastPath handle error", { chatId, error: String(err) });
-            });
-        }
     });
 
     // Hook 3: FeedbackLoop 消息追踪
@@ -1046,7 +1029,7 @@ async function main(): Promise<void> {
 
     }));
 
-    // Dispatch handler: 分派任务到 CodeActExecutor / FastPath / Deferred Re-entry
+    // Dispatch handler: 分派任务到 CodeActExecutor / Deferred Re-entry
     mainLoop.setDispatchHandler(createDispatchHandler({
         memory,
         globalState,
@@ -1148,18 +1131,6 @@ async function main(): Promise<void> {
         mainLoop.setOnAttendComplete((chatId, result) => {
             for (const d of result.decisions) {
                 metricsInstance!.groupCollector.onAttend(chatId, d.action);
-            }
-        });
-
-        // Hook 3: FastPath 快回复发送时更新 fast_path_replies_total
-        // q5 的回调包含 sentMessages，可通过 CallbackQueue 读取
-        // 简化：在 NC.onPush 中检测 system.agent_message_sent + fastPath flag
-        nc.onPush(event => {
-            if (String(event.type ?? "") !== "system.agent_message_sent") return;
-            const chatId = String(event.chatId ?? "");
-            // FastPathHandler 在 dispatch-handler 中设置 scene: "fastpath"
-            if (event.scene === "fastpath" && chatId) {
-                metricsInstance!.groupCollector.onFastPathReply(chatId);
             }
         });
 

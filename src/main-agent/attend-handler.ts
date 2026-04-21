@@ -2,7 +2,7 @@
  * attend-handler.ts — 主 Agent Attend Handler (Phase 4-5)
  *
  * 从 main.ts 提取的 LLM 决策逻辑：
- * - Phase 4: 构建 GroupContextPackage (Cosine Decay → 上下文深度 → 消息原文/FastPath 历史)
+ * - Phase 4: 构建 GroupContextPackage (Cosine Decay → 上下文深度 → 消息原文)
  * - Phase 5: 主 Agent LLM 决策 (系统 prompt + 上下文注入 + JSON 解析 + 算法 fallback)
  *
  * 参考设计：subagent.md §12.2 ➋➌➍
@@ -10,7 +10,6 @@
 
 import type { AttentionQueueEntry, AttendResult } from "../subagent/types.js";
 import type { SubagentManager } from "../subagent/subagent-manager.js";
-import type { FastPathHandler } from "../subagent/fast-path-handler.js";
 import type { MemoryStoreV2 } from "../memory-v2/index.js";
 import type { AppConfig } from "../core/config.js";
 import type { ChatMessage } from "../core/llm.js";
@@ -23,7 +22,6 @@ import { renderPrompt, buildAttentionVariables, buildMainSystemVariables } from 
 import { callLLMWithFallback } from "../core/llm.js";
 import { getRawId, getGroupModelKey } from "../core/chat-id.js";
 import { createLogger } from "../core/logger.js";
-import { formatTsForDisplay } from "../core/timezone.js";
 import { enrichMessages, formatMessageLine, resolveReplyText, type RawMessage } from "../core/message-enricher.js";
 import { loadConfig, resolveComponentProfiles } from "../core/config.js";
 import type { PlatformAdapter } from "../adapter/platform-adapter.js";
@@ -46,7 +44,7 @@ function buildObserve(chatId: string): AttendResult {
  * 构建精简的历史 attend 记录（仅标题 + 增量消息）。
  *
  * 剥离所有瞬态段落（活跃参与者、聊天画像、话题注册表、全局状态快照、
- * 决策记录、任务列表、FastPath 历史等），仅保留 chatId 标识和增量消息原文。
+ * 决策记录、任务列表等），仅保留 chatId 标识和增量消息原文。
  *
  * 增量逻辑：通过 mainLoop 的 per-chatId 追踪，只存储上次未见过的新消息。
  * compaction 后追踪被重置，自动退化为全量存储。
@@ -225,7 +223,6 @@ export function createAttendHandler(
             chatTitle: groupModel?.chatTitle,
             isDirectMessage: groupModel?.isDirectMessage,
             stickiness: subagent.stickiness,
-            fastPathEnabled: !!(subagent.fastPathHandler as any)?.isAuthorized?.(),
             pendingCodeActTasks: (subagent.codeActExecutor as any)?.getQueueSize?.() ?? 0,
             activePersons,
         });
@@ -352,12 +349,6 @@ export function createAttendHandler(
                 }
             }
 
-            // 构建 FastPath 历史
-            const fpHandler = subagent.fastPathHandler as FastPathHandler | null;
-            const fpHistory = fpHandler?.getSentMessages()
-                .map(m => `- [${formatTsForDisplay(m.timestamp)}] ${m.text}`)
-                .join("\n") ?? "";
-
             // 计算时间差
             const timeSinceLastAttend = entry.lastAttendedAt
                 ? `${Math.round((Date.now() - new Date(entry.lastAttendedAt).getTime()) / 60_000)}分钟`
@@ -383,7 +374,6 @@ export function createAttendHandler(
                 callbacks: subagent.lastCallbacks.length > 0
                     ? subagent.lastCallbacks.slice(-3)
                     : undefined,
-                fastPathHistory: fpHistory,
                 messages: messagesText || undefined,
                 dispatchedTopicIds: [...subagent.getDispatchedTopicIds()],
                 // 从 system prompt 迁移过来的动态字段
@@ -490,21 +480,6 @@ export function createAttendHandler(
             const llmResult: AttendResult = {
                 chatId: entry.chatId,
                 replyMode: parsed.replyMode ?? "NONE",
-                fastPathAuth: parsed.fastPathAuth ? {
-                    preauthorizedActions: parsed.fastPathAuth.preauthorizedActions ?? [],
-                    blockedActions: parsed.fastPathAuth.blockedActions ?? [],
-                    tonePreset: parsed.fastPathAuth.tonePreset ?? "礼貌得体",
-                    maxRepliesBeforeReauth: parsed.fastPathAuth.maxRepliesBeforeReauth ?? 3,
-                    expiresAt: parsed.fastPathAuth.expiresInMinutes
-                        ? new Date(Date.now() + parsed.fastPathAuth.expiresInMinutes * 60_000).toISOString()
-                        : new Date(Date.now() + 5 * 60_000).toISOString(),
-                    maxReplyLength: parsed.fastPathAuth.maxReplyLength,
-                    authorizedAt: new Date().toISOString(),
-                    // 从 FAST_PATH_AUTH 决策的 contentDirection 提取任务描述
-                    taskDescription: Array.isArray(parsed.decisions)
-                        ? parsed.decisions.find((d: any) => d.action === "FAST_PATH_AUTH")?.contentDirection
-                        : undefined,
-                } : undefined,
                 decisions: Array.isArray(parsed.decisions) ? parsed.decisions.map((d: any) => ({
                     action: d.action ?? "REPLY",
                     topicId: d.topicId || undefined,

@@ -24,7 +24,6 @@
 
   const CALLER_COLORS = {
     "attend-handler": "badge-primary",
-    "fast-path": "badge-warning",
     "session-runner": "badge-accent",
     "context-manager": "badge-info",
     reflection: "badge-secondary",

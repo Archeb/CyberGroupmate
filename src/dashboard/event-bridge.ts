@@ -384,7 +384,6 @@ export class EventBridge {
         // 群组概览
         const groups: Record<string, unknown>[] = [];
         for (const sub of subagentManager.getAllSubagents()) {
-            const fp = sub.fastPathHandler as any;
             const gm = this.deps.memory.getGroupModel(getGroupModelKey(sub.chatId));
             groups.push({
                 chatId: sub.chatId,
@@ -400,7 +399,6 @@ export class EventBridge {
                 codeActQueueSize: (sub.codeActExecutor as any)?.getQueueSize?.() ?? 0,
                 codeActProcessing: (sub.codeActExecutor as any)?.isProcessing?.() ?? false,
                 codeActSessionSize: (sub.codeActExecutor as any)?.getSessionSize?.() ?? 0,
-                fastPathStatus: fp?.getStatus?.() ?? { authorized: false, repliesSent: 0, maxReplies: 0, expiresAt: null },
                 dispatchedTopicIds: [...sub.getDispatchedTopicIds()],
                 lastCallbacks: sub.lastCallbacks,
             });

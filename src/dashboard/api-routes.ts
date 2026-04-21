@@ -8,7 +8,6 @@ import { Router } from "express";
 import * as fs from "node:fs";
 import type { DashboardDeps } from "./types.js";
 import type { EventBridge } from "./event-bridge.js";
-import type { FastPathHandler } from "../subagent/fast-path-handler.js";
 import type { CodeActExecutor } from "../subagent/code-act-executor.js";
 import { createLogger } from "../core/logger.js";
 import { loadConfig, validateConfig, saveConfig } from "../core/config.js";
@@ -501,18 +500,6 @@ export function createApiRouter(deps: DashboardDeps, bridge: EventBridge): Route
     // ─── Sandbox Pool ───
     router.get("/sandbox/pool", (_req, res) => {
         res.json(deps.sandboxPool.getStats());
-    });
-
-    // ─── FastPath ───
-    router.post("/fastpath/:chatId/revoke", (req, res) => {
-        const sub = deps.subagentManager.get(req.params.chatId);
-        if (!sub) { res.status(404).json({ error: "chat not found" }); return; }
-        const fp = sub.fastPathHandler as FastPathHandler | null;
-        if (fp) {
-            fp.revoke();
-            log.info("FastPath 手动撤销", { chatId: req.params.chatId });
-        }
-        res.json({ ok: true });
     });
 
     // ─── Manual Flush / Reflection ───

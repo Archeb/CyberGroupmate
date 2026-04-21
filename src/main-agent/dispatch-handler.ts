@@ -3,7 +3,6 @@
  *
  * 从 main.ts 提取的任务分派逻辑：
  * - REPLY → 构建 CodeActReplyTask + 创建/获取 CodeActExecutor → enqueue
- * - FAST_PATH_AUTH → 创建/获取 FastPathHandler → authorize
  * - DEFER → 重新入队 Q3 (DEFERRED_RE_ENTRY)
  * - OBSERVE / IGNORE → 仅记录
  *
@@ -21,9 +20,8 @@ import type { DynamicAttentionQueue } from "../subagent/attention-queue.js";
 import type { CallbackQueue } from "../subagent/callback-queue.js";
 import type { GlobalState } from "./global-state.js";
 import { CodeActExecutor } from "../subagent/code-act-executor.js";
-import { FastPathHandler } from "../subagent/fast-path-handler.js";
 import { buildGroupContext } from "./context-builder.js";
-import { formatTopicList, formatRelativeTime } from "./prompt-renderer.js";
+import { formatTopicList } from "./prompt-renderer.js";
 import { createLogger } from "../core/logger.js";
 import { formatTsForDisplay } from "../core/timezone.js";
 import { loadConfig, resolveComponentProfiles } from "../core/config.js";
@@ -35,8 +33,6 @@ import { getGroupModelKey } from "../core/chat-id.js";
 import { TopicRegistry } from "../pipeline/topic-registry.js";
 
 const log = createLogger("dispatch-handler");
-
-// formatRelativeTime 和 formatTopicList 已从 prompt-renderer.ts 导入
 
 /** Dispatch handler 依赖 */
 export interface DispatchHandlerDeps {
@@ -342,60 +338,6 @@ export function createDispatchHandler(
                     confidence: decision.confidence,
                     contextMessageCount: formattedMessages.length,
                     topicSummary: topicSummary ? topicSummary.slice(0, 100) : "(无)",
-                });
-            } else if (decision.action === "FAST_PATH_AUTH" && result.fastPathAuth) {
-                // 授权 FastPath
-                let fp = subagent.fastPathHandler as FastPathHandler | null;
-                const fpGroupModel = memory.getGroupModel(getGroupModelKey(result.chatId));
-                if (!fp) {
-                    fp = new FastPathHandler(result.chatId);
-                    fp.setCallbackHandler((cb: SubagentCallback) => q5.enqueue(cb));
-                    fp.setPersonaContext(persona, fpGroupModel?.chatTitle ?? result.chatId, fpGroupModel?.isDirectMessage);
-                    // 注入发送函数：通过平台 adapter 路由发送消息
-                    const fpAdapter = adapterList?.find(a => result.chatId.startsWith(a.platform + ":"));
-                    if (fpAdapter) {
-                        fp.setSendFunction(async (chatId: string, text: string): Promise<string | undefined> => {
-                            const sendResult = await fpAdapter.handleCall(`${fpAdapter.platform}.sendText`, [chatId, text]) as any;
-                            const messageId = sendResult?.messageId ?? sendResult?.id ? String(sendResult.messageId ?? sendResult.id) : undefined;
-                            // 发出 agent_message_sent 事件：触发 FeedbackLoop 追踪 + 消息落盘
-                            nc.push({
-                                type: "system.agent_message_sent",
-                                scene: "fastpath",
-                                chatId,
-                                text,
-                                messageId,
-                                timestamp: new Date().toISOString(),
-                            });
-                            return messageId;
-                        });
-                    }
-                    subagent.fastPathHandler = fp;
-                }
-
-                // 构建任务上下文（话题摘要、人物背景），类似 CODEACT_REPLY
-                let fpTopicSummary = "";
-                const fpTopics = subagent.topicRegistry.getActive(result.chatId);
-                if (fpTopics.length > 0) {
-                    fpTopicSummary = formatTopicList(fpTopics.map(t => ({
-                        label: t.label,
-                        summary: t.lastSummary,
-                        createdAt: t.createdAt,
-                    })));
-                }
-
-                fp.setTaskContext({
-                    topicSummary: fpTopicSummary || undefined,
-                    toneGuidance: subagent.stickiness.level === "CORE" ? "随意友好" : "礼貌得体",
-                });
-
-                fp.authorize(result.fastPathAuth);
-                log.info("授权 FastPath", {
-                    chatId: result.chatId,
-                    taskDescription: result.fastPathAuth.taskDescription ?? "(无)",
-                    maxReplies: result.fastPathAuth.maxRepliesBeforeReauth,
-                    expiresAt: result.fastPathAuth.expiresAt,
-                    actions: result.fastPathAuth.preauthorizedActions,
-                    topicCount: fpTopics.length,
                 });
             } else if (decision.action === "DEFER") {
                 // Fix 2: DEFERRED_RE_ENTRY — 延迟重新入队 (subagent.md §13.1 D1)

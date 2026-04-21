@@ -30,11 +30,6 @@
 {{callbacks}}
 {{/hasCallbacks}}
 
-{{#hasFastPathHistory}}
-## FastPath 回复历史
-{{fastPathHistory}}
-{{/hasFastPathHistory}}
-
 {{#groupModel}}
 ## 聊天画像
 - 标题: {{chatTitle}}

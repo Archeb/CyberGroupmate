@@ -70,7 +70,6 @@
   const ROUTING_COMPONENTS = [
     { key: "attend", label: "注意力决策", desc: "判断是否需要回复" },
     { key: "session", label: "CodeAct 交互", desc: "生成回复内容" },
-    { key: "fast_path", label: "快速回复", desc: "轻量级即时回复" },
     { key: "recording_cluster", label: "话题聚类", desc: "消息→话题分组" },
     { key: "recording_triage", label: "话题 Triage", desc: "摘要 + 介入判断" },
     { key: "reflection", label: "反思引擎", desc: "人物画像/总结" },

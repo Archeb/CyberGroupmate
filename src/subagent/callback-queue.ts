@@ -15,7 +15,7 @@ const log = createLogger("callback-queue");
  * CallbackQueue — 全局回调队列 (Q5)
  *
  * 线程安全的生产者-消费者队列。
- * 生产者: CodeActExecutor, FastPathHandler
+ * 生产者: CodeActExecutor
  * 消费者: MainAgentLoop (Phase 1)
  */
 export class CallbackQueue {

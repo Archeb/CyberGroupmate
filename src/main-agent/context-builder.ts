@@ -42,8 +42,6 @@ export interface ContextBuildInput {
     isDirectMessage?: boolean;
     /** 群组亲密度 */
     stickiness?: GroupStickiness;
-    /** FastPath 是否启用 */
-    fastPathEnabled?: boolean;
     /** 待执行任务数 */
     pendingCodeActTasks?: number;
     /** 活跃参与者 */
@@ -74,7 +72,6 @@ export function buildGroupContext(input: ContextBuildInput): GroupContextPackage
         pkg.chatTitle = input.chatTitle;
         pkg.isDirectMessage = input.isDirectMessage;
         pkg.stickiness = input.stickiness;
-        pkg.fastPathEnabled = input.fastPathEnabled;
         pkg.pendingCodeActTasks = input.pendingCodeActTasks;
         pkg.activePersons = input.activePersons;
     }
