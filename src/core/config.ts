@@ -165,6 +165,28 @@ export interface DiscordConfig {
     applicationId?: string;
 }
 
+export interface OneBotConfig {
+    /** WebSocket 连接地址，如 ws://127.0.0.1:6099/onebot */
+    wsUrl: string;
+    /** Bot 的 QQ 号（用于识别自己的消息） */
+    selfId: string;
+    /** 入站白名单（可选） */
+    whitelist?: {
+        enabled: boolean;
+        /** 群号列表 */
+        groups: string[];
+        /** 私聊用户 QQ 号列表 */
+        users: string[];
+    };
+    /** 拟人化发送延迟配置 */
+    humanizedDelay?: {
+        enabled: boolean;
+        msPerChar: number;
+        minDelay: number;
+        maxDelay: number;
+    };
+}
+
 export interface ReflectionExternalConfig {
     /** Silence threshold in seconds before triggering reflection (default: 7200 = 2h) */
     silenceThreshold?: number;
@@ -388,6 +410,7 @@ export interface AppConfig {
     timezone?: string;
     telegram?: TelegramConfig;
     discord?: DiscordConfig;
+    onebot?: OneBotConfig;
     notification: NotificationConfig;
     reflection: ReflectionExternalConfig;
     contextBudget?: ContextBudgetConfig;
@@ -487,6 +510,7 @@ export function loadConfig(configPath?: string, forceReload?: boolean): AppConfi
     const filePersona = (fileConfig.persona ?? {}) as Record<string, unknown>;
     const fileTG = (fileConfig.telegram ?? {}) as Record<string, unknown>;
     const fileDC = (fileConfig.discord ?? {}) as Record<string, unknown>;
+    const fileOB = (fileConfig.onebot ?? {}) as Record<string, unknown>;
     const fileNotification = (fileConfig.notification ?? {}) as Record<string, unknown>;
     const fileReflection = (fileConfig.reflection ?? {}) as Record<string, unknown>;
     const fileMerge = (fileReflection.merge_thresholds ?? {}) as Record<string, unknown>;
@@ -538,6 +562,12 @@ export function loadConfig(configPath?: string, forceReload?: boolean): AppConfi
         discord: Object.keys(fileDC).length > 0 ? {
             botToken: str(fileDC.bot_token) ?? "",
             applicationId: str(fileDC.application_id),
+        } : undefined,
+        onebot: Object.keys(fileOB).length > 0 ? {
+            wsUrl: str(fileOB.ws_url) ?? "",
+            selfId: str(fileOB.self_id) ?? "",
+            whitelist: parseOneBotWhitelist(fileOB),
+            humanizedDelay: parseOneBotHumanizedDelay(fileOB),
         } : undefined,
         notification: {
             mentionKeywords: Array.isArray(fileNotification.mention_keywords)
@@ -981,6 +1011,29 @@ function parseTelegramWhitelist(fileTG: Record<string, unknown>): TelegramWhitel
     };
 }
 
+function parseOneBotWhitelist(fileOB: Record<string, unknown>): OneBotConfig["whitelist"] | undefined {
+    const raw = fileOB.whitelist as Record<string, unknown> | undefined;
+    if (!raw || typeof raw !== "object") return undefined;
+    const groups = Array.isArray(raw.groups)
+        ? (raw.groups as unknown[]).map(x => String(x).trim()).filter(Boolean)
+        : [];
+    const users = Array.isArray(raw.users)
+        ? (raw.users as unknown[]).map(x => String(x).trim()).filter(Boolean)
+        : [];
+    return { enabled: raw.enabled === true, groups, users };
+}
+
+function parseOneBotHumanizedDelay(fileOB: Record<string, unknown>): OneBotConfig["humanizedDelay"] | undefined {
+    const raw = fileOB.humanized_delay as Record<string, unknown> | undefined;
+    if (!raw || typeof raw !== "object") return undefined;
+    return {
+        enabled: raw.enabled === true,
+        msPerChar: typeof raw.ms_per_char === "number" ? raw.ms_per_char : 50,
+        minDelay: typeof raw.min_delay === "number" ? raw.min_delay : 500,
+        maxDelay: typeof raw.max_delay === "number" ? raw.max_delay : 5000,
+    };
+}
+
 // ─── 序列化 + 验证（Dashboard Config Editor 用） ───
 
 /** 将 AppConfig 序列化为 YAML 格式的对象（snake_case keys） */
@@ -1085,6 +1138,30 @@ export function serializeConfigToObject(config: AppConfig): Record<string, unkno
         };
         if (config.discord.applicationId) dc.application_id = config.discord.applicationId;
         obj.discord = dc;
+    }
+
+    // onebot
+    if (config.onebot) {
+        const ob: Record<string, unknown> = {
+            ws_url: config.onebot.wsUrl,
+            self_id: config.onebot.selfId,
+        };
+        if (config.onebot.whitelist) {
+            ob.whitelist = {
+                enabled: config.onebot.whitelist.enabled,
+                groups: config.onebot.whitelist.groups,
+                users: config.onebot.whitelist.users,
+            };
+        }
+        if (config.onebot.humanizedDelay) {
+            ob.humanized_delay = {
+                enabled: config.onebot.humanizedDelay.enabled,
+                ms_per_char: config.onebot.humanizedDelay.msPerChar,
+                min_delay: config.onebot.humanizedDelay.minDelay,
+                max_delay: config.onebot.humanizedDelay.maxDelay,
+            };
+        }
+        obj.onebot = ob;
     }
 
     // reflection
@@ -1380,6 +1457,21 @@ export function validateConfig(config: unknown): { valid: boolean; errors: strin
     const dc = c.discord as Record<string, unknown> | undefined;
     if (dc) {
         if (!dc.botToken) errors.push("discord.botToken 不能为空");
+    }
+
+    // onebot (optional)
+    const ob = c.onebot as Record<string, unknown> | undefined;
+    if (ob) {
+        if (!ob.wsUrl) errors.push("onebot.wsUrl 不能为空");
+        if (!ob.selfId) errors.push("onebot.selfId 不能为空");
+        const wl = ob.whitelist as Record<string, unknown> | undefined;
+        if (wl && typeof wl === "object" && wl.enabled === true) {
+            const g = Array.isArray(wl.groups) ? wl.groups.length : 0;
+            const u = Array.isArray(wl.users) ? wl.users.length : 0;
+            if (g === 0 && u === 0) {
+                errors.push("onebot.whitelist.enabled 为 true 时，groups 与 users 至少填写一项");
+            }
+        }
     }
 
     // contextBudget
