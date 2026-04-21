@@ -367,6 +367,11 @@ export class OneBotAdapter implements PlatformAdapter {
         } else if (sticker && typeof sticker === "object") {
             const rec = sticker as Record<string, unknown>;
             let resolvedFile = rec.file;
+            // 兜底：如果没有 file，尝试通过 uniqueFileId 从媒体缓存查找本地文件（TG 贴纸转发 QQ 场景）
+            if (!resolvedFile && typeof rec.uniqueFileId === "string" && this.mediaDownloader) {
+                const cachedPath = this.mediaDownloader.getExistingPath(rec.uniqueFileId);
+                if (cachedPath) resolvedFile = cachedPath;
+            }
             if (typeof resolvedFile === "string") {
                 const cachedPath = this.mediaDownloader?.getExistingPath(resolvedFile);
                 if (cachedPath) {

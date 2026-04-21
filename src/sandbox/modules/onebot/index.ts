@@ -152,7 +152,11 @@ export function createOneBotClientProxy(env: CapabilityRegistryEnv, sentHistory:
             return sent;
         },
         sendSticker: async (chatId: string, sticker: string | Record<string, unknown>, opts?: { replyTo?: string | number; caption?: string }) => {
-            const stickerText = opts?.caption ?? (typeof sticker === "string" ? `[sticker:${sticker}]` : "[sticker]");
+            const stickerText = opts?.caption ?? (
+                typeof sticker === "string"
+                    ? `[sticker:${sticker}]`
+                    : `[sticker:${(sticker as Record<string, unknown>).uniqueFileId ?? (sticker as Record<string, unknown>).file ?? "unknown"}]`
+            );
             if (isDuplicate(String(chatId), stickerText)) {
                 const warning = `[⚠ 运行时警告: 重复消息已拦截] 目标 chat=${String(chatId)} 的表情包消息已重复，已自动拦截。`;
                 env.emitOutput(warning);
