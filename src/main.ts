@@ -757,7 +757,7 @@ async function main(): Promise<void> {
             memory.storeMessageBatch([{
                 messageId: String(event.messageId ?? event.id ?? `msg_${Date.now()}`),
                 chatId,
-                userId: String(event.userId ?? event.user_id ?? event.senderId ?? ""),
+                userId: ensureCompositeId(getPlatform(chatId), String(event.userId ?? event.user_id ?? event.senderId ?? "")),
                 displayName: String(event.displayName ?? event.senderName ?? event.userName ?? ""),
                 text: String(event.text ?? event.message ?? ""),
                 replyToMessageId: event.replyToMessageId ? String(event.replyToMessageId) : undefined,
@@ -775,7 +775,8 @@ async function main(): Promise<void> {
             const eventUserId = String(event.userId ?? event.user_id ?? event.senderId ?? "");
             if (eventUserId) {
                 try {
-                    memory.upsertPersonIdentity(eventUserId, { username: eventUsername });
+                    const compositeUid2 = ensureCompositeId(getPlatform(chatId), eventUserId);
+                    memory.upsertPersonIdentity(compositeUid2, { username: eventUsername });
                 } catch { /* 非关键路径 */ }
             }
         }
@@ -846,7 +847,8 @@ async function main(): Promise<void> {
             // 记录入方向交互（用户 → agent，此刻已发生）
             // 配合 feedback-loop.ts 的 agent_replied 出方向记录，构成完整双向交互链
             try {
-                const userId = String(event.userId ?? event.senderId ?? "");
+                const rawUserId = String(event.userId ?? event.senderId ?? "");
+                const userId = rawUserId ? ensureCompositeId(getPlatform(chatId), rawUserId) : "";
                 const displayName = String(event.displayName ?? event.senderName ?? event.userName ?? "");
                 const messageText = String(event.text ?? event.message ?? "").slice(0, 200);
                 // Issue 4: 包含发言人信息的交互摘要

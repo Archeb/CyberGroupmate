@@ -23,7 +23,7 @@ import type { MemoryStoreV2 } from "../memory-v2/index.js";
 import { embed } from "../memory-v2/embedding.js";
 import type { EmbeddingConfig } from "../core/config.js";
 import type { TopicRegistry } from "./topic-registry.js";
-import { getRawId, getGroupModelKey, getDunbarTierLabel } from "../core/chat-id.js";
+import { getRawId, getGroupModelKey, getDunbarTierLabel, ensureCompositeId, getPlatform } from "../core/chat-id.js";
 import type {
     Message,
     TopicClusteringResult,
@@ -247,7 +247,7 @@ export class RecordingPipeline extends EventEmitter {
                     this.memory.storeMessageBatch(chatMessages.map(m => ({
                         messageId: m.id,
                         chatId: String(m.chatId),
-                        userId: String(m.senderId),
+                        userId: ensureCompositeId(getPlatform(chatId), String(m.senderId)),
                         displayName: m.senderName,
                         text: m.text,
                         replyToMessageId: m.replyToMessageId,
@@ -263,7 +263,7 @@ export class RecordingPipeline extends EventEmitter {
                     for (const m of chatMessages) {
                         if (!seenUsers.has(m.senderId)) {
                             seenUsers.add(m.senderId);
-                            this.memory.upsertPersonIdentity(String(m.senderId), {
+                            this.memory.upsertPersonIdentity(ensureCompositeId(getPlatform(chatId), String(m.senderId)), {
                                 displayName: m.senderName,
                                 ...(m.senderUsername ? { username: m.senderUsername } : {}),
                                 lastSeenAt: new Date(m.timestamp).toISOString(),
