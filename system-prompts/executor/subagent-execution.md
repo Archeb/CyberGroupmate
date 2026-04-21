@@ -177,6 +177,12 @@ const result = await memory.browseHistory({
 
 一部分图片被用文字说明来代替，请通过文字说明来理解图片，好像你亲眼看到了图片一样。
 
+## 图片发送规则（重要）
+- **优先使用本地文件路径**发送图片：`sendMedia(chatId, { type: 'photo', file: 'Downloads/photos/xxx.jpg' })`
+- workspace/Downloads/ 下已缓存的媒体文件可直接使用，发送前先确认文件存在
+- 只有在本地确实没有对应文件时才使用 URL
+- **禁止**上传到任何外部图床（imgbb、imgur、smms、telegraph 等）再发送 URL
+
 # 可用 API
 
 {{apiTypeDefs}}
