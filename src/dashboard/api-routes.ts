@@ -11,6 +11,7 @@ import type { EventBridge } from "./event-bridge.js";
 import type { CodeActExecutor } from "../subagent/code-act-executor.js";
 import { createLogger } from "../core/logger.js";
 import { loadConfig, validateConfig, saveConfig } from "../core/config.js";
+import { rateLimiter } from "../core/llm-rate-limiter.js";
 import {
     listAllPrompts,
     loadOriginalPrompt,
@@ -830,6 +831,11 @@ export function createApiRouter(deps: DashboardDeps, bridge: EventBridge): Route
 
     router.get("/token-pricing", (_req, res) => {
         res.json(deps.tokenStats.getPricing() ?? {});
+    });
+
+    // ─── Rate Limiter Stats ───
+    router.get("/rate-limiter/stats", (_req, res) => {
+        res.json(rateLimiter.getStats());
     });
 
     // ─── Config Editor ───
