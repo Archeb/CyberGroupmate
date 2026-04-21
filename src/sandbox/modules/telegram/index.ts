@@ -58,6 +58,45 @@ export function createTelegramClientProxy(env: CapabilityRegistryEnv, sentHistor
         return file;
     }
 
+    function buildTelegramMediaDedupKey(media: unknown, captionOverride?: string): string {
+        const parts: string[] = [];
+
+        if (typeof captionOverride === "string" && captionOverride.trim()) {
+            parts.push(`caption=${captionOverride.trim()}`);
+        }
+
+        if (typeof media === "string") {
+            parts.push(`file=${String(resolveLocalFile(media))}`);
+            return `[media:${parts.join("|")}]`;
+        }
+
+        if (media && typeof media === "object") {
+            const record = media as Record<string, unknown>;
+            const type = typeof record.type === "string" ? record.type : "unknown";
+            parts.push(`type=${type}`);
+
+            const resolvedFile = resolveLocalFile(record.file);
+            if (typeof resolvedFile === "string" && resolvedFile) parts.push(`file=${resolvedFile}`);
+            if (typeof record.url === "string" && record.url) parts.push(`url=${record.url}`);
+            if (typeof record.fileId === "string" && record.fileId) parts.push(`fileId=${record.fileId}`);
+            if (typeof record.id === "string" && record.id) parts.push(`id=${record.id}`);
+            if (typeof record.uniqueFileId === "string" && record.uniqueFileId) parts.push(`uniqueFileId=${record.uniqueFileId}`);
+            if (typeof record.fileName === "string" && record.fileName) parts.push(`fileName=${record.fileName}`);
+            if (!captionOverride && typeof record.caption === "string" && record.caption.trim()) {
+                parts.push(`caption=${record.caption.trim()}`);
+            }
+
+            return `[media:${parts.join("|")}]`;
+        }
+
+        return "[media:unknown]";
+    }
+
+    function buildTelegramMediaGroupDedupKey(medias: unknown[]): string {
+        const mediaKeys = (medias || []).map((media) => buildTelegramMediaDedupKey(media));
+        return `[mediaGroup:${mediaKeys.join("||")}]`;
+    }
+
     /**
      * 检查消息是否是重复发送。
      * 如果是新消息则记录并返回 false；如果已发送过则返回 true。
@@ -107,18 +146,7 @@ export function createTelegramClientProxy(env: CapabilityRegistryEnv, sentHistor
             return sent;
         },
         sendMedia: async (chatId: number | string, media: unknown, opts?: { replyTo?: number; caption?: string }) => {
-            // ── 重复消息拦截（基于 caption + 媒体标识）──
-            // 从 media 对象中提取可区分的标识（file/url/fileId/type），避免不同媒体被误判为重复
-            let mediaIdentifier = "[media]";
-            if (media && typeof media === "object") {
-                const m = media as Record<string, unknown>;
-                if (typeof m.file === "string") mediaIdentifier = `[media:file=${m.file}]`;
-                else if (typeof m.url === "string") mediaIdentifier = `[media:url=${m.url}]`;
-                else if (typeof m.fileId === "string") mediaIdentifier = `[media:fileId=${m.fileId}]`;
-                else if (typeof m.id === "string") mediaIdentifier = `[media:id=${m.id}]`;
-                else if (typeof m.type === "string") mediaIdentifier = `[media:type=${m.type}]`;
-            }
-            const mediaText = opts?.caption ? `${opts.caption}|${mediaIdentifier}` : mediaIdentifier;
+            const mediaText = buildTelegramMediaDedupKey(media, opts?.caption);
             if (isDuplicate(String(chatId), mediaText)) {
                 const preview = mediaText.length > 80 ? mediaText.slice(0, 80) + '...' : mediaText;
                 const warning = `[⚠ 运行时警告: 重复消息已拦截] 目标 chat=${String(chatId)} 的媒体消息 "${preview}" 与本次 session 中已发送的消息内容完全一致，已自动拦截，不会重复发送。`;
@@ -159,8 +187,12 @@ export function createTelegramClientProxy(env: CapabilityRegistryEnv, sentHistor
             return sent;
         },
         sendFile: async (chatId: number | string, filePath: string, opts?: { replyTo?: number; caption?: string; fileName?: string; mimeType?: string }) => {
-            // ── 重复消息拦截（基于 caption + filePath）──
-            const fileText = opts?.caption ?? `[file:${filePath}]`;
+            const absFilePath = typeof filePath === "string" ? String(resolveLocalFile(filePath)) : filePath;
+            const fileParts = [`file=${String(absFilePath)}`];
+            if (opts?.caption) fileParts.push(`caption=${opts.caption}`);
+            if (opts?.fileName) fileParts.push(`fileName=${opts.fileName}`);
+            if (opts?.mimeType) fileParts.push(`mimeType=${opts.mimeType}`);
+            const fileText = `[file:${fileParts.join("|")}]`;
             if (isDuplicate(String(chatId), fileText)) {
                 const warning = `[⚠ 运行时警告: 重复消息已拦截] 目标 chat=${String(chatId)} 的文件消息 "${fileText.length > 80 ? fileText.slice(0, 80) + '...' : fileText}" 与本次 session 中已发送的消息内容完全一致，已自动拦截，不会重复发送。`;
                 env.emitOutput(warning);
@@ -173,10 +205,7 @@ export function createTelegramClientProxy(env: CapabilityRegistryEnv, sentHistor
                 });
                 return null;
             }
-            
-            // 解析可能的相对路径
-            const absFilePath = typeof filePath === "string" ? String(resolveLocalFile(filePath)) : filePath;
-            
+
             const sent = hydrateTelegramMessage(await env.callHost("telegram.sendFile", [chatId, absFilePath, opts]));
             env.emitOutput(formatTelegramAck("[Telegram] sendFile ok", sent));
             // 发射 agent_message_sent 通知
@@ -278,9 +307,7 @@ export function createTelegramClientProxy(env: CapabilityRegistryEnv, sentHistor
         // ─── 扩展: 发送与交互 ───
 
         sendMediaGroup: async (chatId: number | string, medias: unknown[], opts?: { replyTo?: number; silent?: boolean }) => {
-            // ── 重复消息拦截（基于首项 caption 或类型摘要）──
-            const firstMedia = medias[0] as Record<string, unknown> | undefined;
-            const mediaGroupText = `[mediaGroup:${medias.length}items]${firstMedia?.caption ? `|${firstMedia.caption}` : ""}`;
+            const mediaGroupText = buildTelegramMediaGroupDedupKey(medias);
             if (isDuplicate(String(chatId), mediaGroupText)) {
                 const warning = `[⚠ 运行时警告: 重复消息已拦截] 目标 chat=${String(chatId)} 的媒体组与本次 session 中已发送的内容一致，已自动拦截。`;
                 env.emitOutput(warning);
