@@ -232,6 +232,21 @@ export function createAttendHandler(
 
         // ═══ Phase 5: LLM 决策路径 (subagent.md §12.2 ➋➌➍) ═══
         try {
+            const currentConfig = loadConfig();
+            const attendProfiles = resolveComponentProfiles("attend", currentConfig);
+            // 只有显式声明 vision:true 的 attend profile 才能接收图片。
+            const attendSupportsVision = attendProfiles.some(p => p.vision === true);
+            // attend 媒体策略：vision=看图，describe=仅文字描述，disable=禁用媒体富化（默认）。
+            const attendVisionMode = currentConfig.vision?.attendMode ?? "disable";
+            const effectiveAttendVisionMode = attendVisionMode === "vision" && !attendSupportsVision
+                ? "describe"
+                : attendVisionMode;
+            if (attendVisionMode === "vision" && !attendSupportsVision) {
+                log.warn("attend_mode=vision 但 attend profile 未启用 vision，降级为 describe", {
+                    chatId: entry.chatId,
+                });
+            }
+
             // 构建消息原文（所有深度均获取）+ Vision 富化 sticker/photo
             let messagesText = "";
             let rawMessagesForHistory: RawMessage[] = [];
@@ -302,30 +317,37 @@ export function createAttendHandler(
                         }
                     ));
 
-                    // 使用 enrichMessages 进行 Vision 富化（下载并分析 sticker/photo/gif 等所有带附件消息）
-                    const currentConfig = loadConfig();
-                    const visionConfig = currentConfig.vision;
-                    const visionLlmConfig = currentConfig.llmRouting.vision
-                        ? resolveComponentProfiles("vision", currentConfig)[0]
-                        : undefined;
-                    // 使用 vision tier LLM 进行媒体富化，而非 attend LLM
-                    const enrichLlmConfig = visionLlmConfig ?? resolveComponentProfiles("attend", currentConfig)[0];
-
-                    const downloadFn = buildDownloadFn(entry.chatId);
-
-                    const { formattedText, imageParts: parsedImageParts } = await enrichMessages(rawMessages, {
-                        visionConfig,
-                        llmConfig: enrichLlmConfig,
-                        visionLlmConfig,
-                        downloadFn,
-                        stickerCache: memory,
-                        chatId: entry.chatId,
-                        mediaDownloader,
-                    });
-                    messagesText = formattedText;
                     rawMessagesForHistory = rawMessages;
-                    if (parsedImageParts.length > 0) {
-                        imageParts.push(...parsedImageParts);
+
+                    if (effectiveAttendVisionMode === "disable") {
+                        // 完全禁用媒体富化，仅保留文本与媒体标签。
+                        messagesText = rawMessages
+                            .map(m => formatMessageLine(m, { includeMediaTags: true }))
+                            .join("\n");
+                    } else {
+                        // 使用 enrichMessages 进行 Vision 富化（下载并分析 sticker/photo/gif 等所有带附件消息）
+                        const visionConfig = currentConfig.vision;
+                        const visionLlmConfig = currentConfig.llmRouting.vision
+                            ? resolveComponentProfiles("vision", currentConfig)[0]
+                            : undefined;
+                        // 使用 vision tier LLM 进行媒体富化，而非 attend LLM
+                        const enrichLlmConfig = visionLlmConfig ?? attendProfiles[0];
+
+                        const downloadFn = buildDownloadFn(entry.chatId);
+
+                        const { formattedText, imageParts: parsedImageParts } = await enrichMessages(rawMessages, {
+                            visionConfig,
+                            llmConfig: enrichLlmConfig,
+                            visionLlmConfig,
+                            downloadFn,
+                            stickerCache: memory,
+                            chatId: entry.chatId,
+                            mediaDownloader,
+                        });
+                        messagesText = formattedText;
+                        if (effectiveAttendVisionMode === "vision" && parsedImageParts.length > 0) {
+                            imageParts.push(...parsedImageParts);
+                        }
                     }
                 }
             }
@@ -386,7 +408,6 @@ export function createAttendHandler(
             const mainSystemVars = buildMainSystemVariables(persona);
 
             // ═══ 可指派模块名册注入（放入 system prompt，避免每次 attend 重复占用 token） ═══
-            const currentConfig = loadConfig();
             const baseSkills = new Set(currentConfig.subagent?.baseSkills ?? [
                 "runtime", "memory", "docs", "fs", "actions", "skills", "mcp", "cron", "events", "kv", "http", "vision", "shell",
             ]);
@@ -419,7 +440,7 @@ export function createAttendHandler(
 
             const llmPromise = callLLMWithFallback(
                 messages,
-                resolveComponentProfiles("attend"),
+                attendProfiles,
                 {
                     caller: "attend-handler",
                     prefill: `让${persona.name}看看，`,
