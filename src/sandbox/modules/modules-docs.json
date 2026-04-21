@@ -550,5 +550,77 @@
       }
     ],
     "typeDefs": "interface VisionModule {\n    /**\n     * 看图：读取一张或多张图片文件，返回每张图片的文字描述。\n     * 使用 Vision LLM 分析图片内容，支持 JPEG、PNG、WebP 等常见格式。\n     *\n     * @param imagePaths - 图片文件路径（支持绝对路径或相对于 workspace/ 的相对路径），可传入多个参数\n     * @returns 每张图片的详细文字描述数组（与输入路径一一对应）\n     *\n     * @example\n     * // 查看单张图片\n     * const [desc] = await vision.see(\"screenshots/page.png\");\n     * console.log(desc);\n     *\n     * @example\n     * // 同时查看多张图片\n     * const descriptions = await vision.see(\"img1.jpg\", \"img2.png\", \"data/chart.png\");\n     * descriptions.forEach((d, i) => console.log(`图片${i+1}: ${d}`));\n     */\n    see(...imagePaths: string[]): Promise<string[]>;\n}"
+  },
+  {
+    "name": "onebot",
+    "description": "QQ 消息客户端（通过 OneBot v11 协议）。也可通过 qq 别名访问。",
+    "methods": [
+      {
+        "name": "sendText",
+        "brief": "sendText(chatId, text, opts?): 发送文本消息到 QQ 群或私聊",
+        "fullDoc": ""
+      },
+      {
+        "name": "sendMedia",
+        "brief": "sendMedia(chatId, media, opts?): 发送图片/媒体到 QQ 群或私聊",
+        "fullDoc": ""
+      },
+      {
+        "name": "sendFile",
+        "brief": "sendFile(chatId, filePath, opts?): 发送文件到 QQ 群或私聊",
+        "fullDoc": ""
+      },
+      {
+        "name": "sendTyping",
+        "brief": "sendTyping(chatId): 发送输入状态（OneBot 不支持，静默忽略）",
+        "fullDoc": ""
+      },
+      {
+        "name": "deleteMessages",
+        "brief": "deleteMessages(chatId, messageIds): 撤回消息",
+        "fullDoc": ""
+      },
+      {
+        "name": "downloadMedia",
+        "brief": "downloadMedia(mediaRef): 下载媒体文件",
+        "fullDoc": ""
+      }
+    ]
+  },
+  {
+    "name": "qq",
+    "description": "onebot 模块的别名，提供相同的 QQ 消息 API。",
+    "methods": [
+      {
+        "name": "sendText",
+        "brief": "sendText(chatId, text, opts?): 发送文本消息到 QQ 群或私聊",
+        "fullDoc": ""
+      },
+      {
+        "name": "sendMedia",
+        "brief": "sendMedia(chatId, media, opts?): 发送图片/媒体到 QQ 群或私聊",
+        "fullDoc": ""
+      },
+      {
+        "name": "sendFile",
+        "brief": "sendFile(chatId, filePath, opts?): 发送文件到 QQ 群或私聊",
+        "fullDoc": ""
+      },
+      {
+        "name": "sendTyping",
+        "brief": "sendTyping(chatId): 发送输入状态（OneBot 不支持，静默忽略）",
+        "fullDoc": ""
+      },
+      {
+        "name": "deleteMessages",
+        "brief": "deleteMessages(chatId, messageIds): 撤回消息",
+        "fullDoc": ""
+      },
+      {
+        "name": "downloadMedia",
+        "brief": "downloadMedia(mediaRef): 下载媒体文件",
+        "fullDoc": ""
+      }
+    ]
   }
 ]

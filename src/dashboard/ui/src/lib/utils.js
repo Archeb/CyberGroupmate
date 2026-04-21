@@ -58,6 +58,7 @@ export function platformIcon(platform) {
   switch (platform) {
     case 'telegram': return '✈️';
     case 'discord': return '🎮';
+    case 'onebot': return '🐧';
     default: return '';
   }
 }
@@ -69,6 +70,7 @@ export function platformLabel(platform) {
   switch (platform) {
     case 'telegram': return 'TG';
     case 'discord': return 'DC';
+    case 'onebot': return 'QQ';
     default: return platform.toUpperCase().slice(0, 2);
   }
 }

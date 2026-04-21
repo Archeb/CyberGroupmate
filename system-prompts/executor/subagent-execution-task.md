@@ -18,7 +18,7 @@
 
 {{#availableStickers}}
 ## 可用贴纸
-以下贴纸可通过 telegram.sendSticker 发送（适合用贴纸表达情绪或活跃气氛时使用，不要强行发送）：
+以下贴纸可通过 sendSticker 发送（适合用贴纸表达情绪或活跃气氛时使用，不要强行发送）：
 {{availableStickers}}
 {{/availableStickers}}
 

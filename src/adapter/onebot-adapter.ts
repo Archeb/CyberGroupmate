@@ -11,7 +11,7 @@ import type { PlatformAdapter } from "./platform-adapter.js";
 import { composeChatId, ensureCompositeId, parseChatId } from "../core/chat-id.js";
 import { createLogger } from "../core/logger.js";
 import { WebSocket } from "ws";
-import { readFileSync, existsSync } from "node:fs";
+import { existsSync } from "node:fs";
 import path from "node:path";
 
 const log = createLogger("onebot-adapter");
@@ -51,7 +51,7 @@ type OneBotActionResponse = {
 };
 
 type OneBotMediaInfo = {
-    type: "photo" | "video" | "document" | "other";
+    type: "photo" | "video" | "document" | "audio" | "other";
     url?: string;
     fileId: string;
     uniqueFileId: string;
@@ -66,6 +66,7 @@ export class OneBotAdapter implements PlatformAdapter {
     private ws: WebSocket | null = null;
     private started = false;
     private readonly pending = new Map<string, { resolve: (v: unknown) => void; reject: (err: Error) => void; timer: NodeJS.Timeout }>();
+    private readonly mutedChats = new Map<string, number>();
 
     constructor(
         private config: OneBotConfig,
@@ -129,10 +130,12 @@ export class OneBotAdapter implements PlatformAdapter {
             "onebot.sendMedia",
             "onebot.sendFile",
             "onebot.sendTyping",
+            "onebot.deleteMessages",
             "qq.sendText",
             "qq.sendMedia",
             "qq.sendFile",
             "qq.sendTyping",
+            "qq.deleteMessages",
         ];
     }
 
@@ -144,9 +147,53 @@ export class OneBotAdapter implements PlatformAdapter {
         // OneBot v11 / NapCat 通常没有统一的标记已读接口，静默忽略。
     }
 
+    muteChat(chatId: string, hours: number): void {
+        const h = Number.isFinite(hours) && hours > 0 ? hours : 1;
+        const expiryMs = Date.now() + h * 3600_000;
+        this.mutedChats.set(chatId, expiryMs);
+        log.info("muteChat (onebot)", { chatId, hours: h, expiryMs });
+    }
+
+    unmuteChat(chatId: string): void {
+        this.mutedChats.delete(chatId);
+        log.info("unmuteChat (onebot)", { chatId });
+    }
+
+    getMutedChats(): Array<{ chatId: string; expiry: number; remaining: string }> {
+        const now = Date.now();
+        const result: Array<{ chatId: string; expiry: number; remaining: string }> = [];
+        for (const [chatId, expiry] of this.mutedChats.entries()) {
+            if (expiry <= now) {
+                this.mutedChats.delete(chatId);
+                continue;
+            }
+            const mins = Math.max(1, Math.ceil((expiry - now) / 60000));
+            result.push({ chatId, expiry, remaining: `${mins}m` });
+        }
+        return result;
+    }
+
+    isChatMuted(chatId: string): boolean {
+        const expiry = this.mutedChats.get(chatId);
+        if (!expiry) return false;
+        if (expiry <= Date.now()) {
+            this.mutedChats.delete(chatId);
+            return false;
+        }
+        return true;
+    }
+
     async handleCall(method: string, args: unknown[]): Promise<unknown> {
         if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
             throw new Error("OneBotAdapter is not started");
+        }
+
+        const writeMethods = new Set(this.getWriteMethods());
+        if (writeMethods.has(method)) {
+            const chatId = ensureCompositeId("onebot", String(args[0] ?? ""));
+            if (this.isChatMuted(chatId)) {
+                throw new Error(`[禁言中] 你在该聊天已被 /mute，所有发送操作已被抑制。`);
+            }
         }
 
         switch (method) {
@@ -175,6 +222,12 @@ export class OneBotAdapter implements PlatformAdapter {
                 const caption = typeof opts.caption === "string" ? opts.caption : "";
                 await this.applyHumanizedDelay(chatId, caption.length);
                 return this.sendFile(chatId, filePath, opts);
+            }
+            case "onebot.deleteMessages":
+            case "qq.deleteMessages": {
+                const chatId = ensureCompositeId("onebot", String(args[0] ?? ""));
+                const ids = Array.isArray(args[1]) ? args[1].map(id => String(id)).filter(Boolean) : [];
+                return this.deleteMessages(chatId, ids);
             }
             case "onebot.sendTyping":
             case "qq.sendTyping": {
@@ -251,6 +304,17 @@ export class OneBotAdapter implements PlatformAdapter {
             fileName: typeof opts.fileName === "string" ? opts.fileName : path.basename(resolvedPath),
         };
         return this.sendMedia(chatId, payload, opts);
+    }
+
+    private async deleteMessages(chatId: string, messageIds: string[]): Promise<void> {
+        if (messageIds.length === 0) return;
+        const parsed = parseChatId(chatId);
+        if (!parsed.rawId.startsWith("group:")) {
+            throw new Error("deleteMessages: OneBot 目前仅支持群消息撤回");
+        }
+        for (const id of messageIds) {
+            await this.callAction("delete_msg", { message_id: Number(id) });
+        }
     }
 
     private async buildOutgoingSegments(media: Record<string, unknown>, opts: Record<string, unknown>): Promise<OneBotMessageSegment[]> {
@@ -397,13 +461,13 @@ export class OneBotAdapter implements PlatformAdapter {
             return null;
         }
 
+        const normalizedMessage = this.normalizeMessageSegments(event.message ?? event.raw_message ?? "");
         const displayName = event.sender?.card || event.sender?.nickname || userId;
-        const text = this.extractText(event.message ?? event.raw_message ?? "");
         const messageId = String(event.message_id ?? "");
-        const replyToMessageId = this.extractReplyTo(event.message) ?? (event.reply?.message_id != null ? String(event.reply.message_id) : undefined);
-        const mentionsAgent = this.hasAtSelf(event.message) || text.includes(String(this.config.selfId));
-        const mediaInfo = this.extractMediaInfo(event.message);
-
+        const mentionsAgent = this.hasAtSelf(normalizedMessage);
+        const mediaInfo = this.extractMediaInfo(normalizedMessage);
+        const text = this.extractText(normalizedMessage);
+        const replyToMessageId = this.extractReplyTo(normalizedMessage) ?? (event.reply?.message_id != null ? String(event.reply.message_id) : undefined);
         const normalizedText = text || (mediaInfo ? this.mediaPlaceholder(mediaInfo.type) : "");
 
         return {
@@ -423,9 +487,47 @@ export class OneBotAdapter implements PlatformAdapter {
         };
     }
 
-    private extractText(message: string | OneBotMessageSegment[]): string {
-        if (typeof message === "string") return message.replace(/\[CQ:[^\]]+\]/g, "").trim();
-        if (!Array.isArray(message)) return "";
+    private normalizeMessageSegments(message: string | OneBotMessageSegment[]): OneBotMessageSegment[] {
+        if (Array.isArray(message)) return message;
+        return this.parseCqString(message);
+    }
+
+    private parseCqString(input: string): OneBotMessageSegment[] {
+        const segments: OneBotMessageSegment[] = [];
+        const regex = /\[CQ:([^,\]]+)((?:,[^\]]*)?)\]/g;
+        let lastIndex = 0;
+        let match: RegExpExecArray | null;
+
+        while ((match = regex.exec(input)) !== null) {
+            const before = input.slice(lastIndex, match.index);
+            if (before) segments.push({ type: "text", data: { text: before } });
+
+            const type = match[1];
+            const rawAttrs = match[2] ?? "";
+            const data: Record<string, unknown> = {};
+            if (rawAttrs) {
+                for (const pair of rawAttrs.slice(1).split(",")) {
+                    const eqIdx = pair.indexOf("=");
+                    if (eqIdx === -1) continue;
+                    const key = pair.slice(0, eqIdx);
+                    const value = pair.slice(eqIdx + 1)
+                        .replaceAll("&#44;", ",")
+                        .replaceAll("&#91;", "[")
+                        .replaceAll("&#93;", "]")
+                        .replaceAll("&amp;", "&");
+                    data[key] = value;
+                }
+            }
+            segments.push({ type, data });
+            lastIndex = regex.lastIndex;
+        }
+
+        const rest = input.slice(lastIndex);
+        if (rest) segments.push({ type: "text", data: { text: rest } });
+        return segments;
+    }
+
+    private extractText(message: OneBotMessageSegment[]): string {
         return message.map(seg => {
             if (seg.type === "text") return String(seg.data?.text ?? "");
             if (seg.type === "at") return `[CQ:at,qq=${String(seg.data?.qq ?? "")}]`;
@@ -433,19 +535,14 @@ export class OneBotAdapter implements PlatformAdapter {
         }).join("").trim();
     }
 
-    private extractReplyTo(message: string | OneBotMessageSegment[] | undefined): string | undefined {
-        if (!Array.isArray(message)) {
-            const match = typeof message === "string" ? message.match(/\[CQ:reply,id=(\d+)\]/) : null;
-            return match?.[1];
-        }
+    private extractReplyTo(message: OneBotMessageSegment[]): string | undefined {
         const seg = message.find(seg => seg.type === "reply");
         if (!seg) return undefined;
         const id = seg.data?.id;
         return id == null ? undefined : String(id);
     }
 
-    private extractMediaInfo(message: string | OneBotMessageSegment[] | undefined): OneBotMediaInfo | undefined {
-        if (!Array.isArray(message)) return undefined;
+    private extractMediaInfo(message: OneBotMessageSegment[]): OneBotMediaInfo | undefined {
         for (const seg of message) {
             const data = seg.data ?? {};
             if (seg.type === "image") {
@@ -470,7 +567,18 @@ export class OneBotAdapter implements PlatformAdapter {
                     fileName: typeof data.file === "string" ? path.basename(String(data.file)) : undefined,
                 };
             }
-            if (seg.type === "file" || seg.type === "record") {
+            if (seg.type === "record") {
+                const url = typeof data.url === "string" ? data.url : undefined;
+                const file = String(data.file ?? url ?? "");
+                return {
+                    type: "audio",
+                    url,
+                    fileId: file,
+                    uniqueFileId: String(data.file_unique ?? data.file_id ?? file),
+                    fileName: typeof data.file === "string" ? path.basename(String(data.file)) : undefined,
+                };
+            }
+            if (seg.type === "file") {
                 const url = typeof data.url === "string" ? data.url : undefined;
                 const file = String(data.file ?? url ?? "");
                 return {
@@ -491,6 +599,8 @@ export class OneBotAdapter implements PlatformAdapter {
                 return "[📷 图片]";
             case "video":
                 return "[🎬 视频]";
+            case "audio":
+                return "[🎤 语音]";
             case "document":
                 return "[📎 文件]";
             default:
@@ -498,10 +608,7 @@ export class OneBotAdapter implements PlatformAdapter {
         }
     }
 
-    private hasAtSelf(message: string | OneBotMessageSegment[] | undefined): boolean {
-        if (!Array.isArray(message)) {
-            return typeof message === "string" && message.includes(`[CQ:at,qq=${this.config.selfId}]`);
-        }
+    private hasAtSelf(message: OneBotMessageSegment[]): boolean {
         return message.some(seg => seg.type === "at" && String(seg.data?.qq ?? "") === String(this.config.selfId));
     }
 
