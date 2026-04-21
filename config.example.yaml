@@ -205,6 +205,9 @@ telegram:
 #   ws_url: "ws://127.0.0.1:6099/onebot/v11/ws"
 #   # 机器人 QQ 号
 #   self_id: "1234567890"
+#   # 是否将本地文件编码为 data URL 后发送（跨机器部署建议开启）
+#   # 开启后，发送图片时会使用 data:image/png;base64,... 这类 payload，避免 file:// 路径不可达
+#   send_file_as_data_url: true
 #   # 入站白名单（可选）
 #   # whitelist:
 #   #   enabled: true

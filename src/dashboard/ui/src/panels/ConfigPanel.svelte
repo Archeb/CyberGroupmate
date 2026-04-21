@@ -69,7 +69,7 @@
   const RESTART_FIELDS = {
     telegram: ["mode", "botToken", "apiId", "apiHash", "phone"],
     discord: ["botToken"],
-    onebot: ["wsUrl", "selfId"],
+    onebot: ["wsUrl", "selfId", "sendFileAsDataUrl"],
     subagent: ["maxSandboxInstances"],
   };
 
@@ -124,7 +124,8 @@
         config.telegram.whitelist = { enabled: false, groups: [], users: [] };
       }
       if (!config.discord) config.discord = { botToken: "", applicationId: "" };
-      if (!config.onebot) config.onebot = { wsUrl: '', selfId: '' };
+      if (!config.onebot) config.onebot = { wsUrl: '', selfId: '', sendFileAsDataUrl: false };
+      if (config.onebot.sendFileAsDataUrl == null) config.onebot.sendFileAsDataUrl = false;
       if (!config.onebot.whitelist) {
         config.onebot.whitelist = { enabled: false, groups: [], users: [] };
       }

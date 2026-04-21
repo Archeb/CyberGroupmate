@@ -170,6 +170,8 @@ export interface OneBotConfig {
     wsUrl: string;
     /** Bot 的 QQ 号（用于识别自己的消息） */
     selfId: string;
+    /** 是否将本地文件编码为 data URL 发送（跨机器部署时建议开启） */
+    sendFileAsDataUrl?: boolean;
     /** 入站白名单（可选） */
     whitelist?: {
         enabled: boolean;
@@ -568,6 +570,7 @@ export function loadConfig(configPath?: string, forceReload?: boolean): AppConfi
         onebot: Object.keys(fileOB).length > 0 ? {
             wsUrl: str(fileOB.ws_url) ?? "",
             selfId: str(fileOB.self_id) ?? "",
+            sendFileAsDataUrl: fileOB.send_file_as_data_url != null ? Boolean(fileOB.send_file_as_data_url) : undefined,
             whitelist: parseOneBotWhitelist(fileOB),
             humanizedDelay: parseOneBotHumanizedDelay(fileOB),
         } : undefined,
@@ -1172,6 +1175,9 @@ export function serializeConfigToObject(config: AppConfig): Record<string, unkno
             ws_url: config.onebot.wsUrl,
             self_id: config.onebot.selfId,
         };
+        if (config.onebot.sendFileAsDataUrl != null) {
+            ob.send_file_as_data_url = config.onebot.sendFileAsDataUrl;
+        }
         if (config.onebot.whitelist) {
             ob.whitelist = {
                 enabled: config.onebot.whitelist.enabled,

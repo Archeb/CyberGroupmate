@@ -45,6 +45,16 @@
       /></label
     >
   </div>
+  <label class="cfg-check mt-3 mb-2">
+    <input
+      type="checkbox"
+      class="toggle toggle-xs"
+      bind:checked={config.onebot.sendFileAsDataUrl}
+    />
+    <span><i class="fa-solid fa-rotate-right restart-icon"></i> 发送本地文件时改用 Data URL payload</span>
+  </label>
+  <p class="text-xs opacity-60 mb-1">跨机器部署 NapCat 时建议开启，避免 `file://` 路径在 QQ 端不可达。</p>
+  <p class="text-xs opacity-60 mb-3">开启后会发送 `data:image/png;base64,...` 这类文件内容。</p>
   <div class="divider text-xs opacity-50 my-3">拟人化发送延迟</div>
   <label class="cfg-check mb-2">
     <input

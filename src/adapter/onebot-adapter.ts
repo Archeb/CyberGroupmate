@@ -452,6 +452,30 @@ export class OneBotAdapter implements PlatformAdapter {
         }
     }
 
+    private inferMimeTypeFromPath(filePath: string): string {
+        const imageMime = this.inferImageMimeType(filePath);
+        if (imageMime) return imageMime;
+        const ext = path.extname(filePath).toLowerCase();
+        switch (ext) {
+            case ".mp4": return "video/mp4";
+            case ".mp3": return "audio/mpeg";
+            case ".wav": return "audio/wav";
+            case ".ogg": return "audio/ogg";
+            case ".pdf": return "application/pdf";
+            case ".txt": return "text/plain";
+            case ".json": return "application/json";
+            default: return "application/octet-stream";
+        }
+    }
+
+    private toDataUrlIfLocalFile(file: string): string | null {
+        const localPath = this.resolveFileReferenceToPath(file);
+        if (!localPath) return null;
+        const mimeType = this.inferMimeTypeFromPath(localPath);
+        const buf = readFileSync(localPath);
+        return `data:${mimeType};base64,${buf.toString("base64")}`;
+    }
+
     private writeOutgoingConvertedImage(sourcePath: string, buffer: Buffer, mimeType: string): string {
         const stat = statSync(sourcePath);
         const ext = mimeType === "image/jpeg" ? ".jpg" : ".png";
@@ -518,8 +542,12 @@ export class OneBotAdapter implements PlatformAdapter {
         if ((type === "photo" || type === "image") && typeof file === "string") {
             file = await this.normalizeOutgoingImageFile(file);
         }
+        if (this.config.sendFileAsDataUrl === true && typeof file === "string") {
+            const dataUrl = this.toDataUrlIfLocalFile(file);
+            if (dataUrl) file = dataUrl;
+        }
         if (typeof file === "string") {
-            if (!(file.startsWith("http://") || file.startsWith("https://") || file.startsWith("base64://") || file.startsWith("file://"))) {
+            if (!(file.startsWith("http://") || file.startsWith("https://") || file.startsWith("base64://") || file.startsWith("file://") || file.startsWith("data:"))) {
                 file = `file://${this.resolveWorkspacePath(file)}`;
             }
         } else if (Buffer.isBuffer(file)) {
