@@ -317,7 +317,7 @@ async function executeCode(id: string, code: string): Promise<void> {
             notifyHost(event);
         };
 
-        const { runtime, memory, scene, actions, skills, telegram, discord } = installCapabilityRegistry({
+        const { runtime, memory, scene, actions, skills, telegram, discord, onebot } = installCapabilityRegistry({
             ctx,
             emitOutput: (line) => {
                 outputLines.push(line);
@@ -337,6 +337,7 @@ async function executeCode(id: string, code: string): Promise<void> {
             skills: unknown;
             telegram: unknown;
             discord: unknown;
+            onebot: unknown;
         };
 
         // 用 PromiseTracker 包装注入的 API，追踪所有返回的 Promise
@@ -346,9 +347,10 @@ async function executeCode(id: string, code: string): Promise<void> {
         const act = tracker.wrap(actions as Record<string, unknown>);
         const sk = tracker.wrap(skills as Record<string, unknown>);
 
-        // 包装平台 API（互斥：telegram 或 discord 有一个是 undefined）
+        // 包装平台 API（互斥：telegram / discord / onebot 只有一个是有值的）
         const tg = telegram ? tracker.wrap(telegram as Record<string, unknown>) : undefined;
         const dc = discord ? tracker.wrap(discord as Record<string, unknown>) : undefined;
+        const ob = onebot ? tracker.wrap(onebot as Record<string, unknown>) : undefined;
 
         // ─── 动态注入 TS Skills ───
         const skillArgNames: string[] = [];
@@ -364,8 +366,8 @@ async function executeCode(id: string, code: string): Promise<void> {
         // 构造参数列表：固定参数 + 平台 API + 动态 Skill 参数
         // ctx 保留为纯用户 state bag（LLM 可跨 turn 存取任意属性）
         const sh = installShell();
-        const fixedArgNames = ["ctx", "runtime", "memory", "scene", "docs", "actions", "skills", "fs", "mcp", "cron", "events", "kv", "http", "vision", "shell", "telegram", "discord"];
-        const fixedArgValues = [ctx, rt, mem, scene, docs, act, sk, filesystem, mcpBridge, tracker.wrap(cronModule as unknown as Record<string, unknown>), eventsModule, tracker.wrap(kvModule as unknown as Record<string, unknown>), tracker.wrap(httpModule as unknown as Record<string, unknown>), tracker.wrap(visionModule as unknown as Record<string, unknown>), sh, tg, dc];
+        const fixedArgNames = ["ctx", "runtime", "memory", "scene", "docs", "actions", "skills", "fs", "mcp", "cron", "events", "kv", "http", "vision", "shell", "telegram", "discord", "onebot", "qq"];
+        const fixedArgValues = [ctx, rt, mem, scene, docs, act, sk, filesystem, mcpBridge, tracker.wrap(cronModule as unknown as Record<string, unknown>), eventsModule, tracker.wrap(kvModule as unknown as Record<string, unknown>), tracker.wrap(httpModule as unknown as Record<string, unknown>), tracker.wrap(visionModule as unknown as Record<string, unknown>), sh, tg, dc, ob, ob];
         const allArgNames = [...fixedArgNames, ...skillArgNames];
         const allArgValues = [...fixedArgValues, ...skillArgValues];
 

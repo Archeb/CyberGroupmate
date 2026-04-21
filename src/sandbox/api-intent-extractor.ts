@@ -22,6 +22,10 @@ const TRIVIAL_CALLS = new Set([
     "telegram.sendMedia",
     "discord.sendText",
     "discord.sendMedia",
+    "onebot.sendText",
+    "onebot.sendMedia",
+    "qq.sendText",
+    "qq.sendMedia",
     // fs 模块：简单操作不需要完整文档
     "fs.exists",
     "fs.readdir",

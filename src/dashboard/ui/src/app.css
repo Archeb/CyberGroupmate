@@ -281,6 +281,18 @@
   border: 1px solid color-mix(in srgb, #5865F2 20%, transparent);
 }
 
+.platform-badge.platform-onebot {
+  background: color-mix(in srgb, #12b7f5 18%, transparent);
+  color: #12b7f5;
+  border: 1px solid color-mix(in srgb, #12b7f5 25%, transparent);
+}
+
+[data-theme="light"] .platform-badge.platform-onebot {
+  background: color-mix(in srgb, #12b7f5 12%, transparent);
+  color: #0b8fc2;
+  border: 1px solid color-mix(in srgb, #12b7f5 20%, transparent);
+}
+
 .platform-badge.platform-unknown {
   background: color-mix(in srgb, var(--color-base-content) 10%, transparent);
   color: color-mix(in srgb, var(--color-base-content) 50%, transparent);

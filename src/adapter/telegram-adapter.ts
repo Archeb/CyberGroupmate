@@ -1462,10 +1462,22 @@ export class TelegramAdapter implements PlatformAdapter {
 }
 
 async function defaultTelegramClientFactory(config: TelegramConfig): Promise<TelegramClientLike> {
-    const { TelegramClient } = await import("@mtcute/node");
-    return new TelegramClient({
+    const { TelegramClient, SocksProxyTcpTransport } = await import("@mtcute/node");
+    const proxyUrl = process.env.TG_PROXY || process.env.HTTPS_PROXY || "";
+    const clientOpts: Record<string, unknown> = {
         apiId: Number(config.apiId),
         apiHash: config.apiHash,
         storage: "workspace/tg-session/account",
-    }) as TelegramClientLike;
+    };
+    if (proxyUrl) {
+        const url = new URL(proxyUrl.replace(/^socks5:\/\//, "socks5h://").replace(/^socks:\/\//, "socks5h://"));
+        clientOpts.transport = new SocksProxyTcpTransport({
+            host: url.hostname,
+            port: Number(url.port),
+            version: 5,
+            user: url.username || undefined,
+            password: url.password || undefined,
+        });
+    }
+    return new TelegramClient(clientOpts as any) as TelegramClientLike;
 }
