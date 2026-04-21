@@ -198,6 +198,25 @@ telegram:
 #   # Application ID（在 General Information 页面，可选，用于 slash commands 注册等）
 #   application_id: ""
 
+# ─── OneBot / NapCat 设置 ───
+# 可选。用于接入 NapCat / LLOneBot / 其他 OneBot v11 实现。
+# onebot:
+#   # WebSocket 地址（NapCat 反向 WS 不适用，这里是 bot 主动连过去的正向 WS）
+#   ws_url: "ws://127.0.0.1:6099/onebot/v11/ws"
+#   # 机器人 QQ 号
+#   self_id: "1234567890"
+#   # 入站白名单（可选）
+#   # whitelist:
+#   #   enabled: true
+#   #   groups: ["123456789"]
+#   #   users: []
+#   # 拟人化发送延迟（可选）
+#   # humanized_delay:
+#   #   enabled: true
+#   #   ms_per_char: 50
+#   #   min_delay: 500
+#   #   max_delay: 5000
+
 # ─── Reflection 设置 ───
 # 控制反思引擎的行为参数
 reflection:
