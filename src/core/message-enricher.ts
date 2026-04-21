@@ -329,6 +329,7 @@ function parseMediaAttachments(messages: RawMessage[], fallbackChatId?: string):
                 type: info.type,
                 fileId: info.fileId,
                 uniqueFileId: info.uniqueFileId ?? info.fileId,
+                url: info.url,
                 emoji: info.emoji,
                 mimeType: info.mimeType,
                 fileName: info.fileName,

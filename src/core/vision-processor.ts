@@ -24,6 +24,7 @@ export interface MediaAttachment {
     type: "photo" | "sticker" | "video" | "document" | "animation" | "other";
     fileId: string;
     uniqueFileId: string;
+    url?: string;
     emoji?: string;       // sticker only
     mimeType?: string;
     fileName?: string;

@@ -273,7 +273,20 @@ export class OneBotAdapter implements PlatformAdapter {
             if (!resp.ok) throw new Error(`downloadMedia: HTTP ${resp.status} for ${mediaRef}`);
             return Buffer.from(await resp.arrayBuffer());
         }
-        throw new Error(`downloadMedia: unsupported mediaRef ${mediaRef}`);
+        // Fallback: try get_image OneBot API to resolve a downloadable URL
+        try {
+            const result = await this.callAction("get_image", { file: mediaRef }) as Record<string, unknown>;
+            const imgData = result?.data ?? result;
+            const imgUrl = (imgData as Record<string, unknown>)?.url;
+            if (typeof imgUrl === "string" && (imgUrl.startsWith("http://") || imgUrl.startsWith("https://"))) {
+                const resp = await fetch(imgUrl);
+                if (!resp.ok) throw new Error(`downloadMedia: HTTP ${resp.status} for resolved URL`);
+                return Buffer.from(await resp.arrayBuffer());
+            }
+        } catch (e) {
+            log.warn("get_image 回退失败", { mediaRef, error: String(e) });
+        }
+        throw new Error(`downloadMedia: cannot resolve mediaRef ${mediaRef}`);
     }
 
     private async sendMessage(chatId: string, text: string, opts: Record<string, unknown>): Promise<unknown> {
@@ -648,44 +661,44 @@ export class OneBotAdapter implements PlatformAdapter {
             const data = seg.data ?? {};
             if (seg.type === "image") {
                 const url = typeof data.url === "string" ? data.url : undefined;
-                const file = String(data.file ?? url ?? "");
+                const file = String(data.file ?? "");
                 return {
                     type: "photo",
                     url,
-                    fileId: file,
+                    fileId: url || file,
                     uniqueFileId: String(data.file_unique ?? data.file_id ?? file),
                     fileName: typeof data.file === "string" ? path.basename(String(data.file)) : undefined,
                 };
             }
             if (seg.type === "video") {
                 const url = typeof data.url === "string" ? data.url : undefined;
-                const file = String(data.file ?? url ?? "");
+                const file = String(data.file ?? "");
                 return {
                     type: "video",
                     url,
-                    fileId: file,
+                    fileId: url || file,
                     uniqueFileId: String(data.file_unique ?? data.file_id ?? file),
                     fileName: typeof data.file === "string" ? path.basename(String(data.file)) : undefined,
                 };
             }
             if (seg.type === "record") {
                 const url = typeof data.url === "string" ? data.url : undefined;
-                const file = String(data.file ?? url ?? "");
+                const file = String(data.file ?? "");
                 return {
                     type: "audio",
                     url,
-                    fileId: file,
+                    fileId: url || file,
                     uniqueFileId: String(data.file_unique ?? data.file_id ?? file),
                     fileName: typeof data.file === "string" ? path.basename(String(data.file)) : undefined,
                 };
             }
             if (seg.type === "file") {
                 const url = typeof data.url === "string" ? data.url : undefined;
-                const file = String(data.file ?? url ?? "");
+                const file = String(data.file ?? "");
                 return {
                     type: "document",
                     url,
-                    fileId: file,
+                    fileId: url || file,
                     uniqueFileId: String(data.file_unique ?? data.file_id ?? file),
                     fileName: typeof data.name === "string" ? data.name : (typeof data.file === "string" ? path.basename(String(data.file)) : undefined),
                 };
