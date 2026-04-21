@@ -1230,11 +1230,36 @@ async function main(): Promise<void> {
     }, 30_000);
     if (schedulerWatchdogInterval.unref) schedulerWatchdogInterval.unref();
 
-    // ─── 启动 ───
-    for (const adapter of adapters) {
+    // ─── 启动（并行 + 超时容错） ───
+    const ADAPTER_START_TIMEOUT_MS = 30_000;
+    const adapterStatuses: Array<{ platform: string; status: "ok" | "failed" | "timeout"; error?: string }> = [];
+
+    await Promise.all(adapters.map(async (adapter) => {
         log.info(`启动 ${adapter.platform} adapter...`);
-        await adapter.start();
-        log.info(`${adapter.platform} adapter 就绪`);
+        try {
+            await Promise.race([
+                adapter.start(),
+                new Promise<never>((_, reject) =>
+                    setTimeout(() => reject(new Error(`启动超时 (${ADAPTER_START_TIMEOUT_MS / 1000}s)`)), ADAPTER_START_TIMEOUT_MS)
+                ),
+            ]);
+            log.info(`${adapter.platform} adapter 就绪`);
+            adapterStatuses.push({ platform: adapter.platform, status: "ok" });
+        } catch (err) {
+            const errMsg = String((err as Error)?.message ?? err);
+            log.error(`${adapter.platform} adapter 启动失败，已跳过`, { error: errMsg });
+            adapterStatuses.push({ platform: adapter.platform, status: errMsg.includes("超时") ? "timeout" : "failed", error: errMsg });
+        }
+    }));
+
+    // 广播 adapter 状态到 dashboard
+    nc.push({ type: "system.adapter_status", adapters: adapterStatuses });
+    const failedAdapters = adapterStatuses.filter(a => a.status !== "ok");
+    if (failedAdapters.length > 0) {
+        log.warn("部分 adapter 未就绪", { failed: failedAdapters.map(a => `${a.platform}: ${a.error}`) });
+    }
+    if (adapterStatuses.every(a => a.status !== "ok")) {
+        log.error("所有 adapter 均启动失败，但保持进程运行以允许 dashboard 访问");
     }
 
     // ─── 启动主 Agent 注意力循环 ───
