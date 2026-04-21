@@ -571,6 +571,16 @@
         "fullDoc": ""
       },
       {
+        "name": "sendSticker",
+        "brief": "sendSticker(chatId, sticker, opts?): 发送图片作为 QQ 表情包",
+        "fullDoc": ""
+      },
+      {
+        "name": "sendFace",
+        "brief": "sendFace(chatId, faceId, opts?): 发送 QQ 系统表情（CQ face）",
+        "fullDoc": ""
+      },
+      {
         "name": "sendTyping",
         "brief": "sendTyping(chatId): 发送输入状态（OneBot 不支持，静默忽略）",
         "fullDoc": ""
@@ -604,6 +614,16 @@
       {
         "name": "sendFile",
         "brief": "sendFile(chatId, filePath, opts?): 发送文件到 QQ 群或私聊",
+        "fullDoc": ""
+      },
+      {
+        "name": "sendSticker",
+        "brief": "sendSticker(chatId, sticker, opts?): 发送图片作为 QQ 表情包",
+        "fullDoc": ""
+      },
+      {
+        "name": "sendFace",
+        "brief": "sendFace(chatId, faceId, opts?): 发送 QQ 系统表情（CQ face）",
         "fullDoc": ""
       },
       {
