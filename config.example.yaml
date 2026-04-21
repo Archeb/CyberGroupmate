@@ -103,8 +103,6 @@ llm_routing:
   # session:
   #   - gemini-pro
   #   - gemini-flash
-  # fast_path — 快速回复（轻量级回复生成）
-  fast_path: gemini-flash
   # recording — 话题聚类 + Triage（后台分析）
   recording: gemini-flash
   # reflection — 反思引擎（人物画像/话题总结）

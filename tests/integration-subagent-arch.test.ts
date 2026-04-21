@@ -22,7 +22,6 @@ import { SubagentManager } from "../src/subagent/subagent-manager.js";
 import { DynamicAttentionQueue } from "../src/subagent/attention-queue.js";
 import { CallbackQueue } from "../src/subagent/callback-queue.js";
 import { CodeActExecutor } from "../src/subagent/code-act-executor.js";
-import { FastPathHandler } from "../src/subagent/fast-path-handler.js";
 import { Observer } from "../src/subagent/observer.js";
 
 import { MainAgentLoop } from "../src/main-agent/main-agent-loop.js";
@@ -35,7 +34,6 @@ import type {
     AttendResult,
     CodeActReplyTask,
     SubagentCallback,
-    FastPathConfig,
     GroupContextPackage,
 } from "../src/subagent/types.js";
 
@@ -95,7 +93,6 @@ describe("Subagent Architecture: 跨节点集成测试", () => {
             observerConfig: {
                 engagementWindowMs: 60000,
                 alertEngagementThreshold: 90,
-                fastPathEngagementThreshold: 95,
                 mentionKeywords: [],
             },
         });
@@ -153,7 +150,6 @@ describe("Subagent Architecture: 跨节点集成测试", () => {
             observerConfig: {
                 engagementWindowMs: 60000,
                 alertEngagementThreshold: 30,
-                fastPathEngagementThreshold: 90,
                 mentionKeywords: [],
             },
         });
@@ -243,52 +239,6 @@ describe("Subagent Architecture: 跨节点集成测试", () => {
         mgr.dispose();
     });
 
-    // ━━━ Test 4: FastPath 完整生命周期 ━━━
-    it("#4 FastPath 完整流: 授权 → 触发 → 回复 → Q5 callback → MainAgentLoop drain", async () => {
-        const q3 = new DynamicAttentionQueue();
-        const q5 = new CallbackQueue();
-        const mgr = new SubagentManager();
-        const loop = new MainAgentLoop(q3, q5, mgr);
-
-        const fp = new FastPathHandler("g1");
-        fp.setCallbackHandler(cb => q5.enqueue(cb));
-
-        // Step 1: Authorize
-        const config: FastPathConfig = {
-            preauthorizedActions: ["ack", "greet"],
-            blockedActions: ["spam"],
-            tonePreset: "casual",
-            maxRepliesBeforeReauth: 2,
-            expiresAt: new Date(Date.now() + 60000).toISOString(),
-            authorizedAt: new Date().toISOString(),
-        };
-        fp.authorize(config);
-        assert.ok(fp.isAuthorized(), "Should be authorized after authorize()");
-
-        // Step 2: Handle first trigger → reply
-        const reply1 = await fp.handle({
-            chatId: "g1", messageId: "m1", userId: "u1",
-            text: "ack please", timestamp: new Date().toISOString(),
-        });
-        assert.ok(reply1, "Should produce reply for 'ack' trigger");
-        assert.equal(q5.size, 1, "Q5 should have 1 callback after first reply");
-
-        // Step 3: Handle second trigger → reply + auto-disable
-        const reply2 = await fp.handle({
-            chatId: "g1", messageId: "m2", userId: "u2",
-            text: "greet me", timestamp: new Date().toISOString(),
-        });
-        assert.ok(reply2, "Should produce reply for second trigger");
-        assert.equal(q5.size, 2, "Q5 should have 2 callbacks");
-        assert.equal(fp.isAuthorized(), false, "Should auto-disable after maxReplies");
-
-        // Step 4: MainAgentLoop drains callbacks
-        const tickResult = await loop.tick();
-        assert.equal(tickResult.phase1Callbacks, 2, "Should drain 2 callbacks in Phase 1");
-
-        mgr.dispose();
-    });
-
     // ━━━ Test 5: 多群组竞争调度 ━━━
     it("#5 多群组竞争: 不同 priority + stickiness → 正确 dequeue 顺序", async () => {
         const mgr = new SubagentManager();
@@ -340,7 +290,6 @@ describe("Subagent Architecture: 跨节点集成测试", () => {
             observerConfig: {
                 engagementWindowMs: 60000,
                 alertEngagementThreshold: 90,
-                fastPathEngagementThreshold: 95,
                 mentionKeywords: [],
             },
         });
@@ -485,7 +434,6 @@ describe("Subagent Architecture: 跨节点集成测试", () => {
             observerConfig: {
                 engagementWindowMs: 60000,
                 alertEngagementThreshold: 90,
-                fastPathEngagementThreshold: 95,
                 mentionKeywords: [],
             },
         });
@@ -614,7 +562,6 @@ describe("Subagent Architecture: 跨节点集成测试", () => {
             observerConfig: {
                 engagementWindowMs: 60000,
                 alertEngagementThreshold: 90,
-                fastPathEngagementThreshold: 95,
                 mentionKeywords: [],
             },
         });
@@ -775,7 +722,6 @@ describe("Subagent Architecture: 跨节点集成测试", () => {
             observerConfig: {
                 engagementWindowMs: 60000,
                 alertEngagementThreshold: 30, // low threshold for testing
-                fastPathEngagementThreshold: 90,
                 mentionKeywords: [],
             },
         });
@@ -819,7 +765,6 @@ describe("Subagent Architecture: 跨节点集成测试", () => {
             observerConfig: {
                 engagementWindowMs: 60000,
                 alertEngagementThreshold: 90,
-                fastPathEngagementThreshold: 95,
                 mentionKeywords: [],
             },
         });
@@ -873,50 +818,6 @@ describe("Subagent Architecture: 跨节点集成测试", () => {
         const lowPkg = { ...pkg, engagementScore: 5 };
         const mode4 = estimateReplyMode(lowPkg, 1, false, "STRANGER", 0, 0, 0);
         assert.equal(mode4, "NONE", "Very low engagement → NONE even with new signal params");
-    });
-
-    // ━━━ Test 17: FastPath 触发路径 ━━━
-    it("#17 FastPath 触发: 消息到达 → 已授权 FastPath 自动 handle", async () => {
-        const q5 = new CallbackQueue();
-
-        const fp = new FastPathHandler("g1");
-        fp.setCallbackHandler(cb => q5.enqueue(cb));
-        fp.authorize({
-            preauthorizedActions: ["greet", "acknowledge"],
-            blockedActions: ["spam"],
-            tonePreset: "friendly",
-            maxRepliesBeforeReauth: 3,
-            expiresAt: new Date(Date.now() + 60000).toISOString(),
-            authorizedAt: new Date().toISOString(),
-        });
-
-        assert.ok(fp.isAuthorized(), "FastPath should be authorized");
-
-        // Simulate the trigger path (as if nc.onPush called fp.handle)
-        const result = await fp.handle({
-            chatId: "g1",
-            messageId: "m1",
-            userId: "u1",
-            text: "greet me please",
-            timestamp: new Date().toISOString(),
-        });
-
-        assert.ok(result, "FastPath should produce a reply");
-        assert.equal(q5.size, 1, "Q5 should have 1 callback from FastPath");
-
-        const cb = q5.drain()[0];
-        assert.equal(cb.executionType, "FAST_PATH");
-        assert.equal(cb.status, "COMPLETED");
-
-        // Blocked action should not trigger
-        const blocked = await fp.handle({
-            chatId: "g1",
-            messageId: "m2",
-            userId: "u2",
-            text: "spam content",
-            timestamp: new Date().toISOString(),
-        });
-        assert.equal(blocked, null, "Blocked action should return null");
     });
 
     // ━━━ Test 18: RecordingPipeline → Observer 桥接 ━━━

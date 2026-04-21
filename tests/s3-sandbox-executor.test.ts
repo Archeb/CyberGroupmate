@@ -141,7 +141,7 @@ describe("S3: Sandbox 多实例 + CodeActExecutor", () => {
                 createdAt: new Date().toISOString(),
             });
             q.enqueue({
-                taskId: "t2", chatId: "c2", executionType: "FAST_PATH",
+                taskId: "t2", chatId: "c2", executionType: "CODEACT",
                 status: "COMPLETED", summary: "fast", durationMs: 50,
                 createdAt: new Date().toISOString(),
             });

@@ -6,7 +6,6 @@
  * - TopicRegistry (per-group): 该群的话题状态机
  * - RecordingPipeline (per-group): 该群的话题聚类 + 记忆沉淀
  * - CodeActExecutor: CodeAct 执行器（S3 实现后注入）
- * - FastPathHandler: 快速回复处理器（S4 实现后注入）
  *
  * RecordingPipeline 的 topic:triage-passed 事件自动更新 Observer
  * 的 topicDigests，同时 emit triage-engage 事件驱动 Q3 入队。
@@ -80,9 +79,8 @@ export class GroupSubagent extends EventEmitter {
     /** 最后活跃时间 */
     lastActivityAt: number = Date.now();
 
-    /** CodeActExecutor 和 FastPathHandler 预留接口（S3/S4 实现后注入） */
+    /** CodeActExecutor 预留接口（S3 实现后注入） */
     codeActExecutor: unknown = null;
-    fastPathHandler: unknown = null;
 
     /** 已完成任务 ID 集合（用于状态追踪） */
     private completedTaskIds = new Set<string>();
@@ -182,7 +180,6 @@ export class GroupSubagent extends EventEmitter {
      */
     buildQueueEntry(sourceOverride?: AttentionQueueEntry["source"]): AttentionQueueEntry {
         const engagement = this.observer.getEngagementScore();
-        const hasFastPathRequest = this.observer.checkFastPathRequest();
         const basePriority = engagement * this.stickiness.priorityMultiplier;
 
         // topicDigests: 直接从 TopicRegistry 取当前话题，使用统一转换方法
@@ -191,9 +188,7 @@ export class GroupSubagent extends EventEmitter {
 
         // 来源标记：优先使用调用方传入的 sourceOverride（如 DIRECT_ADDRESS）
         const source: AttentionQueueEntry["source"] = sourceOverride
-            ?? (hasFastPathRequest
-                    ? "FAST_PATH_REQUEST"
-                    : "DIGEST_UPDATE");
+            ?? "DIGEST_UPDATE";
 
         return {
             chatId: this.chatId,
@@ -204,7 +199,6 @@ export class GroupSubagent extends EventEmitter {
             lastAttendedAt: this.lastAttendedAt,
             attendCount: this.attendCount,
             blocked: false,
-            hasFastPathRequest,
             newMessageCount: this.observer.getBufferSize(),
             topicDigests,
             stickinessLevel: this.stickiness.level,

@@ -194,11 +194,10 @@
       <div class="overflow-x-auto">
         <table class="table table-xs">
           <thead><tr>
-            <th>ChatId</th><th>Stickiness</th><th>Engagement</th><th>Buffer</th><th>Attend #</th><th>FastPath</th>
+            <th>ChatId</th><th>Stickiness</th><th>Engagement</th><th>Buffer</th><th>Attend #</th>
           </tr></thead>
           <tbody>
             {#each groups as g}
-              {@const fp = g.fastPathStatus || {}}
               <tr>
                 <td class="font-mono text-xs">
                   {#if getPlatform(g.chatId)}<span class="platform-badge platform-{getPlatform(g.chatId)}">{platformLabel(getPlatform(g.chatId))}</span>{/if}
@@ -208,13 +207,6 @@
                 <td>{(g.engagement || 0).toFixed(1)}</td>
                 <td>{g.bufferSize || 0}</td>
                 <td>{g.attendCount || 0}</td>
-                <td>
-                  {#if fp.authorized}
-                    <span class="badge badge-xs badge-warning">{fp.repliesSent}/{fp.maxReplies}</span>
-                  {:else}
-                    <span class="opacity-40">-</span>
-                  {/if}
-                </td>
               </tr>
             {/each}
           </tbody>

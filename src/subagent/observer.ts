@@ -6,8 +6,6 @@
  * - 维护 per-group TopicRegistry（话题状态机）
  * - 计算 Engagement Score（纯算法）
  * - 检测告警条件（engagement 超阈值）
- * - 检测 FastPath 请求条件
- * - 检测 FastPath 请求条件
  *
  * 参考设计：subagent.md §3.2
  */
@@ -25,8 +23,6 @@ const log = createLogger("observer");
 export interface ObserverConfig {
     /** 告警 engagement 阈值 (0-100)。默认 60 */
     alertEngagementThreshold: number;
-    /** FastPath 推荐的 engagement 阈值。默认 70 */
-    fastPathEngagementThreshold: number;
     /** engagement 计算时间窗口 (ms)。默认 5 分钟 */
     engagementWindowMs: number;
     /** @ bot 的关键词列表 */
@@ -35,7 +31,6 @@ export interface ObserverConfig {
 
 const DEFAULT_OBSERVER_CONFIG: ObserverConfig = {
     alertEngagementThreshold: DEFAULT_SUBAGENT_CONFIG.alertEngagementThreshold,
-    fastPathEngagementThreshold: DEFAULT_SUBAGENT_CONFIG.fastPath.engagementThreshold,
     engagementWindowMs: 5 * 60 * 1000,
     mentionKeywords: [],
 };
@@ -53,7 +48,7 @@ interface BufferedMessage {
  * Observer 负责：
  * 1. 消息缓冲 (Q2)
  * 2. Engagement 计算
- * 3. Alert/FastPath 检测
+ * 3. Alert 检测
  */
 export class Observer {
     readonly chatId: string;
@@ -131,15 +126,6 @@ export class Observer {
      */
     getEngagementScore(): number {
         return this.cachedEngagement;
-    }
-
-
-    /**
-     * 检查是否推荐 FastPath
-     */
-    checkFastPathRequest(): boolean {
-        // subagent.md §3.3: FastPath 面向「高 engagement 时段」，不强制要求 @mention
-        return this.cachedEngagement >= this.config.fastPathEngagementThreshold;
     }
 
     /**

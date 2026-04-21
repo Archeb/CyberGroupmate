@@ -37,8 +37,6 @@ export interface Message {
     isDirectMessage?: boolean;
     /** 平台是否已检测到明确提及 agent */
     mentionsAgent?: boolean;
-    /** 内部标记：该消息已走过 FAST_PATH，即时回复侧已处理 */
-    _viaFastPath?: boolean;
     /** 内部标记：是否歧义归属 */
     _ambiguous?: boolean;
     /** 媒体类型: "photo" | "sticker" | "video" | "document" | "animation" | "other" */
@@ -198,7 +196,6 @@ export interface QuickTriageResult {
 
 /** 消息路由分类结果 */
 export type RouteResult =
-    | { type: "FAST_PATH"; message: Message; reason: string }
     | { type: "ENGAGED"; message: Message; topicId: string }
     | { type: "RECORDING"; message: Message };
 

@@ -7,8 +7,7 @@
  * ➌ Observer.TriagePrompt — 话题分类（Observer 端）   [复用已有]
  * ➍ Observer.EngagementPrompt — engagement 告警描述   [复用已有]
  * ➎ CodeAct.ExecutionPrompt — CodeAct 执行上下文
- * ➏ FastPath.ReplyPrompt — FastPath 快速回复
- * ➐ MainAgent.CallbackPrompt — 回调处理
+ * ➏ MainAgent.CallbackPrompt — 回调处理
  *
  * 模板以 .md 文件存放在 system-prompts/ 目录下。
  * 使用 Mustache-like 变量（{{variable}}）和条件块（{{#flag}}...{{/flag}}）。
@@ -16,7 +15,7 @@
  * 参考设计：subagent.md §12, subtask.md S5.5
  */
 
-import type { GroupContextPackage, TopicDigest, SubagentCallback, FastPathConfig } from "../subagent/types.js";
+import type { GroupContextPackage, TopicDigest, SubagentCallback } from "../subagent/types.js";
 
 import type { GroupModel } from "../memory-v2/types.js";
 import { createLogger } from "../core/logger.js";
@@ -43,7 +42,6 @@ const PROMPT_FILE_MAP: Record<string, string> = {
     ATTENTION: "main-agent/mainagent-attention.md",
     EXECUTION: "executor/subagent-execution.md",
     EXECUTION_TASK: "executor/subagent-execution-task.md",
-    FAST_PATH_TASK: "fast-path/subagent-fast-path-task.md",
     CALLBACK: "main-agent/mainagent-callback.md",
     MAIN_SYSTEM: "main-agent/mainagent-main-system.md",
     GROUNDING: "main-agent/mainagent-grounding.md",
@@ -181,7 +179,6 @@ export function buildAttentionVariables(
         priorityMultiplier?: number;
         tonePreset?: string;
         callbacks?: SubagentCallback[];
-        fastPathHistory?: string;
         messages?: string;
         dispatchedTopicIds?: string[];
         /** 从 system prompt 迁移过来的动态字段 */
@@ -233,11 +230,6 @@ export function buildAttentionVariables(
 
         // Messages
         messages: opts.messages ?? "",
-
-
-        // FastPath history
-        hasFastPathHistory: !!opts.fastPathHistory,
-        fastPathHistory: opts.fastPathHistory ?? "",
 
         // Dispatched topics (防重复分派)
         hasDispatchedTopics: !!opts.dispatchedTopicIds?.length,
@@ -304,95 +296,6 @@ export function buildCallbackVariables(
         hasError: !!cb.error,
         error: cb.error ?? "",
     };
-}
-
-/**
- * 构建 FastPath system prompt 变量（静态，authorize 时设置一次）
- */
-export function buildFastPathSystemVariables(
-    persona: { name: string; description: string },
-    chatTitle: string,
-    isDirectMessage?: boolean,
-): Record<string, unknown> {
-    return {
-        personaName: persona.name,
-        personaDescription: persona.description,
-        chatTitle,
-        chatType: deriveChatType(isDirectMessage),
-    };
-}
-
-/**
- * 构建 FastPath task prompt 变量（per-authorization，authorize 时设置一次）
- * 类似 executor 的 task context，包含群组信息、话题摘要、人物背景等
- */
-export function buildFastPathTaskVariables(
-    auth: FastPathConfig,
-    chatId: string,
-    chatTitle: string,
-    isDirectMessage?: boolean,
-    context?: {
-        topicSummary?: string;
-        personContext?: string;
-        toneGuidance?: string;
-    },
-): Record<string, unknown> {
-    return {
-        chatId: getRawId(chatId),
-        chatTitle,
-        chatType: deriveChatType(isDirectMessage),
-        preauthorizedActions: auth.preauthorizedActions.map(a => `- ${a}`).join("\n"),
-        blockedActions: auth.blockedActions.length > 0
-            ? auth.blockedActions.map(a => `- ❌ ${a}`).join("\n")
-            : "(无)",
-        maxReplyLength: auth.maxReplyLength ?? 150,
-        tonePreset: context?.toneGuidance ?? auth.tonePreset,
-        maxReplies: auth.maxRepliesBeforeReauth,
-        hasTaskDescription: !!auth.taskDescription,
-        taskDescription: auth.taskDescription ?? "",
-        hasTopicSummary: !!context?.topicSummary,
-        topicSummary: context?.topicSummary ?? "",
-        hasPersonContext: !!context?.personContext,
-        personContext: context?.personContext ?? "",
-    };
-}
-
-/**
- * 构建 FastPath per-turn 用户消息（每次 handle 时动态生成）
- */
-export function buildFastPathTurnContent(
-    event: { userId: string; text: string },
-    repliesSent: number,
-    maxReplies: number,
-    sentMessages?: ReadonlyArray<{ text: string; timestamp: string }>,
-): string {
-    const parts: string[] = [];
-
-    // 已发送消息确认（如果有历史）
-    if (sentMessages && sentMessages.length > 0) {
-        parts.push(`[📤 已发送消息确认]`);
-        for (const m of sentMessages) {
-            parts.push(`- "${m.text.length > 100 ? m.text.slice(0, 100) + '...' : m.text}"`);
-        }
-        parts.push("");
-    }
-
-    // 剩余额度状态
-    const remaining = maxReplies - repliesSent;
-    parts.push(`[📊 额度状态: 已用 ${repliesSent}/${maxReplies}，剩余 ${remaining} 次回复机会]`);
-    if (remaining <= 1) {
-        parts.push(`[⚠ 这是最后的回复机会，请谨慎使用]`);
-    }
-    parts.push("");
-
-    // 触发消息
-    parts.push(`## 触发消息`);
-    parts.push(`发送者: ${event.userId}`);
-    parts.push(`内容: ${event.text}`);
-    parts.push("");
-    parts.push(`请直接输出回复内容（纯文本，不含其他格式）。如果不应回复，输出 "__SKIP__"。`);
-
-    return parts.join("\n");
 }
 
 /** 话题渲染输入（统一接口，各调用方筛选/排序后传入） */

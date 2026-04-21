@@ -87,7 +87,6 @@ export class DynamicAttentionQueue {
             // 更新其他字段
             if (entry.topicDigests) existing.topicDigests = entry.topicDigests;
             if (entry.newMessageCount !== undefined) existing.newMessageCount = entry.newMessageCount;
-            if (entry.hasFastPathRequest !== undefined) existing.hasFastPathRequest = entry.hasFastPathRequest;
             if (entry.stickinessLevel) existing.stickinessLevel = entry.stickinessLevel;
             // 合并 schedulerTriggers（追加，不覆盖）
             if (entry.schedulerTriggers?.length) {
@@ -115,7 +114,6 @@ export class DynamicAttentionQueue {
                 attendCount: entry.attendCount ?? 0,
                 blocked: false,
                 blockReason: undefined,
-                hasFastPathRequest: entry.hasFastPathRequest ?? false,
                 newMessageCount: entry.newMessageCount ?? 0,
                 topicDigests: entry.topicDigests ?? [],
                 stickinessLevel: entry.stickinessLevel ?? "STRANGER",

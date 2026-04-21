@@ -699,15 +699,12 @@ export class RecordingPipeline extends EventEmitter {
                 topic.lastSummary = triage.summary;
 
                 // 唯一的跳过条件：agent 已经回复过比这批消息更新的内容
-                const wasAlreadyHandledByFastPath = topicMsgs.some(msg => msg._viaFastPath);
                 const latestMsgTs = Math.max(...topicMsgs.map(m => m.timestamp));
                 const wasAlreadyRepliedByAgent = this.lastAgentReplyAt > 0
                     && latestMsgTs <= this.lastAgentReplyAt;
 
-                if (wasAlreadyHandledByFastPath || wasAlreadyRepliedByAgent) {
-                    const reason = wasAlreadyHandledByFastPath
-                        ? "already handled via fast path"
-                        : `agent already replied at ${new Date(this.lastAgentReplyAt).toISOString()}, topic last msg at ${new Date(latestMsgTs).toISOString()}`;
+                if (wasAlreadyRepliedByAgent) {
+                    const reason = `agent already replied at ${new Date(this.lastAgentReplyAt).toISOString()}, topic last msg at ${new Date(latestMsgTs).toISOString()}`;
                     log.info("话题跳过入队（已回复）", {
                         topicId: topic.id,
                         label: topic.label,

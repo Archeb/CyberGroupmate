@@ -334,13 +334,11 @@ describe("E2E Scrape — Counter data flow", () => {
         const {
             groupMessagesTotal,
             groupAttendsTotal,
-            groupFastPathRepliesTotal,
         } = await import("../src/metrics/registry.js");
 
         // Reset to known state
         groupMessagesTotal.reset();
         groupAttendsTotal.reset();
-        groupFastPathRepliesTotal.reset();
 
         const { exporter, groupCollector } = await createMockExporter(19200);
         await exporter.start();
@@ -353,7 +351,6 @@ describe("E2E Scrape — Counter data flow", () => {
             groupCollector.onAttend("group-a", "REPLY");
             groupCollector.onAttend("group-a", "DEFER");
             groupCollector.onAttend("group-b", "REPLY");
-            groupCollector.onFastPathReply("group-a");
 
             const { families } = await scrape(19200);
 
@@ -385,13 +382,6 @@ describe("E2E Scrape — Counter data flow", () => {
             const attendBReply = findSample(attendFam, "cybergroupmate_group_attends_total", { chat_id: "group-b", decision: "REPLY" });
             assert.ok(attendBReply, "group-b REPLY attend missing");
             assert.equal(attendBReply!.value, 1, "group-b REPLY should be 1");
-
-            // Verify fast_path_replies_total
-            const fpFam = families.get("cybergroupmate_group_fast_path_replies_total");
-            assert.ok(fpFam, "fast_path_replies_total family missing");
-            const fpA = findSample(fpFam, "cybergroupmate_group_fast_path_replies_total", { chat_id: "group-a" });
-            assert.ok(fpA, "group-a fast path reply missing");
-            assert.equal(fpA!.value, 1);
         } finally {
             exporter.stop();
         }
@@ -867,7 +857,6 @@ describe("E2E Scrape — All 30 cybergroupmate metrics present", () => {
                 "cybergroupmate_group_stickiness",
                 "cybergroupmate_group_buffer_size",
                 "cybergroupmate_group_topic_count",
-                "cybergroupmate_group_fast_path_replies_total",
                 "cybergroupmate_group_codeact_queue_size",
                 "cybergroupmate_group_last_attend_age_seconds",
                 "cybergroupmate_main_loop_ticks_total",

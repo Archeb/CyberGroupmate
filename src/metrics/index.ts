@@ -7,7 +7,6 @@
  *   const metricsExporter = await startMetrics(deps, appConfig.metrics);
  *   // 在 NC.onPush 中：metricsExporter.groupCollector.onMessage(chatId)
  *   // 在 attend 完成时：metricsExporter.groupCollector.onAttend(chatId, decision)
- *   // 在 FastPath 发送时：metricsExporter.groupCollector.onFastPathReply(chatId)
  */
 
 export { MetricsExporter, type MetricsExporterConfig } from "./exporter.js";

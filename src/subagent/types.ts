@@ -1,7 +1,7 @@
 /**
  * subagent/types.ts — Subagent 架构核心类型定义
  *
- * 定义 SubagentManager、Observer、CodeActExecutor、FastPath、
+ * 定义 SubagentManager、Observer、CodeActExecutor、
  * 注意力队列、回调队列等组件间的数据交换格式。
  *
  * 参考设计文档：subagent.md v0.5.0
@@ -42,7 +42,7 @@ export interface AttentionQueueEntry {
     /** 群组 chatId */
     chatId: string;
     /** 来源标记 (subagent.md §2.2) */
-    source: 'DIGEST_UPDATE' | 'OBSERVER_ALERT' | 'FAST_PATH_REQUEST' | 'DEFERRED_RE_ENTRY' | 'DIRECT_ADDRESS' | 'SCHEDULED_REVISIT' | 'SCHEDULER_TRIGGER';
+    source: 'DIGEST_UPDATE' | 'OBSERVER_ALERT' | 'DEFERRED_RE_ENTRY' | 'DIRECT_ADDRESS' | 'SCHEDULED_REVISIT' | 'SCHEDULER_TRIGGER';
     /** 当前优先级分数 (0-100) */
     priority: number;
     /** 基础优先级（不含时间衰减） */
@@ -57,8 +57,6 @@ export interface AttentionQueueEntry {
     blocked: boolean;
     /** 阻塞原因 */
     blockReason?: string;
-    /** 是否有 FastPath 请求 */
-    hasFastPathRequest: boolean;
     /** 消息计数（自上次 attend 以来） — 即 pendingMessageCount */
     newMessageCount: number;
     /** 话题摘要列表 — 即 topicDigest */
@@ -126,14 +124,6 @@ export type ReplyStrategy =
     | "CLARIFICATION"
     | "CASUAL";
 
-/** FastPath 授权任务 */
-export interface FastPathAuthTask {
-    type: "FAST_PATH_AUTH";
-    chatId: string;
-    config: FastPathConfig;
-    createdAt: string;
-}
-
 // ─── Subagent Callback (Q5) ───
 
 /** Subagent 执行完成后的回调 */
@@ -146,8 +136,8 @@ export interface SubagentCallback {
     chatTitle?: string;
     /** 是否为私聊 */
     isDirectMessage?: boolean;
-    /** 执行类型 — spec 中为 source: 'CODE_ACT' | 'FAST_PATH' */
-    executionType: "CODEACT" | "FAST_PATH";
+    /** 执行类型 */
+    executionType: "CODEACT";
     /** 执行状态 — spec 中为 type: 'COMPLETED' | 'FAILED' | 'TIMEOUT' */
     status: "COMPLETED" | "ERROR" | "SKIPPED" | "TIMEOUT";
     /** 结果摘要 */
@@ -174,28 +164,6 @@ export interface SubagentCallback {
     sessionSummary?: string;
 }
 
-// ─── FastPath ───
-
-/** FastPath 预授权配置 */
-export interface FastPathConfig {
-    /** 预授权的动作类型 */
-    preauthorizedActions: string[];
-    /** 禁止的动作类型 */
-    blockedActions: string[];
-    /** 语气预设 */
-    tonePreset: string;
-    /** 重新授权前最大回复数 */
-    maxRepliesBeforeReauth: number;
-    /** 过期时间 (ISO 8601) */
-    expiresAt: string;
-    /** 最大回复长度（字符数），默认 150 */
-    maxReplyLength?: number;
-    /** 授权时间 */
-    authorizedAt: string;
-    /** 主 Agent 的任务描述/内容方向（来自 decision.contentDirection） */
-    taskDescription?: string;
-}
-
 // ─── GroupStickiness ───
 
 /** 群组亲密度级别 */
@@ -209,8 +177,6 @@ export interface GroupStickiness {
     priorityMultiplier: number;
     /** cosine decay 周期 */
     depthCyclePeriod: number;
-    /** 是否允许 FastPath */
-    fastPathEligible: boolean;
     /** 过度活跃阈值（超过后降低回复频率） */
     overactiveThreshold: number;
     /** 上次更新时间 */
@@ -255,8 +221,6 @@ export interface GroupContextPackage {
     isDirectMessage?: boolean;
     /** 群组亲密度配置 */
     stickiness?: GroupStickiness;
-    /** FastPath 是否已启用 */
-    fastPathEnabled?: boolean;
     /** 待执行的 CodeAct 任务数 */
     pendingCodeActTasks?: number;
     /** 活跃参与者概况 */
@@ -301,8 +265,6 @@ export interface AttendResult {
     decisions: Decision[];
     /** 回复模式 */
     replyMode: "NONE" | "SINGLE" | "BATCH";
-    /** FastPath 授权（如果决定授权） */
-    fastPathAuth?: FastPathConfig;
     /** 决策理由 */
     reasoning: string;
     /** 主 Agent 指定的模块路由（Subagent 可见的额外技能模块名） */
@@ -314,7 +276,7 @@ export interface AttendResult {
 /** 单条决策 */
 export interface Decision {
     /** 决策动作 */
-    action: "REPLY" | "IGNORE" | "DEFER" | "FAST_PATH_AUTH" | "OBSERVE";
+    action: "REPLY" | "IGNORE" | "DEFER" | "OBSERVE";
     /** 目标话题 ID（可选） */
     topicId?: string;
     /** 目标消息 ID 列表（main agent 圈定的需要回复的消息） */
@@ -425,15 +387,6 @@ export interface SubagentConfig {
     pollInterval: number;
     /** Observer 告警的 engagement 阈值 */
     alertEngagementThreshold: number;
-    /** FastPath 配置 */
-    fastPath: {
-        /** 默认最大回复数 */
-        defaultMaxReplies: number;
-        /** 默认过期时间（分钟） */
-        defaultExpiresMinutes: number;
-        /** 授权要求的最低 engagement */
-        engagementThreshold: number;
-    };
     /** Stickiness 默认值 */
     stickiness: {
         defaults: Record<StickinessLevel, {
@@ -456,11 +409,6 @@ export const DEFAULT_SUBAGENT_CONFIG: SubagentConfig = {
     sandboxIdleTimeout: 600_000,
     pollInterval: 5_000,
     alertEngagementThreshold: 60,
-    fastPath: {
-        defaultMaxReplies: 3,
-        defaultExpiresMinutes: 5,
-        engagementThreshold: 70,
-    },
     stickiness: {
         defaults: {
             CORE: { priorityMultiplier: 1.0, depthCyclePeriod: 10 },

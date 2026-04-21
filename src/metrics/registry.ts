@@ -313,12 +313,6 @@ export const groupTopicCount = registry.register(
     new Gauge(),
 );
 
-export const groupFastPathRepliesTotal = registry.register(
-    "cybergroupmate_group_fast_path_replies_total",
-    "FastPath 快回复发送次数",
-    new Counter(),
-);
-
 export const groupCodeActQueueSize = registry.register(
     "cybergroupmate_group_codeact_queue_size",
     "CodeActExecutor Q4 待执行任务数",
