@@ -8,6 +8,7 @@
 import type { NotificationCenter } from "../event/notification-center.js";
 import type { OneBotConfig } from "../core/config.js";
 import type { PlatformAdapter } from "./platform-adapter.js";
+import type { MediaDownloader } from "../core/media-downloader.js";
 import { composeChatId, ensureCompositeId, parseChatId } from "../core/chat-id.js";
 import { createLogger } from "../core/logger.js";
 import { WebSocket } from "ws";
@@ -71,6 +72,7 @@ export class OneBotAdapter implements PlatformAdapter {
     constructor(
         private config: OneBotConfig,
         private nc: NotificationCenter,
+        private mediaDownloader?: MediaDownloader,
     ) {}
 
     async start(): Promise<void> {
@@ -129,11 +131,15 @@ export class OneBotAdapter implements PlatformAdapter {
             "onebot.sendText",
             "onebot.sendMedia",
             "onebot.sendFile",
+            "onebot.sendSticker",
+            "onebot.sendFace",
             "onebot.sendTyping",
             "onebot.deleteMessages",
             "qq.sendText",
             "qq.sendMedia",
             "qq.sendFile",
+            "qq.sendSticker",
+            "qq.sendFace",
             "qq.sendTyping",
             "qq.deleteMessages",
         ];
@@ -223,6 +229,23 @@ export class OneBotAdapter implements PlatformAdapter {
                 await this.applyHumanizedDelay(chatId, caption.length);
                 return this.sendFile(chatId, filePath, opts);
             }
+            case "onebot.sendSticker":
+            case "qq.sendSticker": {
+                const chatId = ensureCompositeId("onebot", String(args[0] ?? ""));
+                const sticker = args[1];
+                const opts = (args[2] ?? {}) as Record<string, unknown>;
+                const caption = typeof opts.caption === "string" ? opts.caption : "";
+                await this.applyHumanizedDelay(chatId, caption.length);
+                return this.sendSticker(chatId, sticker, opts);
+            }
+            case "onebot.sendFace":
+            case "qq.sendFace": {
+                const chatId = ensureCompositeId("onebot", String(args[0] ?? ""));
+                const faceId = String(args[1] ?? "").trim();
+                const opts = (args[2] ?? {}) as Record<string, unknown>;
+                await this.applyHumanizedDelay(chatId, 0);
+                return this.sendFace(chatId, faceId, opts);
+            }
             case "onebot.deleteMessages":
             case "qq.deleteMessages": {
                 const chatId = ensureCompositeId("onebot", String(args[0] ?? ""));
@@ -304,6 +327,84 @@ export class OneBotAdapter implements PlatformAdapter {
             fileName: typeof opts.fileName === "string" ? opts.fileName : path.basename(resolvedPath),
         };
         return this.sendMedia(chatId, payload, opts);
+    }
+
+    private async sendSticker(chatId: string, sticker: unknown, opts: Record<string, unknown>): Promise<unknown> {
+        let file: unknown = sticker;
+
+        if (typeof sticker === "string") {
+            const trimmed = sticker.trim();
+            const looksLikeDirectFile = trimmed.startsWith("http://")
+                || trimmed.startsWith("https://")
+                || trimmed.startsWith("file://")
+                || trimmed.startsWith("base64://")
+                || trimmed.includes("/")
+                || trimmed.includes("\\")
+                || /\.[a-zA-Z0-9]{2,5}$/.test(trimmed);
+
+            if (!looksLikeDirectFile && this.mediaDownloader) {
+                const cachedPath = this.mediaDownloader.getExistingPath(trimmed);
+                if (cachedPath) {
+                    if (cachedPath.toLowerCase().endsWith(".webm") || cachedPath.toLowerCase().endsWith(".tgs")) {
+                        throw new Error(`sendSticker: 暂不支持将动态 TG 贴纸转发到 QQ (${path.basename(cachedPath)})`);
+                    }
+                    file = cachedPath;
+                }
+            }
+        } else if (sticker && typeof sticker === "object") {
+            const rec = sticker as Record<string, unknown>;
+            let resolvedFile = rec.file;
+            if (typeof resolvedFile === "string") {
+                const cachedPath = this.mediaDownloader?.getExistingPath(resolvedFile);
+                if (cachedPath) {
+                    if (cachedPath.toLowerCase().endsWith(".webm") || cachedPath.toLowerCase().endsWith(".tgs")) {
+                        throw new Error(`sendSticker: 暂不支持将动态 TG 贴纸转发到 QQ (${path.basename(cachedPath)})`);
+                    }
+                    resolvedFile = cachedPath;
+                }
+            }
+            file = { ...rec, file: resolvedFile };
+        }
+
+        const payload: Record<string, unknown> = typeof file === "string"
+            ? {
+                type: "photo",
+                file,
+                caption: typeof opts.caption === "string" ? opts.caption : undefined,
+            }
+            : {
+                ...(file as Record<string, unknown>),
+                type: "photo",
+            };
+        return this.sendMedia(chatId, payload, opts);
+    }
+
+    private async sendFace(chatId: string, faceId: string, opts: Record<string, unknown>): Promise<unknown> {
+        if (!faceId) throw new Error("sendFace: faceId 为空");
+        const parsed = parseChatId(chatId);
+        const segments: OneBotMessageSegment[] = [];
+        if (opts.replyTo != null && opts.replyTo !== "") {
+            segments.push({ type: "reply", data: { id: String(opts.replyTo) } });
+        }
+        segments.push({ type: "face", data: { id: faceId } });
+        if (typeof opts.text === "string" && opts.text.trim()) {
+            segments.push({ type: "text", data: { text: opts.text } });
+        }
+        if (parsed.rawId.startsWith("group:")) {
+            const groupId = parsed.rawId.slice("group:".length);
+            return this.callAction("send_group_msg", {
+                group_id: Number(groupId),
+                message: segments,
+            });
+        }
+        if (parsed.rawId.startsWith("private:")) {
+            const userId = parsed.rawId.slice("private:".length);
+            return this.callAction("send_private_msg", {
+                user_id: Number(userId),
+                message: segments,
+            });
+        }
+        throw new Error(`Unsupported onebot chatId: ${chatId}`);
     }
 
     private async deleteMessages(chatId: string, messageIds: string[]): Promise<void> {
