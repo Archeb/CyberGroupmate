@@ -11,6 +11,7 @@ import { installActions } from "./modules/actions/index.js";
 import { installSkills } from "./modules/skills/index.js";
 import { createTelegramClientProxy } from "./modules/telegram/index.js";
 import { createDiscordClientProxy } from "./modules/discord/index.js";
+import { createOneBotClientProxy } from "./modules/onebot/index.js";
 
 // ─── 环境接口 ───
 
@@ -61,9 +62,12 @@ export function installCapabilityRegistry(env: CapabilityRegistryEnv): Record<st
     const platform = currentPlatform;
     let telegram: unknown = undefined;
     let discord: unknown = undefined;
+    let onebot: unknown = undefined;
 
     if (platform === "discord") {
         discord = createDiscordClientProxy(env, sentHistory);
+    } else if (platform === "onebot") {
+        onebot = createOneBotClientProxy(env, sentHistory);
     } else {
         // 默认 telegram（向后兼容）
         telegram = createTelegramClientProxy(env, sentHistory);
@@ -76,5 +80,6 @@ export function installCapabilityRegistry(env: CapabilityRegistryEnv): Record<st
         skills: installSkills(env, sentHistory),
         telegram,
         discord,
+        onebot,
     };
 }

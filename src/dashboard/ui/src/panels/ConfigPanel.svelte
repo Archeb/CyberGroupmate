@@ -8,6 +8,7 @@
   import TimezoneTab from "./config/TimezoneTab.svelte";
   import TelegramTab from "./config/TelegramTab.svelte";
   import DiscordTab from "./config/DiscordTab.svelte";
+  import OneBotTab from "./config/OneBotTab.svelte";
   import ReflectionTab from "./config/ReflectionTab.svelte";
   import ContextBudgetTab from "./config/ContextBudgetTab.svelte";
   import EmbeddingTab from "./config/EmbeddingTab.svelte";
@@ -27,6 +28,7 @@
   let toastTimer = null;
   let telegramEnabled = false;
   let discordEnabled = false;
+  let onebotEnabled = false;
 
   /** Password 输入框：focus 显示明文，blur 恢复隐藏 */
   function pwFocus(e) { e.target.type = 'text'; }
@@ -48,6 +50,7 @@
     { id: "timezone", label: "时区", icon: "fa-clock" },
     { id: "telegram", label: "Telegram", icon: "fa-paper-plane" },
     { id: "discord", label: "Discord", icon: "fa-gamepad" },
+    { id: "onebot", label: "QQ / OneBot", icon: "fa-comments" },
     { id: "reflection", label: "反思引擎", icon: "fa-brain" },
     { id: "contextBudget", label: "上下文预算", icon: "fa-sliders" },
     { id: "embedding", label: "Embedding", icon: "fa-vector-square" },
@@ -64,6 +67,7 @@
   const RESTART_FIELDS = {
     telegram: ["mode", "botToken", "apiId", "apiHash", "phone"],
     discord: ["botToken"],
+    onebot: ["wsUrl", "selfId"],
     subagent: ["maxSandboxInstances"],
   };
 
@@ -109,12 +113,25 @@
         (config.telegram?.apiId && config.telegram?.apiHash && config.telegram?.phone)
       );
       discordEnabled = !!config.discord?.botToken;
+      onebotEnabled = !!(config.onebot?.wsUrl && config.onebot?.selfId);
       // 始终确保 UI 有空对象可绑定
       if (!config.telegram) config.telegram = { mode: 'bot', botToken: '', apiId: '', apiHash: '', phone: '' };
       if (!config.telegram.whitelist) {
         config.telegram.whitelist = { enabled: false, groups: [], users: [] };
       }
       if (!config.discord) config.discord = { botToken: "", applicationId: "" };
+      if (!config.onebot) config.onebot = { wsUrl: '', selfId: '' };
+      if (!config.onebot.whitelist) {
+        config.onebot.whitelist = { enabled: false, groups: [], users: [] };
+      }
+      if (!config.onebot.humanizedDelay) {
+        config.onebot.humanizedDelay = {
+          enabled: false,
+          msPerChar: 50,
+          minDelay: 500,
+          maxDelay: 5000,
+        };
+      }
       if (config.telegram && !config.telegram.humanizedDelay) {
         config.telegram.humanizedDelay = {
           enabled: false,
@@ -150,6 +167,11 @@
       JSON.stringify(originalConfig.telegram?.whitelist)
     )
       return true;
+    if (
+      JSON.stringify(config.onebot?.whitelist) !==
+      JSON.stringify(originalConfig.onebot?.whitelist)
+    )
+      return true;
     return false;
   }
 
@@ -161,6 +183,7 @@
       const payload = JSON.parse(JSON.stringify(config));
       if (!telegramEnabled) delete payload.telegram;
       if (!discordEnabled) delete payload.discord;
+      if (!onebotEnabled) delete payload.onebot;
       const res = await api("/config", { method: "PUT", body: payload });
       if (res.ok) {
         originalConfig = JSON.parse(JSON.stringify(config));
@@ -548,6 +571,8 @@
             <TelegramTab bind:config bind:telegramEnabled {pwFocus} {pwBlur} />
           {:else if currentSection === "discord"}
             <DiscordTab bind:config bind:discordEnabled {pwFocus} {pwBlur} />
+          {:else if currentSection === "onebot"}
+            <OneBotTab bind:config bind:onebotEnabled {pwFocus} {pwBlur} />
           {:else if currentSection === "reflection"}
             <ReflectionTab bind:config />
           {:else if currentSection === "contextBudget"}

@@ -1433,14 +1433,7 @@ export function validateConfig(config: unknown): { valid: boolean; errors: strin
         if (!tg.mode || (tg.mode !== "bot" && tg.mode !== "userbot")) {
             errors.push("telegram.mode 必须是 \"bot\" 或 \"userbot\"");
         }
-        const wl = tg.whitelist as Record<string, unknown> | undefined;
-        if (wl && typeof wl === "object" && wl.enabled === true) {
-            const g = Array.isArray(wl.groups) ? wl.groups.length : 0;
-            const u = Array.isArray(wl.users) ? wl.users.length : 0;
-            if (g === 0 && u === 0) {
-                errors.push("telegram.whitelist.enabled 为 true 时，groups 与 users 至少填写一项");
-            }
-        }
+        // whitelist enabled + empty lists = reject all — valid config, no error
     }
 
     // dashboard (optional)
@@ -1464,14 +1457,7 @@ export function validateConfig(config: unknown): { valid: boolean; errors: strin
     if (ob) {
         if (!ob.wsUrl) errors.push("onebot.wsUrl 不能为空");
         if (!ob.selfId) errors.push("onebot.selfId 不能为空");
-        const wl = ob.whitelist as Record<string, unknown> | undefined;
-        if (wl && typeof wl === "object" && wl.enabled === true) {
-            const g = Array.isArray(wl.groups) ? wl.groups.length : 0;
-            const u = Array.isArray(wl.users) ? wl.users.length : 0;
-            if (g === 0 && u === 0) {
-                errors.push("onebot.whitelist.enabled 为 true 时，groups 与 users 至少填写一项");
-            }
-        }
+        // whitelist enabled + empty lists = reject all — valid config, no error
     }
 
     // contextBudget

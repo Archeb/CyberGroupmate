@@ -71,6 +71,7 @@ export function getModuleRegistryCache(): ModuleEntry[] {
 const PLATFORM_MODULES: Record<string, string> = {
     telegram: "telegram",
     discord: "discord",
+    onebot: "onebot",
 };
 
 /**
@@ -460,10 +461,13 @@ export class CodeActExecutor {
             // 主 Agent 指定的额外模块
             ...(task.useSkills ?? []),
         ]);
+        const platform = getPlatform(this.chatId);
+        const platformModule = platform === "onebot" ? "qq" : platform;
         const systemVars = {
             personaName: this.personaName,
             personaDescription: this.personaDescription,
-            apiTypeDefs: loadApiTypeDefs(getPlatform(this.chatId), allowedSkills),
+            apiTypeDefs: loadApiTypeDefs(platform, allowedSkills),
+            platformModule,
         };
         const systemPrompt = renderPrompt("EXECUTION", systemVars);
 
@@ -522,7 +526,6 @@ export class CodeActExecutor {
         const sandbox = await this.sandboxPool!.acquire(this.chatId);
 
         // 设置平台标识，供 capability-registry 和 scene.current 使用
-        const platform = getPlatform(this.chatId);
         await sandbox.execute(`__setPlatform(${JSON.stringify(platform)})`, 5000);
         // 注册 notify 监听器收集已发消息
         const rawChatId = getRawId(this.chatId);
