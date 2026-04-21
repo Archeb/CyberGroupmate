@@ -14,6 +14,7 @@ import { composeChatId, ensureCompositeId, parseChatId } from "../core/chat-id.j
 import { createLogger } from "../core/logger.js";
 import { WebSocket } from "ws";
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import path from "node:path";
 
@@ -363,7 +364,10 @@ export class OneBotAdapter implements PlatformAdapter {
                     file = cachedPath;
                 }
             }
-            file = await this.normalizeOutgoingImageFile(file, { rejectAnimatedSticker: true });
+            file = await this.normalizeOutgoingImageFile(file, {
+                rejectAnimatedSticker: true,
+                resizeForQqSticker: true,
+            });
         } else if (sticker && typeof sticker === "object") {
             const rec = sticker as Record<string, unknown>;
             let resolvedFile = rec.file;
@@ -375,7 +379,10 @@ export class OneBotAdapter implements PlatformAdapter {
             if (typeof resolvedFile === "string") {
                 resolvedFile = this.mediaDownloader?.getExistingPath(resolvedFile) ?? resolvedFile;
             }
-            resolvedFile = await this.normalizeOutgoingImageFile(resolvedFile, { rejectAnimatedSticker: true });
+            resolvedFile = await this.normalizeOutgoingImageFile(resolvedFile, {
+                rejectAnimatedSticker: true,
+                resizeForQqSticker: true,
+            });
             file = { ...rec, file: resolvedFile };
         }
 
@@ -392,7 +399,7 @@ export class OneBotAdapter implements PlatformAdapter {
         return this.sendMedia(chatId, payload, opts);
     }
 
-    private async normalizeOutgoingImageFile(file: unknown, options?: { rejectAnimatedSticker?: boolean }): Promise<unknown> {
+    private async normalizeOutgoingImageFile(file: unknown, options?: { rejectAnimatedSticker?: boolean; resizeForQqSticker?: boolean }): Promise<unknown> {
         if (typeof file !== "string") return file;
 
         const resolvedPath = this.resolveFileReferenceToPath(file);
@@ -404,17 +411,18 @@ export class OneBotAdapter implements PlatformAdapter {
         }
 
         const mimeType = this.inferImageMimeType(resolvedPath);
-        if (!mimeType || mimeType === "image/jpeg" || mimeType === "image/png") {
-            return resolvedPath;
+        let normalizedPath = resolvedPath;
+        if (mimeType && mimeType !== "image/jpeg" && mimeType !== "image/png") {
+            const rawBuffer = readFileSync(resolvedPath);
+            const { buffer: convertedBuffer, mimeType: convertedMimeType } = await ensureSupportedFormat(rawBuffer, mimeType);
+            if (convertedMimeType !== mimeType) {
+                normalizedPath = this.writeOutgoingConvertedImage(resolvedPath, convertedBuffer, convertedMimeType);
+            }
         }
-
-        const rawBuffer = readFileSync(resolvedPath);
-        const { buffer: convertedBuffer, mimeType: convertedMimeType } = await ensureSupportedFormat(rawBuffer, mimeType);
-        if (convertedMimeType === mimeType) {
-            return resolvedPath;
+        if (options?.resizeForQqSticker) {
+            normalizedPath = this.resizeStickerImageForQq(normalizedPath);
         }
-
-        return this.writeOutgoingConvertedImage(resolvedPath, convertedBuffer, convertedMimeType);
+        return normalizedPath;
     }
 
     private resolveFileReferenceToPath(file: string): string | null {
@@ -490,6 +498,39 @@ export class OneBotAdapter implements PlatformAdapter {
             writeFileSync(outPath, buffer);
         }
         return outPath;
+    }
+
+    private resizeStickerImageForQq(sourcePath: string): string {
+        const stat = statSync(sourcePath);
+        const hash = createHash("sha1")
+            .update(`${sourcePath}:${stat.size}:${stat.mtimeMs}:sticker-w200`)
+            .digest("hex")
+            .slice(0, 16);
+        const outDir = path.resolve(process.cwd(), "workspace", "Downloads", "other", "qq-converted");
+        mkdirSync(outDir, { recursive: true });
+        const outPath = path.join(outDir, `${path.basename(sourcePath, path.extname(sourcePath))}_${hash}_w200.png`);
+        if (existsSync(outPath)) {
+            return outPath;
+        }
+        try {
+            execFileSync("ffmpeg", [
+                "-hide_banner", "-loglevel", "error",
+                "-i", sourcePath,
+                "-vf", "scale=200:-2",
+                "-frames:v", "1",
+                outPath,
+            ], {
+                timeout: 10000,
+                maxBuffer: 20 * 1024 * 1024,
+            });
+            return outPath;
+        } catch (err) {
+            log.warn("贴纸缩放失败，回退原图", {
+                sourcePath,
+                error: String(err).slice(0, 200),
+            });
+            return sourcePath;
+        }
     }
 
     private async sendFace(chatId: string, faceId: string, opts: Record<string, unknown>): Promise<unknown> {
