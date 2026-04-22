@@ -312,6 +312,14 @@ export interface VisionConfig {
     stickerSendingMode?: "allow_all" | "allow_listed" | "disallow_all";
     /** 新收集的贴纸默认状态。默认 "enabled" */
     newStickerDefault?: "enabled" | "disabled";
+    /** 是否启用偷表情包（ImageCatalog + StickerDetector 管线）。默认 true */
+    stickerStealingEnabled?: boolean;
+    /** 图片出现次数达到此阈值后才进行表情包分类。默认 3 */
+    stickerStealingMinFrequency?: number;
+    /** 表情包检测扫描间隔（分钟）。默认 10 */
+    stickerStealingIntervalMin?: number;
+    /** 被判定为非表情包的图片保留天数。默认 30 */
+    catalogRetentionDays?: number;
 }
 
 /** Recording Pipeline 缓冲/触发配置 */
@@ -847,6 +855,10 @@ function parseVisionConfig(fileConfig: Record<string, unknown>): VisionConfig | 
         mediaRetentionDays: raw.media_retention_days != null ? num(raw.media_retention_days, 3) : undefined,
         stickerSendingMode: (str(raw.sticker_sending_mode) as VisionConfig["stickerSendingMode"]) ?? undefined,
         newStickerDefault: (str(raw.new_sticker_default) as VisionConfig["newStickerDefault"]) ?? undefined,
+        stickerStealingEnabled: raw.sticker_stealing_enabled != null ? !!raw.sticker_stealing_enabled : undefined,
+        stickerStealingMinFrequency: raw.sticker_stealing_min_frequency != null ? num(raw.sticker_stealing_min_frequency, 3) : undefined,
+        stickerStealingIntervalMin: raw.sticker_stealing_interval_min != null ? num(raw.sticker_stealing_interval_min, 10) : undefined,
+        catalogRetentionDays: raw.catalog_retention_days != null ? num(raw.catalog_retention_days, 30) : undefined,
     };
 }
 
@@ -1260,6 +1272,10 @@ export function serializeConfigToObject(config: AppConfig): Record<string, unkno
         if (config.vision.mediaRetentionDays != null) v.media_retention_days = config.vision.mediaRetentionDays;
         if (config.vision.stickerSendingMode != null) v.sticker_sending_mode = config.vision.stickerSendingMode;
         if (config.vision.newStickerDefault != null) v.new_sticker_default = config.vision.newStickerDefault;
+        if (config.vision.stickerStealingEnabled != null) v.sticker_stealing_enabled = config.vision.stickerStealingEnabled;
+        if (config.vision.stickerStealingMinFrequency != null) v.sticker_stealing_min_frequency = config.vision.stickerStealingMinFrequency;
+        if (config.vision.stickerStealingIntervalMin != null) v.sticker_stealing_interval_min = config.vision.stickerStealingIntervalMin;
+        if (config.vision.catalogRetentionDays != null) v.catalog_retention_days = config.vision.catalogRetentionDays;
         obj.vision = v;
     }
 

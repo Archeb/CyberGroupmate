@@ -22,6 +22,7 @@ export interface StickerDetectorDeps {
     mediaDownloader: MediaDownloader;
     memory: MemoryStoreV2;
     visionConfigs: LLMConfig[];
+    minFrequency?: number;
 }
 
 export class StickerDetector {
@@ -39,7 +40,7 @@ export class StickerDetector {
         }
         this.processing = true;
         try {
-            const candidates = this.deps.imageCatalog.getPendingStickerCandidates(3);
+            const candidates = this.deps.imageCatalog.getPendingStickerCandidates(this.deps.minFrequency ?? 3);
             if (candidates.length === 0) return 0;
 
             log.info("processCandidates: 开始处理", { count: candidates.length });
