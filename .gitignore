@@ -28,3 +28,10 @@ config.yaml
 
 # Temporal Project Files
 .tmp
+
+# Runtime data (bind mounts)
+data/
+
+# Agent instructions (local only)
+AGENTS.md
+CLAUDE.md
