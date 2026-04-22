@@ -55,6 +55,44 @@ import { matchesCron, validateCronMinInterval } from "./core/cron-matcher.js";
 
 const log = createLogger("main");
 
+let _metricsStopFn: (() => void) | null = null;
+let _gracefulShutdown: ((signal: string) => Promise<void>) | null = null;
+let _shutdownStarted = false;
+
+async function requestGracefulShutdown(signal: string): Promise<void> {
+    if (_shutdownStarted) {
+        log.warn("Shutdown already in progress", { signal });
+        return;
+    }
+    _shutdownStarted = true;
+
+    console.log("\n🛑 Shutting down...");
+    log.info("收到停止信号", { signal });
+
+    const hardTimeoutMs = 30_000;
+    const hardTimeout = setTimeout(() => {
+        log.error("Graceful shutdown 超时，强制退出", { timeoutMs: hardTimeoutMs });
+        process.exit(1);
+    }, hardTimeoutMs);
+    if (hardTimeout.unref) hardTimeout.unref();
+
+    let exitCode = 0;
+    try {
+        if (_gracefulShutdown) {
+            await _gracefulShutdown(signal);
+        } else {
+            // 初始化中断时至少先停掉 metrics exporter
+            _metricsStopFn?.();
+        }
+    } catch (err) {
+        exitCode = 1;
+        log.error("Graceful shutdown 失败", { signal, error: String(err) });
+    } finally {
+        clearTimeout(hardTimeout);
+        process.exit(exitCode);
+    }
+}
+
 // ─── 常量 ───
 
 /** 数据目录 */
@@ -233,6 +271,7 @@ async function main(): Promise<void> {
     });
 
     const nc = new NotificationCenter(EVENTS_PATH);
+    let shuttingDown = false;
 
     // ─── 自动检查并安装 Skills 依赖 ───
     await installSkillsDependencies(join(process.cwd(), "workspace", "skills"));
@@ -626,6 +665,7 @@ async function main(): Promise<void> {
 
     // Hook 2: 消息分发到 per-group GroupSubagent (Observer + RecordingPipeline) → 更新 Q3
     nc.onPush(event => {
+        if (shuttingDown) return;
         const chatId = String(event.chatId ?? "");
         if (!chatId) return;
 
@@ -819,6 +859,7 @@ async function main(): Promise<void> {
 
     // Hook 3: FeedbackLoop 消息追踪
     nc.onPush(event => {
+        if (shuttingDown) return;
         if ((event as any).type === "system.agent_message_sent" && feedbackLoop) {
             const sentEvent = event as Record<string, unknown>;
             const fbPlatform = String(sentEvent.scene ?? "") as import("./core/chat-id.js").PlatformName;
@@ -837,6 +878,7 @@ async function main(): Promise<void> {
     // Hook 4: 追问实时检测 (architecture_v2.md §3 Q3 路径 5)
     // 在 FeedbackLoop 的追问窗口内检测同群用户消息并触发 Q3 入队
     nc.onPush(event => {
+        if (shuttingDown) return;
         const chatId = String(event.chatId ?? "");
         if (!chatId) return;
         const eventType = String(event.type ?? "");
@@ -847,11 +889,12 @@ async function main(): Promise<void> {
     });
 
     // Per-group TopicRegistry 定时清理（遍历所有 subagent 的 topicRegistry）
-    setInterval(() => {
+    const topicCleanupInterval = setInterval(() => {
         for (const sub of subagentManager.getAllSubagents()) {
             sub.topicRegistry.cleanup();
         }
     }, 60_000);
+    if (topicCleanupInterval.unref) topicCleanupInterval.unref();
 
     // Subagent 实例是 chat-bound 的，不做空闲回收。
     // Sandbox 空闲回收由 SandboxPool 独立管理。
@@ -887,11 +930,13 @@ async function main(): Promise<void> {
 
     // Track chat activity for reflection
     nc.onPush(event => {
+        if (shuttingDown) return;
         const chatId = String(event.chatId ?? "");
         if (chatId) lastActivityPerChat.set(chatId, Date.now());
     });
 
-    setInterval(async () => {
+    const reflectionInterval = setInterval(async () => {
+        if (shuttingDown) return;
         const now = Date.now();
         for (const [chatId, lastActive] of lastActivityPerChat) {
             if (reflectionInProgress.has(chatId)) continue;
@@ -952,6 +997,7 @@ async function main(): Promise<void> {
             }
         }
     }, checkInterval);
+    if (reflectionInterval.unref) reflectionInterval.unref();
 
     // ─── MainAgentLoop 配置 ───
     const mainLoop = new MainAgentLoop(q3, q5, subagentManager, {
@@ -1002,6 +1048,7 @@ async function main(): Promise<void> {
 
     // ─── Dashboard 监控仪表盘 ───
     const dashboardEnabled = appConfig.dashboard?.enabled !== false;
+    let dashboardServer: { stop: () => void } | null = null;
     if (dashboardEnabled) {
         const { DashboardServer } = await import("./dashboard/dashboard-server.js");
         const { TokenStatsCollector } = await import("./dashboard/token-stats.js");
@@ -1053,6 +1100,7 @@ async function main(): Promise<void> {
             },
             { host: dashboardHost, port: dashboardPort, token: dashboardToken, enabled: true },
         );
+        dashboardServer = dashboard;
         await dashboard.start();
         const displayHost = dashboardHost === "0.0.0.0" || dashboardHost === "::" ? "localhost" : dashboardHost;
         log.info("Dashboard 已启动", { listen: `${dashboardHost}:${dashboardPort}`, url: `http://${displayHost}:${dashboardPort}?token=${dashboardToken}` });
@@ -1070,6 +1118,7 @@ async function main(): Promise<void> {
 
         // Hook 1: 消息到达时更新 group_messages_total
         nc.onPush(event => {
+            if (shuttingDown) return;
             const eventType = String(event.type ?? "");
             if (eventType !== "nc.message") return;
             const chatId = String(event.chatId ?? "");
@@ -1195,6 +1244,85 @@ async function main(): Promise<void> {
     mainLoop.start();
     log.info("🤖 CyberGroupmate 运行中 (Subagent Architecture)");
 
+    const runWithTimeout = async (name: string, fn: () => Promise<void>, timeoutMs = 15_000): Promise<void> => {
+        await Promise.race([
+            fn(),
+            new Promise<never>((_, reject) => {
+                setTimeout(() => reject(new Error(`${name} timeout (${timeoutMs}ms)`)), timeoutMs);
+            }),
+        ]);
+    };
+
+    _gracefulShutdown = async (signal: string) => {
+        shuttingDown = true;
+        log.info("Graceful shutdown 开始", { signal });
+
+        // 先停主循环，停止新的 dispatch/attend
+        mainLoop.stop();
+
+        // 停止本进程定时任务
+        clearInterval(topicCleanupInterval);
+        clearInterval(reflectionInterval);
+        clearInterval(schedulerWatchdogInterval);
+
+        // 停止反馈检测定时器
+        feedbackLoop.dispose();
+
+        // 先停止平台输入，避免新消息继续进入系统
+        await Promise.allSettled(adapters.map((adapter) =>
+            runWithTimeout(`adapter.stop:${adapter.platform}`, () => adapter.stop(), 10_000)
+        ));
+
+        // 终止所有 sandbox，避免并发 host call 在收尾期继续写状态
+        await runWithTimeout("sandboxPool.dispose", () => sandboxPool.dispose(), 15_000);
+
+        // 强制 flush 每个群的 RecordingPipeline 缓冲，避免尾部消息丢失
+        const flushTasks = subagentManager.getAllSubagents().map(async (sub) => {
+            const pipeline = sub.recordingPipeline;
+            if (!pipeline || pipeline.bufferSize === 0) return;
+            await runWithTimeout(
+                `recording.flush:${sub.chatId}`,
+                () => pipeline.flush(),
+                20_000,
+            );
+        });
+        const flushResults = await Promise.allSettled(flushTasks);
+        const flushFailed = flushResults.filter(r => r.status === "rejected");
+        if (flushFailed.length > 0) {
+            log.warn("部分 RecordingPipeline flush 失败", {
+                failed: flushFailed.length,
+                total: flushResults.length,
+            });
+        }
+
+        // 释放 subagent（含 pipeline 计时器）
+        subagentManager.dispose();
+
+        // 停止 dashboard / metrics 导出
+        try {
+            dashboardServer?.stop();
+        } catch (err) {
+            log.warn("Dashboard stop 失败", { error: String(err) });
+        }
+        _metricsStopFn?.();
+
+        // 保存全局状态并释放其自动保存计时器
+        globalState.dispose();
+
+        // 释放其余资源
+        nc.dispose();
+        try {
+            hostRL.close();
+        } catch {
+            // ignore
+        }
+
+        // DB 最后关闭，确保前序写入已完成
+        memory.close();
+
+        log.info("Graceful shutdown 完成");
+    };
+
     // ─── 保持进程活跃 ───
     // MainAgentLoop 使用 setTimeout 自驱动，这里用一个 keep-alive 防止进程退出
     await new Promise(() => {
@@ -1204,18 +1332,12 @@ async function main(): Promise<void> {
 }
 
 // ─── Graceful shutdown ───
-let _metricsStopFn: (() => void) | null = null;
-
-process.on("SIGINT", () => {
-    console.log("\n🛑 Shutting down...");
-    _metricsStopFn?.();
-    process.exit(0);
+process.once("SIGINT", () => {
+    void requestGracefulShutdown("SIGINT");
 });
 
-process.on("SIGTERM", () => {
-    console.log("\n🛑 Shutting down...");
-    _metricsStopFn?.();
-    process.exit(0);
+process.once("SIGTERM", () => {
+    void requestGracefulShutdown("SIGTERM");
 });
 
 main().catch((err) => {
