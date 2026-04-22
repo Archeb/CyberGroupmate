@@ -15,6 +15,7 @@
 import { processMediaBatch, type MediaAttachment, type ProcessedMedia, type DownloadFn, type StickerCache } from "./vision-processor.js";
 import { resolveComponentTimeout, type LLMConfig, type VisionConfig } from "./config.js";
 import type { MediaDownloader } from "./media-downloader.js";
+import type { ImageCatalog } from "./image-catalog.js";
 import { formatTsForDisplay } from "./timezone.js";
 import { createLogger } from "./logger.js";
 import { extractUrls, fetchOpenGraphBatch, downloadOgImage, type OGResult } from "./opengraph.js";
@@ -75,6 +76,8 @@ export interface EnrichOptions {
     chatId?: string;
     /** 媒体下载管理器（可选，启用后保存文件到磁盘） */
     mediaDownloader?: MediaDownloader;
+    /** 图片目录（可选，启用后追踪图片频率用于表情包检测） */
+    imageCatalog?: ImageCatalog;
     /** 仅处理指定类型的媒体（如 ["sticker"]），未指定时处理所有类型 */
     mediaTypes?: Array<"photo" | "sticker" | "video" | "document" | "animation" | "other">;
     /** 是否启用 URL OpenGraph 预览（默认 true） */
@@ -125,6 +128,7 @@ export async function enrichMessages(
                 options.downloadFn,
                 options.stickerCache,
                 options.mediaDownloader,
+                options.imageCatalog,
                 { forceTextDescriptions: options.forceTextDescriptions },
             );
             // 将处理结果写回 messages

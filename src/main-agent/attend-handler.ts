@@ -16,6 +16,7 @@ import type { ChatMessage } from "../core/llm.js";
 import type { GlobalState } from "./global-state.js";
 import type { MainAgentLoop } from "./main-agent-loop.js";
 import type { MediaDownloader } from "../core/media-downloader.js";
+import type { ImageCatalog } from "../core/image-catalog.js";
 import { calculateDepth } from "./cosine-decay.js";
 import { buildGroupContext } from "./context-builder.js";
 import { renderPrompt, buildAttentionVariables, buildMainSystemVariables } from "./prompt-renderer.js";
@@ -110,6 +111,8 @@ export interface AttendHandlerDeps {
     adapters?: PlatformAdapter[];
     /** 共享的媒体下载管理器 */
     mediaDownloader?: MediaDownloader;
+    /** 图片目录（用于表情包频率追踪） */
+    imageCatalog?: ImageCatalog;
 
 }
 
@@ -121,7 +124,7 @@ export interface AttendHandlerDeps {
 export function createAttendHandler(
     deps: AttendHandlerDeps,
 ): (entry: AttentionQueueEntry) => Promise<AttendResult | null> {
-    const { memory, globalState, subagentManager, mainLoop, adapters: adapterList, mediaDownloader } = deps;
+    const { memory, globalState, subagentManager, mainLoop, adapters: adapterList, mediaDownloader, imageCatalog } = deps;
 
     // 构建下载函数（用于 vision 处理 sticker/photo）
     // 从 adapters 数组中按 chatId 平台路由到对应 adapter 的 downloadMedia
@@ -344,6 +347,7 @@ export function createAttendHandler(
                             stickerCache: memory,
                             chatId: entry.chatId,
                             mediaDownloader,
+                            imageCatalog,
                             forceTextDescriptions: effectiveAttendVisionMode === "describe",
                         });
                         messagesText = formattedText;

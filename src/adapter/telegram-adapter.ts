@@ -643,7 +643,27 @@ export class TelegramAdapter implements PlatformAdapter {
                 if (stickerPath.toLowerCase().endsWith(".webm")) {
                     throw new Error("sendSticker: 禁止发送 webm 格式贴纸 (通常为视频贴纸)");
                 }
-                const stickerBuffer = fs.readFileSync(stickerPath);
+                let stickerBuffer = fs.readFileSync(stickerPath);
+                // 非 webp/png 格式的贴纸（如来自 QQ 的 jpg）需要转换为 PNG
+                // Telegram sticker 要求: webp/png, ≤512x512, ≤512KB
+                const lowerPath = stickerPath.toLowerCase();
+                if (!lowerPath.endsWith(".webp") && !lowerPath.endsWith(".png")) {
+                    try {
+                        const { ensureSupportedFormat } = await import("../core/vision-processor.js");
+                        const ext = path.extname(stickerPath).toLowerCase();
+                        const mimeMap: Record<string, string> = {
+                            ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+                            ".gif": "image/gif", ".bmp": "image/bmp",
+                            ".tiff": "image/tiff", ".tif": "image/tiff",
+                            ".avif": "image/avif",
+                        };
+                        const mime = mimeMap[ext] ?? "image/jpeg";
+                        const { buffer: converted } = await ensureSupportedFormat(stickerBuffer, mime);
+                        stickerBuffer = Buffer.from(converted);
+                    } catch (err) {
+                        log.warn("sendSticker: 格式转换失败，使用原始文件", { error: String(err) });
+                    }
+                }
                 const stickerOpts = args[2] ?? undefined;
                 return this.handleCall("telegram.sendMedia", [
                     stickerTarget,

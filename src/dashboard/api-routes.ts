@@ -568,7 +568,12 @@ export function createApiRouter(deps: DashboardDeps, bridge: EventBridge): Route
         const filePath = deps.mediaDownloader.getExistingPath(req.params.uniqueFileId);
         if (!filePath || !fs.existsSync(filePath)) { res.status(404).json({ error: "sticker image not found" }); return; }
         try {
-            res.setHeader("Content-Type", "image/webp");
+            const ext = filePath.toLowerCase();
+            const contentType = ext.endsWith(".png") ? "image/png"
+                : ext.endsWith(".jpg") || ext.endsWith(".jpeg") ? "image/jpeg"
+                : ext.endsWith(".gif") ? "image/gif"
+                : "image/webp";
+            res.setHeader("Content-Type", contentType);
             res.setHeader("Cache-Control", "public, max-age=86400");
             fs.createReadStream(filePath).pipe(res);
         } catch (err) {
@@ -614,6 +619,89 @@ export function createApiRouter(deps: DashboardDeps, bridge: EventBridge): Route
         if (enabled === undefined) { res.status(400).json({ error: "enabled required" }); return; }
         const ok = deps.memory.setStickerEnabled(req.params.uniqueFileId, !!enabled);
         res.json({ ok });
+    });
+
+    // ─── Image Catalog (表情包频率追踪) ───
+
+    router.get("/image-catalog", (req, res) => {
+        if (!deps.imageCatalog) { res.status(404).json({ error: "imageCatalog not available" }); return; }
+        const limit = Math.min(parseInt(qs(req.query.limit)) || 50, 200);
+        const offset = parseInt(qs(req.query.offset)) || 0;
+        const filter = qs(req.query.filter);
+        let result;
+        if (filter === "pending") {
+            const items = deps.imageCatalog.getPendingStickerCandidates(1);
+            result = { items, total: items.length };
+        } else if (filter === "stickers") {
+            const items = deps.imageCatalog.getStickerEntries();
+            result = { items, total: items.length };
+        } else {
+            result = deps.imageCatalog.getAllEntries(limit, offset);
+        }
+        res.json(result);
+    });
+
+    router.get("/image-catalog/:contentHash/image", (req, res) => {
+        if (!deps.imageCatalog) { res.status(404).json({ error: "imageCatalog not available" }); return; }
+        const entry = deps.imageCatalog.getByContentHash(req.params.contentHash);
+        if (!entry?.filePath || !fs.existsSync(entry.filePath)) {
+            res.status(404).json({ error: "image not found" });
+            return;
+        }
+        try {
+            const ext = entry.filePath.toLowerCase();
+            const contentType = ext.endsWith(".png") ? "image/png"
+                : ext.endsWith(".jpg") || ext.endsWith(".jpeg") ? "image/jpeg"
+                : ext.endsWith(".gif") ? "image/gif"
+                : "image/webp";
+            res.setHeader("Content-Type", contentType);
+            res.setHeader("Cache-Control", "public, max-age=86400");
+            fs.createReadStream(entry.filePath).pipe(res);
+        } catch (err) {
+            res.status(500).json({ error: String(err) });
+        }
+    });
+
+    router.patch("/image-catalog/:contentHash/verdict", (req, res) => {
+        if (!deps.imageCatalog) { res.status(404).json({ error: "imageCatalog not available" }); return; }
+        const { isSticker, description, emoji } = req.body;
+        if (isSticker === undefined) { res.status(400).json({ error: "isSticker required" }); return; }
+        deps.imageCatalog.setStickerVerdict({
+            contentHash: req.params.contentHash,
+            isSticker: !!isSticker,
+            description,
+            emoji,
+        });
+        if (isSticker && deps.mediaDownloader && deps.memory) {
+            const entry = deps.imageCatalog.getByContentHash(req.params.contentHash);
+            if (entry?.filePath && fs.existsSync(entry.filePath)) {
+                try {
+                    const rawBuffer = fs.readFileSync(entry.filePath);
+                    const saved = deps.mediaDownloader.saveMedia(rawBuffer, {
+                        chatId: entry.sourceChatId ?? undefined,
+                        uniqueFileId: entry.uniqueFileId ?? entry.contentHash,
+                        mediaType: "sticker",
+                        mimeType: entry.mimeType ?? "image/jpeg",
+                    });
+                    if (saved) {
+                        deps.memory.setStickerDescription(
+                            entry.uniqueFileId ?? entry.contentHash,
+                            description ?? "",
+                            emoji,
+                            true,
+                        );
+                        deps.imageCatalog.markPromoted(
+                            entry.contentHash,
+                            entry.uniqueFileId ?? entry.contentHash,
+                            saved.path,
+                        );
+                    }
+                } catch (err) {
+                    log.warn("手动提升贴纸失败", { contentHash: req.params.contentHash, error: String(err) });
+                }
+            }
+        }
+        res.json({ ok: true });
     });
 
 
