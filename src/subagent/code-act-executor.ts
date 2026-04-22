@@ -452,7 +452,7 @@ export class CodeActExecutor {
         // 计算这次 task 的 allowedSkills 白名单
         const currentConfig = loadConfig();
         const baseSkills = currentConfig.subagent?.baseSkills ?? [
-            "runtime", "memory", "docs", "fs", "actions", "skills", "mcp", "cron", "events", "kv", "http", "vision", "shell",
+            "runtime", "docs", "fs", "skills", "mcp", "cron", "todo", "vision", "shell",
         ];
         const allowedSkills = new Set<string>([
             ...baseSkills,
@@ -462,12 +462,19 @@ export class CodeActExecutor {
             ...(task.useSkills ?? []),
         ]);
         const platform = getPlatform(this.chatId);
-        const platformModule = platform === "onebot" ? "qq" : platform;
+        const platformModule = platform;
+        const todoItems = this.memory ? this.memory.todoList(this.chatId) : [];
         const systemVars = {
             personaName: this.personaName,
             personaDescription: this.personaDescription,
             apiTypeDefs: loadApiTypeDefs(platform, allowedSkills),
             platformModule,
+            hasTodos: todoItems.length > 0,
+            todosText: todoItems.map((item) =>
+                item.dueAt
+                    ? `- ${item.key}: ${item.content} (到期: ${item.dueAt})`
+                    : `- ${item.key}: ${item.content}`
+            ).join("\n"),
         };
         const systemPrompt = renderPrompt("EXECUTION", systemVars);
 

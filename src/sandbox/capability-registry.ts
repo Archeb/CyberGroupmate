@@ -6,8 +6,6 @@
  */
 
 import { installRuntime } from "./modules/runtime/index.js";
-import { installMemory } from "./modules/memory/index.js";
-import { installActions } from "./modules/actions/index.js";
 import { installSkills } from "./modules/skills/index.js";
 import { createTelegramClientProxy } from "./modules/telegram/index.js";
 import { createDiscordClientProxy } from "./modules/discord/index.js";
@@ -75,8 +73,6 @@ export function installCapabilityRegistry(env: CapabilityRegistryEnv): Record<st
 
     return {
         runtime: installRuntime(env),
-        memory: installMemory(env),
-        actions: installActions(env),
         skills: installSkills(env, sentHistory),
         telegram,
         discord,

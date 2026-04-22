@@ -1,12 +1,5 @@
 # Sandbox API Brief Overview
 
-## actions
-shared/actions.d.ts — 所有 scene 共享的 actions 能力
-
-- `getTopicContext`: 获取某个话题的结构化上下文
-- `listActiveTopics`: 列出当前活跃话题
-- `recallForTopic`: 以话题为中心触发一次记忆检索
-
 ## cron
 shared/cron.d.ts — 定时任务管理模块类型定义 通过 Host 侧 GlobalState 持久化 cron 任务。 触发时以自然语言任务描述唤醒 agent，由 agent 自主决策执行。
 
@@ -27,13 +20,6 @@ docs.d.ts — 文档查阅系统类型定义 Agent 可通过 docs 对象查阅 w
 - `list`: 列出所有可用文档（返回 slug、标题，以及是否为标准 Agent Skill）
 - `read`: 读取指定文档的完整内容 支持精确 slug 匹配和模糊匹配
 
-## events
-shared/events.d.ts — 事件监听器模块类型定义 注册事件监听器，当匹配的事件到达时在 sandbox 中执行处理代码。 监听器持久化到磁盘，Worker 重启后自动恢复。
-
-- `on`: 注册事件监听器。匹配 type 前缀的事件会触发 handlerCode 在 sandbox 中执行。 handler 代码中可通过 `event` 变量访问事件数据。
-- `off`: 移除监听器
-- `list`: 列出当前所有监听器
-
 ## fs
 filesystem.d.ts — 文件系统操作模块类型定义 所有路径操作限定在 workspace/ 目录下。 支持相对路径（相对于 workspace/）和绝对路径。
 
@@ -46,20 +32,13 @@ filesystem.d.ts — 文件系统操作模块类型定义 所有路径操作限�
 - `mkdir`: 创建目录（递归创建，类似 mkdir -p）。
 - `stat`: 获取文件或目录的状态信息。
 
-## http
-shared/http.d.ts — HTTP Webhook 模块类型定义 注册 HTTP webhook 端点，外部系统通过 HTTP POST 触发 sandbox 代码执行。 Webhook 持久化到磁盘，Worker 重启后自动恢复。
+## todo
+shared/todo.d.ts — 当前群 Todo 模块类型定义 用于持久化当前群的待办、规则和长期约定。 数据按群隔离，可选设置 ISO 格式的到期时间。
 
-- `onWebhook`: 注册 webhook 端点。 外部可通过 POST /webhook/{path} 触发 handler 代码执行。 handler 代码中可通过 `request` 变量访问请求数据。
-- `removeWebhook`: 移除 webhook
-- `listWebhooks`: 列出当前所有 webhook
-
-## kv
-shared/kv.d.ts — 持久化键值存储模块类型定义 简单的 per-chat 键值存储，数据持久化到 SQLite。 比 ctx 更正式的存储方式，支持 TTL 过期。
-
-- `get`: 读取键值
-- `set`: 写入键值
-- `del`: 删除键
-- `keys`: 列出键名（可按前缀过滤）
+- `list`: 列出当前群的 todo。
+- `get`: 获取单个 todo。
+- `upsert`: 新增或更新 todo。
+- `remove`: 删除 todo。
 
 ## mcp
 mcp-bridge.d.ts — MCP Server 连接器类型定义 连接外部 MCP (Model Context Protocol) Server，自动发现并代理其工具。 支持 stdio 和 Streamable HTTP 两种传输。
@@ -69,12 +48,17 @@ mcp-bridge.d.ts — MCP Server 连接器类型定义 连接外部 MCP (Model Con
 - `list`: 列出所有已连接的 MCP Servers 及其工具
 - `call`: 直接调用指定 server 的 tool（无需先调用 connect 返回的代理对象）
 
-## memory
-memory.d.ts — Memory V2 Agent API 类型定义 记忆系统 V2 接口。Agent 可通过 memory 全局对象使用： - recall()：统一记忆检索（向量 + 关键词混合搜索） - browseHistory()：消息档案检索（LLM 深度阅读） - reflect()：触发群组反思总结 注意：记忆的写入由后台 Pipeline 自动完成（RecordingPipeline + post-session fact extraction），Agent 不需要手动写入。 memory: MemoryStore — 全局可用
+## onebot
+onebot.d.ts — QQ / OneBot 平台 API 系统注入的 OneBot host proxy 接口。 也会以 `qq` 别名暴露给 sandbox。
 
-- `recall`: 统一记忆检索入口 使用向量搜索 + 关键词搜索混合检索
-- `browseHistory`: 消息档案检索 话题索引引导 + 模糊搜索 + cheap model 深度阅读
-- `reflect`: 对指定群组进行反思总结 读取上次反思以来的 topics 和 interactions，生成结构化总结
+- `sendText`: 发送文本消息。
+- `sendMedia`: 发送媒体消息。支持本地文件路径或 URL。
+- `sendFile`: 发送文件。
+- `sendSticker`: 发送贴纸或图片表情。
+- `sendFace`: 发送 QQ 系统表情（CQ face）。
+- `sendTyping`: OneBot 无 typing 指示，此方法为 no-op。
+- `deleteMessages`: 撤回消息。
+- `downloadMedia`: 下载媒体到本地 workspace/Downloads/。
 
 ## runtime
 shared/runtime.d.ts — 系统级能力

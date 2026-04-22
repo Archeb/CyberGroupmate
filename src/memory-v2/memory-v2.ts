@@ -421,6 +421,18 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
                 PRIMARY KEY (chat_id, key)
             );
             CREATE INDEX IF NOT EXISTS idx_kv_expires ON kv_store(expires_at);
+
+            -- per-chat todo
+            CREATE TABLE IF NOT EXISTS todo_items (
+                chat_id TEXT NOT NULL,
+                key TEXT NOT NULL,
+                content TEXT NOT NULL,
+                due_at TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (chat_id, key)
+            );
+            CREATE INDEX IF NOT EXISTS idx_todo_chat_due ON todo_items(chat_id, due_at);
         `);
     }
 
@@ -2263,68 +2275,108 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
         return runReflection(chatId, this, configs, reflectionConfig);
     }
 
-    // ─── KV Store ───
+    // ─── Todo Store ───
 
-    /**
-     * 读取键值（per-chat 隔离）
-     */
-    kvGet(chatId: string, key: string): string | null {
-        const row = this.db.prepare(
-            "SELECT value, expires_at FROM kv_store WHERE chat_id = ? AND key = ?"
-        ).get(chatId, key) as { value: string; expires_at: string | null } | undefined;
-
-        if (!row) return null;
-
-        // 检查 TTL 过期
-        if (row.expires_at && row.expires_at <= new Date().toISOString()) {
-            this.db.prepare("DELETE FROM kv_store WHERE chat_id = ? AND key = ?").run(chatId, key);
-            return null;
+    private normalizeTodoDueAt(dueAt?: string | null): string | null {
+        if (dueAt == null || dueAt === "") return null;
+        const parsed = new Date(dueAt);
+        if (Number.isNaN(parsed.getTime())) {
+            throw new Error(`Invalid todo dueAt: ${dueAt}`);
         }
-
-        return row.value;
+        return parsed.toISOString();
     }
 
-    /**
-     * 写入键值（per-chat 隔离，支持 TTL）
-     */
-    kvSet(chatId: string, key: string, value: string, ttlSeconds?: number): void {
-        const now = new Date().toISOString();
-        const expiresAt = ttlSeconds
-            ? new Date(Date.now() + ttlSeconds * 1000).toISOString()
-            : null;
+    todoList(chatId: string, options?: { includeExpired?: boolean }): Array<{
+        key: string;
+        content: string;
+        dueAt: string | null;
+        createdAt: string;
+        updatedAt: string;
+        expired: boolean;
+    }> {
+        const nowIso = new Date().toISOString();
+        const rows = this.db.prepare(`
+            SELECT key, content, due_at, created_at, updated_at
+            FROM todo_items
+            WHERE chat_id = ?
+            ORDER BY
+                CASE WHEN due_at IS NULL THEN 1 ELSE 0 END ASC,
+                due_at ASC,
+                updated_at DESC
+        `).all(chatId) as Array<{
+            key: string;
+            content: string;
+            due_at: string | null;
+            created_at: string;
+            updated_at: string;
+        }>;
 
+        return rows
+            .map((row) => ({
+                key: row.key,
+                content: row.content,
+                dueAt: row.due_at,
+                createdAt: row.created_at,
+                updatedAt: row.updated_at,
+                expired: !!row.due_at && row.due_at <= nowIso,
+            }))
+            .filter((row) => options?.includeExpired ? true : !row.expired);
+    }
+
+    todoGet(chatId: string, key: string): {
+        key: string;
+        content: string;
+        dueAt: string | null;
+        createdAt: string;
+        updatedAt: string;
+        expired: boolean;
+    } | null {
+        const row = this.db.prepare(`
+            SELECT key, content, due_at, created_at, updated_at
+            FROM todo_items
+            WHERE chat_id = ? AND key = ?
+        `).get(chatId, key) as {
+            key: string;
+            content: string;
+            due_at: string | null;
+            created_at: string;
+            updated_at: string;
+        } | undefined;
+        if (!row) return null;
+        const nowIso = new Date().toISOString();
+        return {
+            key: row.key,
+            content: row.content,
+            dueAt: row.due_at,
+            createdAt: row.created_at,
+            updatedAt: row.updated_at,
+            expired: !!row.due_at && row.due_at <= nowIso,
+        };
+    }
+
+    todoUpsert(chatId: string, key: string, content: string, dueAt?: string | null): {
+        key: string;
+        content: string;
+        dueAt: string | null;
+        createdAt: string;
+        updatedAt: string;
+        expired: boolean;
+    } {
+        const normalizedDueAt = this.normalizeTodoDueAt(dueAt);
+        const nowIso = new Date().toISOString();
         this.db.prepare(`
-            INSERT INTO kv_store (chat_id, key, value, expires_at, created_at, updated_at)
+            INSERT INTO todo_items (chat_id, key, content, due_at, created_at, updated_at)
             VALUES (?, ?, ?, ?, ?, ?)
             ON CONFLICT(chat_id, key) DO UPDATE SET
-                value = excluded.value,
-                expires_at = excluded.expires_at,
+                content = excluded.content,
+                due_at = excluded.due_at,
                 updated_at = excluded.updated_at
-        `).run(chatId, key, value, expiresAt, now, now);
+        `).run(chatId, key, content, normalizedDueAt, nowIso, nowIso);
+        return this.todoGet(chatId, key)!;
     }
 
-    /**
-     * 删除键（per-chat 隔离）
-     */
-    kvDel(chatId: string, key: string): void {
-        this.db.prepare("DELETE FROM kv_store WHERE chat_id = ? AND key = ?").run(chatId, key);
-    }
-
-    /**
-     * 列出键名（per-chat 隔离，可选前缀过滤）
-     */
-    kvKeys(chatId: string, prefix?: string): string[] {
-        let rows: Array<{ key: string }>;
-        if (prefix) {
-            rows = this.db.prepare(
-                "SELECT key FROM kv_store WHERE chat_id = ? AND key LIKE ? AND (expires_at IS NULL OR expires_at > ?)"
-            ).all(chatId, `${prefix}%`, new Date().toISOString()) as Array<{ key: string }>;
-        } else {
-            rows = this.db.prepare(
-                "SELECT key FROM kv_store WHERE chat_id = ? AND (expires_at IS NULL OR expires_at > ?)"
-            ).all(chatId, new Date().toISOString()) as Array<{ key: string }>;
-        }
-        return rows.map(r => r.key);
+    todoRemove(chatId: string, key: string): void {
+        this.db.prepare("DELETE FROM todo_items WHERE chat_id = ? AND key = ?").run(chatId, key);
     }
 
     // ─── 生命周期 ───

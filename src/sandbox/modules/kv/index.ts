@@ -1,55 +1,98 @@
 /**
- * modules/kv.ts — 持久化键值存储模块
+ * modules/todo.ts — per-chat Todo 模块
  *
- * 通过 callHost 代理到 Host 侧的 MemoryStoreV2 KV 操作。
+ * 通过 callHost 代理到 Host 侧的 MemoryStoreV2 todo 操作。
  * 数据存储在 SQLite 中，per-chat 隔离。
  */
 
-export interface KvCallbacks {
+export interface TodoCallbacks {
     callHost: (method: string, args?: unknown[]) => Promise<unknown>;
 }
 
-let _callbacks: KvCallbacks | null = null;
+let _callbacks: TodoCallbacks | null = null;
 
 /**
  * 注入 Host 通信回调（由 sandbox-worker 调用）
  */
-export function setKvCallbacks(callbacks: KvCallbacks): void {
+export function setTodoCallbacks(callbacks: TodoCallbacks): void {
     _callbacks = callbacks;
 }
 
-export const kvModule = {
+export const todoModule = {
     /**
-     * 读取键值
+     * 读取单个 todo
      */
-    get: async (key: string): Promise<string | null> => {
-        if (!_callbacks) throw new Error("KV module not initialized");
-        const result = await _callbacks.callHost("kv.get", [key]);
-        return result as string | null;
+    get: async (key: string): Promise<{
+        key: string;
+        content: string;
+        dueAt: string | null;
+        createdAt: string;
+        updatedAt: string;
+        expired: boolean;
+    } | null> => {
+        if (!_callbacks) throw new Error("Todo module not initialized");
+        const result = await _callbacks.callHost("todo.get", [key]);
+        return result as {
+            key: string;
+            content: string;
+            dueAt: string | null;
+            createdAt: string;
+            updatedAt: string;
+            expired: boolean;
+        } | null;
     },
 
     /**
-     * 写入键值
+     * 列出 todo
      */
-    set: async (key: string, value: string, ttlSeconds?: number): Promise<void> => {
-        if (!_callbacks) throw new Error("KV module not initialized");
-        await _callbacks.callHost("kv.set", [key, value, ttlSeconds]);
+    list: async (options?: { includeExpired?: boolean }): Promise<Array<{
+        key: string;
+        content: string;
+        dueAt: string | null;
+        createdAt: string;
+        updatedAt: string;
+        expired: boolean;
+    }>> => {
+        if (!_callbacks) throw new Error("Todo module not initialized");
+        const result = await _callbacks.callHost("todo.list", [options]);
+        return result as Array<{
+            key: string;
+            content: string;
+            dueAt: string | null;
+            createdAt: string;
+            updatedAt: string;
+            expired: boolean;
+        }>;
     },
 
     /**
-     * 删除键
+     * 新增或更新 todo
      */
-    del: async (key: string): Promise<void> => {
-        if (!_callbacks) throw new Error("KV module not initialized");
-        await _callbacks.callHost("kv.del", [key]);
+    upsert: async (key: string, content: string, options?: { dueAt?: string | null }): Promise<{
+        key: string;
+        content: string;
+        dueAt: string | null;
+        createdAt: string;
+        updatedAt: string;
+        expired: boolean;
+    }> => {
+        if (!_callbacks) throw new Error("Todo module not initialized");
+        const result = await _callbacks.callHost("todo.upsert", [key, content, options]);
+        return result as {
+            key: string;
+            content: string;
+            dueAt: string | null;
+            createdAt: string;
+            updatedAt: string;
+            expired: boolean;
+        };
     },
 
     /**
-     * 列出键名
+     * 删除 todo
      */
-    keys: async (prefix?: string): Promise<string[]> => {
-        if (!_callbacks) throw new Error("KV module not initialized");
-        const result = await _callbacks.callHost("kv.keys", [prefix]);
-        return result as string[];
+    remove: async (key: string): Promise<void> => {
+        if (!_callbacks) throw new Error("Todo module not initialized");
+        await _callbacks.callHost("todo.remove", [key]);
     },
 };

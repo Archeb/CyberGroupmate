@@ -25,7 +25,7 @@ export interface MethodDoc {
 
 /** 单个模块的注册条目 */
 export interface ModuleEntry {
-    /** 模块名（sandbox 中的全局变量名，如 "runtime", "memory", "telegram"） */
+    /** 模块名（sandbox 中的全局变量名，如 "runtime", "todo", "telegram"） */
     name: string;
     /** 模块一句话描述 */
     description: string;
@@ -108,7 +108,7 @@ export function generateModuleRoster(registry: ModuleEntry[], excludeBaseSkills?
  * 根据方法调用列表检索完整文档
  *
  * @param registry 模块注册表
- * @param calledMethods 从代码中提取的方法调用列表，格式如 ["telegram.sendText", "memory.recall"]
+ * @param calledMethods 从代码中提取的方法调用列表，格式如 ["telegram.sendText", "todo.list"]
  * @returns 拼接好的完整 TypeDoc 文档字符串
  */
 export function lookupFullDocs(registry: ModuleEntry[], calledMethods: string[]): string {
@@ -119,7 +119,7 @@ export function lookupFullDocs(registry: ModuleEntry[], calledMethods: string[])
 
     for (const call of calledMethods) {
         // 解析 "telegram.sendText" → moduleName="telegram", methodName="sendText"
-        // 解析 "memory.recall" → moduleName="memory", methodName="recall"
+        // 解析 "todo.list" → moduleName="todo", methodName="list"
         const lastDot = call.lastIndexOf(".");
         if (lastDot === -1) continue;
         const moduleName = call.slice(0, lastDot);

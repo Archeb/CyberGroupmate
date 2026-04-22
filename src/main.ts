@@ -243,14 +243,10 @@ async function main(): Promise<void> {
         sandboxEnv: currentEnvPlan.sandboxVisible,
         hostOnlyKeys: currentEnvPlan.managedKeys.filter((k) => !(k in currentEnvPlan.sandboxVisible)),
         onAcquire: (sandbox, chatId) => {
-            // 每个新建的 sandbox 实例注册事件处理和 host call handler
+            // 每个新建的 sandbox 实例注册 host call handler
             sandbox.on("notify", (event: Record<string, unknown>) => {
                 nc.push(event as { type: string;[key: string]: unknown });
             });
-            // 恢复持久化的事件监听器
-            sandbox.loadEventListeners();
-            // 恢复持久化的 webhook
-            sandbox.loadWebhooks();
             sandbox.setHostCallHandler(async (method, args) => {
                 // ── Platform adapter routing: 按 method 前缀路由到对应 adapter ──
                 const adapter = adapters.find(a => a.canHandle(method));
@@ -286,46 +282,6 @@ async function main(): Promise<void> {
                         return sandbox.killShellTab(args[0] != null ? String(args[0]) : undefined);
                     case "shell.cwd":
                         return sandbox.getShellCwd();
-                    case "memory.recall":
-                        return memory.recall(args[0] as string, args[1] as any);
-                    case "memory.browseHistory":
-                        return memory.browseHistory(args[0] as any);
-                    case "memory.reflect":
-                        return memory.reflect(String(args[0]), undefined, appConfig.reflection);
-                    case "actions.getTopicContext": {
-                        // 在所有 per-group topicRegistries 中查找
-                        const topicId = String(args[0]);
-                        for (const sub of subagentManager.getAllSubagents()) {
-                            const t = sub.topicRegistry.get(topicId);
-                            if (t) return serializeTopic(t);
-                        }
-                        return null;
-                    }
-                    case "actions.listActiveTopics": {
-                        const cid = args[0];
-                        if (typeof cid === "string" && cid.length > 0) {
-                            const sub = subagentManager.get(cid);
-                            return sub ? sub.topicRegistry.getActive(cid).map(serializeTopic) : [];
-                        }
-                        // 聚合所有群组的话题
-                        return subagentManager.getAllSubagents()
-                            .flatMap(s => s.topicRegistry.getAll())
-                            .map(serializeTopic);
-                    }
-                    case "actions.recallForTopic": {
-                        // 在所有 per-group topicRegistries 中查找
-                        let topic: any = null;
-                        for (const sub of subagentManager.getAllSubagents()) {
-                            topic = sub.topicRegistry.get(String(args[0]));
-                            if (topic) break;
-                        }
-                        if (!topic) return null;
-                        const query = [topic.label, ...topic.keywords].filter(Boolean).join(" ");
-                        return memory.recall(query, {
-                            chatId: String(topic.chatId),
-                            ...(args[1] as Record<string, unknown> ?? {}),
-                        } as any);
-                    }
                     default: {
                         // ── Cron API host calls ──
                         if (method === "cron.add") {
@@ -454,51 +410,21 @@ async function main(): Promise<void> {
                             return { ok: true, deleted: had };
                         }
 
-                        // ── Events API host calls ──
-                        if (method === "events.on") {
-                            const [typePrefix, handlerCode] = args as [string, string];
-                            const listenerId = sandbox.registerEventListener(typePrefix, handlerCode);
-                            return listenerId;
+                        // ── Todo host calls ──
+                        if (method === "todo.list") {
+                            const options = (args[0] as { includeExpired?: boolean } | undefined) ?? undefined;
+                            return memory.todoList(chatId, options);
                         }
-                        if (method === "events.off") {
-                            const listenerId = String(args[0]);
-                            sandbox.removeEventListener(listenerId);
+                        if (method === "todo.get") {
+                            return memory.todoGet(chatId, String(args[0]));
+                        }
+                        if (method === "todo.upsert") {
+                            const [key, content, options] = args as [string, string, { dueAt?: string | null } | undefined];
+                            return memory.todoUpsert(chatId, key, content, options?.dueAt ?? null);
+                        }
+                        if (method === "todo.remove") {
+                            memory.todoRemove(chatId, String(args[0]));
                             return;
-                        }
-                        if (method === "events.list") {
-                            return sandbox.listEventListeners();
-                        }
-
-                        // ── KV Store host calls ──
-                        if (method === "kv.get") {
-                            return memory.kvGet(chatId, String(args[0]));
-                        }
-                        if (method === "kv.set") {
-                            const [key, value, ttl] = args as [string, string, number | undefined];
-                            memory.kvSet(chatId, key, value, ttl);
-                            return;
-                        }
-                        if (method === "kv.del") {
-                            memory.kvDel(chatId, String(args[0]));
-                            return;
-                        }
-                        if (method === "kv.keys") {
-                            return memory.kvKeys(chatId, args[0] as string | undefined);
-                        }
-
-                        // ── HTTP Webhook host calls ──
-                        if (method === "http.onWebhook") {
-                            const [path, handlerCode] = args as [string, string];
-                            const webhookId = sandbox.registerWebhook(path, handlerCode);
-                            return webhookId;
-                        }
-                        if (method === "http.removeWebhook") {
-                            const webhookId = String(args[0]);
-                            sandbox.removeWebhook(webhookId);
-                            return;
-                        }
-                        if (method === "http.listWebhooks") {
-                            return sandbox.listWebhooks();
                         }
 
                         // ── Vision API host call ──
@@ -1171,14 +1097,6 @@ async function main(): Promise<void> {
     log.info("SandboxPool 已配置", {
         maxInstances: appConfig.subagent?.maxSandboxInstances ?? 5,
         idleTimeout: appConfig.subagent?.sandboxIdleTimeout ?? 600_000,
-    });
-
-    // ─── NC → Sandbox Event Forwarding ───
-    // 将 NC 事件转发到所有活跃 sandbox 的事件监听器
-    nc.onPush(event => {
-        for (const { sandbox } of sandboxPool.entries()) {
-            sandbox.pushEvent(event as Record<string, unknown>).catch(() => {});
-        }
     });
 
     // ─── 统一调度器 Watchdog ───

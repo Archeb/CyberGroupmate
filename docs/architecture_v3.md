@@ -3,7 +3,7 @@
 > **文档状态**: 当前实现的忠实映射
 > **创建日期**: 2026-04-22
 > **目标读者**: 需要快速理解代码库并贡献代码的 Coding Agent
-> **相较 V2 的变化**: 删除了 FastPathHandler 和 MiniCodeAct；新增 Grounding、AgentSkills 渐进式披露、Multi-Tab Shell、Vision 沙盒模块、MCP Bridge、Cron/KV/Events/HTTP 模块、System Prompts Override、Prometheus Metrics。
+> **相较 V2 的变化**: 删除了 FastPathHandler 和 MiniCodeAct；新增 Grounding、AgentSkills 渐进式披露、Multi-Tab Shell、Vision 沙盒模块、MCP Bridge、Cron/Todo 模块、System Prompts Override、Prometheus Metrics。
 
 ---
 
@@ -171,21 +171,17 @@ CyberGroupmate 是一个接入即时通讯平台（Telegram / Discord / OneBot�
 | 模块 | 全局变量 | 文件 | 说明 |
 |:-----|:---------|:-----|:-----|
 | 平台 API | `telegram` / `discord` / `onebot` | `src/sandbox/modules/telegram/` 等 | 消息发送、媒体下载、贴纸等 |
-| 记忆 | `memory` | `src/sandbox/modules/memory/` | recall、browseHistory、reflect |
 | 文件系统 | `fs` | `src/sandbox/modules/filesystem/` | 读写 workspace/ 内文件 |
 | Runtime | `runtime` | `src/sandbox/modules/runtime/` | notify、print、input、remind |
 | Shell | `shell` | `src/sandbox/modules/shell/` | Multi-Tab PTY 管理 |
 | Vision | `vision` | `src/sandbox/modules/vision/` | `vision.see(path...)` 图片理解 |
-| KV Store | `kv` | `src/sandbox/modules/kv/` | SQLite 键值存储，per-chat 隔离 |
-| Events | `events` | `src/sandbox/modules/events/` | NC 事件监听器（持久化） |
+| Todo | `todo` | `src/sandbox/modules/kv/` | 当前群待办与规则存储，支持 ISO 到期时间 |
 | Cron | `cron` | `src/sandbox/modules/cron/` | 持久化定时任务（最短 1 小时间隔） |
-| HTTP Webhook | `http` | `src/sandbox/modules/http/` | 注册/移除 HTTP Webhook |
 | MCP Bridge | `mcpBridge` | `src/sandbox/modules/mcp-bridge/` | stdio + Streamable HTTP MCP 客户端 |
 | Docs | `docs` | `src/sandbox/modules/docs/` | 读取 workspace/agent-docs/ 中的 markdown 文档 |
-| Actions | `actions` | `src/sandbox/modules/actions/` | getTopicContext、listActiveTopics、recallForTopic |
 
 **AgentSkills 渐进式披露**：
-- `baseSkills`（`config.yaml`）：始终注入 executor 的常驻模块（如 `memory`、`fs`、`runtime`）
+- `baseSkills`（`config.yaml`）：始终注入 executor 的常驻模块（如 `todo`、`fs`、`runtime`）
 - 主 Agent 在 attend 决策时输出 `useSkills: ["skill_name"]` 指定本次任务需要的扩展模块
 - CodeActExecutor 仅将 `baseSkills + platform + useSkills` 对应模块的文档注入 System Prompt
 - AgentSkills（TS Skills）以 `.use()` 形式调用，存放于 `workspace/skills/`
@@ -212,7 +208,7 @@ CyberGroupmate 是一个接入即时通讯平台（Telegram / Discord / OneBot�
 - `group_models` — 群组画像
 - `core_facts` + `core_facts_fts` — 核心事实（长期记忆）
 - `sticker_descriptions` — 贴纸视觉描述缓存
-- `kv_store` — 沙盒 KV 存储
+- `todo_items` — 沙盒 Todo 存储
 
 ### 3.9 视觉与媒体
 

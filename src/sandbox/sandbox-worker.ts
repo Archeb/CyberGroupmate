@@ -19,9 +19,7 @@ import { docs } from "./modules/docs/index.js";
 import { filesystem } from "./modules/filesystem/index.js";
 import { mcpBridge, initMcpBridge, autoReconnect as mcpAutoReconnect } from "./modules/mcp-bridge/index.js";
 import { cronModule, setCronCallbacks } from "./modules/cron/index.js";
-import { eventsModule, setEventsCallbacks } from "./modules/events/index.js";
-import { kvModule, setKvCallbacks } from "./modules/kv/index.js";
-import { httpModule, setHttpCallbacks } from "./modules/http/index.js";
+import { todoModule, setTodoCallbacks } from "./modules/kv/index.js";
 import { visionModule, setVisionCallbacks } from "./modules/vision/index.js";
 import { setSkillManagerCallbacks } from "./modules/skills/index.js";
 import { setRuntimeCallbacks } from "./modules/runtime/index.js";
@@ -317,7 +315,7 @@ async function executeCode(id: string, code: string): Promise<void> {
             notifyHost(event);
         };
 
-        const { runtime, memory, scene, actions, skills, telegram, discord, onebot } = installCapabilityRegistry({
+        const { runtime, skills, telegram, discord, onebot } = installCapabilityRegistry({
             ctx,
             emitOutput: (line) => {
                 outputLines.push(line);
@@ -331,9 +329,6 @@ async function executeCode(id: string, code: string): Promise<void> {
             callHost: guardedCallHost,
         }) as {
             runtime: unknown;
-            memory: unknown;
-            scene: unknown;
-            actions: unknown;
             skills: unknown;
             telegram: unknown;
             discord: unknown;
@@ -343,9 +338,8 @@ async function executeCode(id: string, code: string): Promise<void> {
         // 用 PromiseTracker 包装注入的 API，追踪所有返回的 Promise
         const tracker = createPromiseTracker();
         const rt = tracker.wrap(runtime as Record<string, unknown>);
-        const mem = tracker.wrap(memory as Record<string, unknown>);
-        const act = tracker.wrap(actions as Record<string, unknown>);
         const sk = tracker.wrap(skills as Record<string, unknown>);
+        const scene = undefined;
 
         // 包装平台 API（互斥：telegram / discord / onebot 只有一个是有值的）
         const tg = telegram ? tracker.wrap(telegram as Record<string, unknown>) : undefined;
@@ -366,8 +360,8 @@ async function executeCode(id: string, code: string): Promise<void> {
         // 构造参数列表：固定参数 + 平台 API + 动态 Skill 参数
         // ctx 保留为纯用户 state bag（LLM 可跨 turn 存取任意属性）
         const sh = installShell();
-        const fixedArgNames = ["ctx", "runtime", "memory", "scene", "docs", "actions", "skills", "fs", "mcp", "cron", "events", "kv", "http", "vision", "shell", "telegram", "discord", "onebot", "qq"];
-        const fixedArgValues = [ctx, rt, mem, scene, docs, act, sk, filesystem, mcpBridge, tracker.wrap(cronModule as unknown as Record<string, unknown>), eventsModule, tracker.wrap(kvModule as unknown as Record<string, unknown>), tracker.wrap(httpModule as unknown as Record<string, unknown>), tracker.wrap(visionModule as unknown as Record<string, unknown>), sh, tg, dc, ob, ob];
+        const fixedArgNames = ["ctx", "runtime", "scene", "docs", "skills", "fs", "mcp", "cron", "todo", "vision", "shell", "telegram", "discord", "onebot", "qq"];
+        const fixedArgValues = [ctx, rt, scene, docs, sk, filesystem, mcpBridge, tracker.wrap(cronModule as unknown as Record<string, unknown>), tracker.wrap(todoModule as unknown as Record<string, unknown>), tracker.wrap(visionModule as unknown as Record<string, unknown>), sh, tg, dc, ob, ob];
         const allArgNames = [...fixedArgNames, ...skillArgNames];
         const allArgValues = [...fixedArgValues, ...skillArgValues];
 
@@ -489,11 +483,9 @@ async function initWorker(): Promise<void> {
         npmInstall: async (packages: string[]) => installDepsRuntime(packages),
     });
 
-    // 注入 Cron/Events/KV/HTTP 回调（通过 callHost 代理到 Host）
+    // 注入 Cron/Todo 回调（通过 callHost 代理到 Host）
     setCronCallbacks({ callHost });
-    setEventsCallbacks({ callHost });
-    setKvCallbacks({ callHost });
-    setHttpCallbacks({ callHost });
+    setTodoCallbacks({ callHost });
     setVisionCallbacks({ callHost });
 
     // 注入 Runtime 扩展回调（spawnPersistent, home, workspace, callHost）

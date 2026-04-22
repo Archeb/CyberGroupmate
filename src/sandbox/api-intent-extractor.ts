@@ -41,20 +41,16 @@ const TRIVIAL_CALLS = new Set([
     "mcp.list",
     // cron
     "cron.list",
-    // events
-    "events.list",
-    // kv
-    "kv.get",
-    "kv.del",
-    "kv.keys",
-    // http
-    "http.listWebhooks",
+    // todo
+    "todo.get",
+    "todo.list",
+    "todo.remove",
 ]);
 
 /**
  * 从 modules-docs.json 的模块列表中构建前缀映射
  *
- * 生成的映射格式：{ "telegram": "telegram", "memory": "memory", ... }
+ * 生成的映射格式：{ "telegram": "telegram", "todo": "todo", ... }
  *
  * @param registry 模块注册表
  * @param extraNames 额外的模块名（如动态加载的 TS Skills 名称列表）
@@ -85,17 +81,17 @@ export function buildPrefixMap(
  *
  * @param code - LLM 生成的代码字符串
  * @param prefixMap - 模块前缀映射表（由 buildPrefixMap 生成）
- * @returns 标准化的方法调用列表，如 ["telegram.sendText", "memory.recall"]
+ * @returns 标准化的方法调用列表，如 ["telegram.sendText", "todo.list"]
  *
  * @example
  * ```ts
  * const map = buildPrefixMap(registry, ["github"]);
  * const calls = extractApiCalls(`
- *   const result = await memory.recall("test");
+ *   const result = await todo.list();
  *   await telegram.sendText(chatId, "hello");
  *   const issues = await github.listIssues("owner", "repo");
  * `, map);
- * // calls = ["memory.recall", "telegram.sendText", "github.listIssues"]
+ * // calls = ["todo.list", "telegram.sendText", "github.listIssues"]
  * ```
  */
 export function extractApiCalls(code: string, prefixMap: Record<string, string>): string[] {

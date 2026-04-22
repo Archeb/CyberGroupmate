@@ -1,26 +1,5 @@
 [
   {
-    "name": "actions",
-    "description": "shared/actions.d.ts — 所有 scene 共享的 actions 能力",
-    "methods": [
-      {
-        "name": "getTopicContext",
-        "brief": "获取某个话题的结构化上下文",
-        "fullDoc": "```typescript\ngetTopicContext(topicId: string): Promise<Record<string, unknown> | null>\n```\n\n\n获取某个话题的结构化上下文"
-      },
-      {
-        "name": "listActiveTopics",
-        "brief": "列出当前活跃话题",
-        "fullDoc": "```typescript\nlistActiveTopics(chatId?: string): Promise<Array<Record<string, unknown> | null>>\n```\n\n\n列出当前活跃话题"
-      },
-      {
-        "name": "recallForTopic",
-        "brief": "以话题为中心触发一次记忆检索",
-        "fullDoc": "```typescript\nrecallForTopic(topicId: string, options?: Record<string, unknown>): Promise<unknown>\n```\n\n\n以话题为中心触发一次记忆检索"
-      }
-    ]
-  },
-  {
     "name": "cron",
     "description": "shared/cron.d.ts — 定时任务管理模块类型定义 通过 Host 侧 GlobalState 持久化 cron 任务。 触发时以自然语言任务描述唤醒 agent，由 agent 自主决策执行。",
     "methods": [
@@ -79,27 +58,6 @@
     ]
   },
   {
-    "name": "events",
-    "description": "shared/events.d.ts — 事件监听器模块类型定义 注册事件监听器，当匹配的事件到达时在 sandbox 中执行处理代码。 监听器持久化到磁盘，Worker 重启后自动恢复。",
-    "methods": [
-      {
-        "name": "on",
-        "brief": "注册事件监听器。匹配 type 前缀的事件会触发 handlerCode 在 sandbox 中执行。 handler 代码中可通过 `event` 变量访问事件数据。",
-        "fullDoc": "```typescript\non(typePrefix: string, handlerCode: string): string\n```\n\n\n注册事件监听器。匹配 type 前缀的事件会触发 handlerCode 在 sandbox 中执行。\r\nhandler 代码中可通过 `event` 变量访问事件数据。\n\n**参数：**\n- `typePrefix`: 事件类型前缀（如 \"telegram.message\" 匹配所有以此开头的事件）\n- `handlerCode`: 触发时执行的 JavaScript 代码字符串\n- **返回值**: 监听器 ID\n\n**示例：**\n```typescript\n// 监听新消息事件\r\nconst id = events.on(\"telegram.message\", `\r\n  if (event.text?.includes(\"ping\")) {\r\n    runtime.notify({ type: \"system.pong\", from: event.chatId });\r\n  }\r\n`);\r\nconsole.log(\"监听器已注册:\", id);\n```\n\n```typescript\n// 监听所有系统事件\r\nevents.on(\"system.\", `\r\n  console.log(\"系统事件:\", event.type);\r\n`);\n```"
-      },
-      {
-        "name": "off",
-        "brief": "移除监听器",
-        "fullDoc": "```typescript\noff(listenerId: string): void\n```\n\n\n移除监听器\n\n**参数：**\n- `listenerId`: 监听器 ID（由 on 返回）\n\n**示例：**\n```typescript\nevents.off(\"some-listener-id\");\n```"
-      },
-      {
-        "name": "list",
-        "brief": "列出当前所有监听器",
-        "fullDoc": "```typescript\nlist(): Array<{\r\n        id: string;\r\n        typePrefix: string;\r\n    }>\n```\n\n\n列出当前所有监听器\n\n**示例：**\n```typescript\nconst listeners = events.list();\r\nfor (const l of listeners) {\r\n  console.log(`${l.id}: 监听 \"${l.typePrefix}\"`);\r\n}\n```"
-      }
-    ]
-  },
-  {
     "name": "fs",
     "description": "filesystem.d.ts — 文件系统操作模块类型定义 所有路径操作限定在 workspace/ 目录下。 支持相对路径（相对于 workspace/）和绝对路径。",
     "methods": [
@@ -146,51 +104,31 @@
     ]
   },
   {
-    "name": "http",
-    "description": "shared/http.d.ts — HTTP Webhook 模块类型定义 注册 HTTP webhook 端点，外部系统通过 HTTP POST 触发 sandbox 代码执行。 Webhook 持久化到磁盘，Worker 重启后自动恢复。",
+    "name": "todo",
+    "description": "shared/todo.d.ts — 当前群 Todo 模块类型定义 用于持久化当前群的待办、规则和长期约定。 数据按群隔离，可选设置 ISO 格式的到期时间。",
     "methods": [
       {
-        "name": "onWebhook",
-        "brief": "注册 webhook 端点。 外部可通过 POST /webhook/{path} 触发 handler 代码执行。 handler 代码中可通过 `request` 变量访问请求数据。",
-        "fullDoc": "```typescript\nonWebhook(path: string, handlerCode: string): Promise<string>\n```\n\n\n注册 webhook 端点。\r\n外部可通过 POST /webhook/{path} 触发 handler 代码执行。\r\nhandler 代码中可通过 `request` 变量访问请求数据。\n\n**参数：**\n- `path`: Webhook 路径（唯一标识，不含前缀斜杠）\n- `handlerCode`: 收到请求时执行的 JavaScript 代码字符串\n- **返回值**: webhook ID\n\n**示例：**\n```typescript\n// 注册一个接收 GitHub Push 事件的 webhook\r\nconst id = await http.onWebhook(\"github-push\", `\r\n  const payload = JSON.parse(request.body);\r\n  const repo = payload.repository?.full_name ?? \"unknown\";\r\n  await telegram.sendText(chatId, \"📦 Push to \" + repo + \": \" + payload.head_commit?.message);\r\n`);\r\nconsole.log(\"Webhook 已注册:\", id);\r\nconsole.log(\"URL: /webhook/github-push\");\n```"
+        "name": "list",
+        "brief": "列出当前群的 todo。",
+        "fullDoc": "```typescript\nlist(options?: { includeExpired?: boolean }): Promise<TodoItem[]>\n```\n\n\n列出当前群的 todo。\n\n**参数：**\n- `options.includeExpired`: 设为 true 时包含已过期条目\n\n**示例：**\n```typescript\nconst items = await todo.list();\n```"
       },
-      {
-        "name": "removeWebhook",
-        "brief": "移除 webhook",
-        "fullDoc": "```typescript\nremoveWebhook(webhookId: string): Promise<void>\n```\n\n\n移除 webhook\n\n**参数：**\n- `webhookId`: webhook ID（由 onWebhook 返回）\n\n**示例：**\n```typescript\nawait http.removeWebhook(\"some-webhook-id\");\n```"
-      },
-      {
-        "name": "listWebhooks",
-        "brief": "列出当前所有 webhook",
-        "fullDoc": "```typescript\nlistWebhooks(): Promise<Array<{ id: string; path: string }>>\n```\n\n\n列出当前所有 webhook\n\n**示例：**\n```typescript\nconst hooks = await http.listWebhooks();\r\nfor (const h of hooks) {\r\n  console.log(`${h.id}: POST /webhook/${h.path}`);\r\n}\n```"
-      }
-    ]
-  },
-  {
-    "name": "kv",
-    "description": "shared/kv.d.ts — 持久化键值存储模块类型定义 简单的 per-chat 键值存储，数据持久化到 SQLite。 比 ctx 更正式的存储方式，支持 TTL 过期。",
-    "methods": [
       {
         "name": "get",
-        "brief": "读取键值",
-        "fullDoc": "```typescript\nget(key: string): Promise<string | null>\n```\n\n\n读取键值\n\n**参数：**\n- `key`: 键名\n- **返回值**: 值字符串，不存在时返回 null\n\n**示例：**\n```typescript\nconst token = await kv.get(\"api_token\");\r\nif (token) {\r\n  console.log(\"已有 token\");\r\n}\n```"
+        "brief": "获取单个 todo。",
+        "fullDoc": "```typescript\nget(key: string): Promise<TodoItem | null>\n```\n\n\n获取单个 todo。\n\n**示例：**\n```typescript\nconst rule = await todo.get(\"群规\");\n```"
       },
       {
-        "name": "set",
-        "brief": "写入键值",
-        "fullDoc": "```typescript\nset(key: string, value: string, ttlSeconds?: number): Promise<void>\n```\n\n\n写入键值\n\n**参数：**\n- `key`: 键名\n- `value`: 值（字符串）\n- `ttlSeconds`: 可选的过期时间（秒）。不设置则永不过期。\n\n**示例：**\n```typescript\nawait kv.set(\"last_check\", new Date().toISOString());\n```\n\n```typescript\n// 设置 1 小时后过期的缓存\r\nawait kv.set(\"weather_cache\", JSON.stringify(data), 3600);\n```"
+        "name": "upsert",
+        "brief": "新增或更新 todo。",
+        "fullDoc": "```typescript\nupsert(key: string, content: string, options?: { dueAt?: string | null }): Promise<TodoItem>\n```\n\n\n新增或更新 todo。\n\n**参数：**\n- `key`: 逻辑键，同群内唯一\n- `content`: 内容\n- `options.dueAt`: 可选到期时间，必须是 ISO 时间字符串\n\n**示例：**\n```typescript\nawait todo.upsert(\"周五提醒\", \"提醒大家周五 8 点开黑\", {\n  dueAt: \"2026-04-24T12:00:00.000Z\",\n});\n```"
       },
       {
-        "name": "del",
-        "brief": "删除键",
-        "fullDoc": "```typescript\ndel(key: string): Promise<void>\n```\n\n\n删除键\n\n**参数：**\n- `key`: 键名\n\n**示例：**\n```typescript\nawait kv.del(\"temp_data\");\n```"
-      },
-      {
-        "name": "keys",
-        "brief": "列出键名（可按前缀过滤）",
-        "fullDoc": "```typescript\nkeys(prefix?: string): Promise<string[]>\n```\n\n\n列出键名（可按前缀过滤）\n\n**参数：**\n- `prefix`: 可选的键名前缀\n- **返回值**: 匹配的键名列表\n\n**示例：**\n```typescript\nconst keys = await kv.keys(\"cache_\");\r\nconsole.log(\"缓存键:\", keys);\n```"
+        "name": "remove",
+        "brief": "删除 todo。",
+        "fullDoc": "```typescript\nremove(key: string): Promise<void>\n```\n\n\n删除 todo。\n\n**示例：**\n```typescript\nawait todo.remove(\"过期安排\");\n```"
       }
-    ]
+    ],
+    "typeDefs": "interface TodoItem {\n    key: string;\n    content: string;\n    dueAt: string | null;\n    createdAt: string;\n    updatedAt: string;\n    expired: boolean;\n}"
   },
   {
     "name": "mcp",
@@ -219,26 +157,51 @@
     ]
   },
   {
-    "name": "memory",
-    "description": "memory.d.ts — Memory V2 Agent API 类型定义 记忆系统 V2 接口。Agent 可通过 memory 全局对象使用： - recall()：统一记忆检索（向量 + 关键词混合搜索） - browseHistory()：消息档案检索（LLM 深度阅读） - reflect()：触发群组反思总结 注意：记忆的写入由后台 Pipeline 自动完成（RecordingPipeline + post-session fact extraction），Agent 不需要手动写入。 memory: MemoryStore — 全局可用",
+    "name": "onebot",
+    "description": "onebot.d.ts — QQ / OneBot 平台 API 系统注入的 OneBot host proxy 接口。 也会以 `qq` 别名暴露给 sandbox。",
     "methods": [
       {
-        "name": "recall",
-        "brief": "统一记忆检索入口 使用向量搜索 + 关键词搜索混合检索",
-        "fullDoc": "```typescript\nrecall(query: string, options?: RecallOptions): Promise<RecallResult>\n```\n\n\n统一记忆检索入口\n使用向量搜索 + 关键词搜索混合检索\n\n**示例：**\n```typescript\nconst result = await memory.recall(\"alice 东京\", {\n  chatId: \"-100xxx\",\n  userId: \"alice_123\",\n  categories: ['preference', 'plan'],\n});\n```"
+        "name": "sendText",
+        "brief": "发送文本消息。",
+        "fullDoc": "```typescript\nsendText(chatId: string | number, text: string, opts?: { replyTo?: string | number }): Promise<OneBotMessageAck | null>\n```\n\n\n发送文本消息。\n\n**示例：**\n```typescript\nawait onebot.sendText(chatId, \"你好\");\n```"
       },
       {
-        "name": "browseHistory",
-        "brief": "消息档案检索 话题索引引导 + 模糊搜索 + cheap model 深度阅读",
-        "fullDoc": "```typescript\nbrowseHistory(request: HistoryBrowseRequest): Promise<HistoryBrowseResult>\n```\n\n\n消息档案检索\n话题索引引导 + 模糊搜索 + cheap model 深度阅读\n\n**示例：**\n```typescript\nconst result = await memory.browseHistory({\n  intent: \"谁说过要去京都吃抹茶\",\n  hints: { chatId: \"-100xxx\", daysBack: 7 },\n});\n```"
+        "name": "sendMedia",
+        "brief": "发送媒体消息。支持本地文件路径或 URL。",
+        "fullDoc": "```typescript\nsendMedia(chatId: string | number, media: string | OneBotMediaPayload, opts?: { replyTo?: string | number; caption?: string }): Promise<OneBotMessageAck | null>\n```\n\n\n发送媒体消息。支持本地文件路径或 URL。\n\n**示例：**\n```typescript\nawait onebot.sendMedia(chatId, { type: \"image\", file: \"Downloads/a.png\", caption: \"图\" });\n```"
       },
       {
-        "name": "reflect",
-        "brief": "对指定群组进行反思总结 读取上次反思以来的 topics 和 interactions，生成结构化总结",
-        "fullDoc": "```typescript\nreflect(chatId: string): Promise<{\n        reflectedPeriod: { from: string; to: string };\n        topicsSummary: Array<{ label: string; summary: string; participants: string[]; sentiment: string }>;\n        personUpdates: Array<{ userId: string; chatId: string; changes: string }>;\n        groupUpdates: string;\n        newCoreFacts: string[];\n        mergedEpisodes: number;\n        insights: string;\n    }>\n```\n\n\n对指定群组进行反思总结\n读取上次反思以来的 topics 和 interactions，生成结构化总结"
+        "name": "sendFile",
+        "brief": "发送文件。",
+        "fullDoc": "```typescript\nsendFile(chatId: string | number, filePath: string, opts?: { replyTo?: string | number; caption?: string; fileName?: string }): Promise<OneBotMessageAck | null>\n```\n\n\n发送文件。\n\n**示例：**\n```typescript\nawait onebot.sendFile(chatId, \"Downloads/report.pdf\", { caption: \"日报\" });\n```"
+      },
+      {
+        "name": "sendSticker",
+        "brief": "发送贴纸或图片表情。",
+        "fullDoc": "```typescript\nsendSticker(chatId: string | number, sticker: string | Record<string, unknown>, opts?: { replyTo?: string | number; caption?: string }): Promise<OneBotMessageAck | null>\n```\n\n\n发送贴纸或图片表情。\n\n**示例：**\n```typescript\nawait onebot.sendSticker(chatId, \"Downloads/sticker.png\");\n```"
+      },
+      {
+        "name": "sendFace",
+        "brief": "发送 QQ 系统表情（CQ face）。",
+        "fullDoc": "```typescript\nsendFace(chatId: string | number, faceId: string | number, opts?: { replyTo?: string | number; text?: string }): Promise<OneBotMessageAck | null>\n```\n\n\n发送 QQ 系统表情（CQ face）。\n\n**示例：**\n```typescript\nawait onebot.sendFace(chatId, 21);\n```"
+      },
+      {
+        "name": "sendTyping",
+        "brief": "OneBot 无 typing 指示，此方法为 no-op。",
+        "fullDoc": "```typescript\nsendTyping(chatId: string | number): Promise<void>\n```\n\n\nOneBot 无 typing 指示，此方法为 no-op。"
+      },
+      {
+        "name": "deleteMessages",
+        "brief": "撤回消息。",
+        "fullDoc": "```typescript\ndeleteMessages(chatId: string | number, messageIds: Array<string | number>): Promise<void>\n```\n\n\n撤回消息。\n\n**示例：**\n```typescript\nawait onebot.deleteMessages(chatId, [messageId]);\n```"
+      },
+      {
+        "name": "downloadMedia",
+        "brief": "下载媒体到本地 workspace/Downloads/。",
+        "fullDoc": "```typescript\ndownloadMedia(mediaRef: string): Promise<string>\n```\n\n\n下载媒体到本地 workspace/Downloads/。\n\n**示例：**\n```typescript\nconst localPath = await onebot.downloadMedia(mediaRef);\n```"
       }
     ],
-    "typeDefs": "type FactCategory =\n    | 'biographical'\n    | 'preference'\n    | 'anecdote'\n    | 'opinion'\n    | 'plan'\n    | 'relationship'\n    | 'general';\n\ninterface TopicNode {\n    id: string;\n    chatId: string;\n    label: string;\n    summary: string;\n    keyPoints: string[];\n    participants: string[];\n    messageRange: { messageIds: string[]; count: number };\n    startedAt: string;\n    endedAt: string | null;\n    sentiment: 'positive' | 'neutral' | 'negative' | 'mixed';\n    keywords: string[];\n    createdAt: string;\n    updatedAt: string;\n}\n\ninterface CoreFact {\n    id: string;\n    subject: string;\n    content: string;\n    category: FactCategory;\n    confidence: number;\n    createdAt: string;\n    expiresAt: string | null;\n}\n\ninterface PersonIdentity {\n    userId: string;\n    displayName: string;\n    aliases: string[];\n    totalMessageCount: number;\n    lastSeenAt: string;\n    firstSeenAt: string;\n}\n\ninterface PersonGroupProfile {\n    userId: string;\n    chatId: string;\n    dunbarTier: 1 | 2 | 3 | 4;\n    traits: string[];\n    interests: string[];\n    communicationStyle: string;\n    relationToAgent: string;\n    messageCount: number;\n    lastSeenAt: string;\n}\n\ninterface RecallOptions {\n    chatId?: string;\n    userId?: string;\n    daysBack?: number;\n    maxResults?: number;\n    categories?: FactCategory[];\n    deepRecallThreshold?: number;\n}\n\ninterface RecallResult {\n    topics: TopicNode[];\n    facts: Array<{\n        content: string;\n        category: FactCategory;\n        subject: string;\n        confidence: number;\n    }>;\n    persons: PersonGroupProfile[];\n    deepSummary?: string;\n}\n\ninterface HistoryBrowseRequest {\n    /** 自然语言搜索意图 */\n    intent: string;\n    hints?: {\n        chatId?: string;\n        userId?: string;\n        topicLabel?: string;\n        topicId?: string;\n        hoursBack?: number;\n        daysBack?: number;\n    };\n    contextWindow?: number;\n    maxSegments?: number;\n}\n\ninterface HistoryBrowseResult {\n    answer: string;\n    segments: Array<{\n        topicLabel: string;\n        timeRange: { from: string; to: string };\n        messages: Array<{\n            messageId: string;\n            userId: string;\n            displayName: string;\n            text: string;\n            timestamp: string;\n        }>;\n        relevanceScore: number;\n    }>;\n    messagesRead: number;\n}\n\ninterface MemoryStore {\n    /**\n     * 统一记忆检索入口\n     * 使用向量搜索 + 关键词搜索混合检索\n     * @example\n     * const result = await memory.recall(\"alice 东京\", {\n     *   chatId: \"-100xxx\",\n     *   userId: \"alice_123\",\n     *   categories: ['preference', 'plan'],\n     * });\n     */\n    recall(query: string, options?: RecallOptions): Promise<RecallResult>;\n\n    /**\n     * 消息档案检索\n     * 话题索引引导 + 模糊搜索 + cheap model 深度阅读\n     * @example\n     * const result = await memory.browseHistory({\n     *   intent: \"谁说过要去京都吃抹茶\",\n     *   hints: { chatId: \"-100xxx\", daysBack: 7 },\n     * });\n     */\n    browseHistory(request: HistoryBrowseRequest): Promise<HistoryBrowseResult>;\n\n    /**\n     * 对指定群组进行反思总结\n     * 读取上次反思以来的 topics 和 interactions，生成结构化总结\n     */\n    reflect(chatId: string): Promise<{\n        reflectedPeriod: { from: string; to: string };\n        topicsSummary: Array<{ label: string; summary: string; participants: string[]; sentiment: string }>;\n        personUpdates: Array<{ userId: string; chatId: string; changes: string }>;\n        groupUpdates: string;\n        newCoreFacts: string[];\n        mergedEpisodes: number;\n        insights: string;\n    }>;\n}"
+    "typeDefs": "interface OneBotMessageAck {\n    message_id?: unknown;\n    id?: unknown;\n    chatId?: string | number;\n    group_id?: string | number;\n    user_id?: string | number;\n}\n\ninterface OneBotMediaPayload {\n    type?: string;\n    file?: string;\n    url?: string;\n    caption?: string;\n    fileName?: string;\n}"
   },
   {
     "name": "runtime",
@@ -550,97 +513,5 @@
       }
     ],
     "typeDefs": "interface VisionModule {\n    /**\n     * 看图：读取一张或多张图片文件，返回每张图片的文字描述。\n     * 使用 Vision LLM 分析图片内容，支持 JPEG、PNG、WebP 等常见格式。\n     *\n     * @param imagePaths - 图片文件路径（支持绝对路径或相对于 workspace/ 的相对路径），可传入多个参数\n     * @returns 每张图片的详细文字描述数组（与输入路径一一对应）\n     *\n     * @example\n     * // 查看单张图片\n     * const [desc] = await vision.see(\"screenshots/page.png\");\n     * console.log(desc);\n     *\n     * @example\n     * // 同时查看多张图片\n     * const descriptions = await vision.see(\"img1.jpg\", \"img2.png\", \"data/chart.png\");\n     * descriptions.forEach((d, i) => console.log(`图片${i+1}: ${d}`));\n     */\n    see(...imagePaths: string[]): Promise<string[]>;\n}"
-  },
-  {
-    "name": "onebot",
-    "description": "QQ 消息客户端（通过 OneBot v11 协议）。也可通过 qq 别名访问。",
-    "methods": [
-      {
-        "name": "sendText",
-        "brief": "sendText(chatId, text, opts?): 发送文本消息到 QQ 群或私聊",
-        "fullDoc": ""
-      },
-      {
-        "name": "sendMedia",
-        "brief": "sendMedia(chatId, media, opts?): 发送图片/媒体到 QQ 群或私聊",
-        "fullDoc": ""
-      },
-      {
-        "name": "sendFile",
-        "brief": "sendFile(chatId, filePath, opts?): 发送文件到 QQ 群或私聊",
-        "fullDoc": ""
-      },
-      {
-        "name": "sendSticker",
-        "brief": "sendSticker(chatId, sticker, opts?): 发送图片作为 QQ 表情包",
-        "fullDoc": ""
-      },
-      {
-        "name": "sendFace",
-        "brief": "sendFace(chatId, faceId, opts?): 发送 QQ 系统表情（CQ face）",
-        "fullDoc": ""
-      },
-      {
-        "name": "sendTyping",
-        "brief": "sendTyping(chatId): 发送输入状态（OneBot 不支持，静默忽略）",
-        "fullDoc": ""
-      },
-      {
-        "name": "deleteMessages",
-        "brief": "deleteMessages(chatId, messageIds): 撤回消息",
-        "fullDoc": ""
-      },
-      {
-        "name": "downloadMedia",
-        "brief": "downloadMedia(mediaRef): 下载媒体文件",
-        "fullDoc": ""
-      }
-    ]
-  },
-  {
-    "name": "qq",
-    "description": "onebot 模块的别名，提供相同的 QQ 消息 API。",
-    "methods": [
-      {
-        "name": "sendText",
-        "brief": "sendText(chatId, text, opts?): 发送文本消息到 QQ 群或私聊",
-        "fullDoc": ""
-      },
-      {
-        "name": "sendMedia",
-        "brief": "sendMedia(chatId, media, opts?): 发送图片/媒体到 QQ 群或私聊",
-        "fullDoc": ""
-      },
-      {
-        "name": "sendFile",
-        "brief": "sendFile(chatId, filePath, opts?): 发送文件到 QQ 群或私聊",
-        "fullDoc": ""
-      },
-      {
-        "name": "sendSticker",
-        "brief": "sendSticker(chatId, sticker, opts?): 发送图片作为 QQ 表情包",
-        "fullDoc": ""
-      },
-      {
-        "name": "sendFace",
-        "brief": "sendFace(chatId, faceId, opts?): 发送 QQ 系统表情（CQ face）",
-        "fullDoc": ""
-      },
-      {
-        "name": "sendTyping",
-        "brief": "sendTyping(chatId): 发送输入状态（OneBot 不支持，静默忽略）",
-        "fullDoc": ""
-      },
-      {
-        "name": "deleteMessages",
-        "brief": "deleteMessages(chatId, messageIds): 撤回消息",
-        "fullDoc": ""
-      },
-      {
-        "name": "downloadMedia",
-        "brief": "downloadMedia(mediaRef): 下载媒体文件",
-        "fullDoc": ""
-      }
-    ]
   }
 ]
