@@ -105,7 +105,7 @@
   },
   {
     "name": "todo",
-    "description": "shared/todo.d.ts — 当前群 Todo 模块类型定义 用于持久化当前群的待办、规则和长期约定。 数据按群隔离，可选设置 ISO 格式的到期时间。",
+    "description": "shared/todo.d.ts — 不只是代办，可以当你的记事本用。 用于持久化当前群的待办、规则和长期约定（比如群规、话语风格、被教导的/发现的事实性记忆）。 数据按群隔离，可选设置到期时间。“定期、到期提醒”类请使用 remind 或者 cron 模块。",
     "methods": [
       {
         "name": "list",
@@ -120,7 +120,7 @@
       {
         "name": "upsert",
         "brief": "新增或更新 todo。",
-        "fullDoc": "```typescript\nupsert(key: string, content: string, options?: { dueAt?: string | null }): Promise<TodoItem>\n```\n\n\n新增或更新 todo。\n\n**参数：**\n- `key`: 逻辑键，同群内唯一\n- `content`: 内容\n- `options.dueAt`: 可选到期时间，必须是 ISO 时间字符串\n\n**示例：**\n```typescript\nawait todo.upsert(\"周五提醒\", \"提醒大家周五 8 点开黑\", {\n  dueAt: \"2026-04-24T12:00:00.000Z\",\n});\n```"
+        "fullDoc": "```typescript\nupsert(key: string, content: string, options?: { dueAt?: string | null }): Promise<TodoItem>\n```\n\n\n新增或更新 todo。\n\n**参数：**\n- `key`: 逻辑键，同群内唯一\n- `content`: 内容\n- `options.dueAt`: 可选到期时间，必须是 ISO 时间字符串\n\n**示例：**\n```typescript\nawait todo.upsert(\"周五提醒\", \"提醒大家周五 8 点开黑\", {\n  dueAt: \"2026-04-24T12:00:00.000Z\",\n}); // 有到期时间，一般是阶段性的安排/规则。\n\nawait todo.upsert(\"大A昵称\", \"大A指的是Arc\"); // 事实性记忆/规则，没有到期时间\n```"
       },
       {
         "name": "remove",
@@ -276,6 +276,16 @@
         "name": "remind",
         "brief": "设置一次性定时提醒（自然语言）。到期后 agent 将被唤醒并收到 description 作为新任务。重复定时提醒请用 cron ⚠️ description 必须是详细的自然语言描述，不是代码。 写清楚：要做什么、给谁发、发什么内容、如何获取信息等。 限制：最短 1 分钟，最长 365 天，每个群最多 10 个活跃提醒。",
         "fullDoc": "```typescript\nremind(description: string, delayMinutes: number): Promise<{ reminderId: string; triggerAt: string }>\n```\n\n\n设置一次性定时提醒（自然语言）。到期后 agent 将被唤醒并收到 description 作为新任务。重复定时提醒请用 cron\n\n⚠️ description 必须是详细的自然语言描述，不是代码。\n写清楚：要做什么、给谁发、发什么内容、如何获取信息等。\n\n限制：最短 1 分钟，最长 365 天，每个群最多 10 个活跃提醒。\n\n**参数：**\n- `description`: 详细的自然语言任务描述\n- `delayMinutes`: 延迟分钟数（1 ~ 525600，即 365 天）\n- **返回值**: { reminderId, triggerAt }\n\n**示例：**\n```typescript\n// 3 分钟后提醒\nawait runtime.remind(\"提醒群友该起床了，用活泼的语气叫他\", 3);\n```\n\n```typescript\n// 1 小时后提醒\nawait runtime.remind(\"用 tavily 搜索刚才讨论的那个开源项目的最新版本，然后把结果发到群里\", 60);\n```"
+      },
+      {
+        "name": "extendSteps",
+        "brief": "增加当前 CodeAct session 的可用轮次。 仅对当前 session（本轮任务）生效，不会持久化到下次任务。 在本轮代码中调用后，从下一轮开始生效。",
+        "fullDoc": "```typescript\nextendSteps(steps?: number): { ok: true; extendedBy: number; totalExtended: number }\n```\n\n\n增加当前 CodeAct session 的可用轮次。\n\n仅对当前 session（本轮任务）生效，不会持久化到下次任务。\n在本轮代码中调用后，从下一轮开始生效。\n\n**参数：**\n- `steps`: 要增加的轮次数，必须为正整数\n- **返回值**: 当前累计增加值"
+      },
+      {
+        "name": "modifyTimeout",
+        "brief": "修改当前 CodeAct session 后续代码执行超时（毫秒）。 仅对当前 session（本轮任务）生效，不会持久化到下次任务。 在本轮代码中调用后，从下一段代码执行开始生效。",
+        "fullDoc": "```typescript\nmodifyTimeout(timeoutMs: number): { ok: true; timeoutMs: number }\n```\n\n\n修改当前 CodeAct session 后续代码执行超时（毫秒）。\n\n仅对当前 session（本轮任务）生效，不会持久化到下次任务。\n在本轮代码中调用后，从下一段代码执行开始生效。\n\n**参数：**\n- `timeoutMs`: 新超时（毫秒），1000 ~ 600000\n- **返回值**: 已应用的超时值"
       }
     ]
   },
@@ -321,8 +331,8 @@
     "methods": [
       {
         "name": "install",
-        "brief": "安装或创建一个新 Skill",
-        "fullDoc": "```typescript\ninstall(name: string): string\n```\n\n\n安装或创建一个新 Skill\n\n**参数：**\n- `name`: 拟创建的 Skill 名称\n- **返回值**: 怎样按照格式存放文件来创建 skill 的说明文档"
+        "brief": "安装或创建一个新 Skill。支持SKILL.md 型（多数场景）和TS Skills（复杂能力场景） 两种方式完成文件后，都需要调用 skills.reload() 生效。",
+        "fullDoc": "```typescript\ninstall(name: string): string\n```\n\n\n安装或创建一个新 Skill。支持SKILL.md 型（多数场景）和TS Skills（复杂能力场景）\n两种方式完成文件后，都需要调用 skills.reload() 生效。\n\n**参数：**\n- `name`: 拟创建的 Skill 名称\n- **返回值**: 按规范创建 skill 的操作说明文档"
       },
       {
         "name": "list",

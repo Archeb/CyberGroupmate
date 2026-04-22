@@ -316,6 +316,11 @@ export async function runCodeActSession(
 ): Promise<SessionResult> {
     const sessionId = ulid();
     const turns: SessionTurn[] = [];
+    let effectiveMaxTurns = maxTurns;
+    let effectiveExecuteTimeout = executeTimeout;
+
+    // 清理可能残留的控制指令（避免上一个 session 泄漏）
+    sandbox.consumeExecutionControl();
 
     /** 发射进度事件的辅助函数 */
     const emitProgress = (event: Omit<CodeActProgressEvent, "chatId" | "sessionId" | "timestamp">) => {
@@ -343,7 +348,7 @@ export async function runCodeActSession(
         });
     }
 
-    for (let turnNum = 0; turnNum < maxTurns; turnNum++) {
+    for (let turnNum = 0; turnNum < effectiveMaxTurns; turnNum++) {
         // ─── 层 2: turn 间消息注入 ───
         if (pendingMessagesDrain) {
             const newMessages = pendingMessagesDrain();
@@ -458,8 +463,8 @@ export async function runCodeActSession(
             }
 
             const currentTurn = turnNum + 1;
-            const remaining = maxTurns - currentTurn;
-            let turnStatus = `[📊 轮次状态: 第 ${currentTurn}/${maxTurns} 轮，剩余 ${remaining} 轮]`;
+            const remaining = effectiveMaxTurns - currentTurn;
+            let turnStatus = `[📊 轮次状态: 第 ${currentTurn}/${effectiveMaxTurns} 轮，剩余 ${remaining} 轮]`;
             if (turnNum === 0) {
                 turnStatus += `\n[💡 每轮代码在独立作用域执行，局部变量不跨轮次保留。需要跨轮次传递的状态请存入 ctx 对象]`;
             }
@@ -612,8 +617,8 @@ ${fullDocs}
 
             try {
                 const result = block.lang === "bash"
-                    ? await sandbox.executeShell(block.code, executeTimeout)
-                    : await sandbox.execute(block.code, executeTimeout);
+                    ? await sandbox.executeShell(block.code, effectiveExecuteTimeout)
+                    : await sandbox.execute(block.code, effectiveExecuteTimeout);
                 turn.executionResults.push(result);
 
                 // Debug: 输出执行结果
@@ -685,8 +690,8 @@ ${fullDocs}
 
         // ─── 轮次状态注入 ───
         const currentTurn = turnNum + 1; // 1-indexed for display
-        const remaining = maxTurns - currentTurn;
-        let turnStatus = `[📊 轮次状态: 第 ${currentTurn}/${maxTurns} 轮，剩余 ${remaining} 轮]`;
+        const remaining = effectiveMaxTurns - currentTurn;
+        let turnStatus = `[📊 轮次状态: 第 ${currentTurn}/${effectiveMaxTurns} 轮，剩余 ${remaining} 轮]`;
         if (turnNum === 0) {
             turnStatus += `\n[💡 每轮代码在独立作用域执行，局部变量不跨轮次保留。需要跨轮次传递的状态请存入 ctx 对象]`;
         }
@@ -710,6 +715,26 @@ ${fullDocs}
             messages.push({ role: "user", content: observation });
         }
 
+        // 消费本轮 runtime.extendSteps / runtime.modifyTimeout 控制指令
+        const control = sandbox.consumeExecutionControl();
+        if (control.extendSteps > 0) {
+            const oldMaxTurns = effectiveMaxTurns;
+            effectiveMaxTurns += control.extendSteps;
+            log.info(`Turn ${turnNum}: runtime.extendSteps 生效`, {
+                extendedBy: control.extendSteps,
+                from: oldMaxTurns,
+                to: effectiveMaxTurns,
+            });
+        }
+        if (control.timeoutMs != null) {
+            const oldTimeout = effectiveExecuteTimeout;
+            effectiveExecuteTimeout = control.timeoutMs;
+            log.info(`Turn ${turnNum}: runtime.modifyTimeout 生效`, {
+                from: oldTimeout,
+                to: effectiveExecuteTimeout,
+            });
+        }
+
         // ─── <end_turn> 检查：代码已执行完毕，终止 session ───
         if (hasEndTurn) {
             log.debug(`Turn ${turnNum}: 代码已执行，检测到 <end_turn>，session 结束`);
@@ -725,7 +750,7 @@ ${fullDocs}
     }
 
     // 达到最大轮次
-    emitProgress({ turn: maxTurns, phase: "end", isProcessing: false, endReason: "max_turns" });
+    emitProgress({ turn: effectiveMaxTurns, phase: "end", isProcessing: false, endReason: "max_turns" });
 
     return {
         sessionId,

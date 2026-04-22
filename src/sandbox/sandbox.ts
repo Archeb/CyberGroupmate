@@ -64,6 +64,8 @@ interface WorkerMessage {
     id?: string;
     output?: string;
     error?: boolean;
+    extendSteps?: number;
+    timeoutMs?: number;
     event?: Record<string, unknown>;
     prompt?: string;
     message?: string;
@@ -136,6 +138,10 @@ export class Sandbox extends EventEmitter {
     private sandboxEnv: Record<string, string>;
     /** 仅限 host 的环境变量 key 列表（从 sandbox env 中剔除） */
     private hostOnlyKeys: string[];
+    /** 当前 session 待消费的轮次增量（由 worker runtime.extendSteps 上报） */
+    private pendingExtendedSteps = 0;
+    /** 当前 session 待消费的超时覆盖（由 worker runtime.modifyTimeout 上报） */
+    private pendingTimeoutOverrideMs: number | null = null;
 
     // ─── Multi-Tab PTY 管理 ───
     /** PTY Tab 存储 */
@@ -487,6 +493,13 @@ export class Sandbox extends EventEmitter {
         }
 
         if (msg.type === "result" && msg.id) {
+            if (Number.isInteger(msg.extendSteps) && (msg.extendSteps as number) > 0) {
+                this.pendingExtendedSteps += msg.extendSteps as number;
+            }
+            if (Number.isInteger(msg.timeoutMs) && (msg.timeoutMs as number) > 0) {
+                this.pendingTimeoutOverrideMs = msg.timeoutMs as number;
+            }
+
             const pending = this.pendingRequests.get(msg.id);
             if (pending) {
                 this.pendingRequests.delete(msg.id);
@@ -837,6 +850,19 @@ export class Sandbox extends EventEmitter {
 
     getShellCwd(): string {
         return this.shellCwd || this.shellHome;
+    }
+
+    /**
+     * 取出并清空本次执行累计的控制指令（仅当前 session 使用）
+     */
+    consumeExecutionControl(): { extendSteps: number; timeoutMs: number | null } {
+        const control = {
+            extendSteps: this.pendingExtendedSteps,
+            timeoutMs: this.pendingTimeoutOverrideMs,
+        };
+        this.pendingExtendedSteps = 0;
+        this.pendingTimeoutOverrideMs = null;
+        return control;
     }
 
 }

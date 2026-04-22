@@ -78,6 +78,8 @@ interface ResultMessage {
     id: string;
     output: string;
     error: boolean;
+    extendSteps?: number;
+    timeoutMs?: number;
 }
 
 /** Worker → Host: 后台任务推送事件 */
@@ -268,6 +270,7 @@ function getWorkspace(): string {
 
 async function executeCode(id: string, code: string): Promise<void> {
     const outputLines: string[] = [];
+    const executionControl: { extendSteps: number; timeoutMs?: number } = { extendSteps: 0 };
 
     const originalConsole = {
         log: console.log,
@@ -341,6 +344,26 @@ async function executeCode(id: string, code: string): Promise<void> {
         const sk = tracker.wrap(skills as Record<string, unknown>);
         const scene = undefined;
 
+        // 当前 execute 调用内的临时控制能力（由 session-runner 在 turn 结束后消费）
+        const runtimeApi = rt as Record<string, unknown>;
+        runtimeApi.extendSteps = (steps: number = 1) => {
+            if (!Number.isInteger(steps) || steps <= 0) {
+                throw new Error("runtime.extendSteps(steps) 要求 steps 为正整数");
+            }
+            if (steps > 100) {
+                throw new Error("runtime.extendSteps(steps) 单次最大 100");
+            }
+            executionControl.extendSteps += steps;
+            return { ok: true as const, extendedBy: steps, totalExtended: executionControl.extendSteps };
+        };
+        runtimeApi.modifyTimeout = (timeoutMs: number) => {
+            if (!Number.isInteger(timeoutMs) || timeoutMs < 1000 || timeoutMs > 600000) {
+                throw new Error("runtime.modifyTimeout(timeoutMs) 要求 1000~600000 毫秒");
+            }
+            executionControl.timeoutMs = timeoutMs;
+            return { ok: true as const, timeoutMs };
+        };
+
         // 包装平台 API（互斥：telegram / discord / onebot 只有一个是有值的）
         const tg = telegram ? tracker.wrap(telegram as Record<string, unknown>) : undefined;
         const dc = discord ? tracker.wrap(discord as Record<string, unknown>) : undefined;
@@ -384,6 +407,8 @@ async function executeCode(id: string, code: string): Promise<void> {
             id,
             output: outputLines.join("\n"),
             error: false,
+            ...(executionControl.extendSteps > 0 ? { extendSteps: executionControl.extendSteps } : {}),
+            ...(executionControl.timeoutMs != null ? { timeoutMs: executionControl.timeoutMs } : {}),
         });
 
         // ctx 持久化：每次成功执行后检查并调度保存
@@ -402,6 +427,8 @@ async function executeCode(id: string, code: string): Promise<void> {
             id,
             output: outputLines.join("\n"),
             error: true,
+            ...(executionControl.extendSteps > 0 ? { extendSteps: executionControl.extendSteps } : {}),
+            ...(executionControl.timeoutMs != null ? { timeoutMs: executionControl.timeoutMs } : {}),
         });
     } finally {
         console.log = originalConsole.log;

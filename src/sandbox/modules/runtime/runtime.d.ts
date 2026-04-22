@@ -88,4 +88,26 @@ declare const runtime: {
      * await runtime.remind("用 tavily 搜索刚才讨论的那个开源项目的最新版本，然后把结果发到群里", 60);
      */
     remind(description: string, delayMinutes: number): Promise<{ reminderId: string; triggerAt: string }>;
+
+    /**
+     * 增加当前 CodeAct session 的可用轮次。
+     *
+     * 仅对当前 session（本轮任务）生效，不会持久化到下次任务。
+     * 在本轮代码中调用后，从下一轮开始生效。
+     *
+     * @param steps - 要增加的轮次数，必须为正整数
+     * @returns 当前累计增加值
+     */
+    extendSteps(steps?: number): { ok: true; extendedBy: number; totalExtended: number };
+
+    /**
+     * 修改当前 CodeAct session 后续代码执行超时（毫秒）。
+     *
+     * 仅对当前 session（本轮任务）生效，不会持久化到下次任务。
+     * 在本轮代码中调用后，从下一段代码执行开始生效。
+     *
+     * @param timeoutMs - 新超时（毫秒），1000 ~ 600000
+     * @returns 已应用的超时值
+     */
+    modifyTimeout(timeoutMs: number): { ok: true; timeoutMs: number };
 };

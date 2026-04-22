@@ -33,7 +33,7 @@ filesystem.d.ts — 文件系统操作模块类型定义 所有路径操作限�
 - `stat`: 获取文件或目录的状态信息。
 
 ## todo
-shared/todo.d.ts — 当前群 Todo 模块类型定义 用于持久化当前群的待办、规则和长期约定。 数据按群隔离，可选设置 ISO 格式的到期时间。
+shared/todo.d.ts — 不只是代办，可以当你的记事本用。 用于持久化当前群的待办、规则和长期约定（比如群规、话语风格、被教导的/发现的事实性记忆）。 数据按群隔离，可选设置到期时间。“定期、到期提醒”类请使用 remind 或者 cron 模块。
 
 - `list`: 列出当前群的 todo。
 - `get`: 获取单个 todo。
@@ -77,6 +77,8 @@ shared/runtime.d.ts — 系统级能力
 - `env.set`: 新增或覆盖环境变量。
 - `env.delete`: 删除环境变量（不存在时安全返回）
 - `remind`: 设置一次性定时提醒（自然语言）。到期后 agent 将被唤醒并收到 description 作为新任务。重复定时提醒请用 cron ⚠️ description 必须是详细的自然语言描述，不是代码。 写清楚：要做什么、给谁发、发什么内容、如何获取信息等。 限制：最短 1 分钟，最长 365 天，每个群最多 10 个活跃提醒。
+- `extendSteps`: 增加当前 CodeAct session 的可用轮次。 仅对当前 session（本轮任务）生效，不会持久化到下次任务。 在本轮代码中调用后，从下一轮开始生效。
+- `modifyTimeout`: 修改当前 CodeAct session 后续代码执行超时（毫秒）。 仅对当前 session（本轮任务）生效，不会持久化到下次任务。 在本轮代码中调用后，从下一段代码执行开始生效。
 
 ## shell
 shell.d.ts — 终端 Tab 管理模块 提供类似 tmux/terminal tabs 的多终端管理能力。 主终端 "default" 是所有 ```bash``` 代码块的执行目标。 当主终端被长时间运行的服务阻塞时，可以将其 detach 到后台并获得全新主终端。
@@ -91,7 +93,7 @@ shell.d.ts — 终端 Tab 管理模块 提供类似 tmux/terminal tabs 的多终
 ## skills
 shared/skills.d.ts — Skills 高层能力 + 管理接口
 
-- `install`: 安装或创建一个新 Skill
+- `install`: 安装或创建一个新 Skill。支持SKILL.md 型（多数场景）和TS Skills（复杂能力场景） 两种方式完成文件后，都需要调用 skills.reload() 生效。
 - `list`: 列出当前已加载的 Skills 名称
 - `reload`: 热重载所有 Skills。在 workspace/skills/ 下创建/修改文件后调用。
 - `npmInstall`: 安装 npm 包到 workspace/skills/ 目录
