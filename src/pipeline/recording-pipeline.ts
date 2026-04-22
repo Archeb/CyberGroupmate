@@ -234,7 +234,7 @@ export class RecordingPipeline extends EventEmitter {
                             // 仅在有 triage 结果时写入 summary，避免后续 flush 覆写已有数据
                             ...(triage?.summary ? { summary: triage.summary } : {}),
                             keywords: topic.keywords,
-                            participants: [...topic.participantIds].map(String),
+                            participants: [...topic.participantIds].map(id => ensureCompositeId(getPlatform(chatId), String(id))),
                             messageRange: {
                                 messageIds: topic.messageIds,
                                 count: topic.messageCount,
@@ -285,7 +285,7 @@ export class RecordingPipeline extends EventEmitter {
 
                     // 批量更新群内画像统计（messageCount/activeHours/lastSeenAt）
                     for (const [uid, s] of userStats) {
-                        this.memory.incrementProfileStats(String(uid), String(chatId), {
+                        this.memory.incrementProfileStats(ensureCompositeId(getPlatform(chatId), String(uid)), String(chatId), {
                             messageCountDelta: s.count,
                             activeHoursDelta: s.hours,
                             lastSeenAt: s.lastTs,
