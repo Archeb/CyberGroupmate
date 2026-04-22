@@ -264,6 +264,37 @@ export class ImageCatalog {
         this.db.prepare("UPDATE image_catalog SET file_path = ? WHERE content_hash = ?").run(filePath, contentHash);
     }
 
+    getStats(): {
+        totalImages: number;
+        pendingCandidates: number;
+        confirmedStickers: number;
+        rejectedImages: number;
+        unclassified: number;
+        recentPromotions: Array<{ contentHash: string; description: string | null; emoji: string | null; promotedAt: string | null }>;
+    } {
+        const total = (this.db.prepare("SELECT COUNT(*) as cnt FROM image_catalog").get() as { cnt: number }).cnt;
+        const confirmed = (this.db.prepare("SELECT COUNT(*) as cnt FROM image_catalog WHERE is_sticker = 1").get() as { cnt: number }).cnt;
+        const rejected = (this.db.prepare("SELECT COUNT(*) as cnt FROM image_catalog WHERE is_sticker = 0").get() as { cnt: number }).cnt;
+        const unclassified = (this.db.prepare("SELECT COUNT(*) as cnt FROM image_catalog WHERE is_sticker IS NULL").get() as { cnt: number }).cnt;
+        const pending = (this.db.prepare("SELECT COUNT(*) as cnt FROM image_catalog WHERE is_sticker IS NULL AND frequency >= 3").get() as { cnt: number }).cnt;
+        const recentRows = this.db.prepare(
+            "SELECT content_hash, description, emoji, promoted_at FROM image_catalog WHERE is_sticker = 1 AND promoted_at IS NOT NULL ORDER BY promoted_at DESC LIMIT 5"
+        ).all() as Array<{ content_hash: string; description: string | null; emoji: string | null; promoted_at: string | null }>;
+        return {
+            totalImages: total,
+            pendingCandidates: pending,
+            confirmedStickers: confirmed,
+            rejectedImages: rejected,
+            unclassified,
+            recentPromotions: recentRows.map(r => ({
+                contentHash: r.content_hash,
+                description: r.description,
+                emoji: r.emoji,
+                promotedAt: r.promoted_at,
+            })),
+        };
+    }
+
     cleanup(retentionDays: number): number {
         const cutoffMs = Date.now() - retentionDays * 24 * 60 * 60 * 1000;
         const cutoffStr = new Date(cutoffMs).toISOString();

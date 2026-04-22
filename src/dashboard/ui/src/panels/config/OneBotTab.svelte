@@ -1,8 +1,21 @@
 <script>
+  import { api } from '../../lib/api.js';
+
   export let config;
   export let onebotEnabled = false;
   export let pwFocus;
   export let pwBlur;
+
+  let catalogStats = null;
+  let statsLoading = false;
+
+  async function loadCatalogStats() {
+    statsLoading = true;
+    try {
+      catalogStats = await api('/image-catalog/stats');
+    } catch { catalogStats = null; }
+    statsLoading = false;
+  }
 </script>
 
 <h3 class="card-title text-sm">
@@ -134,4 +147,122 @@
       ></textarea></label
     >
   </div>
+  <div class="divider text-xs opacity-50 my-3">
+    偷表情包 <span class="restart-hint"><i class="fa-solid fa-rotate-right"></i> 修改需重启</span>
+  </div>
+  <p class="text-xs opacity-50 mb-2">自动追踪群聊中反复出现的图片，用 Vision LLM 判定并收录为表情包。</p>
+  <label class="cfg-check mb-2">
+    <input
+      type="checkbox"
+      class="toggle toggle-xs"
+      bind:checked={config.vision.stickerStealingEnabled}
+    />
+    <span>启用偷表情包</span>
+  </label>
+  {#if config.vision.stickerStealingEnabled}
+    <div class="cfg-grid-3 mb-3">
+      <label class="cfg-field"
+        ><span class="cfg-label">最小出现次数</span>
+        <input
+          type="number"
+          class="input input-xs input-bordered w-full"
+          bind:value={config.vision.stickerStealingMinFrequency}
+          placeholder="3"
+          min="1"
+        /></label
+      >
+      <label class="cfg-field"
+        ><span class="cfg-label">检测间隔 (分钟)</span>
+        <input
+          type="number"
+          class="input input-xs input-bordered w-full"
+          bind:value={config.vision.stickerStealingIntervalMin}
+          placeholder="10"
+          min="1"
+        /></label
+      >
+      <label class="cfg-field"
+        ><span class="cfg-label">目录保留天数</span>
+        <input
+          type="number"
+          class="input input-xs input-bordered w-full"
+          bind:value={config.vision.catalogRetentionDays}
+          placeholder="30"
+          min="1"
+        /></label
+      >
+    </div>
+
+    <!-- 状态面板 -->
+    <div class="p-3 bg-base-200 rounded-lg">
+      <div class="flex items-center justify-between mb-2">
+        <span class="text-xs font-bold opacity-70">
+          <i class="fa-solid fa-chart-bar opacity-50 mr-1"></i>图片目录状态
+        </span>
+        <button class="btn btn-xs btn-ghost" on:click={loadCatalogStats} title="刷新状态">
+          {#if statsLoading}
+            <span class="loading loading-spinner loading-xs"></span>
+          {:else}
+            <i class="fa-solid fa-rotate"></i>
+          {/if}
+        </button>
+      </div>
+      {#if catalogStats}
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-2">
+          <div class="stat-card">
+            <span class="stat-num">{catalogStats.totalImages}</span>
+            <span class="stat-label">总追踪</span>
+          </div>
+          <div class="stat-card">
+            <span class="stat-num text-warning">{catalogStats.pendingCandidates}</span>
+            <span class="stat-label">待判定</span>
+          </div>
+          <div class="stat-card">
+            <span class="stat-num text-success">{catalogStats.confirmedStickers}</span>
+            <span class="stat-label">已收录</span>
+          </div>
+          <div class="stat-card">
+            <span class="stat-num text-error">{catalogStats.rejectedImages}</span>
+            <span class="stat-label">已排除</span>
+          </div>
+        </div>
+        {#if catalogStats.recentPromotions.length > 0}
+          <div class="text-xs opacity-60 mb-1">最近收录</div>
+          <div class="space-y-1">
+            {#each catalogStats.recentPromotions as p}
+              <div class="flex items-center gap-2 text-xs">
+                <span class="text-base">{p.emoji || '🎭'}</span>
+                <span class="truncate flex-1" title={p.description}>{p.description || '-'}</span>
+                <span class="opacity-40 whitespace-nowrap">{p.promotedAt ? new Date(p.promotedAt).toLocaleDateString() : ''}</span>
+              </div>
+            {/each}
+          </div>
+        {:else}
+          <p class="text-xs opacity-40 italic">暂无已收录的表情包。</p>
+        {/if}
+      {:else}
+        <p class="text-xs opacity-40 italic">点击刷新按钮加载状态。</p>
+      {/if}
+    </div>
+  {/if}
 </div>
+
+<style>
+  .stat-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 0.4rem;
+    border-radius: 0.375rem;
+    background: var(--color-base-100);
+  }
+  .stat-num {
+    font-size: 1.1rem;
+    font-weight: 700;
+    line-height: 1.2;
+  }
+  .stat-label {
+    font-size: 0.65rem;
+    opacity: 0.5;
+  }
+</style>

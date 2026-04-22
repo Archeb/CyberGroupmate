@@ -1052,19 +1052,23 @@ async function main(): Promise<void> {
 
     log.info("MainAgentLoop 配置完成");
 
-    // ─── 贴纸检测定时器（每 10 分钟扫描一次待判定的图片） ───
+    // ─── 贴纸检测定时器（定期扫描待判定的图片） ───
+    const stickerStealingEnabled = appConfig.vision?.stickerStealingEnabled !== false;
     const visionLlmConfigsForDetector = appConfig.llmRouting.vision
         ? resolveComponentProfiles("vision", appConfig)
         : resolveComponentProfiles("session", appConfig);
-    if (visionLlmConfigsForDetector.length > 0) {
+    if (stickerStealingEnabled && visionLlmConfigsForDetector.length > 0) {
         const { StickerDetector } = await import("./core/sticker-detector.js");
+        const minFreq = appConfig.vision?.stickerStealingMinFrequency ?? 3;
+        const intervalMin = appConfig.vision?.stickerStealingIntervalMin ?? 10;
         const stickerDetector = new StickerDetector({
             imageCatalog,
             mediaDownloader: sharedMediaDownloader,
             memory,
             visionConfigs: visionLlmConfigsForDetector,
+            minFrequency: minFreq,
         });
-        const STICKER_DETECT_INTERVAL = 10 * 60 * 1000;
+        const STICKER_DETECT_INTERVAL = intervalMin * 60 * 1000;
         const stickerDetectTimer = setInterval(() => {
             stickerDetector.processCandidates().catch(err => {
                 log.warn("贴纸检测定时任务失败", { error: String(err) });
@@ -1077,7 +1081,9 @@ async function main(): Promise<void> {
                 log.warn("贴纸检测首次运行失败", { error: String(err) });
             });
         }, 60_000);
-        log.info("贴纸检测定时器已启动", { intervalMin: 10 });
+        log.info("贴纸检测定时器已启动", { intervalMin, minFreq });
+    } else if (!stickerStealingEnabled) {
+        log.info("偷表情包功能已禁用");
     }
 
     // ─── Dashboard 监控仪表盘 ───

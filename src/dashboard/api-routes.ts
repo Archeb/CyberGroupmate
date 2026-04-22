@@ -623,6 +623,11 @@ export function createApiRouter(deps: DashboardDeps, bridge: EventBridge): Route
 
     // ─── Image Catalog (表情包频率追踪) ───
 
+    router.get("/image-catalog/stats", (_req, res) => {
+        if (!deps.imageCatalog) { res.status(404).json({ error: "imageCatalog not available" }); return; }
+        res.json(deps.imageCatalog.getStats());
+    });
+
     router.get("/image-catalog", (req, res) => {
         if (!deps.imageCatalog) { res.status(404).json({ error: "imageCatalog not available" }); return; }
         const limit = Math.min(parseInt(qs(req.query.limit)) || 50, 200);

@@ -95,6 +95,7 @@
       config = await api("/config");
       if (!config.contextBudget) config.contextBudget = {};
       if (!config.vision) config.vision = {};
+      if (config.vision.stickerStealingEnabled == null) config.vision.stickerStealingEnabled = true;
       if (!config.dashboard) config.dashboard = {};
       if (config.dashboard.host == null || config.dashboard.host === "") {
         config.dashboard.host = "127.0.0.1";
