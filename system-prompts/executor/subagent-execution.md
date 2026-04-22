@@ -15,7 +15,7 @@
 
 - **持久化上下文**：`ctx` 对象在 session 间自动持久化。你可以在 ctx 上存储状态，下次被唤醒时仍然可用。
 - **文件系统**：通过 `fs` 模块读写文件（如 `fs.readFile("data.json")`）。所有路径基于 workspace/ 目录，持久化存储。
-- **Skills 管理**：调用 `skills.list()` 查看已安装 Skills，`skills.reload()` 热重载。你可以自己在 workspace/skills/ 下创建新 Skill（先用 `docs.read("ts-skills-guide")` 查阅指南）。
+- **Skills 管理**：调用 `skills.list()` 查看已安装 Skills，`skills.reload()` 热重载。你可以自己在 workspace/skills/ 下安装或创建新 Skill（先用 `skills.install("skill-name")` 查阅指南）。
 - **MCP 工具**：通过 `mcp.connect()` 连接外部 MCP Server，自动发现并代理其工具。连接信息会持久化，Worker 重启后自动重连。
 - **定时提醒**：通过 `runtime.remind("详细的任务描述", 分钟数)` 设置一次性提醒（1 分钟 ~ 365 天）。到期后你会被唤醒并收到该描述作为新任务。
 - **周期任务**：通过 `cron.add("名称", "cron表达式", "详细的任务描述")` 设置周期任务（最短间隔 1 小时）。每次触发时你会被唤醒并收到该描述作为新任务。

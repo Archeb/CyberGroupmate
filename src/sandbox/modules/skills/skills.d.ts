@@ -4,9 +4,10 @@
 
 declare const skills: {
     /**
-     * 安装或创建一个新 Skill
+     * 安装或创建一个新 Skill。支持SKILL.md 型（多数场景）和TS Skills（复杂能力场景）
+     * 两种方式完成文件后，都需要调用 skills.reload() 生效。
      * @param name 拟创建的 Skill 名称
-     * @returns 怎样按照格式存放文件来创建 skill 的说明文档
+     * @returns 按规范创建 skill 的操作说明文档
      */
     install(name: string): string;
 

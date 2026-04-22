@@ -40,21 +40,24 @@ export function installSkills(env: CapabilityRegistryEnv, sentHistory: Map<strin
         /** 获取安装/创建新 Skill 的步骤说明（无实际代码动作） */
         install: (name: string) => {
             return `【创建/安装 Skill: ${name} 的操作指南】
-系统需要你通过文件操作工具自行创建所需的文件，请严格遵循以下目录结构和规范：
+系统支持两种 Skill 形态，请按场景选择：
 
-1. 核心实现文件：
-   创建 \`workspace/skills/${name}/index.ts\`
-   要求：必须提供默认导出 (default export) 或者与模块同名的导出 (export const ${name} = ...)。
+1. SKILL.md 型（推荐多数场景）
+    - 规范：遵循 https://agentskills.io/specification
+    - 文件：创建 \`workspace/skills/${name}/SKILL.md\`
+    - 适用：流程化任务、文档驱动能力、模板化执行
 
-2. 类型声明与文档（必须）：
-   创建 \`workspace/skills/${name}/${name}.d.ts\`
-   要求：系统依据此文件解析能力接口，将其呈现为工具函数。请用标准的 TypeScript 接口格式和 TSDoc 注释写明每个方法的用处。
+2. TS Skills（复杂能力场景）
+    - 实现文件：创建 \`workspace/skills/${name}/index.ts\`
+    - 类型声明：创建 \`workspace/skills/${name}/${name}.d.ts\`
+    - 要求：\`index.ts\` 提供 default export 或同名导出；\`.d.ts\` 用 TypeScript 接口 + TSDoc 清晰描述能力
+    - 依赖：如需第三方包，先调用 \`skills.npmInstall(['包名'])\`
+    - 建议：先参考现有 TS Skill 示例，确保类型定义清晰、示例代码合理、接口设计简洁
+    - 适用：复杂逻辑、需要引入外部 npm 包、希望直接复用 npm 生态
 
-3. npm 依赖包：
-   需要依赖的话，请在写代码前调用全局方法 \`skills.npmInstall(['包名'])\` 以聚合依赖到 skills 目录。
-
-4. 使其生效：
-   全部文件保存后，必须调用 \`skills.reload()\` 触发热重载，之后即可以全局变量 \`${name}\` 的形式直接调用。`;
+3. 使其生效
+    - 文件创建或修改后，调用 \`skills.reload()\` 热重载
+    - 重载成功后，可按全局变量 \`${name}\` 直接调用该 Skill。`;
         },
         /** 列出当前已加载的 Skills */
         list: () => _managerCallbacks.listSkills(),
