@@ -55,13 +55,16 @@ type OneBotActionResponse = {
 };
 
 type OneBotMediaInfo = {
-    type: "photo" | "video" | "document" | "audio" | "other";
+    type: "photo" | "sticker" | "video" | "document" | "audio" | "other";
     url?: string;
     fileId: string;
     uniqueFileId: string;
     fileName?: string;
     mimeType?: string;
     fileSize?: number;
+    width?: number;
+    height?: number;
+    emoji?: string;
 };
 
 export class OneBotAdapter implements PlatformAdapter {
@@ -329,6 +332,12 @@ export class OneBotAdapter implements PlatformAdapter {
     }
 
     async downloadMedia(_rawMessage: unknown, mediaRef: string): Promise<Buffer> {
+        if (mediaRef.startsWith("face:")) {
+            throw new Error(`downloadMedia: QQ内置表情无法下载 (${mediaRef})`);
+        }
+        if (mediaRef.startsWith("mface:")) {
+            throw new Error(`downloadMedia: QQ商城表情需通过URL下载 (${mediaRef})`);
+        }
         if (mediaRef.startsWith("http://") || mediaRef.startsWith("https://")) {
             const resp = await fetch(mediaRef);
             if (!resp.ok) throw new Error(`downloadMedia: HTTP ${resp.status} for ${mediaRef}`);
@@ -851,6 +860,15 @@ export class OneBotAdapter implements PlatformAdapter {
         return message.map(seg => {
             if (seg.type === "text") return String(seg.data?.text ?? "");
             if (seg.type === "at") return `[CQ:at,qq=${String(seg.data?.qq ?? "")}]`;
+            if (seg.type === "face") {
+                const id = String(seg.data?.id ?? "");
+                const result = typeof seg.data?.result === "string" ? seg.data.result : "";
+                return result ? `[🎭 QQ表情:${result}]` : `[🎭 QQ表情:${id}]`;
+            }
+            if (seg.type === "mface") {
+                const summary = typeof seg.data?.summary === "string" ? seg.data.summary : "";
+                return summary ? `[🎭 商城表情:${summary}]` : "[🎭 商城表情]";
+            }
             return "";
         }).join("").trim();
     }
@@ -868,12 +886,40 @@ export class OneBotAdapter implements PlatformAdapter {
             if (seg.type === "image") {
                 const url = typeof data.url === "string" ? data.url : undefined;
                 const file = String(data.file ?? "");
+                const subType = typeof data.sub_type === "number" ? data.sub_type
+                    : typeof data.sub_type === "string" ? Number(data.sub_type) : undefined;
+                const isSticker = subType === 1;
                 return {
-                    type: "photo",
+                    type: isSticker ? "sticker" : "photo",
                     url,
                     fileId: url || file,
                     uniqueFileId: String(data.file_unique ?? data.file_id ?? file),
                     fileName: typeof data.file === "string" ? path.basename(String(data.file)) : undefined,
+                    width: typeof data.width === "number" ? data.width : (typeof data.width === "string" ? Number(data.width) || undefined : undefined),
+                    height: typeof data.height === "number" ? data.height : (typeof data.height === "string" ? Number(data.height) || undefined : undefined),
+                    mimeType: typeof data.mime_type === "string" ? data.mime_type : undefined,
+                    fileSize: typeof data.file_size === "number" ? data.file_size : (typeof data.file_size === "string" ? Number(data.file_size) || undefined : undefined),
+                };
+            }
+            if (seg.type === "face") {
+                const faceId = String(data.id ?? "");
+                return {
+                    type: "sticker",
+                    fileId: `face:${faceId}`,
+                    uniqueFileId: `face:${faceId}`,
+                    emoji: typeof data.result === "string" ? data.result : undefined,
+                };
+            }
+            if (seg.type === "mface") {
+                const url = typeof data.url === "string" ? data.url : undefined;
+                const emojiPackageId = String(data.emoji_package_id ?? "");
+                const emojiId = String(data.emoji_id ?? "");
+                return {
+                    type: "sticker",
+                    url,
+                    fileId: url ?? `mface:${emojiPackageId}_${emojiId}`,
+                    uniqueFileId: `mface:${emojiPackageId}_${emojiId}`,
+                    emoji: typeof data.summary === "string" ? data.summary : undefined,
                 };
             }
             if (seg.type === "video") {
@@ -917,6 +963,8 @@ export class OneBotAdapter implements PlatformAdapter {
         switch (type) {
             case "photo":
                 return "[📷 图片]";
+            case "sticker":
+                return "[🎭 表情包]";
             case "video":
                 return "[🎬 视频]";
             case "audio":

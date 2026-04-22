@@ -27,6 +27,7 @@ import { formatTsForDisplay } from "../core/timezone.js";
 import { loadConfig, resolveComponentProfiles } from "../core/config.js";
 import { resolveReplyText } from "../core/message-enricher.js";
 import { MediaDownloader } from "../core/media-downloader.js";
+import type { ImageCatalog } from "../core/image-catalog.js";
 import type { AppConfig } from "../core/config.js";
 import type { PlatformAdapter } from "../adapter/platform-adapter.js";
 import { getGroupModelKey } from "../core/chat-id.js";
@@ -53,6 +54,8 @@ export interface DispatchHandlerDeps {
     sendTyping?: (chatId: string) => Promise<void>;
     /** 共享的媒体下载管理器 */
     mediaDownloader: MediaDownloader;
+    /** 图片目录（用于表情包频率追踪） */
+    imageCatalog?: ImageCatalog;
 }
 
 /**
@@ -63,7 +66,7 @@ export interface DispatchHandlerDeps {
 export function createDispatchHandler(
     deps: DispatchHandlerDeps,
 ): (result: AttendResult) => Promise<void> {
-    const { memory, globalState, subagentManager, sandboxPool, nc, q3, q5, appConfig: _appConfig, adapters: adapterList, sendTyping, mediaDownloader } = deps;
+    const { memory, globalState, subagentManager, sandboxPool, nc, q3, q5, appConfig: _appConfig, adapters: adapterList, sendTyping, mediaDownloader, imageCatalog } = deps;
     // 构建下载函数（根据 chatId 平台路由到对应 adapter）
     const buildDownloadFn = (chatId: string) => {
         if (!adapterList?.length) return undefined;
@@ -222,7 +225,7 @@ export function createDispatchHandler(
                             // allow_listed 模式下仅包含已启用的贴纸
                             if (stickerSendingMode === "allow_listed" && !s.enabled) continue;
                             const filePath = mediaDownloader.getExistingPath(s.uniqueFileId);
-                            if (filePath && existsSync(filePath) && !filePath.toLowerCase().endsWith(".webm")) {
+                            if (filePath && existsSync(filePath) && !filePath.toLowerCase().endsWith(".webm") && !filePath.toLowerCase().endsWith(".tgs")) {
                                 availableStickers.push({
                                     emoji: s.emoji,
                                     description: s.description,

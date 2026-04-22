@@ -14,6 +14,10 @@ import { callLLMWithFallback, type ChatMessage } from "./llm.js";
 import { resolveComponentTimeout, type LLMConfig, type VisionConfig } from "./config.js";
 import { createLogger } from "./logger.js";
 import type { MediaDownloader } from "./media-downloader.js";
+import type { ImageCatalog } from "./image-catalog.js";
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { computePerceptualHashes } from "./perceptual-hash.js";
 
 const log = createLogger("vision-processor");
 
@@ -131,6 +135,7 @@ export async function processMediaBatch(
     downloadFn?: DownloadFn,
     stickerCache?: StickerCache,
     mediaDownloader?: MediaDownloader,
+    imageCatalog?: ImageCatalog,
     options?: ProcessMediaBatchOptions,
 ): Promise<ProcessedMedia[]> {
     const maxImages = config?.maxImagesPerContext ?? DEFAULT_MAX_IMAGES;
@@ -182,6 +187,7 @@ export async function processMediaBatch(
             downloadFn,
             stickerCache,
             mediaDownloader,
+            imageCatalog,
         );
         // 复用结果到同 uniqueFileId 的所有条目（修正 messageIndex）
         return group.map(s => s === representative
@@ -302,6 +308,69 @@ export async function processMediaBatch(
         }
     }
 
+    // ─── 图片目录追踪（记录 photo 的 SHA256 + 出现频率 + pHash/dHash） ───
+    if (imageCatalog) {
+        const hashPromises: Array<Promise<void>> = [];
+        for (const pm of results) {
+            const att = attachments.find(a => a.messageIndex === pm.index);
+            if (!att || att.type !== "photo") continue;
+            let rawBuffer: Buffer | undefined;
+            if (pm.base64Data) {
+                rawBuffer = Buffer.from(pm.base64Data, "base64");
+            } else if (pathBBuffers.has(att.uniqueFileId)) {
+                rawBuffer = pathBBuffers.get(att.uniqueFileId)!.buffer;
+            } else if (pm.filePath) {
+                try {
+                    rawBuffer = readFileSync(pm.filePath);
+                } catch { /* ignore */ }
+            }
+            if (!rawBuffer) continue;
+            const contentHash = createHash("sha256").update(rawBuffer).digest("hex");
+            const platform = att.chatId?.split(":")[0] ?? "unknown";
+            try {
+                imageCatalog.recordSighting({
+                    contentHash,
+                    sourcePlatform: platform,
+                    sourceChatId: att.chatId,
+                    uniqueFileId: att.uniqueFileId,
+                    filePath: pm.filePath ?? undefined,
+                    mimeType: pm.mimeType ?? att.mimeType,
+                    width: att.width,
+                    height: att.height,
+                    fileSize: att.fileSize ?? rawBuffer.length,
+                    messageId: att.messageId,
+                });
+            } catch (err) {
+                log.debug("imageCatalog.recordSighting 失败", { contentHash, error: String(err) });
+            }
+            // 异步计算 pHash + dHash（不阻塞主流程）
+            hashPromises.push(
+                computePerceptualHashes(rawBuffer).then(({ phash, dhash }) => {
+                    if (phash || dhash) {
+                        try {
+                            imageCatalog.updateHashes(contentHash, phash, dhash);
+                            const similar = imageCatalog.findSimilar(phash, dhash);
+                            for (const s of similar) {
+                                if (s.entry.contentHash !== contentHash && s.entry.isSticker !== null) {
+                                    imageCatalog.setStickerVerdict({
+                                        contentHash,
+                                        isSticker: s.entry.isSticker === 1,
+                                        description: s.entry.description ?? undefined,
+                                        emoji: s.entry.emoji ?? undefined,
+                                    });
+                                    break;
+                                }
+                            }
+                        } catch { /* ignore */ }
+                    }
+                }).catch(() => { /* ignore */ }),
+            );
+        }
+        if (hashPromises.length > 0) {
+            await Promise.allSettled(hashPromises);
+        }
+    }
+
     // ─── 处理 download-only 媒体 (video / document / animation) ───
     if (downloadFn && mediaDownloader) {
         for (const att of downloadOnly) {
@@ -386,6 +455,7 @@ async function processSingleSticker(
     downloadFn?: DownloadFn,
     stickerCache?: StickerCache,
     mediaDownloader?: MediaDownloader,
+    imageCatalog?: ImageCatalog,
 ): Promise<ProcessedMedia> {
     const mode = config?.stickerMode ?? "emoji_only";
 

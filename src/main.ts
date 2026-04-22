@@ -270,6 +270,10 @@ async function main(): Promise<void> {
         maxFileSize: (appConfig.vision?.maxMediaDownloadSize ?? 20) * 1024 * 1024,
     });
 
+    // 图片目录数据库（独立于 memory.db，用于表情包频率追踪）
+    const { ImageCatalog } = await import("./core/image-catalog.js");
+    const imageCatalog = new ImageCatalog(join(DATA_DIR, "image-catalog.db"));
+
     const nc = new NotificationCenter(EVENTS_PATH);
     let shuttingDown = false;
 
@@ -1018,6 +1022,7 @@ async function main(): Promise<void> {
         persona: appConfig.persona,
         adapters,
         mediaDownloader: sharedMediaDownloader,
+        imageCatalog,
 
     }));
 
@@ -1042,9 +1047,38 @@ async function main(): Promise<void> {
             }
         },
         mediaDownloader: sharedMediaDownloader,
+        imageCatalog,
     }));
 
     log.info("MainAgentLoop 配置完成");
+
+    // ─── 贴纸检测定时器（每 10 分钟扫描一次待判定的图片） ───
+    const visionLlmConfigsForDetector = appConfig.llmRouting.vision
+        ? resolveComponentProfiles("vision", appConfig)
+        : resolveComponentProfiles("session", appConfig);
+    if (visionLlmConfigsForDetector.length > 0) {
+        const { StickerDetector } = await import("./core/sticker-detector.js");
+        const stickerDetector = new StickerDetector({
+            imageCatalog,
+            mediaDownloader: sharedMediaDownloader,
+            memory,
+            visionConfigs: visionLlmConfigsForDetector,
+        });
+        const STICKER_DETECT_INTERVAL = 10 * 60 * 1000;
+        const stickerDetectTimer = setInterval(() => {
+            stickerDetector.processCandidates().catch(err => {
+                log.warn("贴纸检测定时任务失败", { error: String(err) });
+            });
+        }, STICKER_DETECT_INTERVAL);
+        if (stickerDetectTimer.unref) stickerDetectTimer.unref();
+        // 启动后延迟 1 分钟首次运行
+        setTimeout(() => {
+            stickerDetector.processCandidates().catch(err => {
+                log.warn("贴纸检测首次运行失败", { error: String(err) });
+            });
+        }, 60_000);
+        log.info("贴纸检测定时器已启动", { intervalMin: 10 });
+    }
 
     // ─── Dashboard 监控仪表盘 ───
     const dashboardEnabled = appConfig.dashboard?.enabled !== false;
@@ -1080,6 +1114,7 @@ async function main(): Promise<void> {
                 feedbackLoop,
                 tokenStats,
                 mediaDownloader: sharedMediaDownloader,
+                imageCatalog,
                 adapters,
                 onConfigSaved: async (config) => {
                     tokenStats.setProfiles(config.llmProfiles ?? {});

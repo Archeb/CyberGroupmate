@@ -13,6 +13,7 @@ import type { NotificationCenter } from "../event/notification-center.js";
 import type { FeedbackLoop } from "../pipeline/feedback-loop.js";
 import type { TokenStatsCollector } from "./token-stats.js";
 import type { MediaDownloader } from "../core/media-downloader.js";
+import type { ImageCatalog } from "../core/image-catalog.js";
 import type { PlatformAdapter } from "../adapter/platform-adapter.js";
 import type { AppConfig } from "../core/config.js";
 
@@ -30,6 +31,8 @@ export interface DashboardDeps {
     tokenStats: TokenStatsCollector;
     /** 媒体下载管理器（用于贴纸预览等） */
     mediaDownloader?: MediaDownloader;
+    /** 图片目录（用于表情包频率追踪和预览） */
+    imageCatalog?: ImageCatalog;
     /** 平台 adapter 引用（用于 mute 等控制操作） */
     adapters?: PlatformAdapter[];
     /** Dashboard 保存配置后的回调（用于热应用） */
