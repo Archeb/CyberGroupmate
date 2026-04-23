@@ -23,6 +23,7 @@ export interface StickerDetectorDeps {
     memory: MemoryStoreV2;
     visionConfigs: LLMConfig[];
     minFrequency?: number;
+    newStickerEnabledByDefault?: boolean;
 }
 
 export class StickerDetector {
@@ -148,7 +149,7 @@ export class StickerDetector {
             entry.uniqueFileId ?? entry.contentHash,
             description,
             emoji,
-            true,
+            this.deps.newStickerEnabledByDefault !== false,
         );
 
         this.deps.imageCatalog.markPromoted(

@@ -712,11 +712,12 @@ export function createApiRouter(deps: DashboardDeps, bridge: EventBridge): Route
                         mimeType: entry.mimeType ?? "image/jpeg",
                     });
                     if (saved) {
+                        const newStickerEnabledByDefault = loadConfig().vision?.newStickerDefault !== "disabled";
                         deps.memory.setStickerDescription(
                             entry.uniqueFileId ?? entry.contentHash,
                             description ?? "",
                             emoji,
-                            true,
+                            newStickerEnabledByDefault,
                         );
                         deps.imageCatalog.markPromoted(
                             entry.contentHash,

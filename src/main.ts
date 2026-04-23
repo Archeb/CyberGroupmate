@@ -1067,6 +1067,7 @@ async function main(): Promise<void> {
             memory,
             visionConfigs: visionLlmConfigsForDetector,
             minFrequency: minFreq,
+            newStickerEnabledByDefault: appConfig.vision?.newStickerDefault !== "disabled",
         });
         const STICKER_DETECT_INTERVAL = intervalMin * 60 * 1000;
         const stickerDetectTimer = setInterval(() => {
