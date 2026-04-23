@@ -69,6 +69,11 @@ export class OneBotAdapter implements PlatformAdapter {
 
     private ws: WebSocket | null = null;
     private started = false;
+    private stopRequested = false;
+    private reconnectTimer: NodeJS.Timeout | null = null;
+    private reconnectAttempts = 0;
+    private static readonly RECONNECT_BASE_MS = 1000;
+    private static readonly RECONNECT_MAX_MS = 30_000;
     private readonly pending = new Map<string, { resolve: (v: unknown) => void; reject: (err: Error) => void; timer: NodeJS.Timeout }>();
     private readonly mutedChats = new Map<string, number>();
 
@@ -83,18 +88,37 @@ export class OneBotAdapter implements PlatformAdapter {
         if (!this.config.wsUrl) throw new Error("onebot.ws_url is required");
         if (!this.config.selfId) throw new Error("onebot.self_id is required");
 
-        await new Promise<void>((resolve, reject) => {
+        this.stopRequested = false;
+        this.reconnectAttempts = 0;
+        await this.connect();
+    }
+
+    private connect(): Promise<void> {
+        return new Promise<void>((resolve, reject) => {
+            const isReconnect = this.reconnectAttempts > 0;
+            let settled = false;
             const ws = new WebSocket(this.config.wsUrl);
             this.ws = ws;
 
             ws.once("open", () => {
+                settled = true;
                 this.started = true;
-                log.info("OneBotAdapter 已连接", { wsUrl: this.config.wsUrl, selfId: this.config.selfId });
+                this.reconnectAttempts = 0;
+                if (isReconnect) {
+                    log.info("OneBotAdapter 重连成功", { wsUrl: this.config.wsUrl });
+                } else {
+                    log.info("OneBotAdapter 已连接", { wsUrl: this.config.wsUrl, selfId: this.config.selfId });
+                }
                 resolve();
             });
 
             ws.once("error", (err) => {
-                reject(err instanceof Error ? err : new Error(String(err)));
+                if (isReconnect) {
+                    log.warn("OneBotAdapter 重连失败", { error: String(err) });
+                } else if (!settled) {
+                    settled = true;
+                    reject(err instanceof Error ? err : new Error(String(err)));
+                }
             });
 
             ws.on("message", (data) => {
@@ -108,17 +132,51 @@ export class OneBotAdapter implements PlatformAdapter {
             ws.on("close", () => {
                 this.started = false;
                 this.ws = null;
-                for (const [echo, pending] of this.pending.entries()) {
-                    clearTimeout(pending.timer);
-                    pending.reject(new Error(`OneBot websocket closed before response: ${echo}`));
-                    this.pending.delete(echo);
+                this.drainPending();
+                if (this.stopRequested) {
+                    log.info("OneBot websocket 已关闭");
+                    return;
                 }
-                log.warn("OneBot websocket 已断开");
+                log.warn("OneBot websocket 已断开，将自动重连");
+                this.scheduleReconnect();
             });
         });
     }
 
+    private drainPending(): void {
+        for (const [echo, pending] of this.pending.entries()) {
+            clearTimeout(pending.timer);
+            pending.reject(new Error(`OneBot websocket closed before response: ${echo}`));
+            this.pending.delete(echo);
+        }
+    }
+
+    private scheduleReconnect(): void {
+        if (this.stopRequested || this.reconnectTimer) return;
+        this.reconnectAttempts++;
+        const delay = Math.min(
+            OneBotAdapter.RECONNECT_BASE_MS * Math.pow(2, this.reconnectAttempts - 1),
+            OneBotAdapter.RECONNECT_MAX_MS,
+        );
+        log.info(`OneBotAdapter 将在 ${delay}ms 后重连 (第 ${this.reconnectAttempts} 次)`);
+        this.reconnectTimer = setTimeout(async () => {
+            this.reconnectTimer = null;
+            if (this.stopRequested) return;
+            try {
+                await this.connect();
+            } catch {
+                // connect() rejects only on first call; reconnect failures
+                // are handled by the close handler which re-schedules.
+            }
+        }, delay);
+    }
+
     async stop(): Promise<void> {
+        this.stopRequested = true;
+        if (this.reconnectTimer) {
+            clearTimeout(this.reconnectTimer);
+            this.reconnectTimer = null;
+        }
         if (!this.ws) return;
         this.ws.close();
         this.ws = null;
