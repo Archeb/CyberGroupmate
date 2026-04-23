@@ -360,7 +360,6 @@ metrics:
 #   base_skills:
 #     - runtime
 #     - memory
-#     - docs
 #     - fs
 #     - actions
 #     - skills

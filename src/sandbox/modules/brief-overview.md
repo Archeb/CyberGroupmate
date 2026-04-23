@@ -14,12 +14,6 @@ discord.d.ts — Discord 平台 API 系统注入的 Discord host proxy 接口。
 - `sendMedia`: 发送媒体消息（附件）到指定频道。支持 URL 和本地文件路径（支持绝对路径或基于 cwd 工作区的相对路径）。
 - `sendTyping`: 在频道中显示 "正在输入..." 状态。
 
-## docs
-docs.d.ts — 文档查阅系统类型定义 Agent 可通过 docs 对象查阅 workspace/agent-docs/ 下的 markdown 文档。 文档在 worker 启动时加载，支持精确匹配和模糊匹配。
-
-- `list`: 列出所有可用文档（返回 slug、标题，以及是否为标准 Agent Skill）
-- `read`: 读取指定文档的完整内容 支持精确 slug 匹配和模糊匹配
-
 ## fs
 filesystem.d.ts — 文件系统操作模块类型定义 所有路径操作限定在 workspace/ 目录下。 支持相对路径（相对于 workspace/）和绝对路径。
 

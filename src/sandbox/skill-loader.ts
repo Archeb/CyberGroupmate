@@ -25,7 +25,7 @@ const log = createLogger("skill-loader");
 
 /**
  * 解析 SKILL.md 的 YAML frontmatter（name / description）
- * 与 docs/index.ts parseFrontmatter 保持一致的逻辑。
+ * 与历史实现保持一致的逻辑。
  */
 function parseSkillMdFrontmatter(markdown: string): { name?: string; description?: string; body: string } {
     const match = markdown.match(/^---\s*\r?\n([\s\S]*?)\r?\n---\s*(?:\r?\n)?/);
@@ -38,7 +38,7 @@ function parseSkillMdFrontmatter(markdown: string): { name?: string; description
 }
 
 /**
- * 将名称转为合法 JS 标识符（与 docs/index.ts 保持一致：不做 camelCase 转换，
+ * 将名称转为合法 JS 标识符（不做 camelCase 转换，
  * 仅替换非法字符为下划线）。
  */
 function toSafeSkillName(str: string): string {
@@ -107,7 +107,7 @@ export function discoverSkills(): DiscoveredSkill[] {
         if (!indexPath) {
             if (existsSync(skillMd)) {
                 // ═══ 纯 AgentSkill：只有 SKILL.md，无代码入口 ═══
-                // 从 frontmatter 提取名称（与 docs/index.ts 保持一致）
+                // 从 frontmatter 提取名称
                 try {
                     const raw = readFileSync(skillMd, "utf-8");
                     const parsed = parseSkillMdFrontmatter(raw);
@@ -132,6 +132,32 @@ export function discoverSkills(): DiscoveredSkill[] {
     }
 
     return skills;
+}
+
+/**
+ * 返回所有包含 scripts/ 子目录的 AgentSkill 路径列表。
+ * 用于将 Skill 脚本目录加入 shell PATH。
+ */
+export function getAgentSkillScriptDirs(projectRoot: string = process.cwd()): string[] {
+    const skillsDir = resolve(projectRoot, "workspace/skills");
+    if (!existsSync(skillsDir)) return [];
+
+    const scriptDirs: string[] = [];
+    for (const entry of readdirSync(skillsDir)) {
+        const skillDir = join(skillsDir, entry);
+        if (!existsSync(skillDir) || !statSync(skillDir).isDirectory()) continue;
+        if (entry === "node_modules" || entry.startsWith(".")) continue;
+
+        const skillMd = join(skillDir, "SKILL.md");
+        if (!existsSync(skillMd)) continue;
+
+        const scriptsDir = join(skillDir, "scripts");
+        if (existsSync(scriptsDir) && statSync(scriptsDir).isDirectory()) {
+            scriptDirs.push(resolve(scriptsDir));
+        }
+    }
+
+    return scriptDirs;
 }
 
 /**

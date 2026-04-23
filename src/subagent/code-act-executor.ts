@@ -452,7 +452,7 @@ export class CodeActExecutor {
         // 计算这次 task 的 allowedSkills 白名单
         const currentConfig = loadConfig();
         const baseSkills = currentConfig.subagent?.baseSkills ?? [
-            "runtime", "docs", "fs", "skills", "mcp", "cron", "todo", "vision", "shell",
+            "runtime", "fs", "skills", "mcp", "cron", "todo", "vision", "shell",
         ];
         const allowedSkills = new Set<string>([
             ...baseSkills,

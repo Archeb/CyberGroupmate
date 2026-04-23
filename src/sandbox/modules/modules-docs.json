@@ -42,22 +42,6 @@
     ]
   },
   {
-    "name": "docs",
-    "description": "docs.d.ts — 文档查阅系统类型定义 Agent 可通过 docs 对象查阅 workspace/agent-docs/ 下的 markdown 文档。 文档在 worker 启动时加载，支持精确匹配和模糊匹配。",
-    "methods": [
-      {
-        "name": "list",
-        "brief": "列出所有可用文档（返回 slug、标题，以及是否为标准 Agent Skill）",
-        "fullDoc": "```typescript\nlist(): Array<{ slug: string; title: string; kind: \"doc\" | \"agent-skill\" }>\n```\n\n\n列出所有可用文档（返回 slug、标题，以及是否为标准 Agent Skill）"
-      },
-      {
-        "name": "read",
-        "brief": "读取指定文档的完整内容 支持精确 slug 匹配和模糊匹配",
-        "fullDoc": "```typescript\nread(slug: string): string\n```\n\n\n读取指定文档的完整内容\n支持精确 slug 匹配和模糊匹配\n\n**参数：**\n- `slug`: 文档标识符（不含 .md 后缀的文件名）\n- **返回值**: 文档内容字符串；不存在时返回提示信息"
-      }
-    ]
-  },
-  {
     "name": "fs",
     "description": "filesystem.d.ts — 文件系统操作模块类型定义 所有路径操作限定在 workspace/ 目录下。 支持相对路径（相对于 workspace/）和绝对路径。",
     "methods": [

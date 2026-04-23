@@ -178,7 +178,6 @@ CyberGroupmate 是一个接入即时通讯平台（Telegram / Discord / OneBot�
 | Todo | `todo` | `src/sandbox/modules/kv/` | 当前群待办与规则存储，支持 ISO 到期时间 |
 | Cron | `cron` | `src/sandbox/modules/cron/` | 持久化定时任务（最短 1 小时间隔） |
 | MCP Bridge | `mcpBridge` | `src/sandbox/modules/mcp-bridge/` | stdio + Streamable HTTP MCP 客户端 |
-| Docs | `docs` | `src/sandbox/modules/docs/` | 读取 workspace/agent-docs/ 中的 markdown 文档 |
 
 **AgentSkills 渐进式披露**：
 - `baseSkills`（`config.yaml`）：始终注入 executor 的常驻模块（如 `todo`、`fs`、`runtime`）

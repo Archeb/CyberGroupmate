@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
-import { docs, getAgentSkillScriptDirs, getAgentSkillsApiBriefs, getAgentSkillsBriefs } from "../src/sandbox/modules/docs.js";
+import { getAgentSkillScriptDirs, parseAllSkillDocs } from "../src/sandbox/skill-loader.js";
 import { loadApiTypeDefs } from "../src/subagent/code-act-executor.js";
 import { buildEnhancedShellPath } from "../src/sandbox/sandbox.js";
 
@@ -30,7 +30,7 @@ after(() => {
 });
 
 describe("Agent Skills native support", () => {
-    it("discovers SKILL.md metadata and strips frontmatter when reading", () => {
+    it("discovers SKILL.md metadata as AgentSkill module entries", () => {
         const skillDir = join(process.cwd(), "workspace", "skills", "test-std-skill");
         const skillMdPath = join(skillDir, "SKILL.md");
         const scriptsDir = join(skillDir, "scripts");
@@ -49,20 +49,16 @@ describe("Agent Skills native support", () => {
         ].join("\n"));
         writeFile(join(scriptsDir, "run-bot.sh"), "#!/bin/bash\necho Hello API\n");
 
-        const list = docs.list();
-        const item = list.find(doc => doc.slug === "my-cool-bot");
+        const modules = parseAllSkillDocs();
+        const item = modules.find(mod => mod.name === "my_cool_bot");
 
         assert.ok(item, "应发现标准 Agent Skill");
-        assert.equal(item?.kind, "agent-skill");
-        assert.ok(item?.title.includes("[AgentSkill] my-cool-bot"));
-
-        const content = docs.read("my-cool-bot");
-        assert.ok(content.includes("# My Cool Bot"));
-        assert.ok(content.includes("run-bot.sh"));
-        assert.ok(!content.includes("name: my-cool-bot"), "返回内容应去掉 frontmatter");
+        assert.equal(item?.description, "Extract PDF text.");
+        assert.equal(item?.methods.length, 1);
+        assert.ok(item?.methods[0].brief.includes("await my_cool_bot.use()"));
     });
 
-    it("generates LLM briefs and exposes skill script directories", () => {
+    it("exposes skill script directories and injects AgentSkill API brief", () => {
         const skillDir = join(process.cwd(), "workspace", "skills", "test-std-skill-brief");
         const skillMdPath = join(skillDir, "SKILL.md");
         const scriptsDir = join(skillDir, "scripts");
@@ -79,21 +75,17 @@ describe("Agent Skills native support", () => {
         ].join("\n"));
         writeFile(join(scriptsDir, "deploy.sh"), "#!/bin/bash\necho deploy\n");
 
-        const briefs = getAgentSkillsBriefs();
-        assert.ok(briefs.includes('- kube-deploy: Deploy to Kubernetes.'));
-        assert.ok(briefs.includes('docs.read("kube-deploy")'));
-
-        const apiBriefs = getAgentSkillsApiBriefs();
-        assert.ok(apiBriefs.includes('## agent-skills'));
-        assert.ok(apiBriefs.includes('- kube-deploy: Deploy to Kubernetes.'));
-        assert.ok(apiBriefs.includes('docs.read("kube-deploy")'));
-
         const scriptDirs = getAgentSkillScriptDirs(process.cwd());
         assert.ok(scriptDirs.includes(resolve(scriptsDir)));
 
         const enhancedPath = buildEnhancedShellPath(process.cwd(), "/usr/bin");
         assert.ok(enhancedPath.includes(resolve(scriptsDir)));
         assert.ok(enhancedPath.includes("/usr/bin"));
+
+        const api = loadApiTypeDefs("telegram");
+        assert.ok(api.includes("## kube_deploy"));
+        assert.ok(api.includes("Deploy to Kubernetes."));
+        assert.ok(api.includes("await kube_deploy.use()"));
     });
 
     it("includes standard Agent Skills in available API overview", () => {
@@ -116,8 +108,8 @@ describe("Agent Skills native support", () => {
         writeFile(join(scriptsDir, "search.py"), "print('ok')\n");
 
         const api = loadApiTypeDefs("telegram");
-        assert.ok(api.includes("## agent-skills"));
-        assert.ok(api.includes("x-search: Search X (Twitter) posts using the xAI API."));
-        assert.ok(api.includes('docs.read("x-search")'));
+        assert.ok(api.includes("## x_search"));
+        assert.ok(api.includes("Search X (Twitter) posts using the xAI API."));
+        assert.ok(api.includes("await x_search.use()"));
     });
 });

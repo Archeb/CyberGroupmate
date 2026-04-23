@@ -16,8 +16,6 @@ const TRIVIAL_CALLS = new Set([
     "runtime.print",
     "runtime.ps",
     "scene.current",
-    "docs.list",
-    "docs.read",
     "telegram.sendText",
     "telegram.sendMedia",
     "discord.sendText",

@@ -17,7 +17,7 @@ import { dirname, join } from "node:path";
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { createLogger } from "../core/logger.js";
 import { loadConfig } from "../core/config.js";
-import { getAgentSkillScriptDirs } from "./modules/docs/index.js";
+import { getAgentSkillScriptDirs } from "./skill-loader.js";
 import * as pty from "node-pty";
 
 const __filename = fileURLToPath(import.meta.url);

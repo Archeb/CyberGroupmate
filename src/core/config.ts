@@ -295,7 +295,7 @@ export interface SubagentExternalConfig {
     /**
      * 常驻模块列表（始终对 Subagent 可见，无需主 Agent 在 useSkills 中指定）。
      * 平台 adapter 模块（telegram / discord）会根据当前平台自动包含，无需在此列举。
-      * 默认: ["runtime", "docs", "fs", "skills", "mcp", "cron", "todo", "vision", "shell"]
+         * 默认: ["runtime", "fs", "skills", "mcp", "cron", "todo", "vision", "shell"]
      */
     baseSkills?: string[];
 }
