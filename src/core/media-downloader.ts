@@ -99,15 +99,17 @@ function resolveExt(mimeType?: string, fileName?: string): string {
 
 export class MediaDownloader {
     private readonly downloadDir: string;
+    private readonly manifestPath: string;
     private readonly retentionDays: number;
     private readonly maxFileSize: number;
     private cleanupTimer: ReturnType<typeof setInterval> | null = null;
-    /** uniqueFileId → relative path 索引 (内存) */
+    /** uniqueFileId → absolute path 索引 (内存) */
     private readonly pathIndex = new Map<string, string>();
 
     constructor(config?: MediaDownloaderConfig) {
         // 始终 resolve 为绝对路径，确保从任意 cwd 都能正确访问
         this.downloadDir = path.resolve(config?.downloadDir ?? DEFAULT_DOWNLOAD_DIR);
+        this.manifestPath = path.join(this.downloadDir, "_manifest.json");
         this.retentionDays = config?.retentionDays ?? DEFAULT_RETENTION_DAYS;
         this.maxFileSize = config?.maxFileSize ?? DEFAULT_MAX_FILE_SIZE;
 
@@ -194,6 +196,7 @@ export class MediaDownloader {
         try {
             fs.writeFileSync(filePath, buffer);
             this.pathIndex.set(opts.uniqueFileId, filePath);
+            this.saveManifest();
             log.debug("saveMedia: 已保存", { filePath, size: buffer.length });
             return {
                 path: filePath,
@@ -240,34 +243,77 @@ export class MediaDownloader {
         }
 
         if (removed > 0) {
+            this.saveManifest();
             log.info("cleanupExpired: 已清理过期文件", { removed, retentionDays: this.retentionDays });
         }
     }
 
+    private loadManifest(): boolean {
+        try {
+            if (!fs.existsSync(this.manifestPath)) return false;
+            const raw = JSON.parse(fs.readFileSync(this.manifestPath, "utf-8"));
+            if (typeof raw !== "object" || raw === null) return false;
+            let loaded = 0;
+            for (const [uniqueFileId, filePath] of Object.entries(raw)) {
+                if (typeof filePath !== "string") continue;
+                if (fs.existsSync(filePath)) {
+                    this.pathIndex.set(uniqueFileId, filePath);
+                    loaded++;
+                }
+            }
+            log.debug("loadManifest: 已加载", { loaded });
+            return loaded > 0;
+        } catch (err) {
+            log.warn("loadManifest: 读取失败", { error: String(err) });
+            return false;
+        }
+    }
+
+    private saveManifest(): void {
+        try {
+            const obj: Record<string, string> = {};
+            for (const [k, v] of this.pathIndex.entries()) {
+                obj[k] = v;
+            }
+            fs.writeFileSync(this.manifestPath, JSON.stringify(obj, null, 2));
+        } catch (err) {
+            log.warn("saveManifest: 写入失败", { error: String(err) });
+        }
+    }
+
     /**
-     * 从磁盘重建 uniqueFileId → path 索引
-     * 通过解析文件名中的第三段 (chatId_msgId_uniqueFileId.ext) 提取
+     * 从 manifest + 磁盘重建 uniqueFileId → path 索引
      */
     private rebuildIndex(): void {
+        this.loadManifest();
+
+        // 回退：扫描磁盘文件，补充 manifest 中缺失的条目
+        let added = 0;
         for (const cat of ["photos", "videos", "stickers", "documents", "other"]) {
             const dir = path.join(this.downloadDir, cat);
             try {
                 const files = fs.readdirSync(dir);
                 for (const file of files) {
-                    // 文件名格式: platform_chatId_msgId_uniqueFileId.ext
+                    if (file.startsWith("_")) continue;
                     const dotIndex = file.lastIndexOf(".");
                     const base = dotIndex > 0 ? file.slice(0, dotIndex) : file;
                     const parts = base.split("_");
-                    // platform(0) + chatId(1) + msgId(2) + uniqueFileId(3+)
                     if (parts.length >= 4) {
                         const uniqueFileId = parts.slice(3).join("_");
-                        this.pathIndex.set(uniqueFileId, path.join(dir, file));
+                        if (!this.pathIndex.has(uniqueFileId)) {
+                            this.pathIndex.set(uniqueFileId, path.join(dir, file));
+                            added++;
+                        }
                     }
                 }
             } catch { /* ignore */ }
         }
+
         if (this.pathIndex.size > 0) {
-            log.debug("rebuildIndex: 已索引文件", { count: this.pathIndex.size });
+            log.debug("rebuildIndex: 已索引文件", { count: this.pathIndex.size, addedFromDisk: added });
+        }
+        if (added > 0) {
+            this.saveManifest();
         }
     }
 
