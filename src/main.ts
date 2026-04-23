@@ -1212,6 +1212,17 @@ async function main(): Promise<void> {
             log.info("Reminder 到期 → Q3", { id: reminder.id, desc: reminder.description.slice(0, 80), chatId: reminder.chatId });
         }
 
+        // ── 清理过期已触发 Reminder（超过 7 天） ──
+        const purgeBefore = Date.now() - 7 * 24 * 60 * 60 * 1000;
+        for (const evt of globalState.getSchedulerEvents()) {
+            if (evt.type !== "reminder" || !evt.triggered || !evt.triggerAt) continue;
+            const triggerAtMs = new Date(evt.triggerAt).getTime();
+            if (!Number.isFinite(triggerAtMs)) continue;
+            if (triggerAtMs < purgeBefore) {
+                globalState.cancelSchedulerEvent(evt.id);
+            }
+        }
+
         // ── Cron 检查 ──
         const allEvents = globalState.getSchedulerEvents();
         for (const evt of allEvents) {

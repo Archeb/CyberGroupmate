@@ -177,6 +177,19 @@ function summarizeMessages(messages: ChatMessage[]): LLMCallEvent["messageSummar
     });
 }
 
+function detectErrorContentPattern(content: string, patterns?: string[]): string | null {
+    if (!patterns || patterns.length === 0) return null;
+    const lowerContent = content.toLowerCase();
+    for (const rawPattern of patterns) {
+        const pattern = rawPattern.trim();
+        if (!pattern) continue;
+        if (lowerContent.includes(pattern.toLowerCase())) {
+            return pattern;
+        }
+    }
+    return null;
+}
+
 // ─── LLM 调用 ───
 
 const MAX_RETRIES = 3;
@@ -405,6 +418,12 @@ async function _callLLMSingleKeyInner(
             // ── 自动拼接 prefill 前缀到返回内容 ──
             if (prefill) {
                 result = { ...result, content: prefill + result.content };
+            }
+
+            // 某些 API 会返回 200 但把错误写进文本内容，这里按配置将其视为失败。
+            const matchedErrorPattern = detectErrorContentPattern(result.content, config.errorContentPatterns);
+            if (matchedErrorPattern) {
+                throw new Error(`response content matched error pattern: ${matchedErrorPattern}`);
             }
 
             // ── 发射 llm:response 事件 ──

@@ -8,6 +8,7 @@
   let feedbackWindows = [];
   let callbacks = [];
   let scheduler = { reminders: [], crons: [], summary: {} };
+  let showTriggeredReminders = false;
 
   $: groups = $appState.groups;
   $: if ($activeTab === 'system') refreshSystem();
@@ -127,27 +128,51 @@
           <i class="fa-solid fa-bell mr-1"></i>Reminders
         </div>
         <div class="space-y-1">
-          {#each scheduler.reminders as r}
-            <div class="flex items-start gap-2 text-xs px-2 py-1.5 bg-base-200 rounded" class:opacity-40={r.triggered}>
+          {#each scheduler.reminders.filter(r => !r.triggered) as r}
+            <div class="flex items-start gap-2 text-xs px-2 py-1.5 bg-base-200 rounded">
               <div class="flex-1 min-w-0">
                 <div class="flex items-center gap-1">
-                  <span class="badge badge-xs" class:badge-success={!r.triggered} class:badge-ghost={r.triggered}>
-                    {r.triggered ? '✓' : '⏳'}
-                  </span>
+                  <span class="badge badge-xs badge-success">⏳</span>
                   {#if getPlatform(r.chatId)}<span class="platform-badge platform-{getPlatform(r.chatId)}">{platformLabel(getPlatform(r.chatId))}</span>{/if}
                   <span class="font-mono">{shortId(r.chatId)}</span>
-                  <span class="opacity-50 ml-auto whitespace-nowrap">{r.triggered ? '已触发' : timeUntil(r.triggerAt)}</span>
+                  <span class="opacity-50 ml-auto whitespace-nowrap">{timeUntil(r.triggerAt)}</span>
                 </div>
                 <div class="mt-0.5 truncate" title={r.description}>{r.description}</div>
               </div>
-              {#if !r.triggered}
-                <button class="btn btn-xs btn-ghost text-error flex-shrink-0" title="取消" on:click={() => cancelEvent(r.id)}>
-                  <i class="fa-solid fa-xmark"></i>
-                </button>
-              {/if}
+              <button class="btn btn-xs btn-ghost text-error flex-shrink-0" title="取消" on:click={() => cancelEvent(r.id)}>
+                <i class="fa-solid fa-xmark"></i>
+              </button>
             </div>
           {/each}
         </div>
+        {#if scheduler.reminders.filter(r => r.triggered).length > 0}
+          <!-- svelte-ignore a11y_click_events_have_key_events -->
+          <!-- svelte-ignore a11y_no_static_element_interactions -->
+          <div
+            class="flex items-center gap-1 text-xs opacity-50 mt-2 cursor-pointer select-none hover:opacity-80"
+            on:click={() => showTriggeredReminders = !showTriggeredReminders}
+          >
+            <i class="fa-solid fa-chevron-right text-[10px] transition-transform" style:transform={showTriggeredReminders ? "rotate(90deg)" : ""}></i>
+            <span>已触发 ({scheduler.reminders.filter(r => r.triggered).length})</span>
+          </div>
+          {#if showTriggeredReminders}
+            <div class="space-y-1 mt-1">
+              {#each scheduler.reminders.filter(r => r.triggered) as r}
+                <div class="flex items-start gap-2 text-xs px-2 py-1.5 bg-base-200 rounded opacity-40">
+                  <div class="flex-1 min-w-0">
+                    <div class="flex items-center gap-1">
+                      <span class="badge badge-xs badge-ghost">✓</span>
+                      {#if getPlatform(r.chatId)}<span class="platform-badge platform-{getPlatform(r.chatId)}">{platformLabel(getPlatform(r.chatId))}</span>{/if}
+                      <span class="font-mono">{shortId(r.chatId)}</span>
+                      <span class="opacity-50 ml-auto whitespace-nowrap">已触发</span>
+                    </div>
+                    <div class="mt-0.5 truncate" title={r.description}>{r.description}</div>
+                  </div>
+                </div>
+              {/each}
+            </div>
+          {/if}
+        {/if}
       {/if}
 
       <!-- Crons -->

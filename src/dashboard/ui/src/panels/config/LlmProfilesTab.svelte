@@ -211,6 +211,24 @@
             <div class="text-xs text-error mt-1"><i class="fa-solid fa-triangle-exclamation mr-1"></i>{p._customHeadersError}</div>
           {/if}
         {/if}
+        <div class="divider text-xs opacity-50 my-2"><i class="fa-solid fa-triangle-exclamation mr-1"></i>错误内容检测（Fallback）</div>
+        <p class="text-xs opacity-40 mb-2">每行一个关键词。若响应文本包含任意关键词，将视为失败并触发 fallback（用于某些返回 200 但内容是错误信息的 API）。</p>
+        <label class="cfg-field"><span class="cfg-label">Error Content Patterns (one per line)</span>
+          <textarea
+            class="textarea textarea-bordered w-full font-mono text-xs"
+            rows="3"
+            placeholder={"Quota exceeded\nrate limit\ninsufficient_quota"}
+            value={(p.errorContentPatterns || []).join("\n")}
+            on:blur={(e) => {
+              const lines = e.target.value
+                .split(/\r?\n/)
+                .map((x) => x.trim())
+                .filter(Boolean);
+              p.errorContentPatterns = lines.length ? lines : undefined;
+              config = config;
+            }}
+          ></textarea>
+        </label>
         <div class="divider text-xs opacity-50 my-2"><i class="fa-solid fa-coins mr-1"></i>Pricing（可选）</div>
         <p class="text-xs opacity-40 mb-2">每百万 token 的价格（美元），用于 token 消耗统计。留空则不计费。</p>
         <div class="cfg-grid-2">
