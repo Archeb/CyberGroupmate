@@ -191,10 +191,14 @@ export class DiscordAdapter implements PlatformAdapter {
             throw new Error("DiscordAdapter is not started");
         }
 
-        switch (method) {
+        const requestId = `dc_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+        const callStart = Date.now();
+        try {
+            switch (method) {
             case "discord.sendText": {
                 // args: [chatId, text, opts?]
                 const channelId = this.extractChannelId(String(args[0] ?? ""));
+                log.info("discord.sendText:start", { requestId, channelId });
                 const channel = await this.client.channels.fetch(channelId);
                 if (!channel?.isTextBased?.()) {
                     throw new Error(`sendText: channel ${channelId} is not text-based`);
@@ -208,13 +212,30 @@ export class DiscordAdapter implements PlatformAdapter {
                     sendOpts.reply = { messageReference: String(opts.replyTo) };
                 }
 
+                const sendStart = Date.now();
                 const sent = await channel.send(sendOpts);
+                log.info("discord.sendText:success", {
+                    requestId,
+                    channelId,
+                    durationMs: Date.now() - callStart,
+                    sendDurationMs: Date.now() - sendStart,
+                    messageId: sent?.id,
+                    textLength: text.length,
+                });
                 return this.normalizeOutgoingMessage(sent);
             }
             case "discord.sendMedia": {
                 // args: [chatId, media, opts?]
                 const channelId = this.extractChannelId(String(args[0] ?? ""));
+                log.info("discord.sendMedia:start", { requestId, channelId });
+
+                const fetchChannelStart = Date.now();
                 const channel = await this.client.channels.fetch(channelId);
+                log.info("discord.sendMedia:channelReady", {
+                    requestId,
+                    channelId,
+                    durationMs: Date.now() - fetchChannelStart,
+                });
                 if (!channel?.isTextBased?.()) {
                     throw new Error(`sendMedia: channel ${channelId} is not text-based`);
                 }
@@ -224,6 +245,8 @@ export class DiscordAdapter implements PlatformAdapter {
                 const sendOpts: Record<string, unknown> = {};
                 if (typeof media.caption === "string") {
                     sendOpts.content = media.caption;
+                } else if (typeof opts.caption === "string") {
+                    sendOpts.content = opts.caption;
                 }
                 if (opts.replyTo) {
                     sendOpts.reply = { messageReference: String(opts.replyTo) };
@@ -235,40 +258,115 @@ export class DiscordAdapter implements PlatformAdapter {
                     const attachment: Record<string, unknown> = {};
                     if (Buffer.isBuffer(media.file) || media.file instanceof Uint8Array) {
                         attachment.attachment = Buffer.from(media.file as Buffer);
+                        log.info("discord.sendMedia:usingBuffer", {
+                            requestId,
+                            channelId,
+                            sizeBytes: (media.file as Buffer | Uint8Array).byteLength,
+                        });
                     } else if (typeof media.file === "string") {
-                        attachment.attachment = media.file; // URL or file path
+                        if (media.file.startsWith("http://") || media.file.startsWith("https://")) {
+                            const downloadStart = Date.now();
+                            attachment.attachment = await this.downloadMediaWithTimeout(media.file, 15_000);
+                            log.info("discord.sendMedia:downloadedMediaFile", {
+                                requestId,
+                                channelId,
+                                url: media.file,
+                                durationMs: Date.now() - downloadStart,
+                                sizeBytes: (attachment.attachment as Buffer).byteLength,
+                            });
+                        } else {
+                            attachment.attachment = media.file;
+                            log.info("discord.sendMedia:usingLocalPath", {
+                                requestId,
+                                channelId,
+                                file: media.file,
+                            });
+                        }
                     }
                     if (typeof media.fileName === "string") {
                         attachment.name = media.fileName;
                     }
                     files.push(attachment);
                 } else if (typeof media.url === "string") {
-                    files.push({ attachment: media.url });
+                    if (media.url.startsWith("http://") || media.url.startsWith("https://")) {
+                        const downloadStart = Date.now();
+                        const downloaded = await this.downloadMediaWithTimeout(media.url, 15_000);
+                        log.info("discord.sendMedia:downloadedMediaUrl", {
+                            requestId,
+                            channelId,
+                            url: media.url,
+                            durationMs: Date.now() - downloadStart,
+                            sizeBytes: downloaded.byteLength,
+                        });
+                        files.push({
+                            attachment: downloaded,
+                            ...(typeof media.fileName === "string" ? { name: media.fileName } : {}),
+                        });
+                    } else {
+                        files.push({ attachment: media.url });
+                        log.info("discord.sendMedia:usingMediaUrlAsAttachment", {
+                            requestId,
+                            channelId,
+                            url: media.url,
+                        });
+                    }
                 }
                 if (files.length > 0) {
                     sendOpts.files = files;
                 }
 
+                const sendStart = Date.now();
                 const sent = await channel.send(sendOpts);
+                log.info("discord.sendMedia:success", {
+                    requestId,
+                    channelId,
+                    durationMs: Date.now() - callStart,
+                    sendDurationMs: Date.now() - sendStart,
+                    fileCount: files.length,
+                    captionLength: typeof sendOpts.content === "string" ? sendOpts.content.length : 0,
+                    messageId: sent?.id,
+                });
                 return this.normalizeOutgoingMessage(sent);
             }
             case "discord.sendTyping": {
                 const channelId = this.extractChannelId(String(args[0] ?? ""));
+                log.info("discord.sendTyping:start", { requestId, channelId });
                 const channel = await this.client.channels.fetch(channelId);
                 if (channel?.isTextBased?.() && typeof channel.sendTyping === "function") {
                     await channel.sendTyping();
                 }
+                log.info("discord.sendTyping:success", { requestId, channelId, durationMs: Date.now() - callStart });
                 return null;
             }
             case "discord.downloadMedia": {
                 // args: [fileId (=URL for Discord), chatId?, messageId?, uniqueFileId?]
                 const url = String(args[0] ?? "");
                 if (!url) throw new Error("discord.downloadMedia: URL is required");
+                log.info("discord.downloadMedia:start", { requestId, url });
+                const downloadStart = Date.now();
                 const buf = await this.downloadMedia(null, url);
+                log.info("discord.downloadMedia:success", {
+                    requestId,
+                    url,
+                    durationMs: Date.now() - downloadStart,
+                    sizeBytes: buf.byteLength,
+                });
                 return { buffer: buf.toString("base64"), size: buf.length };
             }
             default:
                 throw new Error(`Unsupported DiscordAdapter call: ${method}`);
+            }
+        } catch (err) {
+            const errorMessage = err instanceof Error ? err.message : String(err);
+            const errorStack = err instanceof Error ? err.stack : undefined;
+            log.error("discord.handleCall:failed", {
+                requestId,
+                method,
+                durationMs: Date.now() - callStart,
+                error: errorMessage,
+                stack: errorStack,
+            });
+            throw err;
         }
     }
 
@@ -277,6 +375,16 @@ export class DiscordAdapter implements PlatformAdapter {
         const response = await fetch(mediaRef);
         if (!response.ok) {
             throw new Error(`downloadMedia: HTTP ${response.status} for ${mediaRef}`);
+        }
+        const arrayBuffer = await response.arrayBuffer();
+        return Buffer.from(arrayBuffer);
+    }
+
+    private async downloadMediaWithTimeout(url: string, timeoutMs: number): Promise<Buffer> {
+        const signal = AbortSignal.timeout(timeoutMs);
+        const response = await fetch(url, { signal });
+        if (!response.ok) {
+            throw new Error(`sendMedia download failed: HTTP ${response.status} for ${url}`);
         }
         const arrayBuffer = await response.arrayBuffer();
         return Buffer.from(arrayBuffer);
