@@ -480,13 +480,36 @@ export function createApiRouter(deps: DashboardDeps, bridge: EventBridge): Route
     router.post("/codeact/:chatId/cancel", async (req, res) => {
         const chatId = req.params.chatId;
         try {
-            await deps.sandboxPool.destroy(chatId);
+            const sub = deps.subagentManager.get(chatId);
+            const executor = sub?.codeActExecutor as CodeActExecutor | null;
+
+            if (executor) {
+                await executor.cancelCurrentRun();
+            } else {
+                await deps.sandboxPool.destroy(chatId);
+            }
+
             deps.q3.unblock(chatId);
             log.info("CodeAct 手动取消", { chatId });
-            res.json({ ok: true, message: "Sandbox destroyed, queue unblocked" });
+            res.json({ ok: true, message: "Execution cancel requested, queue cleared and sandbox destroyed" });
         } catch (err) {
             res.status(500).json({ error: String(err) });
         }
+    });
+
+    router.post("/codeact/:chatId/reset-session", (req, res) => {
+        const sub = deps.subagentManager.get(req.params.chatId);
+        if (!sub) { res.status(404).json({ error: "chat not found" }); return; }
+        const executor = sub.codeActExecutor as CodeActExecutor | null;
+        if (!executor) { res.status(400).json({ error: "no codeact executor" }); return; }
+        if (executor.isProcessing()) {
+            res.status(409).json({ error: "codeact is processing, cancel it before resetting session" });
+            return;
+        }
+
+        executor.clearSession();
+        log.info("CodeAct session 已重置", { chatId: req.params.chatId });
+        res.json({ ok: true, message: "Session cleared" });
     });
 
     // ─── Recording Pipeline ───

@@ -193,6 +193,8 @@ export class CodeActExecutor {
     private taskQueue: CodeActReplyTask[] = [];
     /** 是否正在处理任务 */
     private processing = false;
+    /** 用户是否请求取消当前执行 */
+    private cancelRequested = false;
 
     /** 上次 compact 时间 */
     lastCompactedAt: string | null = null;
@@ -347,20 +349,25 @@ export class CodeActExecutor {
 
         } catch (err) {
             const durationMs = Date.now() - startTime;
+            const cancelledByUser = this.cancelRequested;
             const callback: SubagentCallback = {
                 taskId: task.taskId,
                 chatId: this.chatId,
                 chatTitle: task.contextSnapshot.chatTitle ?? task.contextSnapshot.groupModel?.chatTitle,
                 isDirectMessage: task.contextSnapshot.isDirectMessage,
                 executionType: "CODEACT",
-                status: "ERROR",
-                summary: `Execution failed: ${String(err)}`,
-                error: String(err),
+                status: cancelledByUser ? "SKIPPED" : "ERROR",
+                summary: cancelledByUser ? "Execution cancelled by user" : `Execution failed: ${String(err)}`,
+                error: cancelledByUser ? undefined : String(err),
                 durationMs,
                 createdAt: new Date().toISOString(),
             };
 
-            log.error("execute: 失败", { chatId: this.chatId, taskId: task.taskId, error: String(err) });
+            if (cancelledByUser) {
+                log.info("execute: 已取消", { chatId: this.chatId, taskId: task.taskId, error: String(err) });
+            } else {
+                log.error("execute: 失败", { chatId: this.chatId, taskId: task.taskId, error: String(err) });
+            }
             return callback;
         }
     }
@@ -849,7 +856,22 @@ export class CodeActExecutor {
      */
     clearSession(): void {
         this.session = [];
+        this.executionRecords = [];
+        this.pendingMessages = [];
         this.lastCompactedAt = null;
+        this.saveSession();
+    }
+
+    async cancelCurrentRun(): Promise<void> {
+        this.cancelRequested = true;
+        this.taskQueue = [];
+        this.pendingMessages = [];
+
+        if (this.sandboxPool) {
+            await this.sandboxPool.destroy(this.chatId);
+        }
+
+        log.info("cancelCurrentRun: 已请求取消", { chatId: this.chatId });
     }
 
     // ─── 内部方法 ───
@@ -862,6 +884,11 @@ export class CodeActExecutor {
 
         try {
             while (this.taskQueue.length > 0) {
+                if (this.cancelRequested) {
+                    this.taskQueue = [];
+                    break;
+                }
+
                 const task = this.taskQueue.shift()!;
 
                 // 层 1: 执行前刷新目标消息
@@ -874,6 +901,11 @@ export class CodeActExecutor {
                     this.callbackHandler(callback);
                 }
 
+                if (this.cancelRequested) {
+                    this.taskQueue = [];
+                    break;
+                }
+
                 // 每次任务完成后 compact session（从任务开始前移至此处，避免延迟任务执行）
                 if (this.session.length > this.config.maxSessionMessages) {
                     await this.compactSession();
@@ -884,6 +916,7 @@ export class CodeActExecutor {
             }
         } finally {
             this.processing = false;
+            this.cancelRequested = false;
         }
     }
 

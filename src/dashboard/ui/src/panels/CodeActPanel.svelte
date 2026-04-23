@@ -1,5 +1,5 @@
 <script>
-  import { appState, selectedCodeActChatId, activeTab, codeActProgress } from '../lib/stores.js';
+  import { appState, selectedCodeActChatId, activeTab, codeActProgress, clearCodeActProgress } from '../lib/stores.js';
   import { api } from '../lib/api.js';
   import { shortId, getGroupLabel, formatCodeActContent, isAtBottom, scrollToBottom, getPlatform, platformLabel } from '../lib/utils.js';
   import { onDestroy, tick } from 'svelte';
@@ -54,6 +54,14 @@
     if (!confirm(`确认取消 ${$selectedCodeActChatId} 的 CodeAct 执行？`)) return;
     await api(`/codeact/${$selectedCodeActChatId}/cancel`, { method: 'POST' });
     await refreshSession($selectedCodeActChatId);
+  }
+
+  async function resetCodeActSession() {
+    if (!$selectedCodeActChatId || sessionData.isProcessing) return;
+    if (!confirm(`确认重置 ${$selectedCodeActChatId} 的 CodeAct Session？这会清空当前 runner 上下文。`)) return;
+    await api(`/codeact/${$selectedCodeActChatId}/reset-session`, { method: 'POST' });
+    clearCodeActProgress($selectedCodeActChatId);
+    await refreshSession($selectedCodeActChatId, true);
   }
 
   /** 获取 phase 的中文标签和样式类 */
@@ -126,8 +134,21 @@
               <span class="badge badge-xs badge-warning animate-pulse ml-1">执行中</span>
             {/if}
           </h3>
-          {#if sessionData.isProcessing}
-            <button class="btn btn-xs btn-error" onclick={cancelCodeAct}>取消执行</button>
+          {#if $selectedCodeActChatId}
+            <div class="flex gap-1">
+              <button
+                class="btn btn-xs btn-ghost"
+                title={sessionData.isProcessing ? '执行中，请先取消当前任务再重置 Session' : '清空当前 CodeAct runner 上下文'}
+                disabled={sessionData.isProcessing}
+                onclick={resetCodeActSession}
+              >
+                <i class="fa-solid fa-rotate-left"></i>
+                Reset Session
+              </button>
+              {#if sessionData.isProcessing}
+                <button class="btn btn-xs btn-error" onclick={cancelCodeAct}>取消执行</button>
+              {/if}
+            </div>
           {/if}
         </div>
 
