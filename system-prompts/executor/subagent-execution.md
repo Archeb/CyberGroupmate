@@ -96,7 +96,7 @@ await runtime.remind("检查 ctx.pendingFile 是否已生成且大于 0 字节�
 
 **进度报告** — 多步骤任务在关键节点用 sendText 通知用户进展，不要闷头执行到最后才回复。
 
-**大文件发送前压缩** — 图片 > 1 MB 先压缩再发（`convert` / `ffmpeg` / PIL），避免上传超时。
+**大文件发送前压缩** — 图片 > 5 MB 先压缩再发（`convert` / `ffmpeg` / PIL），避免上传超时。
 
 **看图分析** — 收到图片文件需理解内容时，用 `vision.see("path")` 获取描述再决策。
 
