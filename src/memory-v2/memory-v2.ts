@@ -434,6 +434,22 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
             );
             CREATE INDEX IF NOT EXISTS idx_todo_chat_due ON todo_items(chat_id, due_at);
         `);
+
+        // 回填 person_identities.total_message_count（历史数据从 person_group_profiles 汇总）
+        this.db.exec(`
+            UPDATE person_identities
+            SET total_message_count = COALESCE((
+                SELECT SUM(message_count)
+                FROM person_group_profiles
+                WHERE person_group_profiles.user_id = person_identities.user_id
+            ), 0)
+            WHERE total_message_count = 0
+              AND EXISTS (
+                SELECT 1 FROM person_group_profiles
+                WHERE person_group_profiles.user_id = person_identities.user_id
+                  AND person_group_profiles.message_count > 0
+              )
+        `);
     }
 
     // ─── 写入方法 ───
@@ -881,6 +897,16 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
                 ts,
             );
             log.debug("incrementProfileStats: INSERT", { userId, chatId, count: stats.messageCountDelta });
+        }
+
+        // 同步更新 person_identities.total_message_count
+        if (stats.messageCountDelta > 0) {
+            this.db.prepare(`
+                UPDATE person_identities
+                SET total_message_count = total_message_count + ?,
+                    updated_at = ?
+                WHERE user_id = ?
+            `).run(stats.messageCountDelta, ts, userId);
         }
     }
 
