@@ -1,4 +1,5 @@
 <script>
+  import { tick } from 'svelte';
   import { activeTab } from '../lib/stores.js';
   import { api } from '../lib/api.js';
   import MonacoEditor from '../components/MonacoEditor.svelte';
@@ -9,6 +10,9 @@
   let saving = false;
   let notice = null;
   let wasMcpTabActive = false;
+  let editModal;
+  let editingServerName = null;
+  let editingConfigJson = '{}';
 
   $: {
     const isMcpTabActive = $activeTab === 'mcp';
@@ -44,25 +48,44 @@
     loading = false;
   }
 
-  async function saveConfigs() {
+  function parseConfigs() {
+    const configs = JSON.parse(configJson || '[]');
+    if (!Array.isArray(configs)) {
+      throw new Error('顶层必须是 JSON 数组');
+    }
+    return configs;
+  }
+
+  async function persistConfigs(configs) {
     saving = true;
     try {
-      const configs = JSON.parse(configJson || '[]');
       const res = await api('/mcp/configs', {
         method: 'PUT',
         body: { configs },
       });
       if (res.error) {
         showNotice('保存失败: ' + res.error, 'error');
-      } else {
-        servers = res.servers || [];
-        configJson = JSON.stringify(res.configs || configs, null, 2);
-        showNotice('全局 MCP 配置已应用', 'success');
+        return false;
       }
+      servers = res.servers || [];
+      configJson = JSON.stringify(res.configs || configs, null, 2);
+      showNotice('全局 MCP 配置已应用', 'success');
+      return true;
+    } catch (err) {
+      showNotice('保存失败: ' + err, 'error');
+      return false;
+    } finally {
+      saving = false;
+    }
+  }
+
+  async function saveConfigs() {
+    try {
+      const configs = parseConfigs();
+      await persistConfigs(configs);
     } catch (err) {
       showNotice('JSON 无效: ' + err, 'error');
     }
-    saving = false;
   }
 
   async function disconnectServer(name) {
@@ -76,6 +99,66 @@
       showNotice(`${name} 已卸载`, 'success');
     } catch (err) {
       showNotice('卸载失败: ' + err, 'error');
+    }
+  }
+
+  function editServer(name) {
+    try {
+      const configs = parseConfigs();
+      const target = configs.find((config) => config.name === name);
+      if (!target) {
+        showNotice(`未找到 ${name} 的配置，请先刷新`, 'error');
+        return;
+      }
+      editingServerName = name;
+      editingConfigJson = JSON.stringify(target, null, 2);
+      editModal?.showModal();
+    } catch (err) {
+      showNotice('无法打开编辑器: ' + err, 'error');
+    }
+  }
+
+  async function applyServerEdit(applyNow = false) {
+    try {
+      if (!editingServerName) {
+        throw new Error('当前没有正在编辑的 Server');
+      }
+
+      const configs = parseConfigs();
+      const nextConfig = JSON.parse(editingConfigJson || '{}');
+      if (!nextConfig || typeof nextConfig !== 'object' || Array.isArray(nextConfig)) {
+        throw new Error('编辑内容必须是单个 JSON 对象');
+      }
+      if (!nextConfig.name) {
+        throw new Error('Server 配置缺少 name');
+      }
+
+      const targetIndex = configs.findIndex((config) => config.name === editingServerName);
+      if (targetIndex < 0) {
+        throw new Error(`未找到 ${editingServerName} 的原始配置`);
+      }
+
+      const duplicateIndex = configs.findIndex((config, index) => index !== targetIndex && config.name === nextConfig.name);
+      if (duplicateIndex >= 0) {
+        throw new Error(`已存在同名 Server: ${nextConfig.name}`);
+      }
+
+      const nextConfigs = [...configs];
+      nextConfigs[targetIndex] = nextConfig;
+      configJson = JSON.stringify(nextConfigs, null, 2);
+      await tick();
+
+      if (applyNow) {
+        const ok = await persistConfigs(nextConfigs);
+        if (!ok) return;
+      } else {
+        showNotice(`${nextConfig.name} 已写回配置编辑器，点击“应用 JSON 配置”后生效`, 'success');
+      }
+
+      editingServerName = null;
+      editModal?.close();
+    } catch (err) {
+      showNotice('编辑失败: ' + err, 'error');
     }
   }
 
@@ -189,9 +272,14 @@
                         </div>
                       {/if}
                     </div>
-                    <button class="btn btn-error btn-outline btn-xs" on:click={() => disconnectServer(srv.name)}>
-                      卸载
-                    </button>
+                    <div class="flex shrink-0 gap-2">
+                      <button class="btn btn-ghost btn-outline btn-xs" on:click={() => editServer(srv.name)}>
+                        编辑
+                      </button>
+                      <button class="btn btn-error btn-outline btn-xs" on:click={() => disconnectServer(srv.name)}>
+                        卸载
+                      </button>
+                    </div>
                   </div>
                 </div>
               {/each}
@@ -204,7 +292,7 @@
         <div class="card-body p-4 space-y-3">
           <div>
             <h3 class="card-title text-base">安装配置 JSON</h3>
-            <p class="text-sm text-base-content/60">直接编辑全局安装配置数组。保存后会按 JSON 全量替换当前 MCP 安装状态。</p>
+            <p class="text-sm text-base-content/60">直接编辑全局安装配置数组。左侧“编辑”会把单个 Server 配置写回这里；保存后会按 JSON 全量替换当前 MCP 安装状态。</p>
           </div>
 
           <MonacoEditor bind:value={configJson} language="json" height={560} />
@@ -217,3 +305,22 @@
     </div>
   </div>
 </div>
+
+<dialog bind:this={editModal} class="modal">
+  <div class="modal-box max-w-3xl space-y-4">
+    <div>
+      <h3 class="text-lg font-bold">编辑 MCP Server</h3>
+      <p class="text-sm text-base-content/60">修改当前 Server 的单条 JSON 配置。可以先写回右侧编辑器，也可以直接写回并应用。</p>
+    </div>
+
+    <MonacoEditor bind:value={editingConfigJson} language="json" height={360} />
+
+    <div class="modal-action">
+      <button class="btn btn-ghost" on:click={() => editModal?.close()}>取消</button>
+      <button class="btn btn-outline" on:click={() => applyServerEdit(false)} disabled={saving}>写回编辑器</button>
+      <button class="btn btn-primary" on:click={() => applyServerEdit(true)} disabled={saving}>
+        {saving ? '应用中...' : '写回并应用'}
+      </button>
+    </div>
+  </div>
+</dialog>
