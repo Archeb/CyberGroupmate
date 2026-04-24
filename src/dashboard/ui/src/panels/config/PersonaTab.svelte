@@ -22,9 +22,9 @@
     /></label
   >
 </div>
-<label class="cfg-field mb-4"
+<div class="cfg-field mb-4"
   ><span class="cfg-label">人格描述</span>
-  <MonacoEditor bind:value={config.persona.description} language="markdown" height={220} /></label
+  <MonacoEditor bind:value={config.persona.description} language="markdown" height={220} /></div
 >
 
 <div class="divider text-xs opacity-50 my-2">

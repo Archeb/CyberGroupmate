@@ -132,7 +132,7 @@
     <span>启用白名单</span>
   </label>
   <div class="cfg-grid-2">
-    <label class="cfg-field col-span-2"
+    <div class="cfg-field col-span-2"
       ><span class="cfg-label">群组 ID（每行一个，如 -1001234567890）</span>
       <MonacoEditor
         language="plaintext"
@@ -144,9 +144,9 @@
             .map((s) => s.trim())
             .filter(Boolean);
         }}
-      /></label
+      /></div
     >
-    <label class="cfg-field col-span-2"
+    <div class="cfg-field col-span-2"
       ><span class="cfg-label">私聊用户 ID（每行一个）</span>
       <MonacoEditor
         language="plaintext"
@@ -158,7 +158,7 @@
             .map((s) => s.trim())
             .filter(Boolean);
         }}
-      /></label
+      /></div
     >
   </div>
 </div>
