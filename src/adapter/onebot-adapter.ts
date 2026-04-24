@@ -79,6 +79,15 @@ export class OneBotAdapter implements PlatformAdapter {
     private static readonly RECONNECT_MAX_MS = 30_000;
     private readonly pending = new Map<string, { resolve: (v: unknown) => void; reject: (err: Error) => void; timer: NodeJS.Timeout }>();
     private readonly mutedChats = new Map<string, number>();
+    /** 缓存群名：groupId → group_name
+    * OneBot get_group_info 返回 group_name 字段
+    * 群管理员改名后通过 notice 事件更新
+    */
+    private readonly groupNameCache = new Map<string, string>();
+    /** 缓存用户昵称：userId → nickname
+    * OneBot get_stranger_info / get_friend_list 返回 nickname 字段
+    */
+    private readonly userNickCache = new Map<string, string>();
 
     constructor(
         private config: OneBotConfig,
@@ -94,6 +103,9 @@ export class OneBotAdapter implements PlatformAdapter {
         this.stopRequested = false;
         this.reconnectAttempts = 0;
         await this.connect();
+
+        // 连接成功后预加载白名单群组的名称
+        this.prefetchWhitelistedGroups();
     }
 
     private connect(): Promise<void> {
@@ -184,6 +196,59 @@ export class OneBotAdapter implements PlatformAdapter {
         this.ws.close();
         this.ws = null;
         this.started = false;
+    }
+
+    /**
+     * 连接成功后预加载白名单群组名称和私聊用户昵称。
+     * 调用 get_group_list 和 get_friend_list 批量获取，
+     * 填充缓存使快照立即显示群名而非群号。
+     */
+    private prefetchWhitelistedGroups(): void {
+        // 异步执行，不阻塞 start()
+        (async () => {
+            try {
+                // 1. 获取群列表
+                const groupListResult = await this.callAction("get_group_list", {}) as Record<string, unknown>;
+                const groupListData = groupListResult?.data ?? groupListResult;
+                if (Array.isArray(groupListData)) {
+                    for (const g of groupListData) {
+                        const gid = String(g.group_id ?? "");
+                        const gname = String(g.group_name ?? "");
+                        if (gid && gname) {
+                            this.groupNameCache.set(gid, gname);
+                        }
+                    }
+                    log.info("预加载群列表成功", { count: groupListData.length, cached: this.groupNameCache.size });
+                }
+            } catch (err) {
+                log.warn("预加载群列表失败", { error: String(err) });
+            }
+
+            try {
+                // 2. 获取好友列表（私聊用户昵称）
+                const friendListResult = await this.callAction("get_friend_list", {}) as Record<string, unknown>;
+                const friendListData = friendListResult?.data ?? friendListResult;
+                if (Array.isArray(friendListData)) {
+                    for (const f of friendListData) {
+                        const uid = String(f.user_id ?? "");
+                        const nick = String(f.nickname ?? "");
+                        if (uid && nick) {
+                            this.userNickCache.set(uid, nick);
+                        }
+                    }
+                    log.info("预加载好友列表成功", { count: friendListData.length, cached: this.userNickCache.size });
+                }
+            } catch (err) {
+                log.warn("预加载好友列表失败", { error: String(err) });
+            }
+        })();
+    }
+
+    /**
+     * 获取所有已缓存的群名和用户昵称，供外部批量更新 GroupModel。
+     */
+    getCachedNames(): { groupNames: ReadonlyMap<string, string>; userNicks: ReadonlyMap<string, string> } {
+        return { groupNames: this.groupNameCache, userNicks: this.userNickCache };
     }
 
     canHandle(method: string): boolean {
@@ -711,39 +776,32 @@ export class OneBotAdapter implements PlatformAdapter {
         }
 
         const event = payload as OneBotIncomingEvent;
+
+        // 处理 notice 事件（群名变更等）
+        if (event.post_type === "notice") {
+            this.handleNoticeEvent(event);
+            return;
+        }
+
         if (event.post_type !== "message") return;
         if (String(event.self_id ?? "") !== String(this.config.selfId)) return;
 
-        const normalized = this.normalizeIncomingMessage(event);
-        if (!normalized) return;
+        // normalizeIncomingMessage 是异步的（需要调用 OneBot API 获取群名/昵称）
+        this.normalizeIncomingMessage(event).then(normalized => {
+            if (!normalized) return;
 
-        this.nc.push({
-            type: "nc.message",
-            scene: "onebot",
-            source: {
+            this.nc.push({
+                type: "nc.message",
                 scene: "onebot",
-                platform: "onebot",
-                chatId: normalized.chatId,
-                userId: normalized.userId,
-                chatType: normalized.chatType,
-                messageId: normalized.messageId,
-                replyToMessageId: normalized.replyToMessageId,
-            },
-            chatId: normalized.chatId,
-            userId: normalized.userId,
-            displayName: normalized.displayName,
-            username: normalized.username,
-            text: normalized.text,
-            timestamp: normalized.timestamp,
-            messageId: normalized.messageId,
-            replyToMessageId: normalized.replyToMessageId,
-            chatTitle: normalized.chatTitle,
-            chatType: normalized.chatType,
-            isDirectMessage: normalized.isDirectMessage,
-            mentionsAgent: normalized.mentionsAgent,
-            mediaInfo: normalized.mediaInfo,
-            payload: {
-                scene: "onebot",
+                source: {
+                    scene: "onebot",
+                    platform: "onebot",
+                    chatId: normalized.chatId,
+                    userId: normalized.userId,
+                    chatType: normalized.chatType,
+                    messageId: normalized.messageId,
+                    replyToMessageId: normalized.replyToMessageId,
+                },
                 chatId: normalized.chatId,
                 userId: normalized.userId,
                 displayName: normalized.displayName,
@@ -757,24 +815,120 @@ export class OneBotAdapter implements PlatformAdapter {
                 isDirectMessage: normalized.isDirectMessage,
                 mentionsAgent: normalized.mentionsAgent,
                 mediaInfo: normalized.mediaInfo,
-                source: {
+                payload: {
                     scene: "onebot",
-                    platform: "onebot",
                     chatId: normalized.chatId,
                     userId: normalized.userId,
-                    chatType: normalized.chatType,
+                    displayName: normalized.displayName,
+                    username: normalized.username,
+                    text: normalized.text,
+                    timestamp: normalized.timestamp,
                     messageId: normalized.messageId,
                     replyToMessageId: normalized.replyToMessageId,
+                    chatTitle: normalized.chatTitle,
+                    chatType: normalized.chatType,
+                    isDirectMessage: normalized.isDirectMessage,
+                    mentionsAgent: normalized.mentionsAgent,
+                    mediaInfo: normalized.mediaInfo,
+                    source: {
+                        scene: "onebot",
+                        platform: "onebot",
+                        chatId: normalized.chatId,
+                        userId: normalized.userId,
+                        chatType: normalized.chatType,
+                        messageId: normalized.messageId,
+                        replyToMessageId: normalized.replyToMessageId,
+                    },
+                    platformData: {
+                        originalType: "onebot.message",
+                    },
                 },
-                platformData: {
-                    originalType: "onebot.message",
-                },
-            },
-            _urgent: normalized.isDirectMessage || normalized.mentionsAgent || normalized.replyToMessageId ? true : false,
+                _urgent: normalized.isDirectMessage || normalized.mentionsAgent || normalized.replyToMessageId ? true : false,
+            });
+        }).catch(err => {
+            log.warn("异步处理 OneBot 消息失败", { error: String(err) });
         });
     }
 
-    private normalizeIncomingMessage(event: OneBotIncomingEvent) {
+
+    /**
+     * 处理 OneBot notice 事件：群名变更、群成员昵称变更等。
+     * 这些事件用于实时更新缓存，确保 chatTitle 始终反映最新状态。
+     */
+    private handleNoticeEvent(event: OneBotIncomingEvent): void {
+        const noticeType = (event as Record<string, unknown>).notice_type;
+
+        if (noticeType === "group_name_change") {
+            // 群名变更事件（NapCat 扩展）
+            const groupId = String(event.group_id ?? "");
+            const newName = String((event as Record<string, unknown>).group_name ?? "");
+            if (groupId && newName) {
+                const oldName = this.groupNameCache.get(groupId);
+                this.groupNameCache.set(groupId, newName);
+                log.info("群名变更", { groupId, oldName, newName });
+            }
+            return;
+        }
+
+        if (noticeType === "group_card" || noticeType === "group_card_change") {
+            // 群成员昵称变更（部分实现支持的扩展事件）
+            const userId = String(event.user_id ?? "");
+            const card = String(event.sender?.card ?? (event as Record<string, unknown>).card ?? "");
+            if (userId && card) {
+                this.userNickCache.set(userId, card);
+                log.debug("群名片变更", { userId, card });
+            }
+            return;
+        }
+    }
+
+    /**
+     * 异步获取群名称，带缓存。
+     * 调用 OneBot get_group_info API，成功后缓存结果。
+     */
+    private async fetchGroupName(groupId: string): Promise<string | undefined> {
+        if (this.groupNameCache.has(groupId)) {
+            return this.groupNameCache.get(groupId)!;
+        }
+        try {
+            const result = await this.callAction("get_group_info", { group_id: Number(groupId) }) as Record<string, unknown>;
+            const data = (result?.data ?? result) as Record<string, unknown> | undefined;
+            const name = typeof data?.group_name === "string" ? data.group_name : undefined;
+            if (name) {
+                this.groupNameCache.set(groupId, name);
+                log.debug("获取群名成功", { groupId, groupName: name });
+            }
+            return name;
+        } catch (err) {
+            log.warn("获取群名失败", { groupId, error: String(err) });
+            return undefined;
+        }
+    }
+
+    /**
+     * 异步获取用户昵称，带缓存。
+     * 调用 OneBot get_stranger_info API，成功后缓存结果。
+     */
+    private async fetchUserNickname(userId: string): Promise<string | undefined> {
+        if (this.userNickCache.has(userId)) {
+            return this.userNickCache.get(userId)!;
+        }
+        try {
+            const result = await this.callAction("get_stranger_info", { user_id: Number(userId) }) as Record<string, unknown>;
+            const data = (result?.data ?? result) as Record<string, unknown> | undefined;
+            const nickname = typeof data?.nickname === "string" ? data.nickname : undefined;
+            if (nickname) {
+                this.userNickCache.set(userId, nickname);
+                log.debug("获取用户昵称成功", { userId, nickname });
+            }
+            return nickname;
+        } catch (err) {
+            log.warn("获取用户昵称失败", { userId, error: String(err) });
+            return undefined;
+        }
+    }
+
+    private async normalizeIncomingMessage(event: OneBotIncomingEvent) {
         const messageType = event.message_type;
         const userId = String(event.user_id ?? event.sender?.user_id ?? "");
         if (!userId) return null;
@@ -796,6 +950,24 @@ export class OneBotAdapter implements PlatformAdapter {
         const replyToMessageId = this.extractReplyTo(normalizedMessage) ?? (event.reply?.message_id != null ? String(event.reply.message_id) : undefined);
         const normalizedText = text || (mediaInfo ? this.mediaPlaceholder(mediaInfo.type) : "");
 
+        // 异步获取群名或用户昵称作为 chatTitle
+        let chatTitle: string | undefined;
+        if (messageType === "group") {
+            const groupId = String(event.group_id ?? "");
+            chatTitle = await this.fetchGroupName(groupId);
+            // 回退：缓存未命中时先用群号，后台获取成功后会在下条消息更新
+            if (!chatTitle) chatTitle = groupId;
+        } else {
+            // 私聊：用对方昵称作为 chatTitle
+            const nickname = await this.fetchUserNickname(userId);
+            chatTitle = nickname || displayName;
+        }
+
+        // 缓存发送者昵称（群聊时也缓存群成员昵称）
+        if (event.sender?.nickname && userId) {
+            this.userNickCache.set(userId, event.sender.nickname);
+        }
+
         return {
             chatId,
             userId,
@@ -805,7 +977,7 @@ export class OneBotAdapter implements PlatformAdapter {
             timestamp: new Date((event.time ?? Math.floor(Date.now() / 1000)) * 1000).toISOString(),
             messageId,
             replyToMessageId,
-            chatTitle: messageType === "group" ? String(event.group_id ?? "") : undefined,
+            chatTitle,
             chatType: messageType === "group" ? "group" : "private",
             isDirectMessage: messageType === "private",
             mentionsAgent,

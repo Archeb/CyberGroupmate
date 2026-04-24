@@ -11,6 +11,7 @@
     escapeHtml,
     shortId,
     getGroupLabel,
+    getChatTypeLabel,
     isAtBottom,
     scrollToBottom,
     getPlatform,
@@ -176,6 +177,10 @@
     );
   }
 
+  function editChatTitle(chatId) {
+    window.dispatchEvent(new CustomEvent('memoryEdit', { detail: { type: 'group', chatId } }));
+  }
+
   // Auto-scroll on new messages
   let wasBottom = true;
   $: if (displayMessages && streamEl) {
@@ -218,6 +223,7 @@
           {#each allChatIds as chatId}
             {@const count = $messages.filter((m) => m.chatId === chatId).length}
             {@const plat = getPlatform(chatId)}
+            {@const chatType = getChatTypeLabel(chatId)}
             <button
               class="chat-item"
               class:active={$selectedChatId === chatId}
@@ -228,9 +234,13 @@
                 {#if plat}<span class="platform-badge platform-{plat}"
                     >{platformLabel(plat)}</span
                   >{/if}
+                {#if chatType}<span class="chat-type-badge">{chatType}</span>{/if}
                 {getGroupLabel(chatId)}
               </span>
               <span class="flex items-center gap-1">
+                <span class="chat-edit-btn" title="编辑群名/显示名" onclick={(e) => { e.stopPropagation(); editChatTitle(chatId); }}>
+                  <i class="fa-solid fa-pen" style="font-size:0.55rem"></i>
+                </span>
                 {#if mutedChatIds.has(chatId)}<span title="禁言中"><i class="fa-solid fa-volume-xmark" style="font-size:0.65rem;color:var(--color-warning)"></i></span>{/if}
                 <span class="badge badge-sm">{count}</span>
               </span>
@@ -447,6 +457,32 @@
     flex-shrink: 0;
     text-align: center;
     display: inline-block;
+  }
+
+
+  .chat-type-badge {
+    font-size: 0.6rem;
+    padding: 0.05rem 0.3rem;
+    border-radius: 0.15rem;
+    background: color-mix(in srgb, var(--color-secondary) 15%, transparent);
+    color: var(--color-secondary);
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+
+  .chat-edit-btn {
+    opacity: 0;
+    cursor: pointer;
+    padding: 0.15rem 0.25rem;
+    border-radius: 0.15rem;
+    transition: opacity 0.15s, background 0.15s;
+  }
+  .chat-item:hover .chat-edit-btn {
+    opacity: 0.5;
+  }
+  .chat-edit-btn:hover {
+    opacity: 1 !important;
+    background: var(--color-base-200);
   }
 
   .chat-item {
