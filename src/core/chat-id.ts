@@ -24,13 +24,16 @@ export interface ParsedChatId {
     /** 原始 ID（完整，不含平台前缀） */
     rawId: string;
     /**
-     * Discord Guild ID（仅 Discord 三段式有值）。
-     * Telegram 群组本身即为 group，此字段为 undefined。
+     * 群组 ID。各平台含义：
+     * - Discord: Guild ID（三段式时有值，DM 时 undefined）
+     * - OneBot: 群聊 ID（onebot:group:xxx → xxx，私聊时 undefined）
+     * - Telegram: 群组即 chatId 本身，此字段为 undefined
      */
     groupId?: string;
     /**
-     * Discord Channel/Thread ID（仅 Discord 三段式有值）。
-     * Telegram 无 channel 层，此字段为 undefined。
+     * 频道/子级 ID。各平台含义：
+     * - Discord: Channel/Thread ID（三段式时有值）
+     * - OneBot/Telegram: 无此层级，此字段为 undefined
      */
     channelId?: string;
 }
@@ -67,6 +70,12 @@ export function composeChatId(platform: PlatformName, ...parts: string[]): strin
  *
  * parseChatId("discord:user789")
  *   → { platform: "discord", rawId: "user789" }  (DM, 无 groupId/channelId)
+ *
+ * parseChatId("onebot:group:679691983")
+ *   → { platform: "onebot", rawId: "group:679691983", groupId: "679691983" }
+ *
+ * parseChatId("onebot:private:1694442676")
+ *   → { platform: "onebot", rawId: "private:1694442676" }  (私聊, 无 groupId)
  */
 export function parseChatId(compositeId: string): ParsedChatId {
     if (!compositeId) {
@@ -107,6 +116,15 @@ export function parseChatId(compositeId: string): ParsedChatId {
             result.channelId = rest.slice(secondColon + 1);
         }
         // 二段式 DM: discord:userId — 无 groupId/channelId
+    }
+
+    // OneBot 三段式: onebot:group:groupId / onebot:private:userId
+    if (platform === "onebot") {
+        const secondColon = rest.indexOf(":");
+        if (secondColon !== -1 && rest.slice(0, secondColon) === "group") {
+            result.groupId = rest.slice(secondColon + 1);
+        }
+        // onebot:private:xxx → 无 groupId（私聊不是群组）
     }
 
     return result;

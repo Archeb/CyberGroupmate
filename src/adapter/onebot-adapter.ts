@@ -362,10 +362,9 @@ export class OneBotAdapter implements PlatformAdapter {
     private async sendMessage(chatId: string, text: string, opts: Record<string, unknown>): Promise<unknown> {
         const parsed = parseChatId(chatId);
         const message = this.applyReplyTo(text, opts.replyTo);
-        if (parsed.rawId.startsWith("group:")) {
-            const groupId = parsed.rawId.slice("group:".length);
+        if (parsed.groupId != null) {
             return this.callAction("send_group_msg", {
-                group_id: Number(groupId),
+                group_id: Number(parsed.groupId),
                 message,
             });
         }
@@ -382,10 +381,9 @@ export class OneBotAdapter implements PlatformAdapter {
     private async sendMedia(chatId: string, media: Record<string, unknown>, opts: Record<string, unknown>): Promise<unknown> {
         const parsed = parseChatId(chatId);
         const segments = await this.buildOutgoingSegments(media, opts);
-        if (parsed.rawId.startsWith("group:")) {
-            const groupId = parsed.rawId.slice("group:".length);
+        if (parsed.groupId != null) {
             return this.callAction("send_group_msg", {
-                group_id: Number(groupId),
+                group_id: Number(parsed.groupId),
                 message: segments,
             });
         }
@@ -611,10 +609,9 @@ export class OneBotAdapter implements PlatformAdapter {
         if (typeof opts.text === "string" && opts.text.trim()) {
             segments.push({ type: "text", data: { text: opts.text } });
         }
-        if (parsed.rawId.startsWith("group:")) {
-            const groupId = parsed.rawId.slice("group:".length);
+        if (parsed.groupId != null) {
             return this.callAction("send_group_msg", {
-                group_id: Number(groupId),
+                group_id: Number(parsed.groupId),
                 message: segments,
             });
         }
@@ -631,7 +628,7 @@ export class OneBotAdapter implements PlatformAdapter {
     private async deleteMessages(chatId: string, messageIds: string[]): Promise<void> {
         if (messageIds.length === 0) return;
         const parsed = parseChatId(chatId);
-        if (!parsed.rawId.startsWith("group:")) {
+        if (parsed.groupId == null) {
             throw new Error("deleteMessages: OneBot 目前仅支持群消息撤回");
         }
         for (const id of messageIds) {
