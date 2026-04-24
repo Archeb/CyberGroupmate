@@ -21,6 +21,7 @@ import { SandboxPool } from "../sandbox/sandbox-pool.js";
 import { NotificationCenter } from "../event/notification-center.js";
 import { runCodeActSession, SentMessageCollector, type SessionResult, type SentMessageRecord } from "../sandbox/session-runner.js";
 import { loadModuleRegistry, lookupFullDocs, generateBriefOverview, type ModuleEntry } from "../sandbox/modules/module-registry.js";
+import { getMcpModuleEntries } from "../sandbox/modules/mcp-bridge/index.js";
 import { parseAllSkillDocs } from "../sandbox/skill-loader.js";
 import { buildPrefixMap } from "../sandbox/api-intent-extractor.js";
 import { renderPrompt, deriveChatType } from "../main-agent/prompt-renderer.js";
@@ -51,8 +52,9 @@ let _moduleRegistryCache: ModuleEntry[] | null = null;
  */
 export function refreshModuleRegistryCache(): void {
     const builtin = loadModuleRegistry() || [];
+    const mcp = getMcpModuleEntries() || [];
     const skills = parseAllSkillDocs() || [];
-    _moduleRegistryCache = [...builtin, ...skills];
+    _moduleRegistryCache = [...builtin, ...mcp, ...skills];
     _apiBriefCache.clear(); // 清除 brief 缓存，强制重新生成
 }
 

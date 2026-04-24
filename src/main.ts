@@ -52,6 +52,8 @@ import { createAttendHandler } from "./main-agent/attend-handler.js";
 import { createDispatchHandler } from "./main-agent/dispatch-handler.js";
 import { evaluateStickiness, createStickiness, updateStickiness } from "./subagent/stickiness.js";
 import { matchesCron, validateCronMinInterval } from "./core/cron-matcher.js";
+import { autoReconnect as autoReconnectMcp, initMcpBridge, mcpBridge } from "./sandbox/modules/mcp-bridge/index.js";
+import { refreshModuleRegistryCache } from "./subagent/code-act-executor.js";
 
 const log = createLogger("main");
 
@@ -103,6 +105,9 @@ const EVENTS_PATH = join(DATA_DIR, "events.jsonl");
 
 /** Session transcript 目录 */
 const SESSIONS_DIR = join(DATA_DIR, "sessions");
+
+/** 全局 MCP 连接持久化路径 */
+const MCP_CONNECTIONS_PATH = join(DATA_DIR, "mcp-connections.json");
 
 // ─── 辅助函数 ───
 
@@ -261,6 +266,30 @@ async function main(): Promise<void> {
             selfId: appConfig.onebot.selfId ? "✓" : "✗",
             whitelist: appConfig.onebot.whitelist?.enabled ? "on" : "off",
         });
+    }
+
+    initMcpBridge({
+        persistPath: MCP_CONNECTIONS_PATH,
+        onRegistryChange: () => {
+            refreshModuleRegistryCache();
+        },
+    });
+    await autoReconnectMcp();
+    for (const server of appConfig.mcpServers ?? []) {
+        if (server.autoConnect === false) continue;
+        try {
+            await mcpBridge.connect({
+                name: server.name,
+                transport: server.transport,
+                command: server.command,
+                args: server.args,
+                env: server.env,
+                url: server.url,
+                headers: server.headers,
+            });
+        } catch (err) {
+            log.warn("MCP 预配置连接失败", { name: server.name, error: String(err) });
+        }
     }
 
     // 共享 MediaDownloader 实例（用于 sendSticker、Dashboard 等）
@@ -538,6 +567,23 @@ async function main(): Promise<void> {
                             }));
 
                             return results;
+                        }
+
+                        if (method === "mcp.list") {
+                            return mcpBridge.list();
+                        }
+                        if (method === "mcp.connect") {
+                            const [config] = args as [Parameters<typeof mcpBridge.connect>[0]];
+                            const server = await mcpBridge.connect(config);
+                            return { name: server.name, tools: server.tools };
+                        }
+                        if (method === "mcp.disconnect") {
+                            await mcpBridge.disconnect(String(args[0] ?? ""));
+                            return;
+                        }
+                        if (method === "mcp.call") {
+                            const [serverName, toolName, toolArgs] = args as [string, string, Record<string, unknown> | undefined];
+                            return mcpBridge.call(serverName, toolName, toolArgs ?? {});
                         }
 
                         // skills.taskList.* host calls

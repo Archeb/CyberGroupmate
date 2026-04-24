@@ -7,8 +7,10 @@
 
 declare const mcp: {
     /**
-     * 连接到一个 MCP Server。
+     * 安装并连接一个 MCP Server。
     * 根据配置使用 stdio 或 Streamable HTTP 建立连接，自动发现所有 tools。
+    * 连接信息会在宿主进程中全局持久化，所有 sandbox / subagent 共享，
+    * 直到显式调用 disconnect()。
      *
      * @param config - Server 配置
      * @returns 包含 tools 列表和 call 方法的代理对象
@@ -50,13 +52,13 @@ declare const mcp: {
     }>;
 
     /**
-     * 断开连接并清理 MCP Server 子进程
+        * 断开全局连接并清理 MCP Server 子进程
      * @param name 连接时指定的 name
      */
     disconnect(name: string): Promise<void>;
 
     /**
-     * 列出所有已连接的 MCP Servers 及其工具
+        * 列出所有全局已连接的 MCP Servers 及其工具
      *
      * @example
      * const servers = mcp.list();

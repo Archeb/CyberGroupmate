@@ -22,6 +22,7 @@ import {
     deleteOverride,
     reloadAllPrompts,
 } from "../core/prompt-loader.js";
+import { getConnectionConfigs, mcpBridge, replaceConnectionConfigs, type McpServerConfig } from "../sandbox/modules/mcp-bridge/index.js";
 
 const log = createLogger("dashboard-api");
 const SKILLS_ROOT = join(process.cwd(), "workspace", "skills");
@@ -1374,74 +1375,66 @@ export function createApiRouter(deps: DashboardDeps, bridge: EventBridge): Route
 
     // ─── MCP Server 管理 ───
 
-    /** 列出指定 chatId sandbox 中已连接的 MCP Servers */
-    router.get("/sandbox/:chatId/mcp", async (req, res) => {
+    /** 列出全局 MCP Servers */
+    router.get("/mcp", async (_req, res) => {
         try {
-            const chatId = req.params.chatId;
-            const sandbox = deps.sandboxPool.get(chatId);
-            if (!sandbox) {
-                res.json({ ok: true, servers: [], message: "Sandbox 未运行" });
-                return;
-            }
-            const result = await sandbox.execute(`JSON.stringify(mcp.list())`, 5000);
-            if (result.error) {
-                res.status(500).json({ error: result.output });
-                return;
-            }
-            res.json({ ok: true, servers: JSON.parse(result.output || "[]") });
+            res.json({ ok: true, servers: mcpBridge.list() });
         } catch (err) {
             res.status(500).json({ error: String(err) });
         }
     });
 
-    /** 连接新的 MCP Server */
-    router.post("/sandbox/:chatId/mcp/connect", async (req, res) => {
+    /** 读取当前全局 MCP 安装配置（可直接 JSON 编辑） */
+    router.get("/mcp/configs", (_req, res) => {
         try {
-            const chatId = req.params.chatId;
-            const sandbox = deps.sandboxPool.get(chatId);
-            if (!sandbox) {
-                res.status(404).json({ error: "Sandbox 未运行" });
-                return;
-            }
+            res.json({ ok: true, configs: getConnectionConfigs() });
+        } catch (err) {
+            res.status(500).json({ error: String(err) });
+        }
+    });
+
+    /** 连接新的全局 MCP Server */
+    router.post("/mcp/connect", async (req, res) => {
+        try {
             const { name, transport, command, args, env, url, headers } = req.body ?? {};
             if (!name || (!command && !url)) {
                 res.status(400).json({ error: "name 必填，且必须提供 command（stdio）或 url（Streamable HTTP）" });
                 return;
             }
-            const config = JSON.stringify({ name, transport, command, args, env, url, headers });
-            const result = await sandbox.execute(
-                `const server = await mcp.connect(${config});
-                 JSON.stringify({ name: server.name, tools: server.tools })`,
-                15000
-            );
-            if (result.error) {
-                res.status(500).json({ error: result.output });
-                return;
-            }
-            res.json({ ok: true, ...JSON.parse(result.output || "{}") });
+            const server = await mcpBridge.connect({ name, transport, command, args, env, url, headers });
+            res.json({ ok: true, name: server.name, tools: server.tools });
         } catch (err) {
             res.status(500).json({ error: String(err) });
         }
     });
 
-    /** 断开指定 MCP Server */
-    router.delete("/sandbox/:chatId/mcp/:name", async (req, res) => {
+    /** 用 JSON 批量替换全局 MCP 安装配置 */
+    router.put("/mcp/configs", async (req, res) => {
         try {
-            const chatId = req.params.chatId;
+            const { configs } = req.body ?? {};
+            if (!Array.isArray(configs)) {
+                res.status(400).json({ error: "configs 必须是 JSON 数组" });
+                return;
+            }
+            const normalized = configs as McpServerConfig[];
+            for (const config of normalized) {
+                if (!config?.name || (!config.command && !config.url)) {
+                    res.status(400).json({ error: `非法 MCP 配置: ${JSON.stringify(config)}` });
+                    return;
+                }
+            }
+            await replaceConnectionConfigs(normalized);
+            res.json({ ok: true, servers: mcpBridge.list(), configs: getConnectionConfigs() });
+        } catch (err) {
+            res.status(500).json({ error: String(err) });
+        }
+    });
+
+    /** 断开指定全局 MCP Server */
+    router.delete("/mcp/:name", async (req, res) => {
+        try {
             const serverName = req.params.name;
-            const sandbox = deps.sandboxPool.get(chatId);
-            if (!sandbox) {
-                res.status(404).json({ error: "Sandbox 未运行" });
-                return;
-            }
-            const result = await sandbox.execute(
-                `await mcp.disconnect(${JSON.stringify(serverName)}); "ok"`,
-                5000
-            );
-            if (result.error) {
-                res.status(500).json({ error: result.output });
-                return;
-            }
+            await mcpBridge.disconnect(serverName);
             res.json({ ok: true });
         } catch (err) {
             res.status(500).json({ error: String(err) });

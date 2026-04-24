@@ -81,6 +81,18 @@ interface ParsedSseEvent {
     id?: string;
 }
 
+interface McpProxyCallbacks {
+    callHost: (method: string, args?: unknown[]) => Promise<unknown>;
+}
+
+export interface McpServerInfo {
+    name: string;
+    transport: "stdio" | "streamable-http";
+    url?: string;
+    tools: string[];
+    running: boolean;
+}
+
 // ─── 全局状态 ───
 
 const connections = new Map<string, McpConnection>();
@@ -90,6 +102,12 @@ let persistPath = "";
 
 /** registry 变更回调（通知 code-act-executor 刷新缓存） */
 let onRegistryChange: (() => void) | null = null;
+
+/** Worker 代理回调：启用后所有操作转发到 Host 全局 MCP 管理器 */
+let proxyCallbacks: McpProxyCallbacks | null = null;
+
+/** Worker 侧缓存的全局 MCP 列表快照，用于同步 mcp.list() */
+let cachedServerList: McpServerInfo[] = [];
 
 const MCP_PROTOCOL_VERSION = "2024-11-05";
 const HTTP_ACCEPT = "application/json, text/event-stream";
@@ -116,6 +134,23 @@ function saveConnectionConfigs(): void {
     } catch (err) {
         process.stderr.write(`[mcp-bridge] 持久化失败: ${err}\n`);
     }
+}
+
+function listConnectionsLocal(): McpServerInfo[] {
+    return Array.from(connections.entries()).map(([name, conn]) => ({
+        name,
+        transport: conn.transportKind,
+        url: conn.config.url,
+        tools: conn.tools.map((tool) => tool.name),
+        running: conn.transportKind === "streamable-http" ? true : !!conn.process,
+    }));
+}
+
+function cloneServerList(list: McpServerInfo[]): McpServerInfo[] {
+    return list.map((server) => ({
+        ...server,
+        tools: [...server.tools],
+    }));
 }
 
 // ─── 配置 / transport 判定 ───
@@ -685,6 +720,20 @@ function formatSchemaAsType(schema: Record<string, unknown>): string {
 
 export const mcpBridge = {
     connect: async (config: McpServerConfig) => {
+        if (proxyCallbacks) {
+            const connected = await proxyCallbacks.callHost("mcp.connect", [config]) as {
+                name: string;
+                tools: Array<{ name: string; description: string }>;
+            };
+            const latest = await proxyCallbacks.callHost("mcp.list", []) as McpServerInfo[];
+            cachedServerList = cloneServerList(latest ?? []);
+            return {
+                name: connected.name,
+                tools: connected.tools ?? [],
+                call: (toolName: string, args: Record<string, unknown> = {}) =>
+                    proxyCallbacks!.callHost("mcp.call", [connected.name, toolName, args]),
+            };
+        }
         const conn = await connectServer(config);
         return {
             name: conn.config.name,
@@ -697,18 +746,24 @@ export const mcpBridge = {
         };
     },
 
-    disconnect: async (name: string) => disconnectServer(name),
+    disconnect: async (name: string) => {
+        if (proxyCallbacks) {
+            await proxyCallbacks.callHost("mcp.disconnect", [name]);
+            const latest = await proxyCallbacks.callHost("mcp.list", []) as McpServerInfo[];
+            cachedServerList = cloneServerList(latest ?? []);
+            return;
+        }
+        await disconnectServer(name);
+    },
 
-    list: () => Array.from(connections.entries()).map(([name, conn]) => ({
-        name,
-        transport: conn.transportKind,
-        url: conn.config.url,
-        tools: conn.tools.map((tool) => tool.name),
-        running: conn.transportKind === "streamable-http" ? true : !!conn.process,
-    })),
+    list: () => proxyCallbacks ? cloneServerList(cachedServerList) : listConnectionsLocal(),
 
-    call: (serverName: string, toolName: string, args: Record<string, unknown> = {}) =>
-        callTool(serverName, toolName, args),
+    call: (serverName: string, toolName: string, args: Record<string, unknown> = {}) => {
+        if (proxyCallbacks) {
+            return proxyCallbacks.callHost("mcp.call", [serverName, toolName, args]);
+        }
+        return callTool(serverName, toolName, args);
+    },
 };
 
 // ─── 初始化 ───
@@ -719,6 +774,33 @@ export function initMcpBridge(options: {
 }): void {
     persistPath = options.persistPath;
     onRegistryChange = options.onRegistryChange ?? null;
+}
+
+export function setMcpProxyCallbacks(callbacks: McpProxyCallbacks | null): void {
+    proxyCallbacks = callbacks;
+}
+
+export function setMcpListSnapshot(servers: McpServerInfo[]): void {
+    cachedServerList = cloneServerList(servers);
+}
+
+export function getConnectionConfigs(): McpServerConfig[] {
+    return Array.from(connections.values()).map((connection) => ({
+        name: connection.config.name,
+        ...(connection.config.transport ? { transport: connection.config.transport } : {}),
+        ...(connection.config.command ? { command: connection.config.command } : {}),
+        ...(connection.config.args ? { args: [...connection.config.args] } : {}),
+        ...(connection.config.env ? { env: { ...connection.config.env } } : {}),
+        ...(connection.config.url ? { url: connection.config.url } : {}),
+        ...(connection.config.headers ? { headers: { ...connection.config.headers } } : {}),
+    }));
+}
+
+export async function replaceConnectionConfigs(configs: McpServerConfig[]): Promise<void> {
+    await disconnectAll();
+    for (const config of configs) {
+        await connectServer(config);
+    }
 }
 
 export async function autoReconnect(): Promise<void> {

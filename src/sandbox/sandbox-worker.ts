@@ -16,7 +16,7 @@ import { installCapabilityRegistry, setPlatform } from "./capability-registry.js
 import { BackgroundManager } from "./background-manager.js";
 import { createPromiseTracker } from "./promise-tracker.js";
 import { filesystem } from "./modules/filesystem/index.js";
-import { mcpBridge, initMcpBridge, autoReconnect as mcpAutoReconnect } from "./modules/mcp-bridge/index.js";
+import { mcpBridge, setMcpListSnapshot, setMcpProxyCallbacks } from "./modules/mcp-bridge/index.js";
 import { cronModule, setCronCallbacks } from "./modules/cron/index.js";
 import { todoModule, setTodoCallbacks } from "./modules/kv/index.js";
 import { visionModule, setVisionCallbacks } from "./modules/vision/index.js";
@@ -368,6 +368,14 @@ async function executeCode(id: string, code: string): Promise<void> {
         const dc = discord ? tracker.wrap(discord as Record<string, unknown>) : undefined;
         const ob = onebot ? tracker.wrap(onebot as Record<string, unknown>) : undefined;
 
+        setMcpListSnapshot(await guardedCallHost("mcp.list", []) as Array<{
+            name: string;
+            transport: "stdio" | "streamable-http";
+            url?: string;
+            tools: string[];
+            running: boolean;
+        }>);
+
         // ─── 动态注入 TS Skills ───
         const skillArgNames: string[] = [];
         const skillArgValues: unknown[] = [];
@@ -528,50 +536,8 @@ async function initWorker(): Promise<void> {
     // 恢复持久化后台任务
     bgManager.restorePersistentTasks();
 
-    // 初始化 MCP 桥接（持久化 + 自动重连）
-    const mcpPersistPath = CTX_PERSIST_PATH
-        ? CTX_PERSIST_PATH.replace(/ctx\.json$/, "mcp-connections.json")
-        : "";
-    initMcpBridge({ persistPath: mcpPersistPath });
-    // 后台重连（不阻断 worker 启动）
-    mcpAutoReconnect().catch(err => {
-        process.stderr.write(`[sandbox-worker] MCP 自动重连失败: ${err}\n`);
-    });
-
-    // MCP 预配置自动连接（config.yaml → env → mcpBridge.connect）
-    const mcpServersRaw = process.env.SANDBOX_MCP_SERVERS;
-    if (mcpServersRaw) {
-        try {
-            const servers = JSON.parse(mcpServersRaw) as Array<{
-                name: string;
-                transport?: "stdio" | "streamable-http";
-                command?: string;
-                args?: string[];
-                env?: Record<string, string>;
-                url?: string;
-                headers?: Record<string, string>;
-                autoConnect?: boolean;
-            }>;
-            for (const srv of servers) {
-                if (srv.autoConnect === false) continue;
-                mcpBridge.connect({
-                    name: srv.name,
-                    transport: srv.transport,
-                    command: srv.command,
-                    args: srv.args,
-                    env: srv.env,
-                    url: srv.url,
-                    headers: srv.headers,
-                })
-                    .then(() => printToHost(`[MCP] 预配置服务器 "${srv.name}" 已连接`))
-                    .catch(err => {
-                        process.stderr.write(`[sandbox-worker] MCP 预配置连接失败 "${srv.name}": ${err}\n`);
-                    });
-            }
-        } catch {
-            process.stderr.write(`[sandbox-worker] SANDBOX_MCP_SERVERS 解析失败\n`);
-        }
-    }
+    // MCP 改为 Host 全局管理；worker 仅保留代理层
+    setMcpProxyCallbacks({ callHost });
 
     // 发送 ready 信号
     sendToHost({

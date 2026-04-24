@@ -37,11 +37,11 @@ shared/todo.d.ts — 不只是代办，可以当你的记事本用。 用于持�
 - `remove`: 删除 todo。
 
 ## mcp
-mcp-bridge.d.ts — MCP Server 连接器类型定义 连接外部 MCP (Model Context Protocol) Server，自动发现并代理其工具。 支持 stdio 和 Streamable HTTP 两种传输。
+mcp-bridge.d.ts — MCP Server 连接器类型定义 连接外部 MCP (Model Context Protocol) Server，自动发现并代理其工具。 支持 stdio 和 Streamable HTTP 两种传输，连接由宿主进程全局持久化。
 
-- `connect`: 连接到一个 MCP Server。 根据配置使用 stdio 或 Streamable HTTP 建立连接，自动发现所有 tools。
-- `disconnect`: 断开连接并清理 MCP Server 子进程
-- `list`: 列出所有已连接的 MCP Servers 及其工具
+- `connect`: 安装并连接一个全局 MCP Server。根据配置使用 stdio 或 Streamable HTTP 建立连接，自动发现所有 tools。
+- `disconnect`: 断开全局连接并清理 MCP Server 子进程
+- `list`: 列出所有全局已连接的 MCP Servers 及其工具
 - `call`: 直接调用指定 server 的 tool（无需先调用 connect 返回的代理对象）
 
 ## onebot

@@ -126,22 +126,22 @@
   },
   {
     "name": "mcp",
-    "description": "mcp-bridge.d.ts — MCP Server 连接器类型定义 连接外部 MCP (Model Context Protocol) Server，自动发现并代理其工具。 支持 stdio 和 Streamable HTTP 两种传输。",
+    "description": "mcp-bridge.d.ts — MCP Server 连接器类型定义 连接外部 MCP (Model Context Protocol) Server，自动发现并代理其工具。 支持 stdio 和 Streamable HTTP 两种传输，连接由宿主进程全局持久化。",
     "methods": [
       {
         "name": "connect",
-        "brief": "连接到一个 MCP Server。 根据配置使用 stdio 或 Streamable HTTP 建立连接，自动发现所有 tools。",
-        "fullDoc": "```typescript\nconnect(config: {\n        /** 显示名称，也用作 tool 命名空间 */\n        name: string;\n        /** 传输方式。省略时：有 url 则视为 streamable-http，否则视为 stdio */\n        transport?: \"stdio\" | \"streamable-http\";\n        /** stdio 启动命令 */\n        command?: string;\n        /** stdio 命令参数 */\n        args?: string[];\n        /** stdio 环境变量（如 API keys） */\n        env?: Record<string, string>;\n        /** Streamable HTTP endpoint */\n        url?: string;\n        /** Streamable HTTP 附加请求头（如 Authorization） */\n        headers?: Record<string, string>;\n    }): Promise<{\n        name: string;\n        tools: Array<{ name: string; description: string }>;\n        /** 调用指定 tool */\n        call(toolName: string, args?: Record<string, unknown>): Promise<unknown>;\n    }>\n```\n\n\n连接到一个 MCP Server。\n根据配置使用 stdio 或 Streamable HTTP 建立连接，自动发现所有 tools。\n\n**参数：**\n- `config`: Server 配置\n- **返回值**: 包含 tools 列表和 call 方法的代理对象\n\n**示例：**\n```typescript\n// 连接 GitHub MCP Server\nconst github = await mcp.connect({\n  name: \"github\",\n  transport: \"streamable-http\",\n  url: \"https://example.com/mcp\",\n  headers: { Authorization: \"Bearer xxx\" }\n});\nconsole.log(\"可用工具:\", github.tools);\n\n// 调用 tool\nconst repos = await github.call(\"search_repositories\", { query: \"mcp typescript\" });\nconsole.log(repos);\n```"
+        "brief": "安装并连接一个全局 MCP Server。根据配置使用 stdio 或 Streamable HTTP 建立连接，自动发现所有 tools。",
+        "fullDoc": "```typescript\nconnect(config: {\n        /** 显示名称，也用作 tool 命名空间 */\n        name: string;\n        /** 传输方式。省略时：有 url 则视为 streamable-http，否则视为 stdio */\n        transport?: \"stdio\" | \"streamable-http\";\n        /** stdio 启动命令 */\n        command?: string;\n        /** stdio 命令参数 */\n        args?: string[];\n        /** stdio 环境变量（如 API keys） */\n        env?: Record<string, string>;\n        /** Streamable HTTP endpoint */\n        url?: string;\n        /** Streamable HTTP 附加请求头（如 Authorization） */\n        headers?: Record<string, string>;\n    }): Promise<{\n        name: string;\n        tools: Array<{ name: string; description: string }>;\n        /** 调用指定 tool */\n        call(toolName: string, args?: Record<string, unknown>): Promise<unknown>;\n    }>\n```\n\n\n安装并连接一个全局 MCP Server。\n根据配置使用 stdio 或 Streamable HTTP 建立连接，自动发现所有 tools。\n连接信息由宿主进程全局持久化，所有 sandbox / subagent 共享，直到显式断开。\n\n**参数：**\n- `config`: Server 配置\n- **返回值**: 包含 tools 列表和 call 方法的代理对象\n\n**示例：**\n```typescript\n// 连接 GitHub MCP Server\nconst github = await mcp.connect({\n  name: \"github\",\n  transport: \"streamable-http\",\n  url: \"https://example.com/mcp\",\n  headers: { Authorization: \"Bearer xxx\" }\n});\nconsole.log(\"可用工具:\", github.tools);\n\n// 调用 tool\nconst repos = await github.call(\"search_repositories\", { query: \"mcp typescript\" });\nconsole.log(repos);\n```"
       },
       {
         "name": "disconnect",
-        "brief": "断开连接并清理 MCP Server 子进程",
-        "fullDoc": "```typescript\ndisconnect(name: string): Promise<void>\n```\n\n\n断开连接并清理 MCP Server 子进程\n\n**参数：**\n- `name`: 连接时指定的 name"
+        "brief": "断开全局连接并清理 MCP Server 子进程",
+        "fullDoc": "```typescript\ndisconnect(name: string): Promise<void>\n```\n\n\n断开全局连接并清理 MCP Server 子进程\n\n**参数：**\n- `name`: 连接时指定的 name"
       },
       {
         "name": "list",
-        "brief": "列出所有已连接的 MCP Servers 及其工具",
-        "fullDoc": "```typescript\nlist(): Array<{\n        name: string;\n        transport: \"stdio\" | \"streamable-http\";\n        url?: string;\n        tools: string[];\n        running: boolean;\n    }>\n```\n\n\n列出所有已连接的 MCP Servers 及其工具\n\n**示例：**\n```typescript\nconst servers = mcp.list();\nfor (const s of servers) {\n  console.log(`${s.name}: ${s.tools.join(\", \")} (running: ${s.running})`);\n}\n```"
+        "brief": "列出所有全局已连接的 MCP Servers 及其工具",
+        "fullDoc": "```typescript\nlist(): Array<{\n        name: string;\n        transport: \"stdio\" | \"streamable-http\";\n        url?: string;\n        tools: string[];\n        running: boolean;\n    }>\n```\n\n\n列出所有全局已连接的 MCP Servers 及其工具\n\n**示例：**\n```typescript\nconst servers = mcp.list();\nfor (const s of servers) {\n  console.log(`${s.name}: ${s.tools.join(\", \")} (running: ${s.running})`);\n}\n```"
       },
       {
         "name": "call",
