@@ -29,10 +29,34 @@ export const cronModule = {
      * @param cronExpr - cron 表达式（最短间隔 1 小时）
      * @param taskDescription - 触发时的任务描述（自然语言）
      */
-    add: async (name: string, cronExpr: string, taskDescription: string): Promise<{ id: string }> => {
+    add: async (name: string, cronExpr: string, taskDescription: string): Promise<{
+        id: string;
+        items: Array<{
+            id: string;
+            type: "reminder" | "cron";
+            description: string;
+            triggerAt?: string;
+            cronExpr?: string;
+            taskDescription?: string;
+            createdAt: string;
+            triggered?: boolean;
+        }>;
+    }> => {
         if (!_callbacks) throw new Error("Cron module not initialized");
         const result = await _callbacks.callHost("cron.add", [name, cronExpr, taskDescription]);
-        return result as { id: string };
+        return result as {
+            id: string;
+            items: Array<{
+                id: string;
+                type: "reminder" | "cron";
+                description: string;
+                triggerAt?: string;
+                cronExpr?: string;
+                taskDescription?: string;
+                createdAt: string;
+                triggered?: boolean;
+            }>;
+        };
     },
 
     /**

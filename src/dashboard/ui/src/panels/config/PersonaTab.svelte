@@ -1,4 +1,5 @@
 <script>
+  import MonacoEditor from "../../components/MonacoEditor.svelte";
   export let config;
   export let newKeyword = "";
   export let addKeyword;
@@ -23,11 +24,7 @@
 </div>
 <label class="cfg-field mb-4"
   ><span class="cfg-label">人格描述</span>
-  <textarea
-    class="textarea textarea-bordered w-full"
-    rows="8"
-    bind:value={config.persona.description}
-  ></textarea></label
+  <MonacoEditor bind:value={config.persona.description} language="markdown" height={220} /></label
 >
 
 <div class="divider text-xs opacity-50 my-2">

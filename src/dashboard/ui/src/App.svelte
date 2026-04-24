@@ -17,6 +17,7 @@
   import TokenStatsPanel from './panels/TokenStatsPanel.svelte';
   import MemoryPanel from './panels/MemoryPanel.svelte';
   import StickersPanel from './panels/StickersPanel.svelte';
+  import SkillsPanel from './panels/SkillsPanel.svelte';
   import SystemPanel from './panels/SystemPanel.svelte';
   import ConfigPanel from './panels/ConfigPanel.svelte';
   import TopicDetailPanel from './panels/TopicDetailPanel.svelte';
@@ -70,6 +71,7 @@
     <div class:hidden={$activeTab !== 'token-stats'}><TokenStatsPanel /></div>
     <div class:hidden={$activeTab !== 'memory'}><MemoryPanel /></div>
     <div class:hidden={$activeTab !== 'stickers'}><StickersPanel /></div>
+    <div class:hidden={$activeTab !== 'skills'}><SkillsPanel /></div>
     <div class:hidden={$activeTab !== 'system'}><SystemPanel /></div>
     <div class:hidden={$activeTab !== 'config'}><ConfigPanel /></div>
     <div class:hidden={$activeTab !== 'topic-detail'}><TopicDetailPanel /></div>

@@ -6,12 +6,14 @@
 
 import { Router } from "express";
 import * as fs from "node:fs";
+import { join } from "node:path";
 import type { DashboardDeps } from "./types.js";
 import type { EventBridge } from "./event-bridge.js";
 import type { CodeActExecutor } from "../subagent/code-act-executor.js";
 import { createLogger } from "../core/logger.js";
 import { loadConfig, validateConfig, saveConfig } from "../core/config.js";
 import { rateLimiter } from "../core/llm-rate-limiter.js";
+import { discoverSkills } from "../sandbox/skill-loader.js";
 import {
     listAllPrompts,
     loadOriginalPrompt,
@@ -22,6 +24,7 @@ import {
 } from "../core/prompt-loader.js";
 
 const log = createLogger("dashboard-api");
+const SKILLS_ROOT = join(process.cwd(), "workspace", "skills");
 
 function qs(val: unknown): string {
     if (Array.isArray(val)) return String(val[0] ?? "");
@@ -30,6 +33,50 @@ function qs(val: unknown): string {
 
 function fromJSONSafe(val: string | null | undefined): unknown[] {
     try { return JSON.parse(String(val || "[]")); } catch { return []; }
+}
+
+function isSafeSkillId(skillId: string): boolean {
+    return /^[A-Za-z0-9._-]+$/.test(skillId);
+}
+
+function ensureSkillId(skillId: string): string {
+    const trimmed = skillId.trim();
+    if (!trimmed || !isSafeSkillId(trimmed)) {
+        throw new Error("invalid skill id");
+    }
+    return trimmed;
+}
+
+function listSkillEntries(): Array<{
+    id: string;
+    entryFileName: "index.ts" | "index.js";
+    dtsFileName: string;
+    hasSkillMd: boolean;
+}> {
+    if (!fs.existsSync(SKILLS_ROOT)) return [];
+
+    return fs.readdirSync(SKILLS_ROOT)
+        .filter((entry) => {
+            const fullPath = join(SKILLS_ROOT, entry);
+            return fs.statSync(fullPath).isDirectory() && entry !== "node_modules" && !entry.startsWith(".");
+        })
+        .map((entry) => {
+            const dirPath = join(SKILLS_ROOT, entry);
+            const files = fs.readdirSync(dirPath);
+            const entryFileName: "index.ts" | "index.js" = files.includes("index.ts") ? "index.ts" : "index.js";
+            const dtsFileName = files.find((file) => file === `${entry}.d.ts`) ?? files.find((file) => file.endsWith(".d.ts")) ?? `${entry}.d.ts`;
+            return {
+                id: entry,
+                entryFileName,
+                dtsFileName,
+                hasSkillMd: files.includes("SKILL.md"),
+            };
+        })
+        .sort((a, b) => a.id.localeCompare(b.id));
+}
+
+function readTextIfExists(filePath: string): string {
+    return fs.existsSync(filePath) ? fs.readFileSync(filePath, "utf-8") : "";
 }
 
 function serializeTopic(topic: any): Record<string, unknown> | null {
@@ -53,6 +100,112 @@ export function createApiRouter(deps: DashboardDeps, bridge: EventBridge): Route
     // ─── Overview ───
     router.get("/overview", (_req, res) => {
         res.json(bridge.buildSnapshot());
+    });
+
+    // ─── Skills ───
+    router.get("/skills", (_req, res) => {
+        try {
+            const discovered = new Set(discoverSkills().map((skill) => skill.name));
+            const skills = listSkillEntries().map((skill) => ({
+                ...skill,
+                loaded: discovered.has(skill.id),
+            }));
+            res.json({ skills });
+        } catch (err) {
+            res.status(500).json({ error: String(err) });
+        }
+    });
+
+    router.get("/skills/:skillId", (req, res) => {
+        try {
+            const skillId = ensureSkillId(req.params.skillId);
+            const info = listSkillEntries().find((skill) => skill.id === skillId) ?? {
+                id: skillId,
+                entryFileName: "index.ts" as const,
+                dtsFileName: `${skillId}.d.ts`,
+                hasSkillMd: false,
+            };
+            const skillDir = join(SKILLS_ROOT, skillId);
+            const entryPath = join(skillDir, info.entryFileName);
+            const dtsPath = join(skillDir, info.dtsFileName);
+            const skillMdPath = join(skillDir, "SKILL.md");
+
+            res.json({
+                skill: {
+                    id: skillId,
+                    entryFileName: info.entryFileName,
+                    dtsFileName: info.dtsFileName,
+                    files: {
+                        entry: {
+                            path: info.entryFileName,
+                            exists: fs.existsSync(entryPath),
+                            content: readTextIfExists(entryPath),
+                        },
+                        dts: {
+                            path: info.dtsFileName,
+                            exists: fs.existsSync(dtsPath),
+                            content: readTextIfExists(dtsPath),
+                        },
+                        skillMd: {
+                            path: "SKILL.md",
+                            exists: fs.existsSync(skillMdPath),
+                            content: readTextIfExists(skillMdPath),
+                        },
+                    },
+                },
+            });
+        } catch (err) {
+            res.status(400).json({ error: String(err) });
+        }
+    });
+
+    router.put("/skills/:skillId", (req, res) => {
+        try {
+            const skillId = ensureSkillId(req.params.skillId);
+            const entryFileName = req.body?.entryFileName === "index.js" ? "index.js" : "index.ts";
+            const dtsFileNameRaw = typeof req.body?.dtsFileName === "string" ? req.body.dtsFileName.trim() : `${skillId}.d.ts`;
+            const dtsFileName = dtsFileNameRaw.endsWith(".d.ts") ? dtsFileNameRaw : `${skillId}.d.ts`;
+            const entryContent = typeof req.body?.entryContent === "string" ? req.body.entryContent : "";
+            const dtsContent = typeof req.body?.dtsContent === "string" ? req.body.dtsContent : "";
+            const skillMdContent = typeof req.body?.skillMdContent === "string" ? req.body.skillMdContent : "";
+            const skillDir = join(SKILLS_ROOT, skillId);
+
+            fs.mkdirSync(skillDir, { recursive: true });
+            fs.writeFileSync(join(skillDir, entryFileName), entryContent, "utf-8");
+            fs.writeFileSync(join(skillDir, dtsFileName), dtsContent, "utf-8");
+            fs.writeFileSync(join(skillDir, "SKILL.md"), skillMdContent, "utf-8");
+
+            log.info("Skill 文件已保存", { skillId, entryFileName, dtsFileName });
+            res.json({ ok: true });
+        } catch (err) {
+            res.status(400).json({ error: String(err) });
+        }
+    });
+
+    router.post("/skills/reload", async (_req, res) => {
+        try {
+            const activeSandboxes = deps.sandboxPool.entries();
+            const results = await Promise.all(activeSandboxes.map(async ({ chatId, sandbox }) => {
+                try {
+                    const result = await sandbox.execute("const loaded = await skills.reload(); console.log(JSON.stringify(loaded));", 15000);
+                    if (result.error) {
+                        return { chatId, ok: false, error: result.output };
+                    }
+                    return { chatId, ok: true };
+                } catch (err) {
+                    return { chatId, ok: false, error: String(err) };
+                }
+            }));
+
+            res.json({
+                ok: true,
+                activeSandboxCount: activeSandboxes.length,
+                reloadedSkills: discoverSkills().map((skill) => skill.name),
+                sandboxResults: results,
+            });
+        } catch (err) {
+            res.status(500).json({ error: String(err) });
+        }
     });
 
     // ─── Messages ───

@@ -69,10 +69,36 @@ export function installRuntime(env: CapabilityRegistryEnv) {
          * @param delayMinutes - 延迟分钟数（1 ~ 525600，即 365 天）
          * @returns { reminderId, triggerAt }
          */
-        remind: async (description: string, delayMinutes: number): Promise<{ reminderId: string; triggerAt: string }> => {
+        remind: async (description: string, delayMinutes: number): Promise<{
+            reminderId: string;
+            triggerAt: string;
+            items: Array<{
+                id: string;
+                type: "reminder" | "cron";
+                description: string;
+                triggerAt?: string;
+                cronExpr?: string;
+                taskDescription?: string;
+                createdAt: string;
+                triggered?: boolean;
+            }>;
+        }> => {
             if (!_callbacks) throw new Error("Runtime not initialized");
             const result = await _callbacks.callHost("runtime.remind", [description, delayMinutes]);
-            return result as { reminderId: string; triggerAt: string };
+            return result as {
+                reminderId: string;
+                triggerAt: string;
+                items: Array<{
+                    id: string;
+                    type: "reminder" | "cron";
+                    description: string;
+                    triggerAt?: string;
+                    cronExpr?: string;
+                    taskDescription?: string;
+                    createdAt: string;
+                    triggered?: boolean;
+                }>;
+            };
         },
     };
 }

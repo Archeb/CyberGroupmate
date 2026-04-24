@@ -578,7 +578,7 @@
           {:else if currentSection === "discord"}
             <DiscordTab bind:config bind:discordEnabled {pwFocus} {pwBlur} />
           {:else if currentSection === "onebot"}
-            <OneBotTab bind:config bind:onebotEnabled {pwFocus} {pwBlur} />
+            <OneBotTab bind:config bind:onebotEnabled />
           {:else if currentSection === "reflection"}
             <ReflectionTab bind:config />
           {:else if currentSection === "contextBudget"}

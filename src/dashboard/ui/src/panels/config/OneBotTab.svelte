@@ -1,10 +1,9 @@
 <script>
   import { api } from '../../lib/api.js';
+  import MonacoEditor from '../../components/MonacoEditor.svelte';
 
   export let config;
   export let onebotEnabled = false;
-  export let pwFocus;
-  export let pwBlur;
 
   let catalogStats = null;
   let statsLoading = false;
@@ -122,29 +121,31 @@
   <div class="cfg-grid-2">
     <label class="cfg-field col-span-2"
       ><span class="cfg-label">群号（每行一个）</span>
-      <textarea
-        class="textarea textarea-bordered textarea-xs w-full font-mono min-h-[4rem]"
+      <MonacoEditor
+        language="plaintext"
+        height={120}
         value={config.onebot.whitelist.groups.join("\n")}
-        on:input={(e) => {
-          config.onebot.whitelist.groups = e.target.value
+        on:change={(e) => {
+          config.onebot.whitelist.groups = e.detail.value
             .split(/\r?\n/)
             .map((s) => s.trim())
             .filter(Boolean);
         }}
-      ></textarea></label
+      /></label
     >
     <label class="cfg-field col-span-2"
       ><span class="cfg-label">私聊 QQ 号（每行一个）</span>
-      <textarea
-        class="textarea textarea-bordered textarea-xs w-full font-mono min-h-[4rem]"
+      <MonacoEditor
+        language="plaintext"
+        height={120}
         value={config.onebot.whitelist.users.join("\n")}
-        on:input={(e) => {
-          config.onebot.whitelist.users = e.target.value
+        on:change={(e) => {
+          config.onebot.whitelist.users = e.detail.value
             .split(/\r?\n/)
             .map((s) => s.trim())
             .filter(Boolean);
         }}
-      ></textarea></label
+      /></label
     >
   </div>
   <div class="divider text-xs opacity-50 my-3">

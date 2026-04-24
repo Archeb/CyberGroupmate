@@ -1,4 +1,5 @@
 <script>
+  import MonacoEditor from "../../components/MonacoEditor.svelte";
   export let promptsLoading = false;
   export let promptTree = {};
   export let expandedDirs;
@@ -84,12 +85,7 @@
             <span class="badge badge-xs badge-ghost">原始</span>
           {/if}
         </div>
-        <textarea
-          class="textarea textarea-bordered w-full font-mono text-xs prompt-textarea"
-          rows="20"
-          bind:value={promptEditorContent}
-          spellcheck="false"
-        ></textarea>
+        <MonacoEditor bind:value={promptEditorContent} language="markdown" height={560} wrapperClass="prompt-monaco" />
         <div class="flex gap-2 mt-2">
           <button class="btn btn-sm btn-primary" on:click={savePromptOverride} disabled={promptSaving}>
             <i class="fa-solid fa-floppy-disk"></i>

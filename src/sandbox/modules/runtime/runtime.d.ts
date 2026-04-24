@@ -87,7 +87,20 @@ declare const runtime: {
      * // 1 小时后提醒
      * await runtime.remind("用 tavily 搜索刚才讨论的那个开源项目的最新版本，然后把结果发到群里", 60);
      */
-    remind(description: string, delayMinutes: number): Promise<{ reminderId: string; triggerAt: string }>;
+    remind(description: string, delayMinutes: number): Promise<{
+        reminderId: string;
+        triggerAt: string;
+        items: Array<{
+            id: string;
+            type: "reminder" | "cron";
+            description: string;
+            triggerAt?: string;
+            cronExpr?: string;
+            taskDescription?: string;
+            createdAt: string;
+            triggered?: boolean;
+        }>;
+    }>;
 
     /**
      * 增加当前 CodeAct session 的可用轮次。

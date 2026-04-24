@@ -1,4 +1,5 @@
 <script>
+  import MonacoEditor from "../../components/MonacoEditor.svelte";
   export let config;
   export let profileTests = {};
   export let expandedProfiles;
@@ -120,13 +121,12 @@
           <div class="divider text-xs opacity-50 my-2"><i class="fa-brands fa-google mr-1"></i>Vertex AI 设置（可选）</div>
           <p class="text-xs opacity-40 mb-2">粘贴服务账号 JSON 密钥后自动启用 Vertex AI 模式。留空则使用 AI Studio（需填 API Key）。</p>
           <label class="cfg-field"><span class="cfg-label">服务账号 JSON 密钥</span>
-            <textarea
-              class="textarea textarea-bordered w-full font-mono text-xs"
-              rows="4"
-              placeholder='粘贴 Google 服务账号 JSON 密钥原文...'
+            <MonacoEditor
+              language="json"
+              height={150}
               value={p.vertexCredentials ? JSON.stringify(p.vertexCredentials, null, 2) : ""}
               on:blur={(e) => {
-                const val = e.target.value.trim();
+                const val = e.detail.value.trim();
                 if (!val) {
                   p.vertexCredentials = undefined;
                 } else {
@@ -138,7 +138,7 @@
                 }
                 config = config;
               }}
-            ></textarea>
+            />
           </label>
           <div class="cfg-grid-2 mt-1">
             <label class="cfg-field"><span class="cfg-label">Project 覆盖 <span class="opacity-40">(可选)</span></span><input type="text" class="input input-xs input-bordered w-full" bind:value={p.vertexProject} placeholder={p.vertexCredentials?.project_id || "自动从 JSON 提取"} /></label>
@@ -149,13 +149,12 @@
           <div class="divider text-xs opacity-50 my-2"><i class="fa-solid fa-plus-circle mr-1"></i>Extra Body & Headers（可选）</div>
           <p class="text-xs opacity-40 mb-2">额外请求体字段和自定义请求头，JSON 对象格式。会被展开合并到对应的 API 请求中。</p>
           <label class="cfg-field"><span class="cfg-label">Extra Body (JSON)</span>
-            <textarea
-              class="textarea textarea-bordered w-full font-mono text-xs"
-              rows="3"
-              placeholder={'{"key": "value"}'}
+            <MonacoEditor
+              language="json"
+              height={132}
               value={p.extraBody ? JSON.stringify(p.extraBody, null, 2) : ""}
               on:blur={(e) => {
-                const val = e.target.value.trim();
+                const val = e.detail.value.trim();
                 if (!val) {
                   p.extraBody = undefined;
                   p._extraBodyError = undefined;
@@ -174,19 +173,18 @@
                 }
                 config = config;
               }}
-            ></textarea>
+            />
           </label>
           {#if p._extraBodyError}
             <div class="text-xs text-error mt-1"><i class="fa-solid fa-triangle-exclamation mr-1"></i>{p._extraBodyError}</div>
           {/if}
           <label class="cfg-field mt-2"><span class="cfg-label">Custom Headers (JSON)</span>
-            <textarea
-              class="textarea textarea-bordered w-full font-mono text-xs"
-              rows="3"
-              placeholder={'{"X-My-Header": "value"}'}
+            <MonacoEditor
+              language="json"
+              height={132}
               value={p.customHeaders ? JSON.stringify(p.customHeaders, null, 2) : ""}
               on:blur={(e) => {
-                const val = e.target.value.trim();
+                const val = e.detail.value.trim();
                 if (!val) {
                   p.customHeaders = undefined;
                   p._customHeadersError = undefined;
@@ -205,7 +203,7 @@
                 }
                 config = config;
               }}
-            ></textarea>
+            />
           </label>
           {#if p._customHeadersError}
             <div class="text-xs text-error mt-1"><i class="fa-solid fa-triangle-exclamation mr-1"></i>{p._customHeadersError}</div>
@@ -214,20 +212,19 @@
         <div class="divider text-xs opacity-50 my-2"><i class="fa-solid fa-triangle-exclamation mr-1"></i>错误内容检测（Fallback）</div>
         <p class="text-xs opacity-40 mb-2">每行一个关键词。若响应文本包含任意关键词，将视为失败并触发 fallback（用于某些返回 200 但内容是错误信息的 API）。</p>
         <label class="cfg-field"><span class="cfg-label">Error Content Patterns (one per line)</span>
-          <textarea
-            class="textarea textarea-bordered w-full font-mono text-xs"
-            rows="3"
-            placeholder={"Quota exceeded\nrate limit\ninsufficient_quota"}
+          <MonacoEditor
+            language="plaintext"
+            height={132}
             value={(p.errorContentPatterns || []).join("\n")}
             on:blur={(e) => {
-              const lines = e.target.value
+              const lines = e.detail.value
                 .split(/\r?\n/)
                 .map((x) => x.trim())
                 .filter(Boolean);
               p.errorContentPatterns = lines.length ? lines : undefined;
               config = config;
             }}
-          ></textarea>
+          />
         </label>
         <div class="divider text-xs opacity-50 my-2"><i class="fa-solid fa-coins mr-1"></i>Pricing（可选）</div>
         <p class="text-xs opacity-40 mb-2">每百万 token 的价格（美元），用于 token 消耗统计。留空则不计费。</p>

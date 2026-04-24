@@ -20,6 +20,8 @@ filesystem.d.ts — 文件系统操作模块类型定义 所有路径操作限�
 - `readFile`: 读取文件内容。
 - `writeFile`: 写入文件。如果目标目录不存在会自动创建。
 - `appendFile`: 追加写入文件。文件不存在时会自动创建。
+- `replace`: 按字符串查找并替换文件内容，类似 sed。 默认仅替换第一个匹配；传 all=true 可全量替换。
+- `patch`: 对文件应用 unified diff patch。 适合 agent 在读取带行号内容后做小范围修改。
 - `readdir`: 列出目录下的文件和子目录名。
 - `exists`: 检查文件或目录是否存在。
 - `unlink`: 删除文件。

@@ -16,7 +16,14 @@ declare const fs: {
      * const content = fs.readFile("skills/myskill/index.ts");
      * console.log(content);
      */
-    readFile(path: string): string;
+    readFile(path: string, options?: {
+        /** 起始行号（1-based） */
+        startLine?: number;
+        /** 结束行号（1-based，含） */
+        endLine?: number;
+        /** 是否在返回结果中附带行号前缀 */
+        withLineNumbers?: boolean;
+    }): string;
 
     /**
      * 写入文件。如果目标目录不存在会自动创建。
@@ -46,6 +53,20 @@ declare const fs: {
      * fs.appendFile("logs/activity.log", `${new Date().toISOString()} 执行了任务\n`);
      */
     appendFile(path: string, content: string): void;
+
+    /**
+     * 按字符串查找并替换文件内容，类似 sed。
+     * 默认仅替换第一个匹配；传 all=true 可全量替换。
+     */
+    replace(path: string, search: string, replacement: string, options?: {
+        all?: boolean;
+    }): { ok: true; count: number };
+
+    /**
+     * 对文件应用 unified diff patch。
+     * 适合 agent 在读取带行号内容后做小范围修改。
+     */
+    patch(path: string, diff: string): { ok: true };
 
     /**
      * 列出目录下的文件和子目录名。

@@ -291,6 +291,17 @@ async function main(): Promise<void> {
                 nc.push(event as { type: string;[key: string]: unknown });
             });
             sandbox.setHostCallHandler(async (method, args) => {
+                const listSchedulerItems = () => globalState.getSchedulerEvents(chatId).map((event) => ({
+                    id: event.id,
+                    type: event.type,
+                    description: event.description,
+                    triggerAt: event.triggerAt,
+                    cronExpr: event.cronExpr,
+                    taskDescription: event.taskTemplate,
+                    createdAt: event.createdAt,
+                    triggered: event.triggered,
+                }));
+
                 // ── Platform adapter routing: 按 method 前缀路由到对应 adapter ──
                 const adapter = adapters.find(a => a.canHandle(method));
                 if (adapter) {
@@ -340,8 +351,12 @@ async function main(): Promise<void> {
                             if (existing.length >= maxCrons) {
                                 throw new Error(`cron 数量上限 ${maxCrons}，请先删除不需要的任务`);
                             }
+                            const duplicate = existing.find((event) => event.taskTemplate === taskDescription);
+                            if (duplicate) {
+                                throw new Error(`已存在完全相同的 cron 任务描述: ${duplicate.id}`);
+                            }
                             const event = globalState.addCron(chatId, name, cronExpr, taskDescription);
-                            return { id: event.id };
+                            return { id: event.id, items: listSchedulerItems() };
                         }
                         if (method === "cron.remove") {
                             const id = String(args[0]);
@@ -375,10 +390,14 @@ async function main(): Promise<void> {
                             if (existingReminders.length >= maxReminders) {
                                 throw new Error(`remind 数量上限 ${maxReminders}，请等待已有提醒触发或手动取消`);
                             }
+                            const duplicate = existingReminders.find((event) => event.description === description);
+                            if (duplicate) {
+                                throw new Error(`已存在完全相同的提醒描述: ${duplicate.id}`);
+                            }
                             const triggerAt = new Date(Date.now() + delayMinutes * 60000).toISOString();
                             const event = globalState.addReminder(chatId, description, triggerAt);
                             log.info("runtime.remind 已设置", { id: event.id, chatId, triggerAt, description: description.slice(0, 80) });
-                            return { reminderId: event.id, triggerAt };
+                            return { reminderId: event.id, triggerAt, items: listSchedulerItems() };
                         }
 
                         // ── Runtime.env host calls ──

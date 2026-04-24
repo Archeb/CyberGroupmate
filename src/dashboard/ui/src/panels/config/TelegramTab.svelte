@@ -4,6 +4,7 @@
   export let pwFocus;
   export let pwBlur;
 </script>
+  import MonacoEditor from "../../components/MonacoEditor.svelte";
 
 <h3 class="card-title text-sm">
   <i class="fa-solid fa-paper-plane opacity-50 mr-1"></i> Telegram 设置
@@ -133,29 +134,31 @@
   <div class="cfg-grid-2">
     <label class="cfg-field col-span-2"
       ><span class="cfg-label">群组 ID（每行一个，如 -1001234567890）</span>
-      <textarea
-        class="textarea textarea-bordered textarea-xs w-full font-mono min-h-[4rem]"
+      <MonacoEditor
+        language="plaintext"
+        height={120}
         value={config.telegram.whitelist.groups.join("\n")}
-        on:input={(e) => {
-          config.telegram.whitelist.groups = e.target.value
+        on:change={(e) => {
+          config.telegram.whitelist.groups = e.detail.value
             .split(/\r?\n/)
             .map((s) => s.trim())
             .filter(Boolean);
         }}
-      ></textarea></label
+      /></label
     >
     <label class="cfg-field col-span-2"
       ><span class="cfg-label">私聊用户 ID（每行一个）</span>
-      <textarea
-        class="textarea textarea-bordered textarea-xs w-full font-mono min-h-[4rem]"
+      <MonacoEditor
+        language="plaintext"
+        height={120}
         value={config.telegram.whitelist.users.join("\n")}
-        on:input={(e) => {
-          config.telegram.whitelist.users = e.target.value
+        on:change={(e) => {
+          config.telegram.whitelist.users = e.detail.value
             .split(/\r?\n/)
             .map((s) => s.trim())
             .filter(Boolean);
         }}
-      ></textarea></label
+      /></label
     >
   </div>
 </div>

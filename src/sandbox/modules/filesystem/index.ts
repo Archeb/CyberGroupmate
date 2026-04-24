@@ -18,6 +18,22 @@ import {
 } from "node:fs";
 import { join, resolve, relative } from "node:path";
 
+interface ReadFileOptions {
+    withLineNumbers?: boolean;
+    startLine?: number;
+    endLine?: number;
+}
+
+interface ReplaceOptions {
+    all?: boolean;
+}
+
+interface PatchHunk {
+    oldStart: number;
+    oldLines: number;
+    newLines: string[];
+}
+
 // ─── 安全路径解析 ───
 
 /** workspace 根目录（Worker 进程 CWD 已被设置为 workspace/） */
@@ -53,13 +69,108 @@ function safePath(userPath: string): string {
     return resolved;
 }
 
+function normalizeReadOptions(options?: ReadFileOptions): Required<ReadFileOptions> {
+    const startLine = options?.startLine == null ? 1 : Math.trunc(options.startLine);
+    const endLine = options?.endLine == null ? Number.MAX_SAFE_INTEGER : Math.trunc(options.endLine);
+    if (!Number.isInteger(startLine) || startLine < 1) {
+        throw new Error("startLine 必须是大于等于 1 的整数");
+    }
+    if (!Number.isInteger(endLine) || endLine < startLine) {
+        throw new Error("endLine 必须是大于等于 startLine 的整数");
+    }
+    return {
+        withLineNumbers: options?.withLineNumbers === true,
+        startLine,
+        endLine,
+    };
+}
+
+function sliceLines(content: string, options?: ReadFileOptions): string {
+    const normalized = normalizeReadOptions(options);
+    const endsWithNewline = content.endsWith("\n");
+    const lines = content.split("\n");
+    const effectiveLines = endsWithNewline ? lines.slice(0, -1) : lines;
+    const selected = effectiveLines.slice(normalized.startLine - 1, normalized.endLine);
+    if (normalized.withLineNumbers) {
+        return selected.map((line, index) => `${normalized.startLine + index}: ${line}`).join("\n");
+    }
+    return selected.join("\n");
+}
+
+function escapeRegExp(value: string): string {
+    return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function parseUnifiedPatch(diff: string): PatchHunk[] {
+    const lines = diff.replace(/\r\n/g, "\n").split("\n");
+    const hunks: PatchHunk[] = [];
+    let index = 0;
+
+    while (index < lines.length) {
+        const line = lines[index];
+        if (!line) {
+            index++;
+            continue;
+        }
+        const match = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(line);
+        if (!match) {
+            throw new Error(`无效 patch hunk 头: ${line}`);
+        }
+
+        const oldStart = Number(match[1]);
+        const oldLines = Number(match[2] ?? "1");
+        const newLines: string[] = [];
+        index++;
+
+        while (index < lines.length && !lines[index].startsWith("@@ ")) {
+            const hunkLine = lines[index] ?? "";
+            if (hunkLine.startsWith("+") || hunkLine.startsWith(" ")) {
+                newLines.push(hunkLine.slice(1));
+            } else if (hunkLine.startsWith("-")) {
+                // 删除行由 oldLines 体现
+            } else if (hunkLine === "\\ No newline at end of file") {
+                // ignore
+            } else if (hunkLine === "") {
+                newLines.push("");
+            } else {
+                throw new Error(`无效 patch 内容: ${hunkLine}`);
+            }
+            index++;
+        }
+
+        hunks.push({ oldStart, oldLines, newLines });
+    }
+
+    return hunks;
+}
+
+function applyUnifiedPatch(original: string, diff: string): string {
+    const endsWithNewline = original.endsWith("\n");
+    const lines = original.split("\n");
+    const bodyLines = endsWithNewline ? lines.slice(0, -1) : lines;
+    const hunks = parseUnifiedPatch(diff);
+    let offset = 0;
+
+    for (const hunk of hunks) {
+        const startIndex = hunk.oldStart - 1 + offset;
+        if (startIndex < 0 || startIndex > bodyLines.length) {
+            throw new Error(`patch 行号超出范围: ${hunk.oldStart}`);
+        }
+        bodyLines.splice(startIndex, hunk.oldLines, ...hunk.newLines);
+        offset += hunk.newLines.length - hunk.oldLines;
+    }
+
+    const next = bodyLines.join("\n");
+    return endsWithNewline ? `${next}\n` : next;
+}
+
 // ─── API 实现 ───
 
 export const filesystem = {
     /**
      * 读取文件内容
      */
-    readFile(path: string): string {
+    readFile(path: string, options?: ReadFileOptions): string {
         const resolved = safePath(path);
         if (!existsSync(resolved)) {
             throw new Error(`文件不存在: ${path}`);
@@ -71,7 +182,7 @@ export const filesystem = {
         if (stat.size > MAX_FILE_SIZE) {
             throw new Error(`文件过大: ${path} (${(stat.size / 1024 / 1024).toFixed(1)}MB)，限制 ${MAX_FILE_SIZE / 1024 / 1024}MB`);
         }
-        return readFileSync(resolved, "utf-8");
+        return sliceLines(readFileSync(resolved, "utf-8"), options);
     },
 
     /**
@@ -100,6 +211,48 @@ export const filesystem = {
             mkdirSync(dir, { recursive: true });
         }
         appendFileSync(resolved, content, "utf-8");
+    },
+
+    /**
+     * 按字符串查找替换（类似 sed）
+     */
+    replace(path: string, search: string, replacement: string, options?: ReplaceOptions): { ok: true; count: number } {
+        const resolved = safePath(path);
+        if (!existsSync(resolved)) {
+            throw new Error(`文件不存在: ${path}`);
+        }
+        const stat = statSync(resolved);
+        if (stat.isDirectory()) {
+            throw new Error(`"${path}" 是目录，不是文件。`);
+        }
+        if (!search) {
+            throw new Error("search 不能为空");
+        }
+        const original = readFileSync(resolved, "utf-8");
+        const pattern = new RegExp(escapeRegExp(search), options?.all ? "g" : "");
+        const count = original.match(pattern)?.length ?? 0;
+        if (count === 0) {
+            throw new Error(`未找到要替换的内容: ${search}`);
+        }
+        writeFileSync(resolved, original.replace(pattern, replacement), "utf-8");
+        return { ok: true, count };
+    },
+
+    /**
+     * 应用 unified diff patch
+     */
+    patch(path: string, diff: string): { ok: true } {
+        const resolved = safePath(path);
+        if (!existsSync(resolved)) {
+            throw new Error(`文件不存在: ${path}`);
+        }
+        const stat = statSync(resolved);
+        if (stat.isDirectory()) {
+            throw new Error(`"${path}" 是目录，不是文件。`);
+        }
+        const original = readFileSync(resolved, "utf-8");
+        writeFileSync(resolved, applyUnifiedPatch(original, diff), "utf-8");
+        return { ok: true };
     },
 
     /**

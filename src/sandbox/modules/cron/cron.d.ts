@@ -32,7 +32,19 @@ declare const cron: {
      * await cron.add("新闻播报", "0 9 * * 1-5",
      *   "用 tavily 搜索今日科技新闻，整理成简短的播报发送到群里");
      */
-    add(name: string, cronExpr: string, taskDescription: string): Promise<{ id: string }>;
+    add(name: string, cronExpr: string, taskDescription: string): Promise<{
+        id: string;
+        items: Array<{
+            id: string;
+            type: "reminder" | "cron";
+            description: string;
+            triggerAt?: string;
+            cronExpr?: string;
+            taskDescription?: string;
+            createdAt: string;
+            triggered?: boolean;
+        }>;
+    }>;
 
     /**
      * 移除定时任务
