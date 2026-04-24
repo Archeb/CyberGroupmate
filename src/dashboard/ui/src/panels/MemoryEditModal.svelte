@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { api } from '../lib/api.js';
   import { shortId } from '../lib/utils.js';
+  import { appState } from '../lib/stores.js';
 
   let modal;
   let editCtx = null; // { type, key, data }
@@ -107,6 +108,12 @@
           hotTopics: splitCSV(v.hotTopics), tabooTopics: splitCSV(v.tabooTopics),
           communicationNorms: splitCSV(v.communicationNorms),
         }});
+        // 乐观更新 appState 中的 chatTitle，使侧边栏立即反映修改
+        appState.update(s => {
+          const g = s.groups.find(g => g.chatId === key.chatId);
+          if (g && v.chatTitle) g.chatTitle = v.chatTitle;
+          return s;
+        });
       } else if (type === 'fact') {
         await api(`/memory/fact/${key.id}`, { method: 'PUT', body: {
           content: v.content, category: v.category,
