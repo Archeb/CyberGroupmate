@@ -8,9 +8,14 @@
   let loading = false;
   let saving = false;
   let notice = null;
+  let wasMcpTabActive = false;
 
-  $: if ($activeTab === 'mcp' && !loading && servers.length === 0) {
-    loadMcpState();
+  $: {
+    const isMcpTabActive = $activeTab === 'mcp';
+    if (isMcpTabActive && !wasMcpTabActive && !loading) {
+      loadMcpState();
+    }
+    wasMcpTabActive = isMcpTabActive;
   }
 
   function showNotice(message, type = 'info') {
