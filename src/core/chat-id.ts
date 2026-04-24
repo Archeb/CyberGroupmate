@@ -215,10 +215,16 @@ export function fileNameToChatId(fileName: string): string {
 
     const rest = base.slice(underscoreIdx + 1);
 
-    // Telegram / OneBot: 直接还原 — telegram_-1001234567 → telegram:-1001234567
+    // Telegram: 二段式，直接还原 — telegram_-1001234567 → telegram:-1001234567
     // 注意 Telegram chatId 可能包含负号，不会与 _ 冲突
-    if (platform === "telegram" || platform === "onebot") {
+    if (platform === "telegram") {
         return `${platform}:${rest}`;
+    }
+
+    // OneBot: 三段式（onebot:group:xxx / onebot:private:xxx），需将 _ 还原为 :
+    // onebot_group_679691983 → onebot:group:679691983
+    if (platform === "onebot") {
+        return `onebot:${rest.replaceAll("_", ":")}`;
     }
 
     // Discord: 需要将 _ 还原为 : — discord_guild_chan → discord:guild:chan
