@@ -83,6 +83,7 @@
     configJson = JSON.stringify([
       {
         name: 'filesystem',
+        description: '让 agent 访问 sandbox 工作目录中的文件与目录',
         transport: 'stdio',
         command: 'npx',
         args: ['-y', '@modelcontextprotocol/server-filesystem', '/workspace'],
@@ -95,6 +96,7 @@
     configJson = JSON.stringify([
       {
         name: 'remote-http',
+        description: '供 agent 通过远端 HTTP MCP 服务调用外部能力',
         transport: 'streamable-http',
         url: 'https://example.com/mcp',
         headers: {
@@ -173,6 +175,9 @@
                         <span class="badge badge-secondary badge-sm">{srv.transport}</span>
                         <span class="badge badge-outline badge-sm">{srv.tools?.length || 0} tools</span>
                       </div>
+                      {#if srv.description}
+                        <div class="text-sm text-base-content/80 break-words">{srv.description}</div>
+                      {/if}
                       {#if srv.url}
                         <div class="text-xs text-base-content/60 break-all">{srv.url}</div>
                       {/if}
@@ -205,7 +210,7 @@
           <MonacoEditor bind:value={configJson} language="json" height={560} />
 
           <div class="text-xs text-base-content/60 leading-6">
-            每项至少需要 `name`，并且提供 `command` 或 `url`。`stdio` 使用 `command` / `args` / `env`，`streamable-http` 使用 `url` / `headers`。
+            每项至少需要 `name`，建议补上 `description` 说明用途，并且提供 `command` 或 `url`。`stdio` 使用 `command` / `args` / `env`，`streamable-http` 使用 `url` / `headers`。
           </div>
         </div>
       </div>

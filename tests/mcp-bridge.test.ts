@@ -105,6 +105,7 @@ describe("mcp-bridge Streamable HTTP", () => {
         try {
             await mcpBridge.connect({
                 name: "github",
+                description: "用于搜索 GitHub 仓库和代码",
                 transport: "streamable-http",
                 url: serverUrl,
             });
@@ -114,7 +115,14 @@ describe("mcp-bridge Streamable HTTP", () => {
             assert.ok(githubModule, "connected MCP server should appear in module registry cache");
             assert.equal(githubModule?.methods.length, 1);
             assert.equal(githubModule?.methods[0]?.name, "search_repositories");
-            assert.match(githubModule?.description ?? "", /MCP Server: github/);
+            assert.match(githubModule?.description ?? "", /MCP Server \(1 tools\) via Streamable HTTP/);
+            assert.match(githubModule?.description ?? "", /用于搜索 GitHub 仓库和代码/);
+            assert.deepEqual(getConnectionConfigs(), [{
+                name: "github",
+                description: "用于搜索 GitHub 仓库和代码",
+                transport: "streamable-http",
+                url: serverUrl,
+            }]);
         } finally {
             await disconnectAll();
             await new Promise<void>((resolve, reject) => {
@@ -217,6 +225,7 @@ describe("mcp-bridge Streamable HTTP", () => {
             }
 
             if (msg.method === "tools/call") {
+                const toolArgs = (msg.params as { arguments?: { value?: unknown } } | undefined)?.arguments;
                 writeJson(res, {
                     jsonrpc: "2.0",
                     id: msg.id,
@@ -224,7 +233,7 @@ describe("mcp-bridge Streamable HTTP", () => {
                         content: [
                             {
                                 type: "text",
-                                text: String(msg.params?.arguments?.value ?? ""),
+                                text: String(toolArgs?.value ?? ""),
                             },
                         ],
                     },

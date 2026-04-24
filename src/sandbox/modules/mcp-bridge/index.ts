@@ -22,6 +22,8 @@ export type McpTransportKind = "stdio" | "streamable-http";
 export interface McpServerConfig {
     /** 显示名称（用于 LLM 上下文，也是 tool 命名空间） */
     name: string;
+    /** 服务器用途描述，会透传给模块名册和 mcp.list() */
+    description?: string;
     /** 传输方式。未指定时：有 url 则视为 streamable-http，否则视为 stdio */
     transport?: McpTransportKind;
     /** stdio 启动命令 */
@@ -87,6 +89,7 @@ interface McpProxyCallbacks {
 
 export interface McpServerInfo {
     name: string;
+    description?: string;
     transport: "stdio" | "streamable-http";
     url?: string;
     tools: string[];
@@ -139,6 +142,7 @@ function saveConnectionConfigs(): void {
 function listConnectionsLocal(): McpServerInfo[] {
     return Array.from(connections.entries()).map(([name, conn]) => ({
         name,
+        description: conn.config.description,
         transport: conn.transportKind,
         url: conn.config.url,
         tools: conn.tools.map((tool) => tool.name),
@@ -678,8 +682,9 @@ export function getMcpModuleEntries(): ModuleEntry[] {
 
         entries.push({
             name,
-            description: `MCP Server: ${name} (${conn.tools.length} tools)` +
-                (conn.transportKind === "streamable-http" ? " via Streamable HTTP" : " via stdio"),
+            description: `MCP Server (${conn.tools.length} tools)` +
+                (conn.transportKind === "streamable-http" ? " via Streamable HTTP" : " via stdio") +
+                (conn.config.description?.trim() ? ` - ${conn.config.description.trim()}` : ""),
             methods,
         });
     }
@@ -787,6 +792,7 @@ export function setMcpListSnapshot(servers: McpServerInfo[]): void {
 export function getConnectionConfigs(): McpServerConfig[] {
     return Array.from(connections.values()).map((connection) => ({
         name: connection.config.name,
+        ...(connection.config.description ? { description: connection.config.description } : {}),
         ...(connection.config.transport ? { transport: connection.config.transport } : {}),
         ...(connection.config.command ? { command: connection.config.command } : {}),
         ...(connection.config.args ? { args: [...connection.config.args] } : {}),

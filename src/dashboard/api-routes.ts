@@ -1396,12 +1396,12 @@ export function createApiRouter(deps: DashboardDeps, bridge: EventBridge): Route
     /** 连接新的全局 MCP Server */
     router.post("/mcp/connect", async (req, res) => {
         try {
-            const { name, transport, command, args, env, url, headers } = req.body ?? {};
+            const { name, description, transport, command, args, env, url, headers } = req.body ?? {};
             if (!name || (!command && !url)) {
                 res.status(400).json({ error: "name 必填，且必须提供 command（stdio）或 url（Streamable HTTP）" });
                 return;
             }
-            const server = await mcpBridge.connect({ name, transport, command, args, env, url, headers });
+            const server = await mcpBridge.connect({ name, description, transport, command, args, env, url, headers });
             res.json({ ok: true, name: server.name, tools: server.tools });
         } catch (err) {
             res.status(500).json({ error: String(err) });

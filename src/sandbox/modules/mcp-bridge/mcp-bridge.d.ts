@@ -32,6 +32,8 @@ declare const mcp: {
     connect(config: {
         /** 显示名称，也用作 tool 命名空间 */
         name: string;
+        /** 服务器用途描述，会展示给主 Agent 的模块名册 */
+        description?: string;
         /** 传输方式。省略时：有 url 则视为 streamable-http，否则视为 stdio */
         transport?: "stdio" | "streamable-http";
         /** stdio 启动命令 */
@@ -68,6 +70,7 @@ declare const mcp: {
      */
     list(): Array<{
         name: string;
+        description?: string;
         transport: "stdio" | "streamable-http";
         url?: string;
         tools: string[];
