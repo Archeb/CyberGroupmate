@@ -88,6 +88,22 @@ export function getGroupLabel(chatId) {
   return shortId(chatId);
 }
 
+/**
+ * 获取聊天类型标签（群聊/私聊）
+ */
+export function getChatTypeLabel(chatId) {
+  const state = get(appState);
+  const g = state.groups.find(g => g.chatId === chatId);
+  if (g?.isDirectMessage) return '私聊';
+  // onebot:group:xxx 是群聊
+  const s = String(chatId ?? '');
+  if (s.includes(':group:')) return '群聊';
+  if (s.includes(':private:')) return '私聊';
+  // Telegram/Discord: 非私聊则默认群聊
+  if (g && !g.isDirectMessage) return '群聊';
+  return '';
+}
+
 export function isAtBottom(el) {
   if (!el) return true;
   return el.scrollTop + el.clientHeight >= el.scrollHeight - 50;

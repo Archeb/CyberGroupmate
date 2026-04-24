@@ -1,7 +1,7 @@
 <script>
   import { activeTab, activeMemoryTab, pendingMemoryLink } from '../../lib/stores.js';
   import { api } from '../../lib/api.js';
-  import { shortId, escapeHtml, getPlatform, platformLabel } from '../../lib/utils.js';
+  import { shortId, escapeHtml, getPlatform, platformLabel, getChatTypeLabel } from '../../lib/utils.js';
 
   let groups = [];
 
@@ -35,19 +35,27 @@
     <div class="overflow-x-auto">
       <table class="table table-xs">
         <thead><tr>
-          <th>ChatId</th><th>标题</th><th>描述</th><th>角色</th><th>参与度</th><th>活跃人数</th><th>日均消息</th><th>私聊</th><th>热门话题</th><th>操作</th>
+          <th>ChatId</th><th>类型</th><th>标题</th><th>描述</th><th>角色</th><th>参与度</th><th>活跃人数</th><th>日均消息</th><th>热门话题</th><th>操作</th>
         </tr></thead>
         <tbody>
           {#if !groups.length}
-            <tr><td colspan="10" class="text-center opacity-60">暂无数据</td></tr>
+            <tr><td colspan="11" class="text-center opacity-60">暂无数据</td></tr>
           {:else}
             {#each groups as g}
+              {@const chatType = getChatTypeLabel(g.chatId) || (g.isDirectMessage ? '私聊' : '群聊')}
               <tr>
                 <td class="font-mono text-xs" title={g.chatId}>
                   {#if getPlatform(g.chatId)}<span class="platform-badge platform-{getPlatform(g.chatId)}">{platformLabel(getPlatform(g.chatId))}</span>{/if}
                   {shortId(g.chatId)}
                 </td>
-                <td>{g.chatTitle || '-'}</td>
+                <td>
+                  <span class="badge badge-xs {g.isDirectMessage ? 'badge-ghost' : 'badge-primary'}">{chatType}</span>
+                </td>
+                <td>
+                  <span class="cursor-pointer hover:underline" title="点击编辑" onclick={() => editGroup(g.chatId)}>
+                    {g.chatTitle || '-'}
+                  </span>
+                </td>
                 <td class="max-w-40 truncate" title={g.description || ''}>{g.description || '-'}</td>
                 <td class="max-w-24 truncate" title={g.agentRole || ''}>{g.agentRole || '-'}</td>
                 <td>
@@ -61,13 +69,12 @@
                 </td>
                 <td>{g.activeMembers ?? '-'}</td>
                 <td>{g.avgMessagesPerDay != null ? g.avgMessagesPerDay.toFixed(1) : '-'}</td>
-                <td>{g.isDirectMessage ? '✓' : '-'}</td>
                 <td class="max-w-32 truncate" title={(g.hotTopics || []).join(', ')}>{(g.hotTopics || []).join(', ') || '-'}</td>
                 <td>
                   <div class="flex gap-1">
                     <button class="btn btn-xs btn-ghost" title="群内画像列表" onclick={() => jumpToProfiles(g.chatId)}><i class="fa-solid fa-id-badge"></i></button>
                     <button class="btn btn-xs btn-ghost" title="聊天记录" onclick={() => jumpToChatLog(g.chatId)}><i class="fa-solid fa-comments"></i></button>
-                    <button class="btn btn-xs btn-ghost" onclick={() => editGroup(g.chatId)}><i class="fa-solid fa-pen-to-square"></i></button>
+                    <button class="btn btn-xs btn-ghost" title="编辑群组" onclick={() => editGroup(g.chatId)}><i class="fa-solid fa-pen-to-square"></i></button>
                   </div>
                 </td>
               </tr>

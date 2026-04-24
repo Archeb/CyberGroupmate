@@ -1303,6 +1303,39 @@ async function main(): Promise<void> {
 
     // 广播 adapter 状态到 dashboard
     nc.push({ type: "system.adapter_status", adapters: adapterStatuses });
+
+    // ─── 延迟刷新 OneBot 预加载的群名/昵称到 GroupModel ───
+    // prefetchWhitelistedGroups 是异步的，等 5 秒后从缓存读取并更新 GroupModel
+    const onebotAdapterInstance = adapters.find(a => a.platform === "onebot") as OneBotAdapter | undefined;
+    if (onebotAdapterInstance) {
+        setTimeout(() => {
+            try {
+                const { groupNames, userNicks } = onebotAdapterInstance.getCachedNames();
+                let updatedCount = 0;
+                for (const [groupId, groupName] of groupNames.entries()) {
+                    const chatId = `onebot:group:${groupId}`;
+                    const existing = memory.getGroupModel(getGroupModelKey(chatId));
+                    if (!existing || existing.chatTitle !== groupName) {
+                        memory.upsertGroupModel(getGroupModelKey(chatId), { chatTitle: groupName, isDirectMessage: false });
+                        updatedCount++;
+                    }
+                }
+                for (const [userId, nickname] of userNicks.entries()) {
+                    const chatId = `onebot:private:${userId}`;
+                    const existing = memory.getGroupModel(getGroupModelKey(chatId));
+                    if (!existing || existing.chatTitle !== nickname) {
+                        memory.upsertGroupModel(getGroupModelKey(chatId), { chatTitle: nickname, isDirectMessage: true });
+                        updatedCount++;
+                    }
+                }
+                if (updatedCount > 0) {
+                    log.info("OneBot 预加载 chatTitle 已同步到 GroupModel", { updatedCount });
+                }
+            } catch (err) {
+                log.warn("OneBot 预加载 chatTitle 同步失败", { error: String(err) });
+            }
+        }, 5000);
+    }
     const failedAdapters = adapterStatuses.filter(a => a.status !== "ok");
     if (failedAdapters.length > 0) {
         log.warn("部分 adapter 未就绪", { failed: failedAdapters.map(a => `${a.platform}: ${a.error}`) });

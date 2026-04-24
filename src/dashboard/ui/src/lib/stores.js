@@ -30,13 +30,24 @@ export function addMessage(data, timestamp) {
     return msgs;
   });
 
-  // Update group list if new chat
+  // Update group list if new chat, and sync chatTitle/isDirectMessage
   appState.update(s => {
-    if (!s.groups.find(g => g.chatId === data.chatId)) {
+    const existing = s.groups.find(g => g.chatId === data.chatId);
+    if (!existing) {
       s.groups.push({
         chatId: data.chatId, engagement: 0, bufferSize: 0,
         topicCount: 0, stickiness: 'STRANGER', attendCount: 0,
+        chatTitle: data.chatTitle || '',
+        isDirectMessage: !!data.isDirectMessage,
       });
+    } else {
+      // 如果收到的 chatTitle 比现有更完整，更新它
+      if (data.chatTitle && (!existing.chatTitle || existing.chatTitle === data.chatId)) {
+        existing.chatTitle = data.chatTitle;
+      }
+      if (typeof data.isDirectMessage === 'boolean') {
+        existing.isDirectMessage = data.isDirectMessage;
+      }
     }
     return s;
   });

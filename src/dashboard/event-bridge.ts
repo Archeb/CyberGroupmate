@@ -214,6 +214,7 @@ export class EventBridge {
                     text: String(event.text ?? event.message ?? ""),
                     isDirectMessage: !!event.isDirectMessage,
                     mentionsAgent: !!event.mentionsAgent,
+                    chatTitle: String(event.chatTitle ?? ""),
                 },
             });
         });
@@ -399,6 +400,7 @@ export class EventBridge {
             groups.push({
                 chatId: sub.chatId,
                 chatTitle: gm?.chatTitle || "",
+                isDirectMessage: !!gm?.isDirectMessage,
                 engagement: sub.observer.getEngagementScore(),
                 bufferSize: sub.observer.getBufferSize(),
                 topicCount: sub.topicRegistry.getAll().length,
