@@ -142,6 +142,32 @@ function stripVerboseSections(content: string): string {
     );
     return result;
 }
+
+function normalizeThinkingText(thinking: string | undefined): string {
+    if (!thinking) return "";
+    return thinking
+        .replace(/<end_turn>/g, "")
+        .replace(/\r\n/g, "\n")
+        .replace(/\n{3,}/g, "\n\n")
+        .trim();
+}
+
+function formatThinkingTranscript(result: SessionResult): string {
+    const parts = result.turns
+        .map((turn, index) => {
+            const thinking = normalizeThinkingText(turn.thinking);
+            if (!thinking) return null;
+            return `[Turn ${index + 1}]\n${thinking}`;
+        })
+        .filter((part): part is string => !!part);
+
+    const transcript = parts.join("\n\n");
+    return `本次思考过程：\n\n\`\`\`text\n${transcript || "（无纯文本思考）"}\n\`\`\``;
+}
+
+function formatThinkingPlaceholder(reason: string): string {
+    return `本次思考过程：\n\n\`\`\`text\n${reason}\n\`\`\``;
+}
 export interface CodeActExecutorConfig {
     /** 单次执行最大超时 (ms)。默认 60000 */
     maxExecutionTimeMs: number;
@@ -352,6 +378,9 @@ export class CodeActExecutor {
         } catch (err) {
             const durationMs = Date.now() - startTime;
             const cancelledByUser = this.cancelRequested;
+            const thinkingSummary = cancelledByUser
+                ? formatThinkingPlaceholder("执行已被用户取消，未保留可用的思考记录")
+                : formatThinkingPlaceholder("执行在 session 外层异常中断，未保留可用的思考记录");
             const callback: SubagentCallback = {
                 taskId: task.taskId,
                 chatId: this.chatId,
@@ -359,7 +388,9 @@ export class CodeActExecutor {
                 isDirectMessage: task.contextSnapshot.isDirectMessage,
                 executionType: "CODEACT",
                 status: cancelledByUser ? "SKIPPED" : "ERROR",
-                summary: cancelledByUser ? "Execution cancelled by user" : `Execution failed: ${String(err)}`,
+                summary: cancelledByUser
+                    ? `Execution cancelled by user\n\n${thinkingSummary}`
+                    : `Execution failed: ${String(err)}\n\n${thinkingSummary}`,
                 error: cancelledByUser ? undefined : String(err),
                 durationMs,
                 createdAt: new Date().toISOString(),
@@ -630,10 +661,12 @@ export class CodeActExecutor {
 
         // 记录 execution record（用于 compact）
         const thinkingSummary = sessionResult.turns
-            .map(t => t.thinking)
+            .map(t => normalizeThinkingText(t.thinking))
             .filter(Boolean)
             .join(" | ")
             .slice(0, 500);
+
+        const thinkingTranscript = formatThinkingTranscript(sessionResult);
 
         this.executionRecords.push({
             taskId: task.taskId,
@@ -654,7 +687,7 @@ export class CodeActExecutor {
             executionType: "CODEACT",
             status: isError ? "ERROR" : "COMPLETED",
             summary: `CodeAct session ${sessionResult.sessionId}: ${sessionResult.endReason}, ` +
-                `${sessionResult.turns.length} turns, ${sentCollector.allSent.length} messages sent`,
+                `${sessionResult.turns.length} turns, ${sentCollector.allSent.length} messages sent\n\n${thinkingTranscript}`,
             replyContent: sessionResult.turns
                 .filter((t: any) => t.role === "assistant" && t.content)
                 .map((t: any) => t.content)
@@ -707,7 +740,7 @@ export class CodeActExecutor {
             isDirectMessage: task.contextSnapshot.isDirectMessage,
             executionType: "CODEACT",
             status: "COMPLETED",
-            summary: `Executed ${task.replyMode} task with ${task.decisions.length} decisions (skeleton)`,
+            summary: `Executed ${task.replyMode} task with ${task.decisions.length} decisions (skeleton)\n\n${formatThinkingPlaceholder("当前为 skeleton fallback，未产生可用的思考记录")}`,
             replyContent: task.decisions.map(d => d.contentDirection ?? "").filter(Boolean).join("\n") || undefined,
             tokensUsed: 0,
             durationMs,

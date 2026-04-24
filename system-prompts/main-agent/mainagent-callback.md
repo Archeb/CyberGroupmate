@@ -7,7 +7,8 @@
 {{#isCompleted}}
 已发送消息:
 {{sentMessages}}
-Session 摘要: {{summary}}
+Session 运行状况：
+{{summary}}
 {{/isCompleted}}
 
 {{#hasError}}
