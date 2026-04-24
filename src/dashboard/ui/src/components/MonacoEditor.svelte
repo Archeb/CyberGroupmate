@@ -21,6 +21,8 @@
   let monacoApi;
   let themeObserver;
   let syncingFromEditor = false;
+  let syncingFromProps = false;
+  let editorSnapshot = value ?? '';
 
   const dispatch = createEventDispatcher();
 
@@ -63,12 +65,17 @@
     }
   }
 
-  $: if (editor && !syncingFromEditor) {
-    const currentValue = editor.getValue();
-    if (value !== currentValue) {
+  $: if (editor && !syncingFromEditor && !syncingFromProps) {
+    const nextValue = value ?? '';
+    if (nextValue !== editorSnapshot) {
+      syncingFromProps = true;
+      editorSnapshot = nextValue;
       const position = editor.getPosition();
-      editor.setValue(value ?? '');
+      editor.setValue(nextValue);
       if (position) editor.setPosition(position);
+      queueMicrotask(() => {
+        syncingFromProps = false;
+      });
     }
   }
 
@@ -94,8 +101,11 @@
     });
 
     editor.onDidChangeModelContent(() => {
+      if (syncingFromProps) return;
+
       syncingFromEditor = true;
-      value = editor.getValue();
+      editorSnapshot = editor.getValue();
+      value = editorSnapshot;
       dispatch('change', { value });
       queueMicrotask(() => {
         syncingFromEditor = false;
