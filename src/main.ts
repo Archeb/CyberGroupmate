@@ -330,6 +330,15 @@ async function main(): Promise<void> {
                     createdAt: event.createdAt,
                     triggered: event.triggered,
                 }));
+                const listSchedulerItemsForRemind = () => {
+                    const items = listSchedulerItems();
+                    const untriggered = items.filter((event) => !event.triggered);
+                    const latestTriggered = items
+                        .filter((event) => !!event.triggered)
+                        .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))
+                        .slice(0, 10);
+                    return [...untriggered, ...latestTriggered];
+                };
 
                 // ── Platform adapter routing: 按 method 前缀路由到对应 adapter ──
                 const adapter = adapters.find(a => a.canHandle(method));
@@ -426,7 +435,7 @@ async function main(): Promise<void> {
                             const triggerAt = new Date(Date.now() + delayMinutes * 60000).toISOString();
                             const event = globalState.addReminder(chatId, description, triggerAt);
                             log.info("runtime.remind 已设置", { id: event.id, chatId, triggerAt, description: description.slice(0, 80) });
-                            return { reminderId: event.id, triggerAt, items: listSchedulerItems() };
+                            return { reminderId: event.id, triggerAt, items: listSchedulerItemsForRemind() };
                         }
 
                         // ── Runtime.env host calls ──
