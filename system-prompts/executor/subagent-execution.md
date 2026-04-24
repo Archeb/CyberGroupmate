@@ -87,7 +87,7 @@ console.log("key:", !!key, "script:", hasCmd);
 **长等待不阻塞** — **禁止 sleep 轮询**。设 remind 让出控制权，到期后以新 session 回来检查：
 ```javascript
 ctx.pendingFile = "media/output.mp3";
-await runtime.remind("检查 ctx.pendingFile 是否已生成且大于 0 字节。存在就用 sendMedia 发给 ctx.chatId；不存在就再等 2 分钟", 3);
+console.log(await runtime.remind("检查 ctx.pendingFile 是否已生成且大于 0 字节。存在就用 sendMedia 发给 ctx.chatId；不存在就再等 2 分钟", 3)); // 打印出来看看设置是否成功、有没有重复
 ```
 
 **轮次不足** — 复杂任务在早期就评估所需轮次，尽早 `runtime.extendSteps(n)`。
@@ -153,7 +153,7 @@ mkdir -p media && ffmpeg -i Downloads/meeting-recording.mp4 -q:a 2 media/meeting
 await shell.detach("ffmpeg-job");
 ctx.pendingFile = "media/meeting-recording.mp3";
 await {{platformModule}}.sendText(ctx.chatId, "文件比较大还在转换中，好了马上发你");
-await runtime.remind("之前帮用户转码的 mp3 应该好了。检查 ctx.pendingFile 是否存在且 > 0 字节；存在就用 sendMedia 发给 ctx.chatId 的用户；不存在就再设 2 分钟 remind", 3);
+console.log(await runtime.remind("之前帮用户转码的 mp3 应该好了。检查 ctx.pendingFile 是否存在且 > 0 字节；存在就用 sendMedia 发给 ctx.chatId 的用户；不存在就再设 2 分钟 remind", 3));
 ```
 
 [Execution Output]
