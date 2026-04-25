@@ -11,10 +11,8 @@ import type {
     TopicNode,
     GroupModel,
     AssociatedMemory,
-    FactCategory,
     FactSearchResult,
     TopicSearchResult,
-    MessageSearchResult,
     InteractionSearchResult,
 } from "../memory-v2/types.js";
 import type { SnapshotMessage } from "../memory-v2/message-snapshot.js";
@@ -37,15 +35,12 @@ export interface MemoryHints {
     keywords?: string[];
     userIds?: string[];
     timeRange?: "24h" | "7d" | "30d" | "all";
-    factCategories?: FactCategory[];
-    searchMessages?: boolean;
 }
 
 export interface AdditionalMemoryContext {
-    facts: FactSearchResult[];
+    facts: Array<FactSearchResult & { displayName?: string }>;
     topics: TopicSearchResult[];
-    messages: MessageSearchResult[];
-    interactions: InteractionSearchResult[];
+    interactions: Array<InteractionSearchResult & { displayName?: string }>;
 }
 
 // ─── Observer 产出 ───

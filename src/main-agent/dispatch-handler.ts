@@ -36,7 +36,6 @@ import { TopicRegistry } from "../pipeline/topic-registry.js";
 const log = createLogger("dispatch-handler");
 
 const VALID_TIME_RANGES = new Set(["24h", "7d", "30d", "all"]);
-const VALID_FACT_CATEGORIES = new Set(["biographical", "preference", "anecdote", "opinion", "plan", "relationship", "general"]);
 
 function resolveTimeRange(range?: "24h" | "7d" | "30d" | "all"): string | undefined {
     if (!range || range === "all") return undefined;
@@ -62,11 +61,6 @@ function sanitizeMemoryHints(raw: CodeActReplyTask["decisions"][number]["memoryH
             !/:-\d{10,}/.test(userId)  // 排除群组 ID（如 telegram:-100xxxxxxxxxx）
         ).slice(0, 5)
         : undefined;
-    const factCategories = Array.isArray(raw.factCategories)
-        ? raw.factCategories.filter((category): category is NonNullable<NonNullable<CodeActReplyTask["decisions"][number]["memoryHints"]>["factCategories"]>[number] =>
-            typeof category === "string" && VALID_FACT_CATEGORIES.has(category)
-        )
-        : undefined;
     const timeRange = typeof raw.timeRange === "string" && VALID_TIME_RANGES.has(raw.timeRange)
         ? raw.timeRange as NonNullable<CodeActReplyTask["decisions"][number]["memoryHints"]>["timeRange"]
         : undefined;
@@ -75,8 +69,19 @@ function sanitizeMemoryHints(raw: CodeActReplyTask["decisions"][number]["memoryH
         keywords,
         userIds,
         timeRange,
-        factCategories,
-        searchMessages: raw.searchMessages === true,
+    };
+}
+
+/** 批量解析 userId → displayName，内部缓存避免重复查询 */
+function buildUserIdResolver(memory: MemoryStoreV2): (userId: string) => string {
+    const cache = new Map<string, string>();
+    return (userId: string): string => {
+        const cached = cache.get(userId);
+        if (cached !== undefined) return cached;
+        const identity = memory.getPersonIdentity(userId);
+        const name = identity?.displayName ?? userId;
+        cache.set(userId, name);
+        return name;
     };
 }
 
@@ -86,14 +91,16 @@ function processMemoryHints(memory: MemoryStoreV2, chatId: string, hints?: NonNu
     }
 
     const start = Date.now();
+    const resolveUser = buildUserIdResolver(memory);
 
     const after = resolveTimeRange(hints.timeRange);
-    // facts: 仅用 keywords + categories 搜索，不按 userIds 过滤
-    // （FTS 已按关键词匹配，userIds 过滤会误杀大量有效结果）
+    // facts: 仅用 keywords 搜索全部类别，不按 userIds 过滤
     const facts = memory.searchFacts(hints.keywords.join(" "), {
         limit: 8,
-        categories: hints.factCategories,
-    });
+    }).map(fact => ({
+        ...fact,
+        displayName: resolveUser(fact.subject),
+    }));
 
     const query = hints.keywords.join(" ");
     let topics = memory.searchTopics(query, {
@@ -107,26 +114,18 @@ function processMemoryHints(memory: MemoryStoreV2, chatId: string, hints?: NonNu
     }
 
     const interactions = hints.userIds?.length
-        ? hints.userIds.slice(0, 3).flatMap((userId) => memory.getRecentInteractions(chatId, userId, 5))
+        ? hints.userIds.slice(0, 3).flatMap((userId) =>
+            memory.getRecentInteractions(chatId, userId, 5).map(item => ({
+                ...item,
+                displayName: resolveUser(item.userId),
+            }))
+        )
         : [];
-
-    const messages = hints.searchMessages
-        ? hints.keywords.slice(0, 3).flatMap((keyword) => memory.searchMessages(keyword, {
-            chatId,
-            after,
-            limit: 10,
-        }))
-        : [];
-
-    const dedupedMessages = messages.filter((message, index, arr) =>
-        arr.findIndex((candidate) => candidate.messageId === message.messageId) === index
-    ).slice(0, 15);
 
     const result = {
         facts,
         topics,
         interactions,
-        messages: dedupedMessages,
     };
 
     log.info("processMemoryHints 完成", {
@@ -137,7 +136,6 @@ function processMemoryHints(memory: MemoryStoreV2, chatId: string, hints?: NonNu
             facts: result.facts.length,
             topics: result.topics.length,
             interactions: result.interactions.length,
-            messages: result.messages.length,
         },
     });
 

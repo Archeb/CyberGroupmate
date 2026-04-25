@@ -1891,36 +1891,68 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
         limit?: number;
     } = {}): TopicSearchResult[] {
         const ftsQuery = buildFtsOrQuery(query);
-        if (!ftsQuery) return [];
-
         const limit = Math.min(Math.max(options.limit ?? 5, 1), 30);
-        const sql = [
-            "SELECT t.*",
-            "FROM topics t",
-            "INNER JOIN topics_fts fts ON t.rowid = fts.rowid",
-            "WHERE topics_fts MATCH ?",
-        ];
-        const params: unknown[] = [ftsQuery];
+
+        // ── 查询时解析人名 → userId，用于按参与者搜索 ──
+        const terms = query.split(/\s+/).map(t => t.replace(/"/g, "").trim()).filter(Boolean);
+        const participantUserIds: string[] = [];
+        for (const term of terms) {
+            if (term.length < 2) continue;
+            const matches = this.searchByAlias(term, 3);
+            for (const m of matches) {
+                if (!participantUserIds.includes(m.userId)) {
+                    participantUserIds.push(m.userId);
+                }
+            }
+        }
+
+        // ── 构建条件子句 ──
+        const whereClauses: string[] = [];
+        const params: unknown[] = [];
+
+        // 条件组合: FTS 匹配 OR 参与者匹配
+        const orConditions: string[] = [];
+
+        if (ftsQuery) {
+            orConditions.push("t.rowid IN (SELECT rowid FROM topics_fts WHERE topics_fts MATCH ?)");
+            params.push(ftsQuery);
+        }
+
+        if (participantUserIds.length > 0) {
+            const likeClauses = participantUserIds.map(() => "t.participants LIKE ?");
+            orConditions.push(`(${likeClauses.join(" OR ")})`);
+            params.push(...participantUserIds.map(uid => `%${uid}%`));
+        }
+
+        // 如果 FTS 和参与者都没有匹配条件，返回空
+        if (orConditions.length === 0) return [];
+
+        whereClauses.push(`(${orConditions.join(" OR ")})`);
 
         if (options.chatId) {
-            sql.push("AND t.chat_id = ?");
+            whereClauses.push("t.chat_id = ?");
             params.push(options.chatId);
         }
         if (options.after) {
-            sql.push("AND t.started_at >= ?");
+            whereClauses.push("t.started_at >= ?");
             params.push(options.after);
         }
         if (options.before) {
-            sql.push("AND t.started_at <= ?");
+            whereClauses.push("t.started_at <= ?");
             params.push(options.before);
         }
         if (options.excludeTopicIds?.length) {
-            sql.push(`AND t.id NOT IN (${options.excludeTopicIds.map(() => "?").join(", ")})`);
+            whereClauses.push(`t.id NOT IN (${options.excludeTopicIds.map(() => "?").join(", ")})`);
             params.push(...options.excludeTopicIds);
         }
 
-        sql.push("ORDER BY bm25(topics_fts), t.started_at DESC");
-        sql.push("LIMIT ?");
+        const sql = [
+            "SELECT t.*",
+            "FROM topics t",
+            `WHERE ${whereClauses.join(" AND ")}`,
+            "ORDER BY t.started_at DESC",
+            "LIMIT ?",
+        ];
         params.push(limit);
 
         const rows = this.db.prepare(sql.join(" ")).all(...params) as Array<Record<string, unknown>>;

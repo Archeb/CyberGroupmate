@@ -428,16 +428,13 @@ export class CodeActExecutor {
         const memoryContextText = memoryContext
             ? [
                 memoryContext.facts.length
-                    ? `## 相关事实\n${memoryContext.facts.map((fact) => `- [${fact.subject} · ${fact.category}] ${fact.content}`).join("\n")}`
+                    ? `## 相关事实\n${memoryContext.facts.map((fact) => `- [${fact.displayName ?? fact.subject} · ${fact.category}] ${fact.content}`).join("\n")}`
                     : "",
                 memoryContext.topics.length
-                    ? `## 相关历史话题\n${memoryContext.topics.map((topic) => `- [${topic.startedAt}] ${topic.label} — ${topic.summary}`).join("\n")}`
+                    ? `## 相关历史话题\n${memoryContext.topics.map((topic) => `- [${topic.startedAt}] ${topic.label} — ${topic.summary} (topicId: ${topic.topicId})`).join("\n")}`
                     : "",
                 memoryContext.interactions.length
-                    ? `## 近期互动\n${memoryContext.interactions.map((item) => `- [${item.timestamp}] ${item.userId}: ${item.summary} (${item.sentiment})`).join("\n")}`
-                    : "",
-                memoryContext.messages.length
-                    ? `## 相关聊天记录\n${memoryContext.messages.map((message) => `- [${message.timestamp}] ${message.displayName}: ${message.content}`).join("\n")}`
+                    ? `## 近期互动\n${memoryContext.interactions.map((item) => `- [${item.timestamp}] ${(item as any).displayName ?? item.userId}: ${item.summary} (${item.sentiment})`).join("\n")}`
                     : "",
             ].filter(Boolean).join("\n\n")
             : "";

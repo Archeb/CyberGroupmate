@@ -21,11 +21,9 @@
 
 ## memoryHints 使用原则
 - 只有在当前上下文不够、而且额外回忆能显著提高回复质量时，才填写 memoryHints。
-- keywords 要写成真正可检索的词，不要写整句自然语言。
+- keywords 要写成真正可检索的词，不要写整句自然语言。支持按人名搜索。
 - userIds 必须是上下文中出现的**个人用户 ID**（如 `telegram:123456`），不要填群组 chatId。拿不准就省略此字段。
 - timeRange 通常应**省略**（默认搜索全部时间范围）。大部分回忆场景不需要限制时间，只有明确只需非常近期的记忆时才设置。
-- factCategories 只能填写系统支持的事实类别；拿不准就省略，不要乱填。
-- searchMessages 默认应为 false。只有在需要核对原话、引用原话、或确认谁说过什么时才开启。
 
 ## 输出格式要求
 以代码块方式输出纯JSON:
@@ -44,9 +42,7 @@
       "memoryHints": {
         "keywords": ["关键词1", "关键词2"],
         "userIds": ["platform:userId"],
-        "timeRange": "24h | 7d | 30d | all",
-        "factCategories": ["anecdote", "preference", "relationship"],
-        "searchMessages": false
+        "timeRange": "24h | 7d | 30d | all"
       },
       "confidence": 0.8,
       "reason": "决策理由"
@@ -63,7 +59,7 @@
 - contentDirection: 先获取哪些相关信息、要完成什么任务；不应包括具体的事实和结论。
 - toneGuidance: 根据群组氛围、回复人关系给出具体语气指导、还有应该避免的语气。以及要发多少句、每句长度。
 - suggestedEmojis: 为 REPLY 决策根据当前语境/情绪提供 2-4 个相关 emoji，用于查找可发送的贴纸
-- memoryHints: 仅在需要额外回忆时提供。keywords 用于检索事实/历史话题；userIds 用于限定人物；factCategories 用于限定事实类别；searchMessages 仅在需要引用原话时开启。
+- memoryHints: 仅在需要额外回忆时提供。keywords 用于全文检索事实和历史话题（支持按人名搜索）；userIds 限定到具体的个人用户 ID 来查询互动日志。
 - REPLY: 需要给出明确的 contentDirection（内容方向）、targetMessageIds（回复目标）、toneGuidance（语气）和 suggestedEmojis（相关表情）
 - IGNORE: 说明不介入的理由
 - DEFER: 非紧急，下次再看

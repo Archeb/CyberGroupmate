@@ -529,8 +529,6 @@ export function createAttendHandler(
                             keywords: Array.isArray(d.memoryHints.keywords) ? d.memoryHints.keywords.map(String) : undefined,
                             userIds: Array.isArray(d.memoryHints.userIds) ? d.memoryHints.userIds.map(String) : undefined,
                             timeRange: typeof d.memoryHints.timeRange === "string" ? d.memoryHints.timeRange : undefined,
-                            factCategories: Array.isArray(d.memoryHints.factCategories) ? d.memoryHints.factCategories : undefined,
-                            searchMessages: d.memoryHints.searchMessages === true,
                         }
                         : undefined,
                     confidence: d.confidence ?? 0.5,
