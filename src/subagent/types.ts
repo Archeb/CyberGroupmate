@@ -7,8 +7,46 @@
  * 参考设计文档：subagent.md v0.5.0
  */
 
-import type { TopicNode, GroupModel } from "../memory-v2/types.js";
+import type {
+    TopicNode,
+    GroupModel,
+    AssociatedMemory,
+    FactCategory,
+    FactSearchResult,
+    TopicSearchResult,
+    MessageSearchResult,
+    InteractionSearchResult,
+} from "../memory-v2/types.js";
 import type { SnapshotMessage } from "../memory-v2/message-snapshot.js";
+
+export interface ActiveUserProfile {
+    userId: string;
+    displayName: string;
+    aliases: string[];
+    dunbarTier?: 1 | 2 | 3 | 4;
+    rapport?: number;
+    traits?: string[];
+    communicationStyle?: string;
+    relationToAgent?: string;
+    messageCount: number;
+    mention?: string;
+    username?: string;
+}
+
+export interface MemoryHints {
+    keywords?: string[];
+    userIds?: string[];
+    timeRange?: "24h" | "7d" | "30d" | "all";
+    factCategories?: FactCategory[];
+    searchMessages?: boolean;
+}
+
+export interface AdditionalMemoryContext {
+    facts: FactSearchResult[];
+    topics: TopicSearchResult[];
+    messages: MessageSearchResult[];
+    interactions: InteractionSearchResult[];
+}
 
 // ─── Observer 产出 ───
 
@@ -32,6 +70,10 @@ export interface TopicDigest {
     lastActivityAt: string;
     /** Triage 判断理由（should_intervene=true 时填充） */
     triageReason?: string;
+    /** 与当前话题程序化关联的记忆 */
+    associatedMemories?: AssociatedMemory[];
+    /** 触发回梗/主动接话的潜力分 */
+    callbackPotential?: number;
 }
 
 
@@ -73,6 +115,10 @@ export interface AttentionQueueEntry {
     snapshotTimestamp?: string;
     /** Scheduler 触发描述列表（watchdog 注入，source=SCHEDULER_TRIGGER 时存在） */
     schedulerTriggers?: Array<{ id: string; type: "reminder" | "cron"; description: string }>;
+    /** 当前队列快照中的最大 callbackPotential */
+    callbackPotential?: number;
+    /** 是否存在高 callbackPotential 话题 */
+    hasHighCallbackPotential?: boolean;
 }
 
 /** AttentionQueue 评估结果 */
@@ -114,6 +160,8 @@ export interface CodeActReplyTask {
     maxResponseTime?: number;
     /** 主 Agent 指定的模块路由（限制 Subagent Pass 1 可见的额外技能模块） */
     useSkills?: string[];
+    /** 主 Agent / dispatch 阶段检索到的额外记忆上下文 */
+    memoryContext?: AdditionalMemoryContext | null;
 }
 
 /** 回复策略 (subagent.md §2.2 B1) */
@@ -225,6 +273,8 @@ export interface GroupContextPackage {
     pendingCodeActTasks?: number;
     /** 活跃参与者概况 */
     activePersons?: Array<{ userId: string; displayName: string; recentMessageCount: number }>;
+    /** 当前上下文窗口中的活跃用户画像 */
+    activeUserProfiles?: ActiveUserProfile[];
 
     // ─── Dispatch handler 注入的执行上下文（CodeActExecutor prompt 使用） ───
     /** 话题摘要文本 */
@@ -287,6 +337,8 @@ export interface Decision {
     toneGuidance?: string;
     /** 建议的相关 emoji（用于查找可发送的贴纸） */
     suggestedEmojis?: string[];
+    /** 回复前希望系统帮忙召回的记忆范围 */
+    memoryHints?: MemoryHints;
     /** 置信度 */
     confidence: number;
     /** 理由 */

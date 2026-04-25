@@ -29,6 +29,7 @@ import { loadPromptFile, registerCacheClear } from "../core/prompt-loader.js";
 import { SafeUpdateBuilder, SafeSelectBuilder } from "./query-builder.js";
 import type {
     IMemoryStoreV2,
+    AssociatedMemory,
     TopicNode,
     PersonIdentity,
     PersonGroupProfile,
@@ -37,6 +38,11 @@ import type {
     GroupModel,
     CoreFact,
     FactCategory,
+    FactSearchResult,
+    TopicSearchResult,
+    MessageSearchResult,
+    InteractionSearchResult,
+    UserProfileSearchResult,
     MessageLogEntry,
     RecentMessageEntry,
     RecallOptions,
@@ -65,6 +71,15 @@ function fromJSON<T>(raw: string | null | undefined, fallback: T): T {
 
 function now(): string {
     return new Date().toISOString();
+}
+
+function buildFtsOrQuery(query: string): string {
+    const terms = query
+        .split(/\s+/)
+        .map(term => term.replace(/"/g, "").trim())
+        .filter(Boolean);
+    if (terms.length === 0) return "";
+    return terms.map(term => `"${term}"`).join(" OR ");
 }
 
 // ─── System Prompt 加载（统一使用 prompt-loader 支持 override）───
@@ -256,6 +271,8 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
                 related_topic_ids TEXT DEFAULT '[]',
                 was_engaged BOOLEAN DEFAULT 0,
                 intervention_count INTEGER DEFAULT 0,
+                associated_memories TEXT DEFAULT '[]',
+                callback_potential INTEGER DEFAULT 0,
                 embedding BLOB,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
@@ -408,6 +425,8 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
 
         // person_identities 新增 username 列（兼容旧数据库）
         try { this.db.exec(`ALTER TABLE person_identities ADD COLUMN username TEXT`); } catch { /* 列已存在 */ }
+        try { this.db.exec(`ALTER TABLE topics ADD COLUMN associated_memories TEXT DEFAULT '[]'`); } catch { /* 列已存在 */ }
+        try { this.db.exec(`ALTER TABLE topics ADD COLUMN callback_potential INTEGER DEFAULT 0`); } catch { /* 列已存在 */ }
 
         // ── KV Store 表 ──
         this.db.exec(`
@@ -479,6 +498,8 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
             if (data.endedAt !== undefined) builder.set("ended_at", data.endedAt);
             if (data.sentiment !== undefined) builder.set("sentiment", data.sentiment);
             if (data.relatedTopicIds !== undefined) builder.set("related_topic_ids", toJSON(data.relatedTopicIds));
+            if (data.associatedMemories !== undefined) builder.set("associated_memories", toJSON(data.associatedMemories));
+            if (data.callbackPotential !== undefined) builder.set("callback_potential", data.callbackPotential);
             if (data.embedding !== undefined) builder.set("embedding", Buffer.from(data.embedding.buffer));
             builder.set("updated_at", ts);
             builder.where("id", existing.id);
@@ -510,9 +531,10 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
                     id, pipeline_topic_id, chat_id, label, summary, key_points, participants,
                     keywords, message_ids, message_count,
                     started_at, ended_at, sentiment, related_topic_ids,
+                    associated_memories, callback_potential,
                     embedding,
                     created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `).run(
                 id,
                 pipelineTopicId,
@@ -528,6 +550,8 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
                 data.endedAt ?? null,
                 data.sentiment ?? "neutral",
                 toJSON(data.relatedTopicIds),
+                toJSON(data.associatedMemories),
+                data.callbackPotential ?? 0,
                 data.embedding ? Buffer.from(data.embedding.buffer) : null,
                 ts,
                 ts,
@@ -568,6 +592,8 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
         if (data.endedAt !== undefined) builder.set("ended_at", data.endedAt);
         if (data.sentiment !== undefined) builder.set("sentiment", data.sentiment);
         if (data.relatedTopicIds !== undefined) builder.set("related_topic_ids", toJSON(data.relatedTopicIds));
+        if (data.associatedMemories !== undefined) builder.set("associated_memories", toJSON(data.associatedMemories));
+        if (data.callbackPotential !== undefined) builder.set("callback_potential", data.callbackPotential);
         if (data.embedding !== undefined) builder.set("embedding", Buffer.from(data.embedding.buffer));
         builder.set("updated_at", ts);
         builder.where("id", id);
@@ -1717,6 +1743,11 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
         return rows.map(r => this.rowToTopicNode(r)).reverse();
     }
 
+    getTopicById(topicId: string): TopicNode | null {
+        const row = this.db.prepare("SELECT * FROM topics WHERE id = ? LIMIT 1").get(topicId) as Record<string, unknown> | undefined;
+        return row ? this.rowToTopicNode(row) : null;
+    }
+
     getInteractionsSince(chatId: string, since: string): InteractionEpisode[] {
         const rows = this.db.prepare(
             "SELECT * FROM interactions WHERE chat_id = ? AND created_at >= ? ORDER BY created_at ASC"
@@ -1807,6 +1838,210 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
             timestamp: row.timestamp as string,
             mediaType: (row.media_type as string) ?? undefined,
             mediaInfo: (row.media_info as string) ?? undefined,
+        }));
+    }
+
+    searchFacts(query: string, options: {
+        subject?: string;
+        categories?: FactCategory[];
+        limit?: number;
+    } = {}): FactSearchResult[] {
+        const ftsQuery = buildFtsOrQuery(query);
+        if (!ftsQuery) return [];
+
+        const limit = Math.min(Math.max(options.limit ?? 10, 1), 50);
+        const sql = [
+            "SELECT cf.id, cf.subject, cf.category, cf.content, cf.confidence, cf.updated_at",
+            "FROM core_facts cf",
+            "INNER JOIN core_facts_fts fts ON cf.rowid = fts.rowid",
+            "WHERE core_facts_fts MATCH ?",
+            "AND (cf.expires_at IS NULL OR cf.expires_at > datetime('now'))",
+        ];
+        const params: unknown[] = [ftsQuery];
+
+        if (options.subject) {
+            sql.push("AND cf.subject = ?");
+            params.push(options.subject);
+        }
+        if (options.categories?.length) {
+            sql.push(`AND cf.category IN (${options.categories.map(() => "?").join(", ")})`);
+            params.push(...options.categories);
+        }
+
+        sql.push("ORDER BY bm25(core_facts_fts)");
+        sql.push("LIMIT ?");
+        params.push(limit);
+
+        const rows = this.db.prepare(sql.join(" ")).all(...params) as Array<Record<string, unknown>>;
+        return rows.map((row) => ({
+            factId: row.id as string,
+            subject: row.subject as string,
+            category: row.category as FactCategory,
+            content: row.content as string,
+            confidence: row.confidence as number,
+            updatedAt: row.updated_at as string,
+        }));
+    }
+
+    searchTopics(query: string, options: {
+        chatId?: string;
+        after?: string;
+        before?: string;
+        excludeTopicIds?: string[];
+        limit?: number;
+    } = {}): TopicSearchResult[] {
+        const ftsQuery = buildFtsOrQuery(query);
+        if (!ftsQuery) return [];
+
+        const limit = Math.min(Math.max(options.limit ?? 5, 1), 30);
+        const sql = [
+            "SELECT t.*",
+            "FROM topics t",
+            "INNER JOIN topics_fts fts ON t.rowid = fts.rowid",
+            "WHERE topics_fts MATCH ?",
+        ];
+        const params: unknown[] = [ftsQuery];
+
+        if (options.chatId) {
+            sql.push("AND t.chat_id = ?");
+            params.push(options.chatId);
+        }
+        if (options.after) {
+            sql.push("AND t.started_at >= ?");
+            params.push(options.after);
+        }
+        if (options.before) {
+            sql.push("AND t.started_at <= ?");
+            params.push(options.before);
+        }
+        if (options.excludeTopicIds?.length) {
+            sql.push(`AND t.id NOT IN (${options.excludeTopicIds.map(() => "?").join(", ")})`);
+            params.push(...options.excludeTopicIds);
+        }
+
+        sql.push("ORDER BY bm25(topics_fts), t.started_at DESC");
+        sql.push("LIMIT ?");
+        params.push(limit);
+
+        const rows = this.db.prepare(sql.join(" ")).all(...params) as Array<Record<string, unknown>>;
+        return rows.map((row) => {
+            const topic = this.rowToTopicNode(row);
+            return {
+                topicId: topic.id,
+                chatId: topic.chatId,
+                label: topic.label,
+                summary: topic.summary,
+                keywords: topic.keywords,
+                participants: topic.participants,
+                startedAt: topic.startedAt,
+                endedAt: topic.endedAt,
+                sentiment: topic.sentiment,
+                callbackPotential: topic.callbackPotential ?? 0,
+                associatedMemories: topic.associatedMemories ?? [],
+            };
+        });
+    }
+
+    searchMessages(query: string, options: {
+        chatId?: string;
+        userId?: string;
+        after?: string;
+        before?: string;
+        limit?: number;
+    } = {}): MessageSearchResult[] {
+        const limit = Math.min(Math.max(options.limit ?? 20, 1), 100);
+        const conditions = ["text LIKE ?"];
+        const params: unknown[] = [`%${query}%`];
+
+        if (options.chatId) {
+            conditions.push("chat_id = ?");
+            params.push(options.chatId);
+        }
+        if (options.userId) {
+            conditions.push("user_id = ?");
+            params.push(options.userId);
+        }
+        if (options.after) {
+            conditions.push("timestamp >= ?");
+            params.push(options.after);
+        }
+        if (options.before) {
+            conditions.push("timestamp <= ?");
+            params.push(options.before);
+        }
+
+        params.push(limit);
+        const rows = this.db.prepare(`
+            SELECT message_id, chat_id, user_id, display_name, text, timestamp
+            FROM message_log
+            WHERE ${conditions.join(" AND ")}
+            ORDER BY timestamp DESC
+            LIMIT ?
+        `).all(...params) as Array<Record<string, unknown>>;
+
+        return rows.map((row) => ({
+            messageId: row.message_id as string,
+            chatId: row.chat_id as string,
+            userId: row.user_id as string,
+            displayName: (row.display_name as string) ?? "",
+            content: (row.text as string) ?? "",
+            timestamp: row.timestamp as string,
+        }));
+    }
+
+    getUserProfile(userId: string, chatId?: string): UserProfileSearchResult {
+        const identity = this.getPersonIdentity(userId);
+        const groupProfile = chatId
+            ? this.getProfilesForChat(chatId).find((profile) => profile.userId === userId) ?? null
+            : null;
+        const recentFacts = this.db.prepare(`
+            SELECT id, subject, category, content, confidence, updated_at
+            FROM core_facts
+            WHERE subject = ?
+              AND (expires_at IS NULL OR expires_at > datetime('now'))
+            ORDER BY updated_at DESC
+            LIMIT 5
+        `).all(userId) as Array<Record<string, unknown>>;
+
+        return {
+            identity,
+            groupProfile,
+            recentFacts: recentFacts.map((row) => ({
+                factId: row.id as string,
+                subject: row.subject as string,
+                category: row.category as FactCategory,
+                content: row.content as string,
+                confidence: row.confidence as number,
+                updatedAt: row.updated_at as string,
+            })),
+        };
+    }
+
+    getRecentInteractions(chatId: string, userId?: string, limit: number = 10): InteractionSearchResult[] {
+        const rows = userId
+            ? this.db.prepare(`
+                SELECT chat_id, user_id, type, summary, sentiment, significance, created_at
+                FROM interactions
+                WHERE chat_id = ? AND user_id = ?
+                ORDER BY created_at DESC
+                LIMIT ?
+            `).all(chatId, userId, limit)
+            : this.db.prepare(`
+                SELECT chat_id, user_id, type, summary, sentiment, significance, created_at
+                FROM interactions
+                WHERE chat_id = ?
+                ORDER BY created_at DESC
+                LIMIT ?
+            `).all(chatId, limit);
+
+        return (rows as Array<Record<string, unknown>>).map((row) => ({
+            timestamp: row.created_at as string,
+            chatId: row.chat_id as string,
+            userId: row.user_id as string,
+            type: row.type as string,
+            summary: row.summary as string,
+            sentiment: ((row.sentiment as string) ?? "neutral") as InteractionSearchResult["sentiment"],
+            significance: (row.significance as number) ?? 0.5,
         }));
     }
 
@@ -2433,6 +2668,8 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
             sentiment: (row.sentiment as TopicNode["sentiment"]) ?? "neutral",
             relatedTopicIds: fromJSON(row.related_topic_ids as string, []),
             keywords: fromJSON(row.keywords as string, []),
+            associatedMemories: fromJSON<AssociatedMemory[]>(row.associated_memories as string, []),
+            callbackPotential: Number(row.callback_potential ?? 0),
             embedding: row.embedding ? new Float32Array((row.embedding as Buffer).buffer) : undefined,
             createdAt: row.created_at as string,
             updatedAt: row.updated_at as string,

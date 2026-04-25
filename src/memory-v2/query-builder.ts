@@ -25,7 +25,7 @@ export const COLUMN_WHITELIST = {
         "pipeline_topic_id", "chat_id", "label", "summary", "key_points",
         "participants", "keywords", "message_ids",
         "message_count", "started_at", "ended_at", "sentiment",
-        "related_topic_ids",
+        "related_topic_ids", "associated_memories", "callback_potential",
         "embedding", "created_at", "updated_at",
     ],
     core_facts: [
@@ -54,7 +54,7 @@ export const COLUMN_WHITELIST = {
     ],
     message_log: [
         "message_id", "chat_id", "user_id", "display_name",
-        "text", "reply_to_message_id", "timestamp",
+        "text", "reply_to_message_id", "timestamp", "media_type", "media_info",
     ],
 } as const;
 

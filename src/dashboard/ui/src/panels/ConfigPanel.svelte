@@ -102,7 +102,7 @@
       }
       if (!config.subagent) config.subagent = {};
       if (!config.subagent.baseSkills) config.subagent.baseSkills = [
-        "runtime", "fs", "skills", "mcp", "cron", "todo", "vision", "shell",
+        "runtime", "fs", "skills", "mcp", "cron", "todo", "memory", "vision", "shell",
       ];
       if (!config.llmRouting) config.llmRouting = {};
       if (!config.llmRouting.timeouts) config.llmRouting.timeouts = {};
@@ -324,7 +324,7 @@
   }
   function resetBaseSkills() {
     config.subagent.baseSkills = [
-      "runtime", "fs", "skills", "mcp", "cron", "todo", "vision", "shell",
+      "runtime", "fs", "skills", "mcp", "cron", "todo", "memory", "vision", "shell",
     ];
     config = config;
   }

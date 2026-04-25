@@ -54,6 +54,7 @@ import { evaluateStickiness, createStickiness, updateStickiness } from "./subage
 import { matchesCron, validateCronMinInterval } from "./core/cron-matcher.js";
 import { autoReconnect as autoReconnectMcp, initMcpBridge, mcpBridge } from "./sandbox/modules/mcp-bridge/index.js";
 import { refreshModuleRegistryCache } from "./subagent/code-act-executor.js";
+import { embed } from "./memory-v2/embedding.js";
 
 const log = createLogger("main");
 
@@ -578,6 +579,79 @@ async function main(): Promise<void> {
                             return results;
                         }
 
+                        // ── Memory host calls ──
+                        if (method === "memory.searchFacts") {
+                            const [query, options] = args as [string, { subject?: string; categories?: string[]; limit?: number } | undefined];
+                            return memory.searchFacts(query, {
+                                ...options,
+                                categories: options?.categories as any,
+                            });
+                        }
+                        if (method === "memory.searchTopics") {
+                            const [query, options] = args as [string, { chatId?: string; after?: string; before?: string; limit?: number } | undefined];
+                            return memory.searchTopics(query, { ...options, chatId: options?.chatId ?? chatId });
+                        }
+                        if (method === "memory.searchMessages") {
+                            const [query, options] = args as [string, { chatId?: string; userId?: string; after?: string; before?: string; limit?: number } | undefined];
+                            return memory.searchMessages(query, { ...options, chatId: options?.chatId ?? chatId });
+                        }
+                        if (method === "memory.getUserProfile") {
+                            const [userId, targetChatId] = args as [string, string | undefined];
+                            return memory.getUserProfile(userId, targetChatId ?? chatId);
+                        }
+                        if (method === "memory.getRecentInteractions") {
+                            const [targetChatId, userId, limit] = args as [string | undefined, string | undefined, number | undefined];
+                            return memory.getRecentInteractions(targetChatId ?? chatId, userId, limit);
+                        }
+                        if (method === "memory.semanticSearch") {
+                            const [query, options] = args as [string, { scope?: "facts" | "topics" | "all"; limit?: number } | undefined];
+                            const limit = options?.limit ?? 5;
+                            const embeddingConfig = memory.getEmbeddingConfig();
+
+                            if (embeddingConfig) {
+                                try {
+                                    const [queryEmbedding] = await embed([query], embeddingConfig);
+                                    const factResults = (options?.scope === "topics"
+                                        ? []
+                                        : memory.vectorSearchFacts(queryEmbedding, limit).map((fact) => ({
+                                            type: "fact" as const,
+                                            content: `[${fact.subject} · ${fact.category}] ${fact.content}`,
+                                            score: fact.similarity,
+                                        })));
+                                    const topicResults = (options?.scope === "facts"
+                                        ? []
+                                        : memory.vectorSearchTopics(queryEmbedding, limit, chatId).map((topic) => ({
+                                            type: "topic" as const,
+                                            content: `${topic.label} — ${topic.summary}`,
+                                            score: topic.similarity,
+                                        })));
+
+                                    return [...factResults, ...topicResults]
+                                        .sort((a, b) => b.score - a.score)
+                                        .slice(0, limit);
+                                } catch (err) {
+                                    log.warn("memory.semanticSearch 向量检索失败，fallback recall", { error: String(err) });
+                                }
+                            }
+
+                            const recallResult = await memory.recall(query, { chatId, maxResults: limit });
+                            const factResults = (options?.scope === "topics"
+                                ? []
+                                : recallResult.facts.map((fact) => ({
+                                    type: "fact" as const,
+                                    content: `[${fact.subject} · ${fact.category}] ${fact.content}`,
+                                    score: fact.confidence,
+                                })));
+                            const topicResults = (options?.scope === "facts"
+                                ? []
+                                : recallResult.topics.map((topic) => ({
+                                    type: "topic" as const,
+                                    content: `${topic.label} — ${topic.summary}`,
+                                    score: (topic.callbackPotential ?? 0) / 100,
+                                })));
+                            return [...factResults, ...topicResults].slice(0, limit);
+                        }
+
                         if (method === "mcp.list") {
                             return mcpBridge.list();
                         }
@@ -859,6 +933,7 @@ async function main(): Promise<void> {
                     chatId: cid,
                     isBlocked,
                     priority: entry.priority,
+                    callbackPotential: entry.callbackPotential ?? 0,
                     source: entry.source,
                     topicDigestCount: entry.topicDigests?.length,
                     hasTriageEngaged: sub.hasTriageEngaged,

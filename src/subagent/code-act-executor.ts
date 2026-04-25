@@ -424,9 +424,29 @@ export class CodeActExecutor {
         const topicSummary = ctx.topicSummary ?? "";
         const toneGuidance = ctx.toneGuidance ?? "";
         const contentDirection = ctx.contentDirection ?? task.decisions.map(d => d.contentDirection ?? "").filter(Boolean).join("; ");
+        const memoryContext = task.memoryContext;
+        const memoryContextText = memoryContext
+            ? [
+                memoryContext.facts.length
+                    ? `## 相关事实\n${memoryContext.facts.map((fact) => `- [${fact.subject} · ${fact.category}] ${fact.content}`).join("\n")}`
+                    : "",
+                memoryContext.topics.length
+                    ? `## 相关历史话题\n${memoryContext.topics.map((topic) => `- [${topic.startedAt}] ${topic.label} — ${topic.summary}`).join("\n")}`
+                    : "",
+                memoryContext.interactions.length
+                    ? `## 近期互动\n${memoryContext.interactions.map((item) => `- [${item.timestamp}] ${item.userId}: ${item.summary} (${item.sentiment})`).join("\n")}`
+                    : "",
+                memoryContext.messages.length
+                    ? `## 相关聊天记录\n${memoryContext.messages.map((message) => `- [${message.timestamp}] ${message.displayName}: ${message.content}`).join("\n")}`
+                    : "",
+            ].filter(Boolean).join("\n\n")
+            : "";
 
         // personContext: dispatch-handler 留空，此处从 recentMessages 发言者查询 memory
         let personContext = ctx.personContext ?? "";
+        if (!personContext && ctx.activeUserProfiles?.length) {
+            personContext = JSON.stringify(ctx.activeUserProfiles, null, 2);
+        }
         if (!personContext && this.memory && ctx.recentMessages && ctx.recentMessages.length > 0) {
             try {
                 const senderNames = ctx.recentMessages.map(m => m.sender);
@@ -492,7 +512,7 @@ export class CodeActExecutor {
         // 计算这次 task 的 allowedSkills 白名单
         const currentConfig = loadConfig();
         const baseSkills = currentConfig.subagent?.baseSkills ?? [
-            "runtime", "fs", "skills", "mcp", "cron", "todo", "vision", "shell",
+            "runtime", "fs", "skills", "mcp", "cron", "todo", "memory", "vision", "shell",
         ];
         const allowedSkills = new Set<string>([
             ...baseSkills,
@@ -531,6 +551,8 @@ export class CodeActExecutor {
             contentDirection,
             toneGuidance,
             decisions: formattedDecisions,
+            hasMemoryContext: !!memoryContextText,
+            memoryContext: memoryContextText,
             availableStickers: ctx.availableStickers && ctx.availableStickers.length > 0
                 ? ctx.availableStickers.map(s => `- ${s.description} (uniqueFileId: ${s.uniqueFileId})`).join("\n")
                 : "",

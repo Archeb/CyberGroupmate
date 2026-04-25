@@ -13,6 +13,16 @@
 ## 相关人物背景
 {{personContext}}
 
+{{#hasMemoryContext}}
+## 相关记忆
+{{memoryContext}}
+
+使用原则：
+- 把这些记忆当成候选上下文，用来帮助判断和接话，不要机械复读。
+- 优先引用和当前目标消息强相关的事实或旧话题。
+- 如果发现这些记忆仍不够，或需要更精确的原话/人物信息，再调用 memory.* 继续检索。
+{{/hasMemoryContext}}
+
 ## 目标消息
 {{targetMessages}}
 

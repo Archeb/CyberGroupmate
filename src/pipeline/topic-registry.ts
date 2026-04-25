@@ -456,6 +456,8 @@ export class TopicRegistry extends EventEmitter {
             keywords: Array.isArray(topic.keywords) ? topic.keywords : [],
             messageCount: topic.messageIds?.length ?? 0,
             lastActivityAt: new Date(topic.createdAt ?? Date.now()).toISOString(),
+            associatedMemories: topic.associatedMemories,
+            callbackPotential: topic.callbackPotential,
             // 传递 triageReason：当 triage 判定 should_intervene 时，无论话题状态如何都传递
             // 这是 attend-handler 做出回复决策的关键输入
             ...(topic.decision?.should_intervene && topic.decision?.reason
@@ -484,6 +486,7 @@ export class TopicRegistry extends EventEmitter {
             participants: [...(topic.participantIds ?? [])].map(resolver),
             messageCount: topic.messageIds?.length ?? 0,
             triageReason: topic.decision?.should_intervene ? topic.decision?.reason : undefined,
+            callbackPotential: topic.callbackPotential,
         };
     }
 }

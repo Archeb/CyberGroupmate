@@ -178,6 +178,7 @@ export function createAttendHandler(
         // 收集活跃参与者画像（含 aliases + mention），用于 Attend 决策上下文
         const chatAdapter = adapterList?.find(a => entry.chatId.startsWith(a.platform + ":"));
         const activePersons: Array<{ userId: string; displayName: string; recentMessageCount: number }> = [];
+        const activeUserProfiles = [] as NonNullable<ReturnType<typeof buildGroupContext>["activeUserProfiles"]>;
         if (recentMessages?.length) {
             const senderCounts = new Map<string, { name: string; count: number }>();
             for (const m of recentMessages) {
@@ -186,9 +187,11 @@ export function createAttendHandler(
                 const prev = senderCounts.get(uid) ?? { name: String((m as any).displayName ?? (m as any).display_name ?? uid), count: 0 };
                 senderCounts.set(uid, { name: prev.name, count: prev.count + 1 });
             }
+            const profiles = memory.getProfilesForChat(entry.chatId);
+            const profileLimit = depth === 0 ? 2 : Number.POSITIVE_INFINITY;
+            let profileIndex = 0;
             for (const [uid, { name, count }] of senderCounts) {
                 try {
-                    const profiles = memory.getProfilesForChat(entry.chatId);
                     const profile = profiles.find(p => p.userId === uid);
                     const identity = memory.getPersonIdentity(uid);
                     const rawId = getRawId(uid);
@@ -203,6 +206,22 @@ export function createAttendHandler(
                         ...(profile ? { dunbarTier: profile.dunbarTier, relationToAgent: profile.relationToAgent } : {}),
                         ...(identity?.aliases?.length ? { aliases: identity.aliases } : {}),
                     } as any);
+                    if (profileIndex < profileLimit) {
+                        activeUserProfiles.push({
+                            userId: rawId,
+                            username,
+                            mention,
+                            displayName: identity?.displayName ?? name,
+                            aliases: identity?.aliases ?? [],
+                            dunbarTier: profile?.dunbarTier,
+                            rapport: typeof profile?.affinityScore === "number" ? Math.round(profile.affinityScore) : undefined,
+                            traits: profile?.traits ?? [],
+                            communicationStyle: profile?.communicationStyle,
+                            relationToAgent: profile?.relationToAgent,
+                            messageCount: count,
+                        });
+                        profileIndex += 1;
+                    }
                 } catch { /* 非关键路径 */ }
             }
         }
@@ -216,6 +235,14 @@ export function createAttendHandler(
                     return identity?.displayName ?? id;
                 } catch { return id; }
             }),
+            associatedMemories: (() => {
+                if (depth === 0) return undefined;
+                const topic = memory.getTopicById(d.topicId);
+                if (!topic?.associatedMemories?.length) return undefined;
+                if (depth === 1 && (topic.callbackPotential ?? 0) <= 70) return undefined;
+                return topic.associatedMemories;
+            })(),
+            callbackPotential: memory.getTopicById(d.topicId)?.callbackPotential ?? 0,
         }));
 
         const contextPkg = buildGroupContext({
@@ -232,6 +259,7 @@ export function createAttendHandler(
             stickiness: subagent.stickiness,
             pendingCodeActTasks: (subagent.codeActExecutor as any)?.getQueueSize?.() ?? 0,
             activePersons,
+            activeUserProfiles,
         });
 
         // ═══ Phase 5: LLM 决策路径 (subagent.md §12.2 ➋➌➍) ═══
@@ -408,7 +436,7 @@ export function createAttendHandler(
 
             // ═══ 可指派模块名册注入（放入 system prompt，避免每次 attend 重复占用 token） ═══
             const baseSkills = new Set(currentConfig.subagent?.baseSkills ?? [
-                "runtime", "fs", "skills", "mcp", "cron", "todo", "vision", "shell",
+                "runtime", "fs", "skills", "mcp", "cron", "todo", "memory", "vision", "shell",
             ]);
             // 平台 adapter 也是 base
             if (currentConfig.telegram) baseSkills.add("telegram");
@@ -496,6 +524,15 @@ export function createAttendHandler(
                     contentDirection: d.contentDirection,
                     toneGuidance: d.toneGuidance,
                     suggestedEmojis: Array.isArray(d.suggestedEmojis) ? d.suggestedEmojis : undefined,
+                    memoryHints: d.memoryHints && typeof d.memoryHints === "object"
+                        ? {
+                            keywords: Array.isArray(d.memoryHints.keywords) ? d.memoryHints.keywords.map(String) : undefined,
+                            userIds: Array.isArray(d.memoryHints.userIds) ? d.memoryHints.userIds.map(String) : undefined,
+                            timeRange: typeof d.memoryHints.timeRange === "string" ? d.memoryHints.timeRange : undefined,
+                            factCategories: Array.isArray(d.memoryHints.factCategories) ? d.memoryHints.factCategories : undefined,
+                            searchMessages: d.memoryHints.searchMessages === true,
+                        }
+                        : undefined,
                     confidence: d.confidence ?? 0.5,
                     reason: d.reason ?? "",
 

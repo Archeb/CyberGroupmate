@@ -125,6 +125,43 @@
     "typeDefs": "interface TodoItem {\n    key: string;\n    content: string;\n    dueAt: string | null;\n    createdAt: string;\n    updatedAt: string;\n    expired: boolean;\n}"
   },
   {
+    "name": "memory",
+    "description": "modules/memory.d.ts — 记忆检索模块类型定义。用于搜索核心事实、历史话题、聊天原文与互动记录。",
+    "methods": [
+      {
+        "name": "searchFacts",
+        "brief": "搜索核心事实。",
+        "fullDoc": "```typescript\nsearchFacts(query: string, options?: {\n        subject?: string;\n        categories?: string[];\n        limit?: number;\n    }): Promise<Array<{\n        factId: string;\n        subject: string;\n        category: string;\n        content: string;\n        confidence: number;\n        updatedAt: string;\n    }>>\n```\n\n\n搜索核心事实。适合回忆某个人的偏好、趣闻、关系或其他长期事实。"
+      },
+      {
+        "name": "searchTopics",
+        "brief": "搜索历史话题。",
+        "fullDoc": "```typescript\nsearchTopics(query: string, options?: {\n        chatId?: string;\n        after?: string;\n        before?: string;\n        limit?: number;\n    }): Promise<Array<{\n        topicId: string;\n        label: string;\n        summary: string;\n        callbackPotential: number;\n    }>>\n```\n\n\n搜索历史话题，返回话题标签、摘要和 callbackPotential。"
+      },
+      {
+        "name": "searchMessages",
+        "brief": "搜索聊天记录原文。",
+        "fullDoc": "```typescript\nsearchMessages(query: string, options?: {\n        chatId?: string;\n        userId?: string;\n        after?: string;\n        before?: string;\n        limit?: number;\n    }): Promise<Array<{\n        messageId: string;\n        displayName: string;\n        content: string;\n        timestamp: string;\n    }>>\n```\n\n\n搜索聊天记录原文。仅在需要引用原话或精确核对说法时使用。"
+      },
+      {
+        "name": "getUserProfile",
+        "brief": "获取用户画像。",
+        "fullDoc": "```typescript\ngetUserProfile(userId: string, chatId?: string): Promise<{\n        identity: unknown;\n        groupProfile: unknown;\n        recentFacts: unknown[];\n    }>\n```\n\n\n获取某个用户的身份、群内画像和近期相关事实。"
+      },
+      {
+        "name": "getRecentInteractions",
+        "brief": "获取近期互动记录。",
+        "fullDoc": "```typescript\ngetRecentInteractions(chatId?: string, userId?: string, limit?: number): Promise<Array<{\n        timestamp: string;\n        summary: string;\n        sentiment: string;\n    }>>\n```\n\n\n获取近期互动记录，适合判断最近聊过什么、气氛如何。"
+      },
+      {
+        "name": "semanticSearch",
+        "brief": "做模糊语义召回。",
+        "fullDoc": "```typescript\nsemanticSearch(query: string, options?: {\n        scope?: \"facts\" | \"topics\" | \"all\";\n        limit?: number;\n    }): Promise<Array<{\n        type: \"fact\" | \"topic\";\n        content: string;\n        score: number;\n    }>>\n```\n\n\n做模糊语义召回，适合只记得大概意思时使用。"
+      }
+    ],
+    "typeDefs": "interface MemoryModule {\n    searchFacts(query: string, options?: { subject?: string; categories?: string[]; limit?: number }): Promise<Array<{ factId: string; subject: string; category: string; content: string; confidence: number; updatedAt: string }>>;\n    searchTopics(query: string, options?: { chatId?: string; after?: string; before?: string; limit?: number }): Promise<Array<{ topicId: string; label: string; summary: string; callbackPotential: number }>>;\n    searchMessages(query: string, options?: { chatId?: string; userId?: string; after?: string; before?: string; limit?: number }): Promise<Array<{ messageId: string; displayName: string; content: string; timestamp: string }>>;\n    getUserProfile(userId: string, chatId?: string): Promise<{ identity: unknown; groupProfile: unknown; recentFacts: unknown[] }>;\n    getRecentInteractions(chatId?: string, userId?: string, limit?: number): Promise<Array<{ timestamp: string; summary: string; sentiment: string }>>;\n    semanticSearch(query: string, options?: { scope?: \"facts\" | \"topics\" | \"all\"; limit?: number }): Promise<Array<{ type: \"fact\" | \"topic\"; content: string; score: number }>>;\n}"
+  },
+  {
     "name": "mcp",
     "description": "mcp-bridge.d.ts — MCP Server 连接器类型定义 连接外部 MCP (Model Context Protocol) Server，自动发现并代理其工具。 支持 stdio 和 Streamable HTTP 两种传输，连接由宿主进程全局持久化。",
     "methods": [

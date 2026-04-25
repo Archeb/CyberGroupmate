@@ -137,6 +137,26 @@ describe("S5: 主 Agent 注意力循环", () => {
             assert.equal(pkg.messages!.length, 1);
         });
 
+        it("#12b L1 透传 activeUserProfiles", () => {
+            const pkg = buildGroupContext({
+                chatId: "c1", depth: 1, snapshotTimestamp: "2026-01-01",
+                topicDigests: [makeDigest()], engagementScore: 50,
+                activeUserProfiles: [{
+                    userId: "u1",
+                    displayName: "Alice",
+                    aliases: ["A"],
+                    dunbarTier: 2,
+                    rapport: 88,
+                    traits: ["爱玩梗"],
+                    communicationStyle: "直接",
+                    relationToAgent: "熟人",
+                    messageCount: 3,
+                }],
+            });
+            assert.equal(pkg.activeUserProfiles?.length, 1);
+            assert.equal(pkg.activeUserProfiles?.[0].displayName, "Alice");
+        });
+
         it("#13 estimateContextTokens 返回正整数", () => {
             const pkg = buildGroupContext({
                 chatId: "c1", depth: 2, snapshotTimestamp: "2026-01-01",

@@ -24,6 +24,24 @@ export type FactCategory =
     | "relationship"    // 人际关系（"alice 和 bob 是同事"）
     | "general";        // 通用事实
 
+export type AssociatedMemory =
+    | {
+        type: "core_fact";
+        factId: string;
+        subject: string;
+        category: FactCategory;
+        content: string;
+        confidence: number;
+    }
+    | {
+        type: "topic";
+        topicId: string;
+        label: string;
+        summary: string;
+        startedAt: string;
+        endedAt: string | null;
+    };
+
 // ─── 话题节点 ───
 
 /** 话题节点 — 中期记忆的持久化形式（SQLite topics 表） */
@@ -57,6 +75,10 @@ export interface TopicNode {
     relatedTopicIds: string[];
     /** 关键词（与 Pipeline Topic.keywords 共享） */
     keywords: string[];
+    /** 与该话题程序化关联的历史记忆 */
+    associatedMemories?: AssociatedMemory[];
+    /** 触发回梗/主动接话的潜力分（0-100） */
+    callbackPotential?: number;
     /** 向量表示（语义检索用，Phase M4） */
     embedding?: Float32Array;
     /** 创建时间 (ISO 8601) */
@@ -262,6 +284,54 @@ export interface RecallResult {
     deepSummary?: string;
 }
 
+export interface FactSearchResult {
+    factId: string;
+    subject: string;
+    category: FactCategory;
+    content: string;
+    confidence: number;
+    updatedAt: string;
+}
+
+export interface TopicSearchResult {
+    topicId: string;
+    chatId: string;
+    label: string;
+    summary: string;
+    keywords: string[];
+    participants: string[];
+    startedAt: string;
+    endedAt: string | null;
+    sentiment: TopicNode["sentiment"];
+    callbackPotential: number;
+    associatedMemories: AssociatedMemory[];
+}
+
+export interface MessageSearchResult {
+    messageId: string;
+    chatId: string;
+    userId: string;
+    displayName: string;
+    content: string;
+    timestamp: string;
+}
+
+export interface InteractionSearchResult {
+    timestamp: string;
+    chatId: string;
+    userId: string;
+    type: string;
+    summary: string;
+    sentiment: "positive" | "neutral" | "negative";
+    significance: number;
+}
+
+export interface UserProfileSearchResult {
+    identity: PersonIdentity | null;
+    groupProfile: PersonGroupProfile | null;
+    recentFacts: FactSearchResult[];
+}
+
 // ─── browseHistory() 消息档案接口 ───
 
 /** 消息档案检索请求 */
@@ -451,6 +521,9 @@ export interface IMemoryStoreV2 {
     /** 获取指定 chatId 最近 N 条 topics（按 started_at DESC，无时间限制） */
     getRecentTopics(chatId: string, limit?: number): TopicNode[];
 
+    /** 通过持久化 topic id 获取单条话题 */
+    getTopicById(topicId: string): TopicNode | null;
+
     /** 获取指定 chatId 在 since 之后的 interactions */
     getInteractionsSince(chatId: string, since: string): InteractionEpisode[];
 
@@ -459,6 +532,37 @@ export interface IMemoryStoreV2 {
 
     /** 获取指定 chatId 最近的原始消息 */
     getRecentMessages(chatId: string, limit?: number): RecentMessageEntry[];
+
+    /** 搜索核心事实 */
+    searchFacts(query: string, options?: {
+        subject?: string;
+        categories?: FactCategory[];
+        limit?: number;
+    }): FactSearchResult[];
+
+    /** 搜索历史话题 */
+    searchTopics(query: string, options?: {
+        chatId?: string;
+        after?: string;
+        before?: string;
+        excludeTopicIds?: string[];
+        limit?: number;
+    }): TopicSearchResult[];
+
+    /** 搜索聊天记录原文 */
+    searchMessages(query: string, options?: {
+        chatId?: string;
+        userId?: string;
+        after?: string;
+        before?: string;
+        limit?: number;
+    }): MessageSearchResult[];
+
+    /** 获取用户完整画像检索结果 */
+    getUserProfile(userId: string, chatId?: string): UserProfileSearchResult;
+
+    /** 获取近期交互日志 */
+    getRecentInteractions(chatId: string, userId?: string, limit?: number): InteractionSearchResult[];
 
     /** 按 messageId 查询单条消息（用于获取不在上下文窗口中的被回复消息） */
     getMessageById(chatId: string, messageId: string): RecentMessageEntry | null;

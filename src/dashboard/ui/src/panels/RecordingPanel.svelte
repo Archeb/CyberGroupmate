@@ -192,6 +192,9 @@
                         <span class="badge badge-xs" class:badge-success={evt.decision.should_intervene} class:badge-ghost={!evt.decision.should_intervene}>
                           {evt.decision.should_intervene ? '介入' : '观望'}
                         </span>
+                        {#if evt.decision.callbackPotential > 0}
+                          <span class="badge badge-xs badge-info">cbp: {evt.decision.callbackPotential}</span>
+                        {/if}
                       </div>
                       {#if evt.decision.reason}
                         <div class="rp-decision-reason">{evt.decision.reason}</div>

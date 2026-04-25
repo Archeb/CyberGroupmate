@@ -44,6 +44,7 @@ export type { SimilarityFn } from "./embedding.js";
 export type {
     // V2 核心类型
     IMemoryStoreV2,
+    AssociatedMemory,
     TopicNode,
     PersonIdentity,
     PersonGroupProfile,
@@ -52,6 +53,11 @@ export type {
     GroupModel,
     CoreFact,
     FactCategory,
+    FactSearchResult,
+    TopicSearchResult,
+    MessageSearchResult,
+    InteractionSearchResult,
+    UserProfileSearchResult,
     MessageLogEntry,
     RecentMessageEntry,
     RecallOptions,

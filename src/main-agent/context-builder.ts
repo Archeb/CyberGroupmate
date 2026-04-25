@@ -46,6 +46,8 @@ export interface ContextBuildInput {
     pendingCodeActTasks?: number;
     /** 活跃参与者 */
     activePersons?: Array<{ userId: string; displayName: string; recentMessageCount: number }>;
+    /** 活跃用户画像 */
+    activeUserProfiles?: GroupContextPackage["activeUserProfiles"];
 }
 
 /**
@@ -74,6 +76,7 @@ export function buildGroupContext(input: ContextBuildInput): GroupContextPackage
         pkg.stickiness = input.stickiness;
         pkg.pendingCodeActTasks = input.pendingCodeActTasks;
         pkg.activePersons = input.activePersons;
+        pkg.activeUserProfiles = input.activeUserProfiles;
     }
 
     // 所有深度都包含消息（数量由 attend-handler 按深度控制）
@@ -128,6 +131,16 @@ export function estimateContextTokens(pkg: GroupContextPackage): number {
     // Deep summary
     if (pkg.deepSummary) {
         charCount += pkg.deepSummary.length;
+    }
+
+    if (pkg.activeUserProfiles) {
+        for (const profile of pkg.activeUserProfiles) {
+            charCount += (profile.displayName?.length ?? 0)
+                + (profile.aliases?.join(", ").length ?? 0)
+                + (profile.communicationStyle?.length ?? 0)
+                + (profile.traits?.join(", ").length ?? 0)
+                + 40;
+        }
     }
 
     return Math.ceil(charCount / 4);

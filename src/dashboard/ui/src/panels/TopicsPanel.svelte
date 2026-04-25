@@ -74,6 +74,13 @@
     activeTab.set('memory');
     window.dispatchEvent(new CustomEvent('quickQueryUser', { detail: { userId, chatId } }));
   }
+
+  function callbackBadge(score) {
+    if (score >= 80) return 'badge-error';
+    if (score >= 60) return 'badge-warning';
+    if (score >= 30) return 'badge-info';
+    return 'badge-ghost';
+  }
 </script>
 
 <div class="card bg-base-100">
@@ -105,15 +112,19 @@
             <div class="collapse-content">
               <div class="space-y-1">
                 {#each topics as t}
-                  <div class="topic-card state-{(t.state || '').toLowerCase()}" onclick={() => viewDetail(t.id)}>
+                  <div class="topic-card state-{(t.state || '').toLowerCase()}" role="button" tabindex="0" onclick={() => viewDetail(t.id)} onkeydown={(e) => (e.key === 'Enter' || e.key === ' ') && viewDetail(t.id)}>
                     <div class="flex justify-between items-center">
                       <span class="font-semibold text-sm">{t.label || t.id}</span>
                       <div class="flex gap-1">
+                        {#if (t.callbackPotential || 0) > 0}<span class={`badge badge-xs ${callbackBadge(t.callbackPotential)}`}>回调 {t.callbackPotential}</span>{/if}
                         {#if t.wasEngaged}<span class="badge badge-xs badge-success">已回应 ×{t.interventionCount || 1}</span>{/if}
                         <span class="badge badge-xs">{t.state}</span>
                       </div>
                     </div>
                     <div class="text-xs opacity-70 mt-1">{t.summary || ''}</div>
+                    {#if t.associatedMemories?.length}
+                      <div class="text-xs mt-1 opacity-80">关联记忆: {t.associatedMemories.length}</div>
+                    {/if}
                   </div>
                 {/each}
               </div>
@@ -146,16 +157,20 @@
                 {:else}
                   <div class="space-y-1">
                     {#each cached.topics as t}
-                      <div class="topic-card state-{(t.state || '').toLowerCase()}" onclick={() => viewDetail(t.id)}>
+                      <div class="topic-card state-{(t.state || '').toLowerCase()}" role="button" tabindex="0" onclick={() => viewDetail(t.id)} onkeydown={(e) => (e.key === 'Enter' || e.key === ' ') && viewDetail(t.id)}>
                         <div class="flex justify-between items-center">
                           <span class="font-semibold text-sm">{t.label || t.id}</span>
                           <div class="flex gap-1">
+                            {#if (t.callbackPotential || 0) > 0}<span class={`badge badge-xs ${callbackBadge(t.callbackPotential)}`}>回调 {t.callbackPotential}</span>{/if}
                             {#if t.wasEngaged}<span class="badge badge-xs badge-success">已回应 ×{t.interventionCount || 1}</span>{/if}
                             {#if t.source === 'history'}<span class="badge badge-xs badge-ghost">历史</span>{/if}
                             <span class="badge badge-xs">{t.state}</span>
                           </div>
                         </div>
                         <div class="text-xs opacity-70 mt-1">{t.summary || ''}</div>
+                        {#if t.associatedMemories?.length}
+                          <div class="text-xs mt-1 opacity-80">关联记忆: {t.associatedMemories.length}</div>
+                        {/if}
                         <div class="text-xs mt-1">
                           <span class="opacity-50">{t.startedAt ? new Date(t.startedAt).toLocaleString() : ''}</span> |
                           参与者: {#each (t.participantIds || []) as p, i}{#if i > 0}, {/if}<button class="clickable-link" onclick={(e) => { e.stopPropagation(); quickQueryUser(p, g.chatId); }}>{p}</button>{:else}无{/each} |

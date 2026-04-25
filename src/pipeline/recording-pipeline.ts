@@ -243,6 +243,16 @@ export class RecordingPipeline extends EventEmitter {
                         });
                     }
 
+                    for (const topic of updatedTopics) {
+                        const association = this.computeTopicAssociations(topic, chatId);
+                        topic.associatedMemories = association.associatedMemories;
+                        topic.callbackPotential = association.callbackPotential;
+                        this.memory.upsertTopic(topic.id, {
+                            associatedMemories: association.associatedMemories,
+                            callbackPotential: association.callbackPotential,
+                        });
+                    }
+
                     // 批量写入原始消息到 message_log
                     this.memory.storeMessageBatch(chatMessages.map(m => ({
                         messageId: m.id,
@@ -630,6 +640,55 @@ export class RecordingPipeline extends EventEmitter {
         }
 
         return sections;
+    }
+
+    private computeTopicAssociations(topic: Topic, chatId: string): {
+        associatedMemories: import("../memory-v2/types.js").AssociatedMemory[];
+        callbackPotential: number;
+    } {
+        if (!this.memory || topic.keywords.length === 0) {
+            return { associatedMemories: [], callbackPotential: 0 };
+        }
+
+        const query = topic.keywords.join(" ");
+        const facts = this.memory.searchFacts(query, { limit: 15 });
+        const topics = this.memory.searchTopics(query, {
+            chatId,
+            limit: 10,
+            excludeTopicIds: [topic.id],
+        }).filter((candidate) => candidate.startedAt < new Date(topic.createdAt).toISOString());
+
+        let score = 0;
+        const anecdoteCount = facts.filter((fact) => fact.category === "anecdote").length;
+        score += anecdoteCount * 15;
+        score += (facts.length - anecdoteCount) * 5;
+        for (const candidate of topics) {
+            const overlap = candidate.participants.filter((participant) => topic.participantIds.has(participant)).length;
+            score += overlap * 10;
+        }
+        score += topics.length * 5;
+
+        return {
+            associatedMemories: [
+                ...facts.slice(0, 5).map((fact) => ({
+                    type: "core_fact" as const,
+                    factId: fact.factId,
+                    subject: fact.subject,
+                    category: fact.category,
+                    content: fact.content,
+                    confidence: fact.confidence,
+                })),
+                ...topics.slice(0, 3).map((candidate) => ({
+                    type: "topic" as const,
+                    topicId: candidate.topicId,
+                    label: candidate.label,
+                    summary: candidate.summary,
+                    startedAt: candidate.startedAt,
+                    endedAt: candidate.endedAt,
+                })),
+            ],
+            callbackPotential: Math.min(score, 100),
+        };
     }
 
     /**

@@ -235,16 +235,21 @@ export function buildAttentionVariables(
         hasDispatchedTopics: !!opts.dispatchedTopicIds?.length,
         dispatchedTopicIds: opts.dispatchedTopicIds?.join(", ") ?? "",
 
-        // Active persons (Issue 3: PersonGroupProfile + aliases + mention 注入)
-        activePersons: pkg.activePersons?.length
-            ? pkg.activePersons.map((p: any) => {
-                const tier = getDunbarTierLabel(p.dunbarTier);
-                const rel = p.relationToAgent ? `, 关系: ${p.relationToAgent}` : "";
-                const mentionStr = p.mention ? ` (提及方式: ${p.mention})` : "";
-                const aka = p.aliases?.length ? ` (又名: ${p.aliases.join(", ")})` : "";
-                return `${p.displayName}${mentionStr}${aka} (${tier}${rel})`;
+        // Active persons / profiles
+        activePersons: pkg.activeUserProfiles?.length
+            ? pkg.activeUserProfiles.map((profile) => {
+                const tier = profile.dunbarTier ? getDunbarTierLabel(profile.dunbarTier) : "未知层级";
+                const aliases = profile.aliases.length ? ` [别名: ${profile.aliases.join(", ")}]` : "";
+                const mention = profile.mention ? ` (提及方式: ${profile.mention})` : "";
+                const rapport = typeof profile.rapport === "number" ? `, 好感${profile.rapport}` : "";
+                const relation = profile.relationToAgent ? `, 关系: ${profile.relationToAgent}` : "";
+                const traits = profile.traits?.length ? ` | 特征: ${profile.traits.join(", ")}` : "";
+                const style = profile.communicationStyle ? ` | 风格: ${profile.communicationStyle}` : "";
+                return `- ${profile.displayName}${mention}${aliases} (${tier}${rapport}${relation})${traits}${style}`;
             }).join("\n")
-            : "",
+            : (pkg.activePersons?.length
+                ? pkg.activePersons.map((p: any) => `- ${p.displayName} (${p.recentMessageCount} 条)`).join("\n")
+                : ""),
     };
 }
 
@@ -301,12 +306,14 @@ export function buildCallbackVariables(
 /** 话题渲染输入（统一接口，各调用方筛选/排序后传入） */
 export interface FormattableTopic {
     id?: string;
+    state?: string;
     label: string;
     summary?: string;
     recentContext?: string;
     createdAt?: number | string;
     participants?: string[];
     messageCount?: number;
+    callbackPotential?: number;
     /** Triage 判断理由（仅 ENGAGED 状态话题） */
     triageReason?: string;
 }
@@ -359,14 +366,32 @@ export function formatTopicList(topics: FormattableTopic[], emptyText = "(无活
  * 格式化 TopicDigest 列表为可读字符串（内部调用 formatTopicList）
  */
 function formatTopicDigests(digests: TopicDigest[]): string {
-    return formatTopicList(digests.map(d => ({
-        id: d.topicId,
-        state: d.state,
-        label: d.label,
-        summary: d.summary,
-        participants: d.participants,
-        messageCount: d.messageCount,
-        createdAt: d.lastActivityAt,
-        triageReason: (d as any).triageReason,
-    })));
+    if (digests.length === 0) return "(无活跃话题)";
+    return digests.map((digest) => {
+        const header = formatTopicList([{
+            id: digest.topicId,
+            state: digest.state,
+            label: digest.label,
+            summary: digest.summary,
+            participants: digest.participants,
+            messageCount: digest.messageCount,
+            createdAt: digest.lastActivityAt,
+            triageReason: digest.triageReason,
+        }], "");
+        const extras: string[] = [];
+        if ((digest.callbackPotential ?? 0) > 0) {
+            extras.push(`  callbackPotential: ${digest.callbackPotential}`);
+        }
+        if (digest.associatedMemories?.length) {
+            extras.push("  关联记忆:");
+            for (const memory of digest.associatedMemories.slice(0, 3)) {
+                if (memory.type === "core_fact") {
+                    extras.push(`    - [${memory.subject} · ${memory.category}] ${memory.content}`);
+                } else {
+                    extras.push(`    - [历史话题] ${memory.label} — ${memory.summary}`);
+                }
+            }
+        }
+        return [header, ...extras].filter(Boolean).join("\n");
+    }).join("\n");
 }

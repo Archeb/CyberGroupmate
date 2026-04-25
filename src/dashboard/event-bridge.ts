@@ -348,6 +348,7 @@ export class EventBridge {
                             decision: {
                                 should_intervene: decision.should_intervene,
                                 reason: decision.reason,
+                                callbackPotential: topic.callbackPotential ?? 0,
                             },
                         },
                     });

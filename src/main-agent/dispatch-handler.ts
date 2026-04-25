@@ -30,10 +30,109 @@ import { MediaDownloader } from "../core/media-downloader.js";
 import type { ImageCatalog } from "../core/image-catalog.js";
 import type { AppConfig } from "../core/config.js";
 import type { PlatformAdapter } from "../adapter/platform-adapter.js";
-import { getGroupModelKey } from "../core/chat-id.js";
+import { getGroupModelKey, getRawId } from "../core/chat-id.js";
 import { TopicRegistry } from "../pipeline/topic-registry.js";
 
 const log = createLogger("dispatch-handler");
+
+const VALID_TIME_RANGES = new Set(["24h", "7d", "30d", "all"]);
+const VALID_FACT_CATEGORIES = new Set(["biographical", "preference", "anecdote", "opinion", "plan", "relationship", "general"]);
+
+function resolveTimeRange(range?: "24h" | "7d" | "30d" | "all"): string | undefined {
+    if (!range || range === "all") return undefined;
+    const durations: Record<Exclude<typeof range, "all">, number> = {
+        "24h": 24 * 60 * 60 * 1000,
+        "7d": 7 * 24 * 60 * 60 * 1000,
+        "30d": 30 * 24 * 60 * 60 * 1000,
+    };
+    return new Date(Date.now() - durations[range]).toISOString();
+}
+
+function sanitizeMemoryHints(raw: CodeActReplyTask["decisions"][number]["memoryHints"]): NonNullable<CodeActReplyTask["decisions"][number]["memoryHints"]> | null {
+    if (!raw || typeof raw !== "object") return null;
+
+    const keywords = Array.isArray(raw.keywords)
+        ? raw.keywords.filter((keyword): keyword is string => typeof keyword === "string" && keyword.trim().length > 0).slice(0, 10)
+        : [];
+    if (keywords.length === 0) return null;
+
+    const userIds = Array.isArray(raw.userIds)
+        ? raw.userIds.filter((userId): userId is string => typeof userId === "string" && userId.trim().length > 0).slice(0, 5)
+        : undefined;
+    const factCategories = Array.isArray(raw.factCategories)
+        ? raw.factCategories.filter((category): category is NonNullable<NonNullable<CodeActReplyTask["decisions"][number]["memoryHints"]>["factCategories"]>[number] =>
+            typeof category === "string" && VALID_FACT_CATEGORIES.has(category)
+        )
+        : undefined;
+    const timeRange = typeof raw.timeRange === "string" && VALID_TIME_RANGES.has(raw.timeRange)
+        ? raw.timeRange as NonNullable<CodeActReplyTask["decisions"][number]["memoryHints"]>["timeRange"]
+        : undefined;
+
+    return {
+        keywords,
+        userIds,
+        timeRange,
+        factCategories,
+        searchMessages: raw.searchMessages === true,
+    };
+}
+
+function processMemoryHints(memory: MemoryStoreV2, chatId: string, hints?: NonNullable<CodeActReplyTask["decisions"]>[number]["memoryHints"]) {
+    if (!hints?.keywords?.length) {
+        return null;
+    }
+
+    const start = Date.now();
+
+    const after = resolveTimeRange(hints.timeRange);
+    const facts = memory.searchFacts(hints.keywords.join(" "), {
+        limit: 8,
+        categories: hints.factCategories,
+    }).filter((fact) => !hints.userIds?.length || hints.userIds.includes(fact.subject));
+
+    const topics = memory.searchTopics(hints.keywords.join(" "), {
+        chatId,
+        after,
+        limit: 5,
+    });
+
+    const interactions = hints.userIds?.length
+        ? hints.userIds.slice(0, 3).flatMap((userId) => memory.getRecentInteractions(chatId, userId, 5))
+        : [];
+
+    const messages = hints.searchMessages
+        ? hints.keywords.slice(0, 3).flatMap((keyword) => memory.searchMessages(keyword, {
+            chatId,
+            after,
+            limit: 10,
+        }))
+        : [];
+
+    const dedupedMessages = messages.filter((message, index, arr) =>
+        arr.findIndex((candidate) => candidate.messageId === message.messageId) === index
+    ).slice(0, 15);
+
+    const result = {
+        facts,
+        topics,
+        interactions,
+        messages: dedupedMessages,
+    };
+
+    log.info("processMemoryHints 完成", {
+        chatId,
+        durationMs: Date.now() - start,
+        keywords: hints.keywords,
+        results: {
+            facts: result.facts.length,
+            topics: result.topics.length,
+            interactions: result.interactions.length,
+            messages: result.messages.length,
+        },
+    });
+
+    return result;
+}
 
 /** Dispatch handler 依赖 */
 export interface DispatchHandlerDeps {
@@ -184,6 +283,36 @@ export function createDispatchHandler(
                 // personContext: 由 code-act-executor 执行前根据 recentMessages 中的发言者查询
                 let personContext = "";
 
+                const senderCounts = new Map<string, { displayName: string; count: number }>();
+                for (const msg of recentMsgs) {
+                    const prev = senderCounts.get(msg.userId) ?? { displayName: msg.displayName, count: 0 };
+                    senderCounts.set(msg.userId, {
+                        displayName: prev.displayName || msg.displayName,
+                        count: prev.count + 1,
+                    });
+                }
+                const profileRows = memory.getProfilesForChat(result.chatId);
+                const chatAdapter = adapterList?.find(a => result.chatId.startsWith(a.platform + ":"));
+                const activeUserProfiles = [...senderCounts.entries()].map(([userId, meta]) => {
+                    const profile = profileRows.find((item) => item.userId === userId);
+                    const identity = memory.getPersonIdentity(userId);
+                    const rawId = getRawId(userId);
+                    const username = identity?.username ?? undefined;
+                    return {
+                        userId: rawId,
+                        username,
+                        displayName: identity?.displayName ?? meta.displayName ?? rawId,
+                        aliases: identity?.aliases ?? [],
+                        dunbarTier: profile?.dunbarTier,
+                        rapport: typeof profile?.affinityScore === "number" ? Math.round(profile.affinityScore) : undefined,
+                        traits: profile?.traits,
+                        communicationStyle: profile?.communicationStyle,
+                        relationToAgent: profile?.relationToAgent,
+                        messageCount: meta.count,
+                        mention: chatAdapter?.formatMention(rawId, username),
+                    };
+                });
+
                 // 获取群组画像
                 const groupModel = memory.getGroupModel(getGroupModelKey(result.chatId)) ?? undefined;
 
@@ -198,6 +327,7 @@ export function createDispatchHandler(
                     chatTitle: groupModel?.chatTitle,
                     isDirectMessage: groupModel?.isDirectMessage,
                     stickiness: subagent.stickiness,
+                    activeUserProfiles,
                 });
 
                 // 增强 contextSnapshot：注入 spec 要求的额外上下文（类型安全）
@@ -255,6 +385,19 @@ export function createDispatchHandler(
                     }
                 }
 
+                const sanitizedMemoryHints = sanitizeMemoryHints(decision.memoryHints);
+                const memoryContext = sanitizedMemoryHints
+                    ? await Promise.race<ReturnType<typeof processMemoryHints> | null>([
+                        Promise.resolve(processMemoryHints(memory, result.chatId, sanitizedMemoryHints)),
+                        new Promise<null>((resolve) => {
+                            setTimeout(() => {
+                                log.warn("processMemoryHints 超时，返回空结果", { chatId: result.chatId, taskId: decision.topicId ?? "" });
+                                resolve(null);
+                            }, 3000);
+                        }),
+                    ])
+                    : null;
+
                 // 构建 CodeActReplyTask
                 const task: CodeActReplyTask = {
                     type: "CODEACT_REPLY",
@@ -266,6 +409,7 @@ export function createDispatchHandler(
                     createdAt: new Date().toISOString(),
                     targetMessageIds: decision.targetMessageIds,
                     useSkills: result.useSkills,
+                    memoryContext,
                 };
 
                 // 获取或创建 CodeActExecutor

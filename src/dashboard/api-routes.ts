@@ -439,6 +439,8 @@ export function createApiRouter(deps: DashboardDeps, bridge: EventBridge): Route
                 keywords: parseJSON(topicRow.keywords),
                 participants: parseJSON(topicRow.participants),
                 keyPoints: parseJSON(topicRow.key_points),
+                associatedMemories: parseJSON(topicRow.associated_memories),
+                callbackPotential: Number(topicRow.callback_potential ?? 0),
                 startedAt: topicRow.started_at,
                 endedAt: topicRow.ended_at,
                 messageCount: messageIds.length,

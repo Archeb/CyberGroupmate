@@ -252,6 +252,88 @@ describe("storeFact", () => {
     });
 });
 
+describe("memory search extensions", () => {
+    let mem: MemoryStoreV2;
+
+    before(() => {
+        mem = createTestMemory("memory-search");
+        mem.upsertTopic("pipeline_search_topic", {
+            chatId: "chat_search",
+            label: "meme_claim 归属争论",
+            summary: "讨论谁先发了 meme_claim 表情包",
+            keyPoints: ["争论先后顺序"],
+            keywords: ["meme_claim", "先发", "归属"],
+            participants: ["u1", "u2"],
+            associatedMemories: [{
+                type: "core_fact",
+                factId: "fact-1",
+                subject: "u1",
+                category: "anecdote",
+                content: "曾经因为 meme_claim 归属吵过",
+                confidence: 0.9,
+            }],
+            callbackPotential: 82,
+            messageRange: { messageIds: ["m1", "m2"], count: 2 },
+            startedAt: "2026-01-01T00:00:00Z",
+        });
+        mem.storeFact("u1", "曾经因为 meme_claim 归属吵过", "anecdote");
+        mem.storeMessageBatch([
+            { messageId: "m1", chatId: "chat_search", userId: "u1", displayName: "Alice", text: "这个 meme_claim 是我先发的", timestamp: "2026-01-01T00:00:01Z" },
+            { messageId: "m2", chatId: "chat_search", userId: "u2", displayName: "Bob", text: "你明明是抄我的 meme_claim", timestamp: "2026-01-01T00:00:02Z" },
+        ]);
+        mem.upsertPersonIdentity("u1", {
+            displayName: "Alice",
+            aliases: ["A"],
+            firstSeenAt: "2026-01-01T00:00:00Z",
+            lastSeenAt: "2026-01-01T00:00:02Z",
+        });
+        mem.upsertPersonGroupProfile("u1", "chat_search", {
+            firstSeenAt: "2026-01-01T00:00:00Z",
+            lastSeenAt: "2026-01-01T00:00:02Z",
+            traits: ["爱玩梗"],
+            communicationStyle: "直接",
+            relationToAgent: "会拿旧梗调侃",
+            affinityScore: 88,
+        });
+        mem.storeInteraction({
+            date: "2026-01-01T00:00:03Z",
+            chatId: "chat_search",
+            userId: "u1",
+            topicId: null,
+            type: "agent_replied",
+            summary: "继续拿表情包旧梗接话",
+            sentiment: "positive",
+            significance: 0.8,
+        });
+    });
+
+    after(() => { cleanupTestMemory(mem, "memory-search"); });
+
+    it("searchFacts/searchTopics/searchMessages expose recall-ready data", () => {
+        const facts = mem.searchFacts("meme_claim", { categories: ["anecdote"] });
+        const topics = mem.searchTopics("meme_claim 先发", { chatId: "chat_search" });
+        const messages = mem.searchMessages("meme_claim", { chatId: "chat_search" });
+
+        assert.equal(facts.length, 1);
+        assert.equal(facts[0].category, "anecdote");
+        assert.equal(topics[0].callbackPotential, 82);
+        assert.equal(topics[0].associatedMemories.length, 1);
+        assert.equal(messages[0].displayName, "Bob");
+    });
+
+    it("getUserProfile/getRecentInteractions combine identity, profile and activity", () => {
+        const profile = mem.getUserProfile("u1", "chat_search");
+        const interactions = mem.getRecentInteractions("chat_search", "u1", 5);
+        const topic = mem.getTopicById(mem.getRecentTopics("chat_search", 1)[0].id);
+
+        assert.equal(profile.identity?.displayName, "Alice");
+        assert.equal(profile.groupProfile?.relationToAgent, "会拿旧梗调侃");
+        assert.equal(profile.recentFacts[0].category, "anecdote");
+        assert.equal(interactions[0].summary, "继续拿表情包旧梗接话");
+        assert.equal(topic?.callbackPotential, 82);
+    });
+});
+
 // ─── 6. upsertPersonIdentity ───
 
 describe("upsertPersonIdentity", () => {
