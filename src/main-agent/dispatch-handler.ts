@@ -57,7 +57,10 @@ function sanitizeMemoryHints(raw: CodeActReplyTask["decisions"][number]["memoryH
     if (keywords.length === 0) return null;
 
     const userIds = Array.isArray(raw.userIds)
-        ? raw.userIds.filter((userId): userId is string => typeof userId === "string" && userId.trim().length > 0).slice(0, 5)
+        ? raw.userIds.filter((userId): userId is string =>
+            typeof userId === "string" && userId.trim().length > 0 &&
+            !/:-\d{10,}/.test(userId)  // 排除群组 ID（如 telegram:-100xxxxxxxxxx）
+        ).slice(0, 5)
         : undefined;
     const factCategories = Array.isArray(raw.factCategories)
         ? raw.factCategories.filter((category): category is NonNullable<NonNullable<CodeActReplyTask["decisions"][number]["memoryHints"]>["factCategories"]>[number] =>
@@ -85,16 +88,23 @@ function processMemoryHints(memory: MemoryStoreV2, chatId: string, hints?: NonNu
     const start = Date.now();
 
     const after = resolveTimeRange(hints.timeRange);
+    // facts: 仅用 keywords + categories 搜索，不按 userIds 过滤
+    // （FTS 已按关键词匹配，userIds 过滤会误杀大量有效结果）
     const facts = memory.searchFacts(hints.keywords.join(" "), {
         limit: 8,
         categories: hints.factCategories,
-    }).filter((fact) => !hints.userIds?.length || hints.userIds.includes(fact.subject));
+    });
 
-    const topics = memory.searchTopics(hints.keywords.join(" "), {
+    const query = hints.keywords.join(" ");
+    let topics = memory.searchTopics(query, {
         chatId,
         after,
         limit: 5,
     });
+    // timeRange 过窄导致 0 结果时，放宽到全量搜索
+    if (topics.length === 0 && after) {
+        topics = memory.searchTopics(query, { chatId, limit: 5 });
+    }
 
     const interactions = hints.userIds?.length
         ? hints.userIds.slice(0, 3).flatMap((userId) => memory.getRecentInteractions(chatId, userId, 5))
