@@ -101,6 +101,9 @@
         config.dashboard.host = "127.0.0.1";
       }
       if (!config.subagent) config.subagent = {};
+      if (config.subagent.restrictAdapterWritesToBoundChat == null) {
+        config.subagent.restrictAdapterWritesToBoundChat = false;
+      }
       if (!config.subagent.baseSkills) config.subagent.baseSkills = [
         "runtime", "fs", "skills", "mcp", "cron", "todo", "memory", "vision", "shell",
       ];

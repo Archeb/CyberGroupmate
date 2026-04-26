@@ -243,6 +243,8 @@ export interface SubagentExternalConfig {
     sandboxIdleTimeout?: number;
     pollInterval?: number;
     alertEngagementThreshold?: number;
+    /** 是否限制 sandbox 只能对其绑定的 chatId 执行 adapter 写操作。默认 false */
+    restrictAdapterWritesToBoundChat?: boolean;
     cosineDecay?: {
         defaultCyclePeriod?: number;
     };
@@ -799,6 +801,7 @@ function parseSubagentConfig(fileConfig: Record<string, unknown>): SubagentExter
         sandboxIdleTimeout: raw.sandbox_idle_timeout != null ? num(raw.sandbox_idle_timeout, 600000) : undefined,
         pollInterval: raw.poll_interval != null ? num(raw.poll_interval, 5000) : undefined,
         alertEngagementThreshold: raw.alert_engagement_threshold != null ? num(raw.alert_engagement_threshold, 60) : undefined,
+        restrictAdapterWritesToBoundChat: raw.restrict_adapter_writes_to_bound_chat != null ? Boolean(raw.restrict_adapter_writes_to_bound_chat) : undefined,
         cosineDecay: Object.keys(rawCD).length > 0 ? {
             defaultCyclePeriod: rawCD.default_cycle_period != null ? num(rawCD.default_cycle_period, 20) : undefined,
         } : undefined,
@@ -1319,6 +1322,9 @@ export function serializeConfigToObject(config: AppConfig): Record<string, unkno
         if (sa.sandboxIdleTimeout != null) s.sandbox_idle_timeout = sa.sandboxIdleTimeout;
         if (sa.pollInterval != null) s.poll_interval = sa.pollInterval;
         if (sa.alertEngagementThreshold != null) s.alert_engagement_threshold = sa.alertEngagementThreshold;
+        if (sa.restrictAdapterWritesToBoundChat != null) {
+            s.restrict_adapter_writes_to_bound_chat = sa.restrictAdapterWritesToBoundChat;
+        }
         if (sa.cosineDecay) s.cosine_decay = { default_cycle_period: sa.cosineDecay.defaultCyclePeriod };
         if (sa.stickiness) {
             const stick: Record<string, unknown> = {};
