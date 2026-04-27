@@ -146,7 +146,7 @@ function stripVerboseSections(content: string): string {
 function normalizeThinkingText(thinking: string | undefined): string {
     if (!thinking) return "";
     return thinking
-        .replace(/<end_turn>/g, "")
+        .replace(/<end_task>/g, "")
         .replace(/\r\n/g, "\n")
         .replace(/\n{3,}/g, "\n\n")
         .trim();
