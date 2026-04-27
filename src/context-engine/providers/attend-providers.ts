@@ -148,18 +148,47 @@ export const attendMetaProvider: SectionProvider<AttendMetaData> = {
     },
 };
 
-/** 话题注册表：完整快照，每次发送最新版本 */
+/** 话题注册表：delta 追踪，按 topicId + 内容变化增量发送 */
 export const topicDigestsProvider: SectionProvider<TopicDigestData> = {
     schema: {
         name: "topic_digests",
         label: "话题注册表",
         source: "pipeline.topicDigests",
-        cache: "snapshot",
-        history: "ephemeral",
+        cache: "delta",
+        history: "delta-only",
+    },
+    scopeKey(ctx) {
+        return scopeByChatId(ctx);
     },
     resolve(ctx) {
         const digests = ctx.topicDigests as TopicDigest[] | undefined;
         return { digests: digests ?? [] };
+    },
+    diff(current, committed) {
+        if (!committed) {
+            return {
+                full: current,
+                delta: current,
+                stats: { total: current.digests.length, added: current.digests.length, unchanged: 0 },
+            };
+        }
+
+        const committedMap = new Map(
+            committed.digests.map(digest => [digest.topicId, JSON.stringify(digest)])
+        );
+        const deltaDigests = current.digests.filter(
+            digest => committedMap.get(digest.topicId) !== JSON.stringify(digest)
+        );
+
+        return {
+            full: current,
+            delta: { digests: deltaDigests },
+            stats: {
+                total: current.digests.length,
+                added: deltaDigests.length,
+                unchanged: current.digests.length - deltaDigests.length,
+            },
+        };
     },
     render(data) {
         if (data.digests.length === 0) return "## 话题注册表\n(无活跃话题)";
@@ -194,6 +223,11 @@ export const topicDigestsProvider: SectionProvider<TopicDigestData> = {
         });
 
         return `## 话题注册表\n${lines.join("\n")}`;
+    },
+    renderDelta(delta) {
+        if (delta.digests.length === 0) return "(无话题更新)";
+        const fullText = this.render(delta);
+        return `═══ 话题注册表增量 ═══\n(增量: ${delta.digests.length} 个话题更新)\n${fullText}`;
     },
 };
 
@@ -266,14 +300,14 @@ export const callbacksProvider: SectionProvider<CallbacksData> = {
     },
 };
 
-/** 聊天画像：static cache, omit from history */
+/** 聊天画像：当前轮可见，但不写入历史以避免重复堆叠 */
 export const groupModelProvider: SectionProvider<GroupModelData> = {
     schema: {
         name: "group_model",
         label: "聊天画像",
         source: "memory.groupModel",
         cache: "static",
-        history: "omit",
+        history: "ephemeral",
     },
     scopeKey(ctx) {
         return scopeByChatId(ctx);
@@ -293,7 +327,7 @@ export const groupModelProvider: SectionProvider<GroupModelData> = {
         return `## 聊天画像\n- 标题: ${data.chatTitle}\n- 描述: ${data.description}\n- 日均消息: ${data.avgMessagesPerDay}\n- 参与度: ${data.engagementLevel}\n- 语气预设: ${data.tonePreset}`;
     },
     hash(data) {
-        return `${data.chatTitle}|${data.description}|${data.engagementLevel}`;
+        return `${data.chatTitle}|${data.description}|${data.avgMessagesPerDay}|${data.engagementLevel}|${data.tonePreset}`;
     },
 };
 

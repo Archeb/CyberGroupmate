@@ -43,6 +43,10 @@ import {
     executorFooterProvider,
     type ExecutorResolveContext,
 } from "../src/context-engine/providers/executor-providers.js";
+import {
+    groupModelProvider,
+    topicDigestsProvider,
+} from "../src/context-engine/providers/attend-providers.js";
 import { existsSync } from "node:fs";
 
 // ═══ Test Helpers ═══
@@ -381,6 +385,85 @@ describe("ContextManifest", () => {
     });
 });
 
+describe("Attend Providers", () => {
+    it("group_model 在当前轮发送完整画像而不是 omit 占位符", () => {
+        const engine = new ContextEngine("attend-group-model-test");
+        engine.register(groupModelProvider);
+
+        const result = engine.render({
+            chatId: "telegram:test",
+            groupModel: {
+                chatTitle: "测试群",
+                description: "一个会讨论技术和日常的群",
+                avgMessagesPerDay: 42,
+                engagementLevel: "HIGH",
+            },
+            tonePreset: "轻松",
+        });
+
+        assert.equal(result.historicalContent, "");
+        assert.ok(result.ephemeralContent.includes("## 聊天画像"));
+        assert.ok(result.ephemeralContent.includes("测试群"));
+        assert.equal(result.manifest.sections[0].sentContent, result.tree[0].fullRendered);
+        assert.equal(result.manifest.sections[0].sentPhase, "ephemeral");
+    });
+
+    it("topic_digests provider 在 commit 后只输出增量话题更新", () => {
+        const engine = new ContextEngine("attend-topic-digests-test");
+        engine.register(topicDigestsProvider);
+
+        const first = engine.render({
+            chatId: "telegram:test",
+            topicDigests: [
+                {
+                    topicId: "topic_1",
+                    label: "话题一",
+                    summary: "第一版摘要",
+                    state: "active",
+                    participants: ["Alice"],
+                    keywords: ["alpha"],
+                    messageCount: 3,
+                    lastActivityAt: "2026-04-27T12:00:00.000Z",
+                },
+            ],
+        });
+        engine.commit(first.tree);
+
+        const second = engine.render({
+            chatId: "telegram:test",
+            topicDigests: [
+                {
+                    topicId: "topic_1",
+                    label: "话题一",
+                    summary: "第二版摘要",
+                    state: "active",
+                    participants: ["Alice", "Bob"],
+                    keywords: ["alpha", "beta"],
+                    messageCount: 5,
+                    lastActivityAt: "2026-04-27T12:05:00.000Z",
+                },
+                {
+                    topicId: "topic_2",
+                    label: "话题二",
+                    summary: "新话题摘要",
+                    state: "active",
+                    participants: ["Carol"],
+                    keywords: ["gamma"],
+                    messageCount: 1,
+                    lastActivityAt: "2026-04-27T12:06:00.000Z",
+                },
+            ],
+        });
+
+        assert.equal(second.tree[0].deltaStats!.added, 2);
+        assert.ok(second.tree[0].historicalRendered!.includes("═══ 话题注册表增量 ═══"));
+        assert.ok(second.tree[0].historicalRendered!.includes("话题二"));
+        assert.ok(second.tree[0].historicalRendered!.includes("第二版摘要"));
+        assert.ok(!second.tree[0].historicalRendered!.includes("第一版摘要"));
+        assert.equal(second.manifest.sections[0].sentPhase, "historical");
+    });
+});
+
 // ═══ 5. Pipeline Providers ═══
 
 describe("Pipeline Providers", () => {
@@ -558,7 +641,7 @@ describe("ContextEngine Provider 验证", () => {
             engine.register({
                 schema: { name: "bad", label: "Bad", source: "test", cache: "delta", history: "persistent" },
                 resolve() { return "x"; },
-                render(d) { return d as string; },
+                render(data: unknown) { return data as string; },
                 // 缺少 diff
             } as unknown as SectionProvider);
         }, /diff/);
@@ -570,8 +653,10 @@ describe("ContextEngine Provider 验证", () => {
             engine.register({
                 schema: { name: "bad", label: "Bad", source: "test", cache: "delta", history: "delta-only" },
                 resolve() { return "x"; },
-                render(d) { return d as string; },
-                diff(c, p) { return { full: c, delta: c, stats: { total: 1, added: 1, unchanged: 0 } }; },
+                render(data: unknown) { return data as string; },
+                diff(current: unknown, _committed: unknown) {
+                    return { full: current, delta: current, stats: { total: 1, added: 1, unchanged: 0 } };
+                },
                 // 缺少 renderDelta
             } as unknown as SectionProvider);
         }, /renderDelta/);
@@ -583,7 +668,7 @@ describe("ContextEngine Provider 验证", () => {
             engine.register({
                 schema: { name: "bad", label: "Bad", source: "test", cache: "static", history: "omit" },
                 resolve() { return "x"; },
-                render(d) { return d as string; },
+                render(data: unknown) { return data as string; },
                 // 缺少 hash
             } as unknown as SectionProvider);
         }, /hash/);
