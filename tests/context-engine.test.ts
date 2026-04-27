@@ -932,8 +932,9 @@ describe("Executor Providers", () => {
         assert.ok(rendered.includes("随意友好"));
     });
 
-    it("targetMessages provider 使用 ephemeral history", () => {
-        assert.equal(executorTargetMessagesProvider.schema.history, "ephemeral");
+    it("targetMessages provider 使用 delta-only history", () => {
+        assert.equal(executorTargetMessagesProvider.schema.history, "delta-only");
+        assert.equal(executorTargetMessagesProvider.schema.cache, "delta");
         const ctx: ExecutorResolveContext = {
             chatId: "test",
             taskId: "t1",
@@ -947,16 +948,29 @@ describe("Executor Providers", () => {
         assert.ok(rendered.includes("Alice"));
     });
 
-    it("personContext provider 使用 ephemeral history", () => {
-        assert.equal(executorPersonContextProvider.schema.history, "ephemeral");
+    it("personContext provider 使用 delta-only history 且渲染为紧凑 JSON", () => {
+        assert.equal(executorPersonContextProvider.schema.history, "delta-only");
+        assert.equal(executorPersonContextProvider.schema.cache, "delta");
+
+        const ctx: ExecutorResolveContext = {
+            chatId: "test",
+            taskId: "t1",
+            decisions: [],
+            personContext: '[\n  {"userId":"u1","displayName":"Alice","traits":["冷静","直接"]}\n]',
+        };
+        const data = executorPersonContextProvider.resolve(ctx);
+        assert.ok(data);
+        const rendered = executorPersonContextProvider.render(data);
+        assert.ok(rendered.includes('[{"userId":"u1","displayName":"Alice","traits":["冷静","直接"]}]'));
+        assert.ok(!rendered.includes("\n  {"), "人物背景应改为紧凑 JSON");
     });
 
-    it("topicSummary provider 使用 omit history", () => {
-        assert.equal(executorTopicSummaryProvider.schema.history, "omit");
+    it("topicSummary provider 使用 ephemeral history", () => {
+        assert.equal(executorTopicSummaryProvider.schema.history, "ephemeral");
     });
 
-    it("memoryContext provider 使用 omit history", () => {
-        assert.equal(executorMemoryContextProvider.schema.history, "omit");
+    it("memoryContext provider 使用 ephemeral history", () => {
+        assert.equal(executorMemoryContextProvider.schema.history, "ephemeral");
     });
 
     it("stickers provider 无贴纸时 resolve 返回 null", () => {
@@ -977,7 +991,7 @@ describe("Executor Providers", () => {
         assert.equal(executorGroundingProvider.resolve(ctx), null);
     });
 
-    it("完整 engine 渲染：ephemeral 部分不进入 historicalContent", () => {
+    it("完整 engine 渲染：任务摘要与记忆仅当前轮可见，delta section 只记录增量", () => {
         const engine = new ContextEngine("exec-test");
         engine.registerAll(getExecutorTaskProviders());
 
@@ -987,29 +1001,89 @@ describe("Executor Providers", () => {
             decisions: [{ action: "REPLY", contentDirection: "测试", confidence: 0.8, topicId: "t1" }],
             toneGuidance: "温柔",
             topicSummary: "测试话题",
-            personContext: '{"name":"Alice"}',
+            personContext: '[{"userId":"u1","displayName":"Alice"}]',
             memoryContext: "相关记忆内容",
-            targetMessages: "Alice: 你好",
+            targetMessages: "[10:00] [msgId:1] Alice: 你好\n--- (距今 1 分钟) ---",
             groundingContext: "查证结果",
         };
 
-        const result = engine.render(ctx);
+        const first = engine.render(ctx);
 
-        // historicalContent 包含 persistent + omit 部分
-        assert.ok(result.historicalContent.includes("task-full"), "header 应在 historical");
-        assert.ok(result.historicalContent.includes("REPLY"), "decisions 应在 historical");
-        assert.ok(result.historicalContent.includes("请根据以上任务信息"), "footer 应在 historical");
-        // omit sections 应在 historical 中以占位符形式出现
-        assert.ok(result.historicalContent.includes("见最新版本"), "omit section 应有占位符");
+        // historicalContent 包含 persistent + 首次 delta sections
+        assert.ok(first.historicalContent.includes("task-full"), "header 应在 historical");
+        assert.ok(first.historicalContent.includes("REPLY"), "decisions 应在 historical");
+        assert.ok(first.historicalContent.includes("请根据以上任务信息"), "footer 应在 historical");
+        assert.ok(first.historicalContent.includes("## 目标消息 (更新)"), "首次 targetMessages delta 应进入 historical");
+        assert.ok(first.historicalContent.includes("## 相关人物背景 (更新)"), "首次 personContext delta 应进入 historical");
+        assert.ok(!first.historicalContent.includes("测试话题"), "topicSummary 不应进入 historical");
+        assert.ok(!first.historicalContent.includes("相关记忆内容"), "memoryContext 不应进入 historical");
 
-        // ephemeralContent 包含 ephemeral 部分
-        assert.ok(result.ephemeralContent.includes("Alice"), "targetMessages 应在 ephemeral");
-        assert.ok(result.ephemeralContent.includes("查证结果"), "grounding 应在 ephemeral");
-        assert.ok(result.ephemeralContent.includes("Alice"), "personContext 应在 ephemeral");
+        // ephemeralContent 包含当前轮可见但不持久化的 section
+        assert.ok(first.ephemeralContent.includes("测试话题"), "topicSummary 应在 ephemeral");
+        assert.ok(first.ephemeralContent.includes("相关记忆内容"), "memoryContext 应在 ephemeral");
+        assert.ok(first.ephemeralContent.includes("查证结果"), "grounding 应在 ephemeral");
 
-        // ephemeral 部分不应在 historicalContent 中
-        assert.ok(!result.historicalContent.includes("目标消息"), "目标消息不应在 historical");
-        assert.ok(!result.historicalContent.includes("查证结果"), "grounding 不应在 historical");
+        engine.commit(first.tree);
+
+        const second = engine.render(ctx);
+        assert.ok(!second.historicalContent.includes("## 目标消息"), "无变化的 targetMessages 不应重复进入 historical");
+        assert.ok(!second.historicalContent.includes("## 相关人物背景"), "无变化的 personContext 不应重复进入 historical");
+        assert.ok(second.ephemeralContent.includes("测试话题"), "topicSummary 后续仍应在 ephemeral");
+        assert.ok(second.ephemeralContent.includes("相关记忆内容"), "memoryContext 后续仍应在 ephemeral");
+        assert.ok(!second.historicalContent.includes("查证结果"), "grounding 不应在 historical");
+    });
+
+    it("personContext delta 按人物签名比较并忽略顺序变化", () => {
+        const engine = new ContextEngine("exec-person-delta-test");
+        engine.register(executorPersonContextProvider);
+
+        const first = engine.render({
+            chatId: "test",
+            taskId: "t1",
+            decisions: [],
+            personContext: '[{"userId":"u1","displayName":"Alice","traits":["冷静","直接"]},{"userId":"u2","displayName":"Bob","aliases":["Bobby","Bob"]}]',
+        });
+        assert.ok(first.historicalContent.includes("Alice"));
+        engine.commit(first.tree);
+
+        const second = engine.render({
+            chatId: "test",
+            taskId: "t2",
+            decisions: [],
+            personContext: '[{"displayName":"Bob","userId":"u2","aliases":["Bob","Bobby"]},{"traits":["直接","冷静"],"displayName":"Alice","userId":"u1"}]',
+        });
+        assert.equal(second.historicalContent, "");
+    });
+
+    it("targetMessages delta 忽略距今尾注并只输出新增消息", () => {
+        const engine = new ContextEngine("exec-target-delta-test");
+        engine.register(executorTargetMessagesProvider);
+
+        const first = engine.render({
+            chatId: "test",
+            taskId: "t1",
+            decisions: [],
+            targetMessages: "[10:00] [msgId:1] Alice: 你好\n--- (距今 1 分钟) ---",
+        });
+        assert.ok(first.historicalContent.includes("msgId:1"));
+        engine.commit(first.tree);
+
+        const sameMessages = engine.render({
+            chatId: "test",
+            taskId: "t2",
+            decisions: [],
+            targetMessages: "[10:00] [msgId:1] Alice: 你好\n--- (距今 2 分钟) ---",
+        });
+        assert.equal(sameMessages.historicalContent, "");
+
+        const withNewMessage = engine.render({
+            chatId: "test",
+            taskId: "t3",
+            decisions: [],
+            targetMessages: "[10:00] [msgId:1] Alice: 你好\n[10:01] [msgId:2] Bob: 世界\n--- (距今 1 分钟) ---",
+        });
+        assert.ok(withNewMessage.historicalContent.includes("msgId:2"));
+        assert.ok(!withNewMessage.historicalContent.includes("msgId:1"));
     });
 
     it("executor engine manifest 包含所有 section", () => {

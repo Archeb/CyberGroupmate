@@ -128,10 +128,10 @@ export function loadApiTypeDefs(platform: string = "telegram", allowedModules?: 
 /** CodeActExecutor 配置 */
 
 // stripVerboseSections 已由 ContextEngine 的 history 策略替代：
-// - executor.targetMessages: history="ephemeral" → 不进入 session 历史
-// - executor.personContext: history="ephemeral" → 不进入 session 历史
-// - executor.topicSummary: history="omit" → 历史中用占位符替代
-// - executor.memoryContext: history="omit" → 历史中用占位符替代
+// - executor.targetMessages: history="delta-only" → 只把新增目标消息写入 session 历史
+// - executor.personContext: history="delta-only" → 只把新增/变化人物背景写入 session 历史
+// - executor.topicSummary: history="ephemeral" → 仅当前任务可见
+// - executor.memoryContext: history="ephemeral" → 仅当前任务可见
 
 function normalizeThinkingText(thinking: string | undefined): string {
     if (!thinking) return "";
@@ -438,7 +438,7 @@ export class CodeActExecutor {
         // personContext: dispatch-handler 留空，此处从 recentMessages 发言者查询 memory
         let personContext = ctx.personContext ?? "";
         if (!personContext && ctx.activeUserProfiles?.length) {
-            personContext = JSON.stringify(ctx.activeUserProfiles, null, 2);
+            personContext = JSON.stringify(ctx.activeUserProfiles);
         }
         if (!personContext && this.memory && ctx.recentMessages && ctx.recentMessages.length > 0) {
             try {
@@ -471,7 +471,7 @@ export class CodeActExecutor {
                     }
                 }
                 if (relevantProfiles.length > 0) {
-                    personContext = JSON.stringify(relevantProfiles, null, 2);
+                    personContext = JSON.stringify(relevantProfiles);
                 }
             } catch (err) {
                 log.debug("personContext 查询失败", { chatId: this.chatId, error: String(err) });
@@ -543,8 +543,8 @@ export class CodeActExecutor {
 
         const renderResult = this.contextEngine.render(resolveCtx);
 
-        // 组装最终 task prompt：非 ephemeral sections 在 historicalContent，
-        // ephemeral sections 在 ephemeralContent（targetMessages/personContext/stickers/grounding）
+        // 组装最终 task prompt：persistent/delta-only sections 在 historicalContent，
+        // ephemeral sections 在 ephemeralContent（topicSummary/memoryContext/stickers/grounding）
         const taskPromptParts: string[] = [];
         if (renderResult.historicalContent) taskPromptParts.push(renderResult.historicalContent);
         if (renderResult.ephemeralContent) taskPromptParts.push(renderResult.ephemeralContent);

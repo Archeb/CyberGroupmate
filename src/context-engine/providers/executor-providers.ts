@@ -5,14 +5,14 @@
  *
  * Task prompt 由多个结构化 section 组成，每个 section 有独立的 history 策略：
  * - persistent：保留在 session 历史中（header/decisions）
- * - ephemeral：仅在当前 turn 出现，下次 render 不进入历史（targetMessages/personContext）
- * - omit：在历史中替换为占位符（topicSummary/memoryContext）
+ * - delta-only：只把新增/变化部分写入 session 历史（targetMessages/personContext）
+ * - ephemeral：仅在当前 turn 出现，下次 render 不进入历史（topicSummary/memoryContext）
  *
  * 这样在 session 历史积累时，不需要 stripVerboseSections 这种 regex hack，
  * 引擎会按声明式策略自动处理。
  */
 
-import type { SectionProvider, ResolveContext } from "../types.js";
+import type { SectionProvider, ResolveContext, DiffResult } from "../types.js";
 import { deriveChatType } from "../prompt-renderer-utils.js";
 import { getRawId } from "../../core/chat-id.js";
 
@@ -38,6 +38,160 @@ export interface ExecutorResolveContext extends ResolveContext {
     availableStickers?: Array<{ description: string; uniqueFileId: string }>;
     groundingContext?: string;
     imageParts?: unknown[];
+}
+
+interface ExecutorPersonContextData {
+    mode: "profiles" | "raw";
+    profiles: Array<Record<string, unknown>>;
+    rawText: string;
+}
+
+interface ExecutorTargetMessageEntry {
+    key: string;
+    signature: string;
+    content: string;
+}
+
+interface ExecutorTargetMessagesData {
+    entries: ExecutorTargetMessageEntry[];
+}
+
+const TARGET_MESSAGE_HEADER_RE = /^\[[^\]]*\] \[msgId:([^\]]+)\] /;
+const TARGET_MESSAGE_SEPARATOR_RE = /^--- \(.+\) ---$/;
+const TARGET_MESSAGE_AGE_MARKER_RE = /^--- \(距今 .+\) ---$/;
+
+function normalizeJsonValue(value: unknown): unknown {
+    if (Array.isArray(value)) {
+        if (value.every(item => typeof item === "string")) {
+            return [...value].map(item => String(item)).sort((left, right) => left.localeCompare(right));
+        }
+        if (value.every(item => typeof item === "number")) {
+            return [...value].map(item => Number(item)).sort((left, right) => left - right);
+        }
+        if (value.every(item => typeof item === "boolean")) {
+            return [...value].map(item => Boolean(item)).sort((left, right) => Number(left) - Number(right));
+        }
+        return value.map(item => normalizeJsonValue(item));
+    }
+
+    if (value && typeof value === "object") {
+        const normalized: Record<string, unknown> = {};
+        for (const [key, child] of Object.entries(value as Record<string, unknown>).sort(([left], [right]) => left.localeCompare(right))) {
+            normalized[key] = normalizeJsonValue(child);
+        }
+        return normalized;
+    }
+
+    return value;
+}
+
+function parsePersonContext(text: string): ExecutorPersonContextData {
+    const trimmed = text.trim();
+    if (!trimmed) {
+        return { mode: "raw", profiles: [], rawText: "" };
+    }
+
+    try {
+        const parsed = JSON.parse(trimmed);
+        if (Array.isArray(parsed)) {
+            const profiles = parsed.filter(
+                (item): item is Record<string, unknown> => !!item && typeof item === "object" && !Array.isArray(item)
+            );
+            if (profiles.length === parsed.length) {
+                return { mode: "profiles", profiles, rawText: trimmed };
+            }
+        } else if (parsed && typeof parsed === "object") {
+            return { mode: "profiles", profiles: [parsed as Record<string, unknown>], rawText: trimmed };
+        }
+    } catch {
+        // 非 JSON 背景文本仍保留原样渲染，并退化为整块比较。
+    }
+
+    return { mode: "raw", profiles: [], rawText: trimmed };
+}
+
+function getPersonContextKey(profile: Record<string, unknown>, index: number): string {
+    const userId = typeof profile.userId === "string" ? profile.userId : "";
+    const displayName = typeof profile.displayName === "string" ? profile.displayName : "";
+    return userId || displayName || `index:${index}`;
+}
+
+function getPersonContextSignature(profile: Record<string, unknown>): string {
+    return JSON.stringify(normalizeJsonValue(profile));
+}
+
+function renderPersonContextBody(data: ExecutorPersonContextData): string {
+    return data.mode === "profiles"
+        ? JSON.stringify(data.profiles)
+        : data.rawText;
+}
+
+function makeTargetMessageEntry(content: string, index: number): ExecutorTargetMessageEntry {
+    const key = content.match(TARGET_MESSAGE_HEADER_RE)?.[1] ?? `raw:${index}:${content}`;
+    return {
+        key,
+        signature: content,
+        content,
+    };
+}
+
+function parseTargetMessages(text: string): ExecutorTargetMessagesData {
+    const trimmed = text.trim();
+    if (!trimmed) return { entries: [] };
+
+    const lines = trimmed.split(/\r?\n/);
+    const entries: ExecutorTargetMessageEntry[] = [];
+    let currentLines: string[] | null = null;
+    let pendingPrefixLines: string[] = [];
+
+    const flushCurrent = () => {
+        if (!currentLines || currentLines.length === 0) return;
+        const content = currentLines.join("\n").trimEnd();
+        if (content) {
+            entries.push(makeTargetMessageEntry(content, entries.length));
+        }
+        currentLines = null;
+    };
+
+    for (const line of lines) {
+        if (TARGET_MESSAGE_AGE_MARKER_RE.test(line)) {
+            continue;
+        }
+
+        if (TARGET_MESSAGE_HEADER_RE.test(line)) {
+            flushCurrent();
+            currentLines = pendingPrefixLines.length > 0 ? [...pendingPrefixLines, line] : [line];
+            pendingPrefixLines = [];
+            continue;
+        }
+
+        if (TARGET_MESSAGE_SEPARATOR_RE.test(line)) {
+            flushCurrent();
+            pendingPrefixLines.push(line);
+            continue;
+        }
+
+        if (currentLines) {
+            currentLines.push(line);
+        } else {
+            pendingPrefixLines.push(line);
+        }
+    }
+
+    flushCurrent();
+
+    if (entries.length === 0) {
+        const fallback = pendingPrefixLines.join("\n").trim();
+        if (fallback) {
+            entries.push(makeTargetMessageEntry(fallback, 0));
+        }
+    }
+
+    return { entries };
+}
+
+function renderTargetMessagesBody(data: ExecutorTargetMessagesData): string {
+    return data.entries.map(entry => entry.content).join("\n");
 }
 
 // ═══ 1. Task Header ═══
@@ -108,14 +262,14 @@ export const executorDecisionsProvider: SectionProvider<{
 
 // ═══ 3. Topic Summary ═══
 
-/** 话题摘要 — omit (历史中用占位符) */
+/** 话题摘要 — ephemeral（当前轮可见，但不写入长期 session） */
 export const executorTopicSummaryProvider: SectionProvider<string> = {
     schema: {
         name: "executor.topicSummary",
         label: "话题摘要",
         source: "topic-registry",
         cache: "volatile",
-        history: "omit",
+        history: "ephemeral",
     },
     resolve(ctx: ExecutorResolveContext) {
         return ctx.topicSummary || null;
@@ -127,33 +281,87 @@ export const executorTopicSummaryProvider: SectionProvider<string> = {
 
 // ═══ 4. Person Context ═══
 
-/** 人物背景 — ephemeral (下次 render 不进入历史) */
-export const executorPersonContextProvider: SectionProvider<string> = {
+/** 人物背景 — delta-only（按人物签名增量写入历史，当前轮不重复塞整块） */
+export const executorPersonContextProvider: SectionProvider<ExecutorPersonContextData> = {
     schema: {
         name: "executor.personContext",
         label: "相关人物背景",
         source: "memory.profiles",
-        cache: "volatile",
-        history: "ephemeral",
+        cache: "delta",
+        history: "delta-only",
     },
     resolve(ctx: ExecutorResolveContext) {
-        return ctx.personContext || null;
+        return ctx.personContext ? parsePersonContext(ctx.personContext) : null;
+    },
+    diff(current, committed): DiffResult<ExecutorPersonContextData> {
+        if (!committed) {
+            return {
+                full: current,
+                delta: current,
+                stats: {
+                    total: current.mode === "profiles" ? current.profiles.length : 1,
+                    added: current.mode === "profiles" ? current.profiles.length : 1,
+                    unchanged: 0,
+                },
+            };
+        }
+
+        if (current.mode !== "profiles" || committed.mode !== "profiles") {
+            const changed = current.rawText !== committed.rawText;
+            return {
+                full: current,
+                delta: changed ? current : { ...current, rawText: "" },
+                stats: {
+                    total: 1,
+                    added: changed ? 1 : 0,
+                    unchanged: changed ? 0 : 1,
+                },
+            };
+        }
+
+        const committedMap = new Map(
+            committed.profiles.map((profile, index) => [
+                getPersonContextKey(profile, index),
+                getPersonContextSignature(profile),
+            ])
+        );
+        const deltaProfiles = current.profiles.filter((profile, index) =>
+            committedMap.get(getPersonContextKey(profile, index)) !== getPersonContextSignature(profile)
+        );
+
+        return {
+            full: current,
+            delta: {
+                mode: "profiles",
+                profiles: deltaProfiles,
+                rawText: JSON.stringify(deltaProfiles),
+            },
+            stats: {
+                total: current.profiles.length,
+                added: deltaProfiles.length,
+                unchanged: current.profiles.length - deltaProfiles.length,
+            },
+        };
     },
     render(data) {
-        return `## 相关人物背景\n${data}`;
+        return `## 相关人物背景\n${renderPersonContextBody(data)}`;
+    },
+    renderDelta(delta) {
+        const body = renderPersonContextBody(delta);
+        return body ? `## 相关人物背景 (更新)\n${body}` : "";
     },
 };
 
 // ═══ 5. Memory Context ═══
 
-/** 相关记忆 — omit (内容大，历史中用占位符) */
+/** 相关记忆 — ephemeral（当前轮可见，但不落入长期 session） */
 export const executorMemoryContextProvider: SectionProvider<string> = {
     schema: {
         name: "executor.memoryContext",
         label: "相关记忆",
         source: "memory.search",
         cache: "volatile",
-        history: "omit",
+        history: "ephemeral",
     },
     resolve(ctx: ExecutorResolveContext) {
         return ctx.memoryContext || null;
@@ -174,20 +382,46 @@ export const executorMemoryContextProvider: SectionProvider<string> = {
 
 // ═══ 6. Target Messages ═══
 
-/** 目标消息 — ephemeral (大段原文，每次从 recentMessages 重新获取) */
-export const executorTargetMessagesProvider: SectionProvider<string> = {
+/** 目标消息 — delta-only（按消息块增量写入历史，忽略“距今”尾注抖动） */
+export const executorTargetMessagesProvider: SectionProvider<ExecutorTargetMessagesData> = {
     schema: {
         name: "executor.targetMessages",
         label: "目标消息",
         source: "message-enricher",
-        cache: "volatile",
-        history: "ephemeral",
+        cache: "delta",
+        history: "delta-only",
     },
     resolve(ctx: ExecutorResolveContext) {
-        return ctx.targetMessages || null;
+        return ctx.targetMessages ? parseTargetMessages(ctx.targetMessages) : null;
+    },
+    diff(current, committed): DiffResult<ExecutorTargetMessagesData> {
+        if (!committed) {
+            return {
+                full: current,
+                delta: current,
+                stats: { total: current.entries.length, added: current.entries.length, unchanged: 0 },
+            };
+        }
+
+        const committedMap = new Map(committed.entries.map(entry => [entry.key, entry.signature]));
+        const deltaEntries = current.entries.filter(entry => committedMap.get(entry.key) !== entry.signature);
+
+        return {
+            full: current,
+            delta: { entries: deltaEntries },
+            stats: {
+                total: current.entries.length,
+                added: deltaEntries.length,
+                unchanged: current.entries.length - deltaEntries.length,
+            },
+        };
     },
     render(data) {
-        return `## 目标消息\n${data}`;
+        return `## 目标消息\n${renderTargetMessagesBody(data)}`;
+    },
+    renderDelta(delta) {
+        const body = renderTargetMessagesBody(delta);
+        return body ? `## 目标消息 (更新)\n${body}` : "";
     },
 };
 

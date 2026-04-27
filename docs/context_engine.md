@@ -366,7 +366,7 @@ eventBridge.broadcast({ type: "context:manifest", data: result.manifest });
 
 **当前**：手动 `renderPrompt("EXECUTION")` + `renderPrompt("EXECUTION_TASK")` + `stripVerboseSections`
 
-**改为**：每个 CodeActExecutor 持有自己的 `ContextEngine`。task prompt 的动态数据通过 providers 提供。`stripVerboseSections` 不再需要——`history="ephemeral"/"omit"` 的 section 天然不进历史。
+**改为**：每个 CodeActExecutor 持有自己的 `ContextEngine`。task prompt 的动态数据通过 providers 提供。`stripVerboseSections` 不再需要——`executor.topicSummary` 和 `executor.memoryContext` 改为 `history="ephemeral"`，只在当前任务可见；`executor.personContext` 和 `executor.targetMessages` 改为 `cache="delta" + history="delta-only"`，只把新增或变化部分写入 session 历史，而不是每轮重复塞整块或显示 `见最新版本` 占位符。
 
 ### 3. main-agent-loop.ts（Callback 渲染）
 
