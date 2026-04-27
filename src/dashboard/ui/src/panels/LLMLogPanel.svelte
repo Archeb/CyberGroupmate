@@ -34,6 +34,7 @@
   let expandedMsgs = {};
   let expandedResp = {};
   let autoExpand = false;
+  let messageViewMode = "structured";
   let currentVisibleIdx = -1;
   let totalMsgCount = 0;
   let detailPane;
@@ -83,6 +84,7 @@
   let prevSelectedId = null;
   $: if (selectedEntry && selectedEntry.callId !== prevSelectedId) {
     prevSelectedId = selectedEntry.callId;
+    messageViewMode = hasStructuredMessageView(selectedEntry) ? "structured" : "raw";
     scrollToLatest();
   }
 
@@ -258,6 +260,64 @@
     else classes.push("is-stable");
     if (section.history === "ephemeral") classes.push("history-ephemeral");
     return classes.join(" ");
+  }
+
+  function getRenderableManifestSections(entry) {
+    return (entry?.contextManifest?.sections || []).filter(
+      (section) => typeof section.sentContent === "string" && section.sentContent.length > 0,
+    );
+  }
+
+  function hasStructuredMessageView(entry) {
+    return getRenderableManifestSections(entry).length > 0;
+  }
+
+  function pushStructuredGap(parts, gapText) {
+    if (!gapText || !gapText.trim()) return;
+    const trimmed = gapText.trim();
+    if (trimmed === "---") {
+      parts.push({ kind: "separator", text: trimmed });
+      return;
+    }
+    parts.push({ kind: "raw", text: trimmed });
+  }
+
+  function getStructuredMessageParts(entry, messageSummary) {
+    const sections = getRenderableManifestSections(entry);
+    if (!sections.length || messageSummary?.role !== "user") return null;
+
+    const messageText = messageSummary.contentPreview || "";
+    if (!messageText) return null;
+
+    const parts = [];
+    let cursor = 0;
+    let matchedLength = 0;
+
+    for (const section of sections) {
+      const sentContent = section.sentContent;
+      const matchIndex = messageText.indexOf(sentContent, cursor);
+      if (matchIndex === -1) continue;
+
+      pushStructuredGap(parts, messageText.slice(cursor, matchIndex));
+      parts.push({ kind: "section", section, text: sentContent });
+      matchedLength += sentContent.length;
+      cursor = matchIndex + sentContent.length;
+    }
+
+    pushStructuredGap(parts, messageText.slice(cursor));
+
+    if (matchedLength === 0) return null;
+
+    const requiredMatchLength = messageText.length < 160
+      ? messageText.length * 0.6
+      : messageText.length * 0.45;
+
+    return matchedLength >= requiredMatchLength ? parts : null;
+  }
+
+  function formatStructuredSectionText(text, expanded, max = 140) {
+    if (!text) return "";
+    return expanded || text.length <= max ? text : text.slice(0, max) + "...";
   }
 </script>
 
@@ -460,6 +520,23 @@
             >
               {#if autoExpand}<i class="fa-solid fa-chevron-down"></i> 收起全部{:else}<i class="fa-solid fa-chevron-up"></i> 展开全部{/if}
             </button>
+            {#if hasStructuredMessageView(selectedEntry)}
+              <span class="llm-nav-divider"></span>
+              <div class="llm-view-toggle">
+                <button
+                  class="btn btn-xs btn-ghost"
+                  class:btn-active={messageViewMode === "structured"}
+                  onclick={() => messageViewMode = "structured"}
+                  title="按 section 查看当前 prompt"
+                >结构化</button>
+                <button
+                  class="btn btn-xs btn-ghost"
+                  class:btn-active={messageViewMode === "raw"}
+                  onclick={() => messageViewMode = "raw"}
+                  title="查看原始 message 列表"
+                >Raw</button>
+              </div>
+            {/if}
             <span class="llm-nav-divider"></span>
             <button class="btn btn-xs btn-ghost" onclick={() => navigateMsg(-1)} title="上一个 message"><i class="fa-solid fa-caret-up"></i></button>
             <span class="llm-nav-pos">
@@ -474,64 +551,6 @@
             <button class="btn btn-xs btn-ghost" onclick={() => exportCurrentLog()} title="导出当前日志为 JSON"><i class="fa-solid fa-file-export"></i></button>
           </div>
         </div>
-
-        {#if selectedEntry.contextManifest?.sections?.length}
-          {@const manifest = selectedEntry.contextManifest}
-          <div class="llm-detail-section">
-            <div class="llm-detail-section-title">
-              Context Manifest
-            </div>
-            <div class="llm-manifest-summary">
-              <span class="badge badge-sm badge-outline">{manifest.engineId}</span>
-              {#if manifest.chatId}
-                <span class="llm-manifest-summary-chat">{manifest.chatId}</span>
-              {/if}
-              <span>{manifest.summary.activeSections}/{manifest.summary.totalSections} sections</span>
-              <span>{manifest.summary.estimatedTokens} tok</span>
-              <span>hist {manifest.summary.historicalChars}</span>
-              <span>eph {manifest.summary.ephemeralChars}</span>
-            </div>
-            <div class="llm-manifest-grid">
-              {#each manifest.sections as section}
-                {@const diffState = getManifestDiffState(section)}
-                {@const deltaLabel = formatDeltaStats(section.deltaStats)}
-                <div class="llm-manifest-card {getManifestCardClass(section)}">
-                  <div class="llm-manifest-card-top">
-                    <div class="llm-manifest-heading">
-                      <div class="llm-manifest-label">{section.label}</div>
-                      <div class="llm-manifest-name">{section.name}</div>
-                    </div>
-                    <span class="badge badge-xs {diffState.badge}">{diffState.label}</span>
-                  </div>
-                  <div class="llm-manifest-source">{section.source}</div>
-                  <div class="llm-manifest-badges">
-                    <span class="badge badge-xs {getManifestCacheBadge(section.cache)}">{section.cache}</span>
-                    <span class="badge badge-xs {getManifestHistoryBadge(section.history)}">{section.history}</span>
-                    {#if deltaLabel}
-                      <span class="badge badge-xs badge-outline">{deltaLabel}</span>
-                    {/if}
-                  </div>
-                  <div class="llm-manifest-preview">{formatManifestPreview(section.contentPreview, 88)}</div>
-
-                  <div class="llm-manifest-hover">
-                    <div class="llm-manifest-hover-title">{section.label}</div>
-                    <div class="llm-manifest-hover-row"><span>name</span><strong>{section.name}</strong></div>
-                    <div class="llm-manifest-hover-row"><span>source</span><strong>{section.source}</strong></div>
-                    <div class="llm-manifest-hover-row"><span>cache</span><strong>{section.cache}</strong></div>
-                    <div class="llm-manifest-hover-row"><span>history</span><strong>{section.history}</strong></div>
-                    <div class="llm-manifest-hover-row"><span>state</span><strong>{diffState.label}</strong></div>
-                    <div class="llm-manifest-hover-row"><span>chars</span><strong>{section.renderedChars}</strong></div>
-                    <div class="llm-manifest-hover-row"><span>tokens</span><strong>{section.estimatedTokens}</strong></div>
-                    {#if section.deltaStats}
-                      <div class="llm-manifest-hover-row"><span>delta</span><strong>{formatDeltaStats(section.deltaStats)}</strong></div>
-                    {/if}
-                    <div class="llm-manifest-hover-preview">{section.contentPreview || "无内容预览"}</div>
-                  </div>
-                </div>
-              {/each}
-            </div>
-          </div>
-        {/if}
 
         <!-- Messages -->
         <div class="llm-detail-section">
@@ -552,9 +571,59 @@
               : content.length > 200
                 ? content.slice(0, 200) + "..."
                 : content}
+            {@const structuredParts = messageViewMode === "structured"
+              ? getStructuredMessageParts(selectedEntry, m)
+              : null}
             <div class="llm-detail-msg" bind:this={msgElements[mi]} data-msg-idx={mi}>
               <div class="llm-detail-msg-role {roleClass}">{m.role}</div>
-              <div class="llm-detail-msg-content">{displayContent}</div>
+              {#if structuredParts?.length}
+                <div class="llm-structured-sections">
+                  {#each structuredParts as part}
+                    {#if part.kind === "separator"}
+                      <div class="llm-inline-separator">ephemeral split</div>
+                    {:else if part.kind === "raw"}
+                      <div class="llm-inline-raw-gap">{formatStructuredSectionText(part.text, isExpanded, 90)}</div>
+                    {:else}
+                      {@const section = part.section}
+                      {@const diffState = getManifestDiffState(section)}
+                      {@const deltaLabel = formatDeltaStats(section.deltaStats)}
+                      <div class="llm-inline-section {getManifestCardClass(section)}">
+                        <div class="llm-inline-section-head">
+                          <div class="llm-inline-section-meta">
+                            <div class="llm-inline-section-label">{section.label}</div>
+                            <div class="llm-inline-section-source">{section.source}</div>
+                          </div>
+                          <div class="llm-inline-section-badges">
+                            <span class="badge badge-xs {getManifestCacheBadge(section.cache)}">{section.cache}</span>
+                            <span class="badge badge-xs {getManifestHistoryBadge(section.history)}">{section.history}</span>
+                            <span class="badge badge-xs {diffState.badge}">{diffState.label}</span>
+                            {#if deltaLabel}
+                              <span class="badge badge-xs badge-outline">{deltaLabel}</span>
+                            {/if}
+                          </div>
+                        </div>
+                        <div class="llm-inline-section-body">{formatStructuredSectionText(part.text, isExpanded)}</div>
+                        <div class="llm-manifest-hover">
+                          <div class="llm-manifest-hover-title">{section.label}</div>
+                          <div class="llm-manifest-hover-row"><span>source</span><strong>{section.source}</strong></div>
+                          <div class="llm-manifest-hover-row"><span>name</span><strong>{section.name}</strong></div>
+                          <div class="llm-manifest-hover-row"><span>cache</span><strong>{section.cache}</strong></div>
+                          <div class="llm-manifest-hover-row"><span>history</span><strong>{section.history}</strong></div>
+                          <div class="llm-manifest-hover-row"><span>state</span><strong>{diffState.label}</strong></div>
+                          <div class="llm-manifest-hover-row"><span>chars</span><strong>{section.renderedChars}</strong></div>
+                          <div class="llm-manifest-hover-row"><span>tokens</span><strong>{section.estimatedTokens}</strong></div>
+                          {#if section.deltaStats}
+                            <div class="llm-manifest-hover-row"><span>delta</span><strong>{formatDeltaStats(section.deltaStats)}</strong></div>
+                          {/if}
+                          <div class="llm-manifest-hover-preview">{part.text}</div>
+                        </div>
+                      </div>
+                    {/if}
+                  {/each}
+                </div>
+              {:else}
+                <div class="llm-detail-msg-content">{displayContent}</div>
+              {/if}
               {#if content.length > 200}
                 <button
                   class="llm-msg-toggle"
@@ -849,6 +918,12 @@
     font-size: 0.7rem;
   }
 
+  .llm-view-toggle {
+    display: inline-flex;
+    gap: 0.25rem;
+    align-items: center;
+  }
+
   .llm-nav-divider {
     width: 1px;
     height: 1em;
@@ -875,6 +950,149 @@
     opacity: 0.6;
     text-transform: uppercase;
     letter-spacing: 0.05em;
+  }
+
+  .llm-structured-sections {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+  }
+
+  .llm-inline-section,
+  .llm-manifest-card {
+    position: relative;
+    padding: 0.6rem 0.7rem;
+    border-radius: 0.45rem;
+    border: 1px solid color-mix(in srgb, var(--color-base-content) 10%, transparent);
+    transition: transform 0.14s ease, border-color 0.14s ease, box-shadow 0.14s ease;
+  }
+
+  .llm-inline-section:hover,
+  .llm-manifest-card:hover {
+    transform: translateY(-1px);
+    border-color: color-mix(in srgb, var(--color-base-content) 18%, transparent);
+    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.12);
+  }
+
+  .llm-inline-section.cache-static,
+  .llm-manifest-card.cache-static {
+    background: color-mix(in srgb, var(--color-info) 12%, var(--color-base-100));
+  }
+
+  .llm-inline-section.cache-delta,
+  .llm-manifest-card.cache-delta {
+    background: color-mix(in srgb, var(--color-warning) 12%, var(--color-base-100));
+  }
+
+  .llm-inline-section.cache-snapshot,
+  .llm-manifest-card.cache-snapshot {
+    background: color-mix(in srgb, var(--color-success) 11%, var(--color-base-100));
+  }
+
+  .llm-inline-section.cache-volatile,
+  .llm-manifest-card.cache-volatile {
+    background: color-mix(in srgb, var(--color-secondary) 11%, var(--color-base-100));
+  }
+
+  .llm-inline-section.is-changed,
+  .llm-manifest-card.is-changed {
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-primary) 20%, transparent);
+  }
+
+  .llm-inline-section.is-stable,
+  .llm-manifest-card.is-stable {
+    opacity: 0.82;
+  }
+
+  .llm-inline-section.is-skipped,
+  .llm-manifest-card.is-skipped {
+    opacity: 0.5;
+    filter: saturate(0.7);
+  }
+
+  .llm-inline-section.history-ephemeral,
+  .llm-manifest-card.history-ephemeral {
+    border-style: dashed;
+  }
+
+  .llm-inline-section-head {
+    display: flex;
+    justify-content: space-between;
+    gap: 0.5rem;
+    align-items: flex-start;
+    margin-bottom: 0.35rem;
+  }
+
+  .llm-inline-section-meta {
+    min-width: 0;
+  }
+
+  .llm-inline-section-label {
+    font-size: 0.75rem;
+    font-weight: 700;
+    line-height: 1.2;
+  }
+
+  .llm-inline-section-source {
+    margin-top: 0.14rem;
+    font-size: 0.62rem;
+    opacity: 0.58;
+    font-family: ui-monospace, monospace;
+    word-break: break-all;
+  }
+
+  .llm-inline-section-badges {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 0.22rem;
+  }
+
+  .llm-inline-section-body {
+    white-space: pre-wrap;
+    word-break: break-word;
+    opacity: 0.86;
+    font-size: 0.76rem;
+    line-height: 1.45;
+  }
+
+  .llm-inline-separator {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.62rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    opacity: 0.45;
+    padding: 0.15rem 0;
+  }
+
+  .llm-inline-separator::before,
+  .llm-inline-separator::after {
+    content: "";
+    flex: 1;
+    height: 1px;
+    background: color-mix(in srgb, var(--color-base-content) 12%, transparent);
+  }
+
+  .llm-inline-separator::before {
+    margin-right: 0.5rem;
+  }
+
+  .llm-inline-separator::after {
+    margin-left: 0.5rem;
+  }
+
+  .llm-inline-raw-gap {
+    font-size: 0.7rem;
+    line-height: 1.4;
+    opacity: 0.6;
+    padding: 0.35rem 0.45rem;
+    border-radius: 0.35rem;
+    background: color-mix(in srgb, var(--color-base-content) 5%, transparent);
+    border: 1px dashed color-mix(in srgb, var(--color-base-content) 10%, transparent);
+    white-space: pre-wrap;
+    word-break: break-word;
   }
 
   .llm-manifest-summary {

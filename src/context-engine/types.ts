@@ -208,6 +208,8 @@ export interface SectionManifestEntry {
     skipped: boolean;
     /** 增量统计 */
     deltaStats?: DeltaStats;
+    /** 本轮实际发进 LLM 当前消息的内容（无内容则为 null） */
+    sentContent: string | null;
     /** 内容预览（前 200 字符） */
     contentPreview: string;
 }

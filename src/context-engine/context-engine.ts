@@ -290,6 +290,11 @@ export class ContextEngine {
             changed: node.changed,
             skipped: node.skipped,
             deltaStats: node.deltaStats,
+            sentContent: node.skipped
+                ? null
+                : node.schema.history === "ephemeral"
+                    ? node.fullRendered
+                    : node.historicalRendered,
             contentPreview: node.fullRendered.slice(0, 200),
         }));
 
