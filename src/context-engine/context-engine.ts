@@ -279,7 +279,35 @@ export class ContextEngine {
      * 构建 Dashboard 可视化 manifest。
      */
     private buildManifest(tree: SectionNode[], chatId?: string): ContextManifest {
+        const sentOrderMap = new Map<SectionNode, { order: number; phase: "historical" | "ephemeral" }>();
+        const historicalNodes = tree.filter(node =>
+            !node.skipped &&
+            node.schema.history !== "ephemeral" &&
+            !!node.historicalRendered
+        );
+        const ephemeralNodes = tree.filter(node =>
+            !node.skipped &&
+            node.schema.history === "ephemeral" &&
+            !!node.fullRendered
+        );
+
+        [...historicalNodes, ...ephemeralNodes].forEach((node, index) => {
+            sentOrderMap.set(node, {
+                order: index,
+                phase: node.schema.history === "ephemeral" ? "ephemeral" : "historical",
+            });
+        });
+
         const sections: SectionManifestEntry[] = tree.map(node => ({
+            ...(sentOrderMap.has(node)
+                ? {
+                    sentPhase: sentOrderMap.get(node)!.phase,
+                    sentOrder: sentOrderMap.get(node)!.order,
+                }
+                : {
+                    sentPhase: "none" as const,
+                    sentOrder: null,
+                }),
             name: node.schema.name,
             label: node.schema.label,
             source: node.schema.source,

@@ -263,9 +263,34 @@
   }
 
   function getRenderableManifestSections(entry) {
-    return (entry?.contextManifest?.sections || []).filter(
+    const sections = (entry?.contextManifest?.sections || []).filter(
       (section) => typeof section.sentContent === "string" && section.sentContent.length > 0,
     );
+
+    const hasExplicitSentOrder = sections.some(
+      (section) => typeof section.sentOrder === "number" && section.sentOrder >= 0,
+    );
+
+    if (hasExplicitSentOrder) {
+      return [...sections].sort((left, right) => {
+        const leftOrder = typeof left.sentOrder === "number" ? left.sentOrder : Number.MAX_SAFE_INTEGER;
+        const rightOrder = typeof right.sentOrder === "number" ? right.sentOrder : Number.MAX_SAFE_INTEGER;
+        return leftOrder - rightOrder;
+      });
+    }
+
+    const historicalSections = [];
+    const ephemeralSections = [];
+
+    for (const section of sections) {
+      if (section.history === "ephemeral") {
+        ephemeralSections.push(section);
+      } else {
+        historicalSections.push(section);
+      }
+    }
+
+    return [...historicalSections, ...ephemeralSections];
   }
 
   function hasStructuredMessageView(entry) {
