@@ -101,6 +101,13 @@ export interface SectionProvider<T = unknown> {
     schema: SectionSchema;
 
     /**
+     * 计算该 section 在 ledger 中的作用域键。
+     * 用于共享引擎中的状态隔离，例如按 chatId 分开追踪 delta/static cache。
+     * 返回 undefined 表示使用全局作用域。
+     */
+    scopeKey?(ctx: ResolveContext, data: T): string | undefined;
+
+    /**
      * 从 ResolveContext 中提取结构化数据。
      * 返回 null/undefined 表示此 section 不应出现（相当于 condition=false）。
      */
@@ -145,6 +152,8 @@ export interface SectionProvider<T = unknown> {
 export interface SectionNode {
     /** Section 元数据 */
     schema: SectionSchema;
+    /** ledger 作用域键（如 chatId） */
+    scopeKey?: string;
     /** 结构化数据（source of truth） */
     data: unknown;
     /** 完整渲染文本（发给 LLM） */

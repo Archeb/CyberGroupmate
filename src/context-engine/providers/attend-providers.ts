@@ -14,6 +14,10 @@ import { formatMessageLine } from "../../core/message-enricher.js";
 import { getRawId, getDunbarTierLabel } from "../../core/chat-id.js";
 import { formatTopicList, formatRelativeTime, type FormattableTopic } from "../prompt-renderer-utils.js";
 
+function scopeByChatId(ctx: ResolveContext): string | undefined {
+    return typeof ctx.chatId === "string" && ctx.chatId.length > 0 ? ctx.chatId : undefined;
+}
+
 // ═══ 类型定义：各 section 的结构化数据 ═══
 
 export interface AttendHeaderData {
@@ -202,6 +206,9 @@ export const messagesProvider: SectionProvider<MessagesData> = {
         cache: "delta",
         history: "delta-only",
     },
+    scopeKey(ctx) {
+        return scopeByChatId(ctx);
+    },
     resolve(ctx) {
         const messages = ctx.rawMessages as RawMessage[] | undefined;
         const count = ctx.newMessageCount as number | undefined;
@@ -268,6 +275,9 @@ export const groupModelProvider: SectionProvider<GroupModelData> = {
         cache: "static",
         history: "omit",
     },
+    scopeKey(ctx) {
+        return scopeByChatId(ctx);
+    },
     resolve(ctx) {
         const gm = ctx.groupModel as GroupModel | undefined;
         if (!gm) return null;
@@ -295,6 +305,9 @@ export const profilesProvider: SectionProvider<ProfilesData> = {
         source: "memory.profiles",
         cache: "delta",
         history: "delta-only",
+    },
+    scopeKey(ctx) {
+        return scopeByChatId(ctx);
     },
     resolve(ctx) {
         const profiles = ctx.activeUserProfiles as ActiveUserProfile[] | undefined;

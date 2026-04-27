@@ -640,6 +640,7 @@ export class CodeActExecutor {
                             lookupFullDocs(getModuleRegistryCache(), calledMethods),
                     };
                 })(),
+                renderResult.manifest,
             );
         } finally {
             // 停止 typing 指示

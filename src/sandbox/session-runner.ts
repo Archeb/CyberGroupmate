@@ -17,6 +17,7 @@ import { Sandbox, ExecutionResult } from "./sandbox.js";
 import type { NotificationCenter } from "../event/notification-center.js";
 import { callLLMWithFallback, ChatMessage, LLMResponse } from "../core/llm.js";
 import type { LLMConfig } from "../core/config.js";
+import type { ContextManifest } from "../context-engine/types.js";
 import { ulid } from "ulid";
 import { createLogger } from "../core/logger.js";
 import { EventEmitter } from "node:events";
@@ -313,6 +314,8 @@ export async function runCodeActSession(
         getPrefixMap: () => Record<string, string>;
         lookupDocs: (calledMethods: string[]) => string;
     },
+    /** 当前任务 prompt 的 ContextEngine manifest（供 Dashboard 关联到 LLM log） */
+    contextManifest?: ContextManifest,
 ): Promise<SessionResult> {
     const sessionId = ulid();
     const turns: SessionTurn[] = [];
@@ -374,6 +377,7 @@ export async function runCodeActSession(
                 caller: "session-runner",
                 ...(prefill ? { prefill } : {}),
                 ...(stopSequences ? { stop: stopSequences } : {}),
+                ...(contextManifest ? { contextManifest } : {}),
             });
         } catch (err: unknown) {
             const errorMsg =
@@ -556,6 +560,7 @@ ${fullDocs}
                                 caller: "session-runner-pass2",
                                 ...(prefill ? { prefill } : {}),
                                 ...(stopSequences ? { stop: stopSequences } : {}),
+                                ...(contextManifest ? { contextManifest } : {}),
                             });
 
                             // ─── Pass 2: 检测 <end_task> ───

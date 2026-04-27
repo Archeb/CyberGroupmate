@@ -27,6 +27,7 @@ export interface LLMLogEntry {
     provider: string;
     timestamp: string;
     messageSummaries: LLMCallEvent["messageSummaries"];
+    contextManifest?: ContextManifest;
     response: LLMResponseEvent | null;
     retries: LLMRetryEvent[];
 }
@@ -50,6 +51,7 @@ export class LLMLogBuffer {
             provider: data.provider,
             timestamp: data.timestamp,
             messageSummaries: data.messageSummaries,
+            contextManifest: data.contextManifest,
             response: null,
             retries: [],
         };

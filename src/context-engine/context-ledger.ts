@@ -15,20 +15,24 @@ export class ContextLedger {
     /** section name → 已提交状态 */
     private sections = new Map<string, CommittedSection>();
 
+    private buildKey(sectionName: string, scopeKey?: string): string {
+        return scopeKey ? `${sectionName}@@${scopeKey}` : sectionName;
+    }
+
     /**
      * 获取某个 section 的已提交数据。
      * 返回 null 表示该 section 从未被提交过（首次渲染）。
      */
-    getCommitted(sectionName: string): CommittedSection | null {
-        return this.sections.get(sectionName) ?? null;
+    getCommitted(sectionName: string, scopeKey?: string): CommittedSection | null {
+        return this.sections.get(this.buildKey(sectionName, scopeKey)) ?? null;
     }
 
     /**
      * 提交一个 section 的当前数据到 ledger。
      * 在 LLM 调用成功后调用。
      */
-    commit(sectionName: string, data: unknown, hash: string): void {
-        this.sections.set(sectionName, {
+    commit(sectionName: string, data: unknown, hash: string, scopeKey?: string): void {
+        this.sections.set(this.buildKey(sectionName, scopeKey), {
             data,
             hash,
             committedAt: Date.now(),
@@ -52,8 +56,8 @@ export class ContextLedger {
      * 移除单个 section 的追踪状态。
      * 用于某个 section 的数据源失效时。
      */
-    invalidate(sectionName: string): boolean {
-        return this.sections.delete(sectionName);
+    invalidate(sectionName: string, scopeKey?: string): boolean {
+        return this.sections.delete(this.buildKey(sectionName, scopeKey));
     }
 
     /** 当前追踪的 section 数量 */

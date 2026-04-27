@@ -447,6 +447,7 @@ export function createAttendHandler(
                 {
                     caller: "attend-handler",
                     prefill: `让${persona.name}看看，`,
+                    contextManifest: renderResult.manifest,
                 },
             );
 

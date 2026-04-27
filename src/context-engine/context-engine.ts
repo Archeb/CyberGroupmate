@@ -151,11 +151,14 @@ export class ContextEngine {
                 ? provider.hash(node.data)
                 : this.defaultHash(node.data);
 
-            this.ledger.commit(node.schema.name, node.data, hash);
+            this.ledger.commit(node.schema.name, node.data, hash, node.scopeKey);
         }
         log.debug("committed", {
             engineId: this.engineId,
-            sections: tree.filter(n => !n.skipped).map(n => n.schema.name),
+            sections: tree.filter(n => !n.skipped).map(n => ({
+                name: n.schema.name,
+                scopeKey: n.scopeKey,
+            })),
         });
     }
 
@@ -170,6 +173,7 @@ export class ContextEngine {
         if (data == null) {
             return {
                 schema,
+                scopeKey: undefined,
                 data: null,
                 fullRendered: "",
                 historicalRendered: null,
@@ -178,8 +182,10 @@ export class ContextEngine {
             };
         }
 
+        const scopeKey = provider.scopeKey?.(ctx, data);
+
         // 2. diff：在结构化层比较
-        const committed = this.ledger.getCommitted(schema.name);
+        const committed = this.ledger.getCommitted(schema.name, scopeKey);
         let changed = true;
         let deltaData: unknown = data;
         let deltaStats: DeltaStats | undefined;
@@ -226,6 +232,7 @@ export class ContextEngine {
 
         return {
             schema,
+            scopeKey,
             data,
             fullRendered,
             historicalRendered,

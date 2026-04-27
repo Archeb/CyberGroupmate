@@ -78,8 +78,11 @@ function makeVolatileProvider(name: string, resolver: (ctx: ResolveContext) => s
 
 interface TestMessage { id: string; text: string }
 
-function makeDeltaProvider(name: string): SectionProvider<TestMessage[]> {
-    return {
+function makeDeltaProvider(
+    name: string,
+    options?: { scopeByChatId?: boolean },
+): SectionProvider<TestMessage[]> {
+    const provider: SectionProvider<TestMessage[]> = {
         schema: {
             name,
             label: `Delta: ${name}`,
@@ -111,6 +114,13 @@ function makeDeltaProvider(name: string): SectionProvider<TestMessage[]> {
             return `(新增 ${delta.length} 条)\n` + delta.map(m => `[${m.id}] ${m.text}`).join("\n");
         },
     };
+
+    if (options?.scopeByChatId) {
+        provider.scopeKey = (ctx) =>
+            typeof ctx.chatId === "string" && ctx.chatId.length > 0 ? ctx.chatId : undefined;
+    }
+
+    return provider;
 }
 
 function makeSnapshotProvider(name: string): SectionProvider<string> {
@@ -301,6 +311,35 @@ describe("ContextEngine Delta Tracking", () => {
         const r2 = engine.render({ messages });
         assert.equal(r2.tree[0].deltaStats!.added, 1);
         assert.ok(r2.tree[0].historicalRendered!.includes("[1] 你好"));
+    });
+
+    it("带 chat 作用域的 delta provider 不会被其他聊天覆盖", () => {
+        const scopedEngine = new ContextEngine("scoped-delta-test");
+        scopedEngine.register(makeDeltaProvider("messages", { scopeByChatId: true }));
+
+        const chatAFirst = scopedEngine.render({
+            chatId: "telegram:a",
+            messages: [{ id: "a1", text: "A-1" }],
+        });
+        scopedEngine.commit(chatAFirst.tree);
+
+        const chatBFirst = scopedEngine.render({
+            chatId: "telegram:b",
+            messages: [{ id: "b1", text: "B-1" }],
+        });
+        scopedEngine.commit(chatBFirst.tree);
+
+        const chatASecond = scopedEngine.render({
+            chatId: "telegram:a",
+            messages: [
+                { id: "a1", text: "A-1" },
+                { id: "a2", text: "A-2" },
+            ],
+        });
+
+        assert.equal(chatASecond.tree[0].deltaStats!.added, 1);
+        assert.ok(chatASecond.tree[0].historicalRendered!.includes("[a2] A-2"));
+        assert.ok(!chatASecond.tree[0].historicalRendered!.includes("[a1] A-1"));
     });
 });
 
