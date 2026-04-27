@@ -24,7 +24,10 @@ import { loadModuleRegistry, lookupFullDocs, generateBriefOverview, type ModuleE
 import { getMcpModuleEntries } from "../sandbox/modules/mcp-bridge/index.js";
 import { parseAllSkillDocs } from "../sandbox/skill-loader.js";
 import { buildPrefixMap } from "../sandbox/api-intent-extractor.js";
-import { renderPrompt, deriveChatType } from "../main-agent/prompt-renderer.js";
+import { renderPrompt } from "../context-engine/template-engine.js";
+import { deriveChatType } from "../context-engine/prompt-renderer-utils.js";
+import { ContextEngine } from "../context-engine/context-engine.js";
+import { getExecutorTaskProviders, type ExecutorResolveContext } from "../context-engine/providers/executor-providers.js";
 import type { LLMConfig, VisionConfig } from "../core/config.js";
 import { resolveComponentProfiles, loadConfig } from "../core/config.js";
 import { enrichMessages, formatMessageLine, resolveReplyText } from "../core/message-enricher.js";
@@ -124,24 +127,11 @@ export function loadApiTypeDefs(platform: string = "telegram", allowedModules?: 
 
 /** CodeActExecutor 配置 */
 
-/**
- * 剥离 task prompt 中的冗余大段原文，用于保存到 session 历史时精简体积。
- * 被剥离的内容在下次执行时会从 memory.getRecentMessages() 重新获取。
- */
-function stripVerboseSections(content: string): string {
-    let result = content;
-    // 剥离 "## 目标消息" 区段（从标题到下一个 ## 或文档末尾）
-    result = result.replace(
-        /## 目标消息\n[\s\S]*?(?=\n## |$)/,
-        "## 目标消息\n[见当前任务的消息原文]"
-    );
-    // 剥离 "## 相关人物背景" 区段
-    result = result.replace(
-        /## 相关人物背景\n[\s\S]*?(?=\n## |$)/,
-        "## 相关人物背景\n[见当前任务]"
-    );
-    return result;
-}
+// stripVerboseSections 已由 ContextEngine 的 history 策略替代：
+// - executor.targetMessages: history="ephemeral" → 不进入 session 历史
+// - executor.personContext: history="ephemeral" → 不进入 session 历史
+// - executor.topicSummary: history="omit" → 历史中用占位符替代
+// - executor.memoryContext: history="omit" → 历史中用占位符替代
 
 function normalizeThinkingText(thinking: string | undefined): string {
     if (!thinking) return "";
@@ -214,6 +204,9 @@ export class CodeActExecutor {
     /** 独立对话历史（跨 session 保留） */
     session: SessionMessage[] = [];
 
+    /** 声明式 prompt 组装引擎（per-executor 实例） */
+    private contextEngine: ContextEngine;
+
     /** 每次 session 的执行记录（用于 compact 时提取摘要） */
     private executionRecords: SessionExecutionRecord[] = [];
 
@@ -245,6 +238,9 @@ export class CodeActExecutor {
     constructor(chatId: string, config?: Partial<CodeActExecutorConfig>) {
         this.chatId = chatId;
         this.config = { ...DEFAULT_EXECUTOR_CONFIG, ...config };
+        // 初始化 ContextEngine，注册 executor task providers
+        this.contextEngine = new ContextEngine(`executor:${chatId}`);
+        this.contextEngine.registerAll(getExecutorTaskProviders());
     }
 
     /**
@@ -500,22 +496,14 @@ export class CodeActExecutor {
             },
         );
 
-        // 3. 格式化决策
-        const formattedDecisions = task.decisions.map(d =>
-            `- [${d.action}] ${d.contentDirection ?? d.reason ?? ""} (topicId: ${d.topicId ?? "N/A"}, confidence: ${d.confidence})`
-        ).join("\n");
-
-        // 4. 渲染系统 prompt (subagent.md §12.2 ➎ — 稳定部分，可缓存)
-        // 计算这次 task 的 allowedSkills 白名单
+        // 3. 渲染系统 prompt (subagent.md §12.2 ➎ — 稳定部分，保持 Mustache 模板)
         const currentConfig = loadConfig();
         const baseSkills = currentConfig.subagent?.baseSkills ?? [
             "runtime", "fs", "skills", "mcp", "cron", "todo", "memory", "vision", "shell",
         ];
         const allowedSkills = new Set<string>([
             ...baseSkills,
-            // 平台 adapter 始终可见
             getPlatform(this.chatId),
-            // 主 Agent 指定的额外模块
             ...(task.useSkills ?? []),
         ]);
         const platform = getPlatform(this.chatId);
@@ -535,28 +523,32 @@ export class CodeActExecutor {
         };
         const systemPrompt = renderPrompt("EXECUTION", systemVars);
 
-        // 5. 渲染任务 prompt (每次任务不同)
-        const taskVars = {
-            chatId: getRawId(this.chatId),
-            chatType: deriveChatType(ctx.isDirectMessage),
+        // 4. 渲染任务 prompt — 通过 ContextEngine 声明式组装
+        const resolveCtx: ExecutorResolveContext = {
+            chatId: this.chatId,
+            isDirectMessage: ctx.isDirectMessage,
             chatTitle: ctx.chatTitle ?? ctx.groupModel?.chatTitle ?? getRawId(this.chatId),
             taskId: task.taskId,
-            replyMode: task.replyMode,
-            targetMessages,
+            decisions: task.decisions,
+            toneGuidance: ctx.toneGuidance ?? task.decisions.map(d => d.contentDirection ?? "").filter(Boolean).join("; ") ? undefined : undefined,
             topicSummary,
             personContext,
-            contentDirection,
-            toneGuidance,
-            decisions: formattedDecisions,
-            hasMemoryContext: !!memoryContextText,
-            memoryContext: memoryContextText,
-            availableStickers: ctx.availableStickers && ctx.availableStickers.length > 0
-                ? ctx.availableStickers.map(s => `- ${s.description} (uniqueFileId: ${s.uniqueFileId})`).join("\n")
-                : "",
-            hasGroundingContext: !!ctx.groundingContext,
-            groundingContext: ctx.groundingContext ?? "",
+            memoryContext: memoryContextText || undefined,
+            targetMessages,
+            availableStickers: ctx.availableStickers,
+            groundingContext: ctx.groundingContext,
         };
-        const taskPrompt = renderPrompt("EXECUTION_TASK", taskVars);
+        // 重新计算 toneGuidance（避免上面的 ternary 混乱）
+        resolveCtx.toneGuidance = toneGuidance || undefined;
+
+        const renderResult = this.contextEngine.render(resolveCtx);
+
+        // 组装最终 task prompt：非 ephemeral sections 在 historicalContent，
+        // ephemeral sections 在 ephemeralContent（targetMessages/personContext/stickers/grounding）
+        const taskPromptParts: string[] = [];
+        if (renderResult.historicalContent) taskPromptParts.push(renderResult.historicalContent);
+        if (renderResult.ephemeralContent) taskPromptParts.push(renderResult.ephemeralContent);
+        const taskPrompt = taskPromptParts.join("\n\n");
 
         // ═══ Fix 2: 构建 messages 时注入历史 session 上下文 ═══
         const messages: ChatMessage[] = [
@@ -565,7 +557,6 @@ export class CodeActExecutor {
 
         // 注入历史 session（如果有）
         if (this.session.length > 0) {
-            // 将历史 session 消息作为 LLM 上下文注入
             for (let i = 0; i < this.session.length; i++) {
                 const msg = this.session[i];
                 const isLast = i === this.session.length - 1;
@@ -665,11 +656,13 @@ export class CodeActExecutor {
         // 跳过已有的历史消息（只保存新产生的对话）
         const historyOffset = 1 + this.session.length; // 1 for system prompt + existing history
         const newMessages = sessionResult.messages.slice(historyOffset);
-        for (const msg of newMessages) {
+        for (let mi = 0; mi < newMessages.length; mi++) {
+            const msg = newMessages[mi];
             let content = msg.content;
-            // 对 user 消息剥离冗余原文段落，避免历史 session 中消息/人物/发送确认重复
-            if (msg.role === "user") {
-                content = stripVerboseSections(content);
+            // 首条 user message = task prompt：用 ContextEngine 的 historicalRendered 替代
+            // historicalRendered 自动按 history 策略处理（ephemeral sections 不保留，omit sections 用占位符）
+            if (mi === 0 && msg.role === "user" && renderResult.historicalContent) {
+                content = renderResult.historicalContent;
             }
             this.session.push({
                 role: msg.role as "system" | "user" | "assistant",
@@ -677,6 +670,9 @@ export class CodeActExecutor {
                 timestamp: new Date().toISOString(),
             });
         }
+
+        // 提交 ContextEngine 状态（标记当前数据已被 LLM 看过）
+        this.contextEngine.commit(renderResult.tree);
 
         // 记录 execution record（用于 compact）
         const thinkingSummary = sessionResult.turns
@@ -913,6 +909,7 @@ export class CodeActExecutor {
         this.executionRecords = [];
         this.pendingMessages = [];
         this.lastCompactedAt = null;
+        this.contextEngine.ledger.reset();
         this.saveSession();
     }
 
@@ -1127,6 +1124,8 @@ export class CodeActExecutor {
             this.executionRecords = this.executionRecords.slice(-3);
         }
         this.lastCompactedAt = new Date().toISOString();
+        // compaction 后 ledger 必须 reset（旧数据已被压缩，delta 追踪失效）
+        this.contextEngine.ledger.reset();
         log.debug("compactSession Layer 1", {
             chatId: this.chatId,
             remaining: this.session.length,

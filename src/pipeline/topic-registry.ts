@@ -21,7 +21,7 @@ import type {
     ExitSignal,
 } from "./types.js";
 import type { TopicDigest } from "../subagent/types.js";
-import type { FormattableTopic } from "../main-agent/prompt-renderer.js";
+import type { FormattableTopic } from "../context-engine/prompt-renderer-utils.js";
 
 const log = createLogger("topic-registry");
 

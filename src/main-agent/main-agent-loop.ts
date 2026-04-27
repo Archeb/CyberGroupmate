@@ -26,9 +26,14 @@ import { DEFAULT_SUBAGENT_CONFIG } from "../subagent/types.js";
 import type { ChatMessage } from "../core/llm.js";
 
 import { resolveComponentProfiles } from "../core/config.js";
-import { renderPrompt, buildCallbackVariables } from "./prompt-renderer.js";
+import { ContextEngine } from "../context-engine/context-engine.js";
+import { getAttendProviders } from "../context-engine/providers/attend-providers.js";
+// renderPrompt/buildCallbackVariables no longer needed — callback uses callbackProvider.render()
 import { shouldCompact, compact as contextManagerCompact } from "../memory-v2/context-manager.js";
 import { createLogger } from "../core/logger.js";
+import { getRawId } from "../core/chat-id.js";
+import { callbackProvider } from "../context-engine/providers/pipeline-providers.js";
+import { deriveChatType } from "../context-engine/prompt-renderer-utils.js";
 
 const log = createLogger("main-agent-loop");
 
@@ -95,8 +100,16 @@ export class MainAgentLoop {
      * 同群消息增量追踪：chatId → 上次存入历史的最新 messageId。
      * 用于 attend-handler 构建增量历史记录，避免跨轮次重复存储相同消息。
      * Compaction 成功后重置。
+     * @deprecated 由 ContextEngine.ledger 的 messages provider delta 追踪替代
      */
     private lastStoredMsgId = new Map<string, string>();
+
+    /**
+     * Context Engine — 声明式 prompt 组装引擎（attend 层）。
+     * 所有 attend prompt 的数据管理、delta 计算、渲染都通过此引擎完成。
+     * Ledger 在 compaction/硬截断后自动 reset。
+     */
+    private _attendEngine: ContextEngine;
 
 
     /** 外部 attend handler（由 main.ts 集成注入） */
@@ -122,6 +135,10 @@ export class MainAgentLoop {
         this.subagentManager = subagentManager;
         this.globalState = globalState ?? null;
         this.config = { ...DEFAULT_LOOP_CONFIG, ...config };
+
+        // 初始化 attend ContextEngine，注册所有 attend providers
+        this._attendEngine = new ContextEngine("attend");
+        this._attendEngine.registerAll(getAttendProviders());
     }
 
     /**
@@ -467,9 +484,10 @@ export class MainAgentLoop {
                     this.conversationHistory,
                     compactConfigs,
                 );
-                // Compaction 成功 → 重置消息增量追踪
+                // Compaction 成功 → 重置消息增量追踪 + Context Engine ledger
                 // 旧消息已被压缩为 briefing，下次 attend 需存完整消息
                 this.lastStoredMsgId.clear();
+                this._attendEngine.ledger.reset();
                 log.info("主 Agent 对话历史 compact 完成", {
                     afterCount: this.conversationHistory.length,
                     deltaTrackingReset: true,
@@ -489,8 +507,9 @@ export class MainAgentLoop {
             this.conversationHistory = this.conversationHistory.slice(
                 -this.config.retainAfterCompact,
             );
-            // 硬截断也需要重置增量追踪
+            // 硬截断也需要重置增量追踪 + Context Engine ledger
             this.lastStoredMsgId.clear();
+            this._attendEngine.ledger.reset();
             log.warn("主 Agent 对话历史硬上限截断（安全网）", {
                 before,
                 after: this.conversationHistory.length,
@@ -524,6 +543,14 @@ export class MainAgentLoop {
     }
 
     /**
+     * 获取 attend 层的 ContextEngine 实例。
+     * attend-handler 通过此引擎进行声明式 prompt 组装。
+     */
+    getAttendEngine(): ContextEngine {
+        return this._attendEngine;
+    }
+
+    /**
      * 获取对话历史长度
      */
     getConversationHistorySize(): number {
@@ -550,8 +577,30 @@ export class MainAgentLoop {
 
 /**
  * 将 SubagentCallback 格式化为对话历史中的 user 消息。
- * 主 Agent LLM 在后续轮次可以看到这些消息，了解上一轮 subagent 做了什么。
+ * 使用 callbackProvider 的结构化数据 + render（统一视图层）。
  */
 export function formatCallbackMessage(cb: SubagentCallback, chatTitle?: string): string {
-    return renderPrompt("CALLBACK", buildCallbackVariables(cb, chatTitle ?? cb.chatTitle, cb.isDirectMessage));
+    const isCompleted = cb.status === "COMPLETED";
+    const sentMessages = cb.sentMessages?.length
+        ? cb.sentMessages.map(m => {
+            const text = m.text.length > 80 ? m.text.slice(0, 80) + "..." : m.text;
+            return `- "${text}"`;
+        }).join("\n")
+        : "（无）";
+
+    const data = {
+        chatId: getRawId(cb.chatId),
+        chatType: deriveChatType(cb.isDirectMessage),
+        chatTitle: chatTitle ?? cb.chatTitle ?? cb.chatId,
+        taskId: cb.taskId,
+        executionType: cb.executionType,
+        status: cb.status,
+        durationMs: cb.durationMs,
+        isCompleted,
+        sentMessages,
+        summary: cb.summary,
+        error: cb.error ?? undefined,
+    };
+
+    return callbackProvider.render(data);
 }

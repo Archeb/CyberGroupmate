@@ -21,7 +21,7 @@ import type { CallbackQueue } from "../subagent/callback-queue.js";
 import type { GlobalState } from "./global-state.js";
 import { CodeActExecutor } from "../subagent/code-act-executor.js";
 import { buildGroupContext } from "./context-builder.js";
-import { formatTopicList } from "./prompt-renderer.js";
+import { formatTopicList } from "../context-engine/prompt-renderer-utils.js";
 import { createLogger } from "../core/logger.js";
 import { formatTsForDisplay } from "../core/timezone.js";
 import { loadConfig, resolveComponentProfiles } from "../core/config.js";

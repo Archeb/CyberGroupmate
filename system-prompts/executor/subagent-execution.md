@@ -205,7 +205,7 @@ undefined
 
 ```bash
 ls -lh media/meeting-recording.mp3 2>/dev/null || echo "NOT_FOUND"
-```
+``` 
 
 [Execution Output]
 -rw-r--r-- 1 user user 38M Apr 23 10:10 media/meeting-recording.mp3

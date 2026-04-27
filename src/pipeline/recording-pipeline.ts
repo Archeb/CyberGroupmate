@@ -18,7 +18,7 @@ import { EventEmitter } from "node:events";
 import { createLogger } from "../core/logger.js";
 import { callLLMWithFallback, type ChatMessage } from "../core/llm.js";
 import { resolveComponentProfiles, resolveComponentTimeout } from "../core/config.js";
-import { renderPrompt } from "../main-agent/prompt-renderer.js";
+import { topicClusteringProvider, topicTriageProvider } from "../context-engine/providers/pipeline-providers.js";
 import type { MemoryStoreV2 } from "../memory-v2/index.js";
 import { embed } from "../memory-v2/embedding.js";
 import type { EmbeddingConfig } from "../core/config.js";
@@ -382,7 +382,7 @@ export class RecordingPipeline extends EventEmitter {
             `[${m.id}] ${m.senderName} (${new Date(m.timestamp).toLocaleTimeString()}): ${m.text}`
         ).join("\n");
 
-        const prompt = renderPrompt("TOPIC_CLUSTERING", {
+        const prompt = topicClusteringProvider.render({
             existingTopics: existingTopicsStr,
             messages: messagesStr,
         });
@@ -438,9 +438,10 @@ export class RecordingPipeline extends EventEmitter {
         const allTopicIds = Array.from(topicGroups.keys());
         const topicMessagesStr = this.buildTopicContextStr(allTopicIds, topicGroups, clustering);
 
-        const prompt = renderPrompt("TOPIC_TRIAGE", {
+        const prompt = topicTriageProvider.render({
             personaName: this.personaName,
             persona: this.personaDescription,
+            rules: "",
         });
 
         // 构建富化的 user message：群组信息 + 参与者画像 + 话题上下文
@@ -482,9 +483,10 @@ export class RecordingPipeline extends EventEmitter {
 
             // 只对缺失的话题重跑一次
             const retryStr = this.buildTopicContextStr(missingIds, topicGroups, clustering);
-            const retryPrompt = renderPrompt("TOPIC_TRIAGE", {
+            const retryPrompt = topicTriageProvider.render({
                 personaName: this.personaName,
                 persona: this.personaDescription,
+                rules: "",
             });
 
             const retryMessages: ChatMessage[] = [
