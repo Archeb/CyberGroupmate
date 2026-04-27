@@ -75,6 +75,72 @@ export interface DispatchGuardData {
     dispatchedTopicIds: string[];
 }
 
+function stableStringList(values?: string[]): string {
+    if (!values || values.length === 0) return "";
+    return [...values].sort((left, right) => left.localeCompare(right)).join("|");
+}
+
+function getProfileSignature(profile: ActiveUserProfile): string {
+    return [
+        profile.userId,
+        profile.displayName,
+        profile.messageCount,
+        profile.dunbarTier ?? "",
+        profile.rapport ?? "",
+        profile.mention ?? "",
+        profile.username ?? "",
+        profile.communicationStyle ?? "",
+        profile.relationToAgent ?? "",
+        stableStringList(profile.aliases),
+        stableStringList(profile.traits),
+    ].join("::");
+}
+
+function getAssociatedMemorySignature(memory: AssociatedMemory): string {
+    if (memory.type === "core_fact") {
+        return [
+            memory.type,
+            memory.factId,
+            memory.subject,
+            memory.category,
+            memory.content,
+            memory.confidence,
+        ].join("::");
+    }
+
+    return [
+        memory.type,
+        memory.topicId,
+        memory.label,
+        memory.summary,
+        memory.startedAt,
+        memory.endedAt ?? "",
+    ].join("::");
+}
+
+function getTopicDigestSignature(digest: TopicDigest): string {
+    const associatedMemories = digest.associatedMemories?.length
+        ? [...digest.associatedMemories]
+            .map(getAssociatedMemorySignature)
+            .sort((left, right) => left.localeCompare(right))
+            .join("|")
+        : "";
+
+    return [
+        digest.topicId,
+        digest.label,
+        digest.summary,
+        digest.state,
+        digest.messageCount,
+        digest.lastActivityAt,
+        digest.triageReason ?? "",
+        digest.callbackPotential ?? "",
+        stableStringList(digest.participants),
+        stableStringList(digest.keywords),
+        associatedMemories,
+    ].join("::");
+}
+
 // ═══ Provider 实现 ═══
 
 /** Attend 头部：chatTitle + chatId */
@@ -174,10 +240,10 @@ export const topicDigestsProvider: SectionProvider<TopicDigestData> = {
         }
 
         const committedMap = new Map(
-            committed.digests.map(digest => [digest.topicId, JSON.stringify(digest)])
+            committed.digests.map(digest => [digest.topicId, getTopicDigestSignature(digest)])
         );
         const deltaDigests = current.digests.filter(
-            digest => committedMap.get(digest.topicId) !== JSON.stringify(digest)
+            digest => committedMap.get(digest.topicId) !== getTopicDigestSignature(digest)
         );
 
         return {
@@ -356,12 +422,12 @@ export const profilesProvider: SectionProvider<ProfilesData> = {
                 stats: { total: current.profiles.length, added: current.profiles.length, unchanged: 0 },
             };
         }
-        // 按 userId 对比，内容变化也算 delta
+        // 按 userId 做稳定签名比较，忽略对象字段构造顺序和别名/特征数组顺序。
         const committedMap = new Map(
-            committed.profiles.map(p => [p.userId, JSON.stringify(p)])
+            committed.profiles.map(p => [p.userId, getProfileSignature(p)])
         );
         const deltaProfiles = current.profiles.filter(
-            p => committedMap.get(p.userId) !== JSON.stringify(p)
+            p => committedMap.get(p.userId) !== getProfileSignature(p)
         );
         return {
             full: current,

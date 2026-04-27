@@ -45,6 +45,7 @@ import {
 } from "../src/context-engine/providers/executor-providers.js";
 import {
     groupModelProvider,
+    profilesProvider,
     topicDigestsProvider,
 } from "../src/context-engine/providers/attend-providers.js";
 import { existsSync } from "node:fs";
@@ -461,6 +462,176 @@ describe("Attend Providers", () => {
         assert.ok(second.tree[0].historicalRendered!.includes("第二版摘要"));
         assert.ok(!second.tree[0].historicalRendered!.includes("第一版摘要"));
         assert.equal(second.manifest.sections[0].sentPhase, "historical");
+    });
+
+    it("topic_digests 在话题顺序和内部数组顺序变化时不应误报增量", () => {
+        const engine = new ContextEngine("attend-topic-digests-stable-test");
+        engine.register(topicDigestsProvider);
+
+        const first = engine.render({
+            chatId: "telegram:test",
+            topicDigests: [
+                {
+                    topicId: "topic_1",
+                    label: "话题一",
+                    summary: "摘要一",
+                    state: "active",
+                    participants: ["Alice", "Bob"],
+                    keywords: ["alpha", "beta"],
+                    messageCount: 5,
+                    lastActivityAt: "2026-04-27T12:05:00.000Z",
+                    associatedMemories: [
+                        {
+                            type: "topic",
+                            topicId: "memory_topic_1",
+                            label: "旧话题",
+                            summary: "以前讨论过",
+                            startedAt: "2026-04-26T10:00:00.000Z",
+                            endedAt: null,
+                        },
+                        {
+                            type: "core_fact",
+                            factId: "fact_1",
+                            subject: "Alice",
+                            category: "preference",
+                            content: "喜欢热锅",
+                            confidence: 0.9,
+                        },
+                    ],
+                },
+                {
+                    topicId: "topic_2",
+                    label: "话题二",
+                    summary: "摘要二",
+                    state: "active",
+                    participants: ["Carol"],
+                    keywords: ["gamma"],
+                    messageCount: 2,
+                    lastActivityAt: "2026-04-27T12:06:00.000Z",
+                },
+            ],
+        });
+        engine.commit(first.tree);
+
+        const second = engine.render({
+            chatId: "telegram:test",
+            topicDigests: [
+                {
+                    topicId: "topic_2",
+                    label: "话题二",
+                    summary: "摘要二",
+                    state: "active",
+                    participants: ["Carol"],
+                    keywords: ["gamma"],
+                    messageCount: 2,
+                    lastActivityAt: "2026-04-27T12:06:00.000Z",
+                },
+                {
+                    topicId: "topic_1",
+                    label: "话题一",
+                    summary: "摘要一",
+                    state: "active",
+                    participants: ["Bob", "Alice"],
+                    keywords: ["beta", "alpha"],
+                    messageCount: 5,
+                    lastActivityAt: "2026-04-27T12:05:00.000Z",
+                    associatedMemories: [
+                        {
+                            type: "core_fact",
+                            factId: "fact_1",
+                            subject: "Alice",
+                            category: "preference",
+                            content: "喜欢热锅",
+                            confidence: 0.9,
+                        },
+                        {
+                            type: "topic",
+                            topicId: "memory_topic_1",
+                            label: "旧话题",
+                            summary: "以前讨论过",
+                            startedAt: "2026-04-26T10:00:00.000Z",
+                            endedAt: null,
+                        },
+                    ],
+                },
+            ],
+        });
+
+        assert.equal(second.tree[0].deltaStats!.added, 0);
+        assert.equal(second.tree[0].historicalRendered, null);
+    });
+
+    it("active_persons 在人物顺序和数组顺序变化时不应误报增量", () => {
+        const engine = new ContextEngine("attend-profiles-test");
+        engine.register(profilesProvider);
+
+        const first = engine.render({
+            chatId: "telegram:test",
+            activeUserProfiles: [
+                {
+                    userId: "u1",
+                    displayName: "Alice",
+                    aliases: ["A", "Alice"],
+                    traits: ["calm", "helpful"],
+                    communicationStyle: "简洁",
+                    relationToAgent: "朋友",
+                    messageCount: 5,
+                    dunbarTier: 2,
+                    rapport: 90,
+                    mention: "@alice",
+                    username: "alice",
+                },
+                {
+                    userId: "u2",
+                    displayName: "Bob",
+                    aliases: ["Bob"],
+                    traits: ["curious"],
+                    communicationStyle: "直接",
+                    relationToAgent: "熟人",
+                    messageCount: 3,
+                    dunbarTier: 3,
+                    rapport: 70,
+                    mention: "@bob",
+                    username: "bob",
+                },
+            ],
+        });
+        engine.commit(first.tree);
+
+        const second = engine.render({
+            chatId: "telegram:test",
+            activeUserProfiles: [
+                {
+                    userId: "u2",
+                    displayName: "Bob",
+                    aliases: ["Bob"],
+                    traits: ["curious"],
+                    communicationStyle: "直接",
+                    relationToAgent: "熟人",
+                    messageCount: 3,
+                    dunbarTier: 3,
+                    rapport: 70,
+                    mention: "@bob",
+                    username: "bob",
+                },
+                {
+                    username: "alice",
+                    mention: "@alice",
+                    rapport: 90,
+                    dunbarTier: 2,
+                    messageCount: 5,
+                    relationToAgent: "朋友",
+                    communicationStyle: "简洁",
+                    traits: ["helpful", "calm"],
+                    aliases: ["Alice", "A"],
+                    displayName: "Alice",
+                    userId: "u1",
+                },
+            ],
+        });
+
+        assert.equal(second.tree[0].deltaStats!.added, 0);
+        assert.equal(second.tree[0].historicalRendered, null);
     });
 });
 
