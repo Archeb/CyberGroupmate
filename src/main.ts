@@ -14,13 +14,11 @@ import { NotificationCenter, type NotificationEvent } from "./event/notification
 import { ensureCompositeId, getRawId, getPlatform, getGroupModelKey } from "./core/chat-id.js";
 import { SandboxPool } from "./sandbox/sandbox-pool.js";
 import { installSkillsDependencies } from "./sandbox/skill-loader.js";
-import { createTaskListSkill, buildTaskListHostCalls } from "./sandbox/skills/task-list.js";
+import { createSandboxHostCallHandler } from "./sandbox/host-call-handler.js";
 import { MemoryStoreV2 } from "./memory-v2/index.js";
 import {
     loadConfig,
     resolveComponentProfiles,
-    saveConfig,
-    validateConfig,
     type AppConfig,
     type EnvironmentVariable,
 } from "./core/config.js";
@@ -51,7 +49,9 @@ import { GlobalState } from "./main-agent/global-state.js";
 import { createAttendHandler } from "./main-agent/attend-handler.js";
 import { createDispatchHandler } from "./main-agent/dispatch-handler.js";
 import { evaluateStickiness, createStickiness, updateStickiness } from "./subagent/stickiness.js";
-import { matchesCron, validateCronMinInterval } from "./core/cron-matcher.js";
+import { matchesCron } from "./core/cron-matcher.js";
+import { autoReconnect as autoReconnectMcp, initMcpBridge, mcpBridge } from "./sandbox/modules/mcp-bridge/index.js";
+import { refreshModuleRegistryCache } from "./subagent/code-act-executor.js";
 
 const log = createLogger("main");
 
@@ -103,6 +103,9 @@ const EVENTS_PATH = join(DATA_DIR, "events.jsonl");
 
 /** Session transcript 目录 */
 const SESSIONS_DIR = join(DATA_DIR, "sessions");
+
+/** 全局 MCP 连接持久化路径 */
+const MCP_CONNECTIONS_PATH = join(DATA_DIR, "mcp-connections.json");
 
 // ─── 辅助函数 ───
 
@@ -263,6 +266,30 @@ async function main(): Promise<void> {
         });
     }
 
+    initMcpBridge({
+        persistPath: MCP_CONNECTIONS_PATH,
+        onRegistryChange: () => {
+            refreshModuleRegistryCache();
+        },
+    });
+    await autoReconnectMcp();
+    for (const server of appConfig.mcpServers ?? []) {
+        if (server.autoConnect === false) continue;
+        try {
+            await mcpBridge.connect({
+                name: server.name,
+                transport: server.transport,
+                command: server.command,
+                args: server.args,
+                env: server.env,
+                url: server.url,
+                headers: server.headers,
+            });
+        } catch (err) {
+            log.warn("MCP 预配置连接失败", { name: server.name, error: String(err) });
+        }
+    }
+
     // 共享 MediaDownloader 实例（用于 sendSticker、Dashboard 等）
     const { MediaDownloader } = await import("./core/media-downloader.js");
     const sharedMediaDownloader = new MediaDownloader({
@@ -290,266 +317,21 @@ async function main(): Promise<void> {
             sandbox.on("notify", (event: Record<string, unknown>) => {
                 nc.push(event as { type: string;[key: string]: unknown });
             });
-            sandbox.setHostCallHandler(async (method, args) => {
-                const listSchedulerItems = () => globalState.getSchedulerEvents(chatId).map((event) => ({
-                    id: event.id,
-                    type: event.type,
-                    description: event.description,
-                    triggerAt: event.triggerAt,
-                    cronExpr: event.cronExpr,
-                    taskDescription: event.taskTemplate,
-                    createdAt: event.createdAt,
-                    triggered: event.triggered,
-                }));
-
-                // ── Platform adapter routing: 按 method 前缀路由到对应 adapter ──
-                const adapter = adapters.find(a => a.canHandle(method));
-                if (adapter) {
-                    // Write 操作安全检查：只允许向绑定的 chatId 发送
-                    const writeMethods = adapter.getWriteMethods();
-                    if (writeMethods.includes(method)) {
-                        const rawTarget = String(args[0] ?? "");
-                        const targetChatId = ensureCompositeId(getPlatform(chatId), rawTarget);
-                        if (targetChatId !== chatId) {
-                            throw new Error(
-                                `[Sandbox 安全限制] ${method} 被拦截：当前 sandbox 绑定 chat=${chatId}，` +
-                                `不允许向 chat=${targetChatId} 发送消息。`
-                            );
-                        }
-                    }
-                    return adapter.handleCall(method, args);
-                }
-                switch (method) {
-                    case "shell.listTabs":
-                        return sandbox.listShellTabs();
-                    case "shell.detach":
-                        return sandbox.detachDefaultTab(String(args[0]));
-                    case "shell.read":
-                        return sandbox.readShellTab(
-                            args[0] != null ? String(args[0]) : undefined,
-                            args[1] != null ? Number(args[1]) : undefined,
-                        );
-                    case "shell.sendInput":
-                        sandbox.sendShellInput(String(args[0]), args[1] != null ? String(args[1]) : undefined);
-                        return;
-                    case "shell.kill":
-                        return sandbox.killShellTab(args[0] != null ? String(args[0]) : undefined);
-                    case "shell.cwd":
-                        return sandbox.getShellCwd();
-                    default: {
-                        // ── Cron API host calls ──
-                        if (method === "cron.add") {
-                            const [name, cronExpr, taskDescription] = args as [string, string, string];
-                            // 最短间隔校验：cron 至少 1 小时
-                            if (!validateCronMinInterval(cronExpr, 60)) {
-                                throw new Error("cron 最短触发间隔为 1 小时");
-                            }
-                            // 数量限制
-                            const maxCrons = appConfig.subagent?.scheduler?.maxCrons ?? 10;
-                            const existing = globalState.getSchedulerEvents(chatId)
-                                .filter(e => e.type === "cron");
-                            if (existing.length >= maxCrons) {
-                                throw new Error(`cron 数量上限 ${maxCrons}，请先删除不需要的任务`);
-                            }
-                            const duplicate = existing.find((event) => event.taskTemplate === taskDescription);
-                            if (duplicate) {
-                                throw new Error(`已存在完全相同的 cron 任务描述: ${duplicate.id}`);
-                            }
-                            const event = globalState.addCron(chatId, name, cronExpr, taskDescription);
-                            return { id: event.id, items: listSchedulerItems() };
-                        }
-                        if (method === "cron.remove") {
-                            const id = String(args[0]);
-                            globalState.cancelSchedulerEvent(id);
-                            return;
-                        }
-                        if (method === "cron.list") {
-                            const events = globalState.getSchedulerEvents(chatId)
-                                .filter(e => e.type === "cron")
-                                .map(e => ({
-                                    id: e.id,
-                                    name: e.description,
-                                    cronExpr: e.cronExpr,
-                                }));
-                            return events;
-                        }
-
-                        // ── Runtime.remind host call ──
-                        if (method === "runtime.remind") {
-                            const [description, delayMinutes] = args as [string, number];
-                            if (typeof delayMinutes !== "number" || delayMinutes < 1) {
-                                throw new Error("remind 最短 1 分钟");
-                            }
-                            if (delayMinutes > 525600) {
-                                throw new Error("remind 最长 365 天（525600 分钟）");
-                            }
-                            // 数量限制
-                            const maxReminders = appConfig.subagent?.scheduler?.maxReminders ?? 10;
-                            const existingReminders = globalState.getSchedulerEvents(chatId)
-                                .filter(e => e.type === "reminder" && !e.triggered);
-                            if (existingReminders.length >= maxReminders) {
-                                throw new Error(`remind 数量上限 ${maxReminders}，请等待已有提醒触发或手动取消`);
-                            }
-                            const duplicate = existingReminders.find((event) => event.description === description);
-                            if (duplicate) {
-                                throw new Error(`已存在完全相同的提醒描述: ${duplicate.id}`);
-                            }
-                            const triggerAt = new Date(Date.now() + delayMinutes * 60000).toISOString();
-                            const event = globalState.addReminder(chatId, description, triggerAt);
-                            log.info("runtime.remind 已设置", { id: event.id, chatId, triggerAt, description: description.slice(0, 80) });
-                            return { reminderId: event.id, triggerAt, items: listSchedulerItems() };
-                        }
-
-                        // ── Runtime.env host calls ──
-                        if (method === "runtime.env.list") {
-                            const cfg = loadConfig("config.yaml", true);
-                            return normalizeEnvVars(cfg.envVars);
-                        }
-                        if (method === "runtime.env.get") {
-                            const key = String(args[0] ?? "").trim();
-                            if (!key) return null;
-                            const cfg = loadConfig("config.yaml", true);
-                            const list = normalizeEnvVars(cfg.envVars);
-                            const found = list.find((ev) => ev.key === key);
-                            return found ?? null;
-                        }
-                        if (method === "runtime.env.set") {
-                            const key = String(args[0] ?? "").trim();
-                            const value = String(args[1] ?? "");
-                            const scopeRaw = String(args[2] ?? "both").trim().toLowerCase();
-                            const scope = (scopeRaw === "host" || scopeRaw === "sandbox" || scopeRaw === "both")
-                                ? scopeRaw as EnvironmentVariable["scope"]
-                                : "both";
-                            if (!isValidEnvKey(key)) {
-                                throw new Error(`非法 env key: ${key}`);
-                            }
-
-                            const cfg = loadConfig("config.yaml", true);
-                            const list = normalizeEnvVars(cfg.envVars);
-                            const nextList = list.filter((ev) => ev.key !== key);
-                            nextList.push({ key, value, scope });
-                            cfg.envVars = nextList.length > 0 ? nextList : undefined;
-
-                            const validation = validateConfig(cfg);
-                            if (!validation.valid) {
-                                throw new Error(validation.errors.join("; "));
-                            }
-                            const save = saveConfig(cfg);
-                            if (!save.ok) {
-                                throw new Error(save.error || "saveConfig failed");
-                            }
-
-                            currentEnvPlan = buildEnvPlan(nextList);
-                            applyHostManagedEnv(currentEnvPlan);
-                            await sandboxPool.updateManagedEnv(
-                                currentEnvPlan.sandboxVisible,
-                                currentEnvPlan.managedKeys,
-                            );
-                            log.info("runtime.env.set 已应用", { key, scope });
-                            return { ok: true, key, scope, value };
-                        }
-                        if (method === "runtime.env.delete") {
-                            const key = String(args[0] ?? "").trim();
-                            if (!key) return { ok: true, deleted: false };
-                            const cfg = loadConfig("config.yaml", true);
-                            const list = normalizeEnvVars(cfg.envVars);
-                            const had = list.some((ev) => ev.key === key);
-                            const nextList = list.filter((ev) => ev.key !== key);
-                            cfg.envVars = nextList.length > 0 ? nextList : undefined;
-
-                            const save = saveConfig(cfg);
-                            if (!save.ok) {
-                                throw new Error(save.error || "saveConfig failed");
-                            }
-
-                            currentEnvPlan = buildEnvPlan(nextList);
-                            applyHostManagedEnv(currentEnvPlan);
-                            await sandboxPool.updateManagedEnv(
-                                currentEnvPlan.sandboxVisible,
-                                currentEnvPlan.managedKeys,
-                            );
-                            log.info("runtime.env.delete 已应用", { key, deleted: had });
-                            return { ok: true, deleted: had };
-                        }
-
-                        // ── Todo host calls ──
-                        if (method === "todo.list") {
-                            const options = (args[0] as { includeExpired?: boolean } | undefined) ?? undefined;
-                            return memory.todoList(chatId, options);
-                        }
-                        if (method === "todo.get") {
-                            return memory.todoGet(chatId, String(args[0]));
-                        }
-                        if (method === "todo.upsert") {
-                            const [key, content, options] = args as [string, string, { dueAt?: string | null } | undefined];
-                            return memory.todoUpsert(chatId, key, content, options?.dueAt ?? null);
-                        }
-                        if (method === "todo.remove") {
-                            memory.todoRemove(chatId, String(args[0]));
-                            return;
-                        }
-
-                        // ── Vision API host call ──
-                        if (method === "vision.see") {
-                            const imagePaths = args as string[];
-                            if (!imagePaths || imagePaths.length === 0) {
-                                throw new Error("vision.see() 至少需要传入一个图片路径");
-                            }
-                            const workspaceRoot = resolve("workspace");
-                            const visionConfigs = resolveComponentProfiles("vision");
-
-                            const results = await Promise.all(imagePaths.map(async (userPath) => {
-                                // 安全路径解析（与 filesystem.ts safePath 逻辑一致）
-                                let resolved: string;
-                                if (userPath.startsWith("/")) {
-                                    resolved = resolve(userPath);
-                                } else {
-                                    resolved = resolve(workspaceRoot, userPath);
-                                }
-                                const rel = relative(workspaceRoot, resolved);
-                                if (rel.startsWith("..") || resolve(workspaceRoot, rel) !== resolved) {
-                                    throw new Error(
-                                        `[vision 安全限制] 路径 "${userPath}" 超出 workspace 范围。`,
-                                    );
-                                }
-                                if (!existsSync(resolved)) {
-                                    throw new Error(`文件不存在: ${userPath}`);
-                                }
-
-                                // 读取文件
-                                const rawBuffer = readFileSync(resolved);
-                                // 推断 MIME 类型
-                                const ext = resolved.split(".").pop()?.toLowerCase() ?? "";
-                                const mimeMap: Record<string, string> = {
-                                    jpg: "image/jpeg", jpeg: "image/jpeg",
-                                    png: "image/png",
-                                    webp: "image/webp",
-                                    gif: "image/gif",
-                                    bmp: "image/bmp",
-                                    tiff: "image/tiff", tif: "image/tiff",
-                                    avif: "image/avif",
-                                    svg: "image/svg+xml",
-                                };
-                                const mimeType = mimeMap[ext] ?? "image/png";
-
-                                // 转码 + 描述
-                                const { buffer, mimeType: finalMime } = await ensureSupportedFormat(rawBuffer, mimeType);
-                                return describeImage(buffer, finalMime, visionConfigs);
-                            }));
-
-                            return results;
-                        }
-
-                        // skills.taskList.* host calls
-                        const taskListSkill = createTaskListSkill(globalState);
-                        const taskListCalls = buildTaskListHostCalls(taskListSkill);
-                        if (method in taskListCalls) {
-                            return taskListCalls[method](args[0]);
-                        }
-                        throw new Error(`Unsupported host call: ${method}`);
-                    }
-                }
-            });
+            sandbox.setHostCallHandler(createSandboxHostCallHandler(chatId, {
+                appConfig,
+                globalState,
+                memory,
+                adapters,
+                sandbox,
+                sandboxPool,
+                mcpBridge,
+                buildEnvPlan,
+                getCurrentEnvPlan: () => currentEnvPlan,
+                setCurrentEnvPlan: (plan) => {
+                    currentEnvPlan = plan;
+                },
+                applyHostManagedEnv,
+            }));
             sandbox.on("stderr", (data: string) => {
                 if (data.trim()) {
                     log.warn("Sandbox stderr", { chatId, output: data.trim() });
@@ -804,6 +586,7 @@ async function main(): Promise<void> {
                     chatId: cid,
                     isBlocked,
                     priority: entry.priority,
+                    callbackPotential: entry.callbackPotential ?? 0,
                     source: entry.source,
                     topicDigestCount: entry.topicDigests?.length,
                     hasTriageEngaged: sub.hasTriageEngaged,

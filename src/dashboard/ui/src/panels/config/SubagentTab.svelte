@@ -50,6 +50,15 @@
         placeholder="60"
       /></label
     >
+    <label class="cfg-field"
+      ><span class="cfg-label">限制写入到绑定 Chat</span>
+      <input
+        type="checkbox"
+        class="toggle toggle-xs"
+        bind:checked={config.subagent.restrictAdapterWritesToBoundChat}
+      />
+      <span class="text-xs opacity-50 mt-1">开启后，Sandbox 只能通过 adapter 向当前绑定的 chatId 发送消息。</span></label
+    >
   </div>
   <div class="divider text-xs opacity-50 my-3">CodeAct</div>
   <div class="cfg-grid-3">

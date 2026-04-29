@@ -180,11 +180,17 @@ export class GroupSubagent extends EventEmitter {
      */
     buildQueueEntry(sourceOverride?: AttentionQueueEntry["source"]): AttentionQueueEntry {
         const engagement = this.observer.getEngagementScore();
-        const basePriority = engagement * this.stickiness.priorityMultiplier;
 
         // topicDigests: 直接从 TopicRegistry 取当前话题，使用统一转换方法
         const allTopics = this.topicRegistry.getByChat(this.chatId);
         const topicDigests: TopicDigest[] = allTopics.map(t => TopicRegistry.toDigest(t));
+        const maxCallbackPotential = Math.max(0, ...allTopics.map(t => t.callbackPotential ?? 0));
+
+        let basePriority = engagement * this.stickiness.priorityMultiplier;
+        if (maxCallbackPotential > 60) {
+            basePriority += Math.floor((maxCallbackPotential - 60) * 0.5);
+        }
+        basePriority = Math.min(100, basePriority);
 
         // 来源标记：优先使用调用方传入的 sourceOverride（如 DIRECT_ADDRESS）
         const source: AttentionQueueEntry["source"] = sourceOverride
@@ -206,6 +212,8 @@ export class GroupSubagent extends EventEmitter {
             engagementScore: engagement,
             urgentSignals: this.observer.getMentionCount() > 0 ? ["@mention"] : undefined,
             snapshotTimestamp: new Date().toISOString(),
+            callbackPotential: maxCallbackPotential,
+            hasHighCallbackPotential: maxCallbackPotential > 70,
         };
     }
 

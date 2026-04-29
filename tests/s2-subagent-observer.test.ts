@@ -205,6 +205,32 @@ describe("S2: SubagentManager + Observer", () => {
         });
     });
 
+    describe("S2.3b: callbackPotential 提权", () => {
+        it("#10b buildQueueEntry() 会根据 callbackPotential 提升基础优先级", () => {
+            const sub = new GroupSubagent({ chatId: "chatA" });
+            const event = mockEvent({ chatId: "chatA", userId: "u1", text: "hello meme callback" });
+            sub.onMessage(event);
+
+            const topic = sub.topicRegistry.create("chatA", "旧梗回调", ["meme", "callback"], [{
+                id: "m1",
+                chatId: "chatA",
+                senderId: "u1",
+                senderName: "Alice",
+                text: "hello meme callback",
+                timestamp: Date.now(),
+            }]);
+            topic.callbackPotential = 82;
+
+            const engagement = sub.observer.getEngagementScore();
+            const entry = sub.buildQueueEntry();
+            const expectedBoost = Math.floor((82 - 60) * 0.5);
+
+            assert.equal(entry.callbackPotential, 82);
+            assert.equal(entry.hasHighCallbackPotential, true);
+            assert.equal(entry.basePriority, Math.min(100, engagement * sub.stickiness.priorityMultiplier + expectedBoost));
+        });
+    });
+
     // ─── S2.4: DynamicAttentionQueue ───
 
     describe("S2.4: DynamicAttentionQueue", () => {

@@ -17,6 +17,7 @@ export { type ImagePart, type ChatMessage, type LLMResponse } from "./llm/types.
 
 import type { LLMConfig } from "./config.js";
 import type { ChatMessage, LLMResponse } from "./llm/types.js";
+import type { ContextManifest } from "../context-engine/types.js";
 import { getOrCreatePool } from "./llm-pool.js";
 import { rateLimiter } from "./llm-rate-limiter.js";
 import { loadConfig } from "./config.js";
@@ -63,6 +64,8 @@ export interface LLMCallEvent {
     extraBody?: Record<string, unknown>;
     /** 自定义请求头（如有） */
     customHeaders?: Record<string, string>;
+    /** 调用时对应的 ContextEngine manifest（如有） */
+    contextManifest?: ContextManifest;
 }
 
 /** LLM 响应事件数据 */
@@ -130,6 +133,8 @@ export interface LLMCallOptions {
     timeoutMs?: number;
     /** Profile 名称（用于限速器按 profile 限速） */
     profileName?: string;
+    /** 调用时对应的 ContextEngine manifest（供 Dashboard 可视化） */
+    contextManifest?: ContextManifest;
 }
 
 let _callIdCounter = 0;
@@ -378,6 +383,7 @@ async function _callLLMSingleKeyInner(
             timestamp: new Date().toISOString(),
             extraBody: config.extraBody,
             customHeaders: config.customHeaders,
+            contextManifest: options?.contextManifest,
         };
         llmEvents.emit("llm:call", callEvent);
     }

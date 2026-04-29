@@ -18,7 +18,7 @@ import { EventEmitter } from "node:events";
 import { createLogger } from "../core/logger.js";
 import { callLLMWithFallback, type ChatMessage } from "../core/llm.js";
 import { resolveComponentProfiles, resolveComponentTimeout } from "../core/config.js";
-import { renderPrompt } from "../main-agent/prompt-renderer.js";
+import { topicClusteringProvider, topicTriageProvider } from "../context-engine/providers/pipeline-providers.js";
 import type { MemoryStoreV2 } from "../memory-v2/index.js";
 import { embed } from "../memory-v2/embedding.js";
 import type { EmbeddingConfig } from "../core/config.js";
@@ -243,6 +243,16 @@ export class RecordingPipeline extends EventEmitter {
                         });
                     }
 
+                    for (const topic of updatedTopics) {
+                        const association = this.computeTopicAssociations(topic, chatId);
+                        topic.associatedMemories = association.associatedMemories;
+                        topic.callbackPotential = association.callbackPotential;
+                        this.memory.upsertTopic(topic.id, {
+                            associatedMemories: association.associatedMemories,
+                            callbackPotential: association.callbackPotential,
+                        });
+                    }
+
                     // 批量写入原始消息到 message_log
                     this.memory.storeMessageBatch(chatMessages.map(m => ({
                         messageId: m.id,
@@ -372,7 +382,7 @@ export class RecordingPipeline extends EventEmitter {
             `[${m.id}] ${m.senderName} (${new Date(m.timestamp).toLocaleTimeString()}): ${m.text}`
         ).join("\n");
 
-        const prompt = renderPrompt("TOPIC_CLUSTERING", {
+        const prompt = topicClusteringProvider.render({
             existingTopics: existingTopicsStr,
             messages: messagesStr,
         });
@@ -428,9 +438,10 @@ export class RecordingPipeline extends EventEmitter {
         const allTopicIds = Array.from(topicGroups.keys());
         const topicMessagesStr = this.buildTopicContextStr(allTopicIds, topicGroups, clustering);
 
-        const prompt = renderPrompt("TOPIC_TRIAGE", {
+        const prompt = topicTriageProvider.render({
             personaName: this.personaName,
             persona: this.personaDescription,
+            rules: "",
         });
 
         // 构建富化的 user message：群组信息 + 参与者画像 + 话题上下文
@@ -472,9 +483,10 @@ export class RecordingPipeline extends EventEmitter {
 
             // 只对缺失的话题重跑一次
             const retryStr = this.buildTopicContextStr(missingIds, topicGroups, clustering);
-            const retryPrompt = renderPrompt("TOPIC_TRIAGE", {
+            const retryPrompt = topicTriageProvider.render({
                 personaName: this.personaName,
                 persona: this.personaDescription,
+                rules: "",
             });
 
             const retryMessages: ChatMessage[] = [
@@ -630,6 +642,55 @@ export class RecordingPipeline extends EventEmitter {
         }
 
         return sections;
+    }
+
+    private computeTopicAssociations(topic: Topic, chatId: string): {
+        associatedMemories: import("../memory-v2/types.js").AssociatedMemory[];
+        callbackPotential: number;
+    } {
+        if (!this.memory || topic.keywords.length === 0) {
+            return { associatedMemories: [], callbackPotential: 0 };
+        }
+
+        const query = topic.keywords.join(" ");
+        const facts = this.memory.searchFacts(query, { limit: 15 });
+        const topics = this.memory.searchTopics(query, {
+            chatId,
+            limit: 10,
+            excludeTopicIds: [topic.id],
+        }).filter((candidate) => candidate.startedAt < new Date(topic.createdAt).toISOString());
+
+        let score = 0;
+        const anecdoteCount = facts.filter((fact) => fact.category === "anecdote").length;
+        score += anecdoteCount * 15;
+        score += (facts.length - anecdoteCount) * 5;
+        for (const candidate of topics) {
+            const overlap = candidate.participants.filter((participant) => topic.participantIds.has(participant)).length;
+            score += overlap * 10;
+        }
+        score += topics.length * 5;
+
+        return {
+            associatedMemories: [
+                ...facts.slice(0, 5).map((fact) => ({
+                    type: "core_fact" as const,
+                    factId: fact.factId,
+                    subject: fact.subject,
+                    category: fact.category,
+                    content: fact.content,
+                    confidence: fact.confidence,
+                })),
+                ...topics.slice(0, 3).map((candidate) => ({
+                    type: "topic" as const,
+                    topicId: candidate.topicId,
+                    label: candidate.label,
+                    summary: candidate.summary,
+                    startedAt: candidate.startedAt,
+                    endedAt: candidate.endedAt,
+                })),
+            ],
+            callbackPotential: Math.min(score, 100),
+        };
     }
 
     /**

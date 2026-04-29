@@ -110,6 +110,10 @@ export interface Topic {
     label: string;
     /** 关键词集合 */
     keywords: string[];
+    /** 预计算的关联记忆 */
+    associatedMemories?: import("../memory-v2/types.js").AssociatedMemory[];
+    /** 回梗/主动接话潜力分 */
+    callbackPotential?: number;
     /** 参与者 user_id 集合 */
     participantIds: Set<string>;
     /** 属于此话题的消息 ID 列表 */

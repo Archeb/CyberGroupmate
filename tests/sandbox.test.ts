@@ -11,6 +11,10 @@ describe("Sandbox", () => {
 
     async function makeSandbox(): Promise<Sandbox> {
         const sb = new Sandbox();
+        sb.setHostCallHandler(async (method) => {
+            if (method === "mcp.list") return [];
+            throw new Error(`unexpected method: ${method}`);
+        });
         sandboxes.push(sb);
         await sb.start();
         return sb;
@@ -121,6 +125,9 @@ describe("Sandbox", () => {
         const sb = await makeSandbox();
 
         sb.setHostCallHandler(async (method, args) => {
+            if (method === "mcp.list") {
+                return [];
+            }
             if (method === "memory.recall") {
                 return { topics: [{ id: "topic_1", label: args[0] }], facts: [], persons: [] };
             }
@@ -145,6 +152,9 @@ describe("Sandbox", () => {
     it("should expose code-based social skill helpers", async () => {
         const sb = await makeSandbox();
         sb.setHostCallHandler(async (method, args) => {
+            if (method === "mcp.list") {
+                return [];
+            }
             if (method === "telegram.sendText") {
                 return {
                     id: "sent_1",
@@ -175,6 +185,9 @@ describe("Sandbox", () => {
     it("should expose host-backed telegram proxy as top-level variable", async () => {
         const sb = await makeSandbox();
         sb.setHostCallHandler(async (method, args) => {
+            if (method === "mcp.list") {
+                return [];
+            }
             if (method === "telegram.getMe") {
                 return { id: "42", firstName: "Cyber", isBot: true };
             }
@@ -204,6 +217,60 @@ describe("Sandbox", () => {
         assert.equal(parsed.me.id, "42");
         assert.equal(parsed.sent.id, "msg_1");
         assert.equal(parsed.sent.chat.id, "100");
+    });
+
+    it("should expose host-backed global mcp proxy", async () => {
+        const sb = await makeSandbox();
+        const calls: string[] = [];
+        sb.setHostCallHandler(async (method, args) => {
+            calls.push(method);
+            if (method === "mcp.list") {
+                return [
+                    {
+                        name: "global-github",
+                        transport: "streamable-http",
+                        url: "https://example.com/mcp",
+                        tools: ["search_repositories"],
+                        running: true,
+                    },
+                ];
+            }
+            if (method === "mcp.connect") {
+                const [config] = args;
+                return {
+                    name: config.name,
+                    tools: [{ name: "search_repositories", description: "Search repositories" }],
+                };
+            }
+            if (method === "mcp.call") {
+                return { ok: true, server: args[0], tool: args[1], payload: args[2] };
+            }
+            if (method === "mcp.disconnect") {
+                return null;
+            }
+            throw new Error(`unexpected method: ${method}`);
+        });
+
+        const result = await sb.execute(`
+          const before = mcp.list();
+          const github = await mcp.connect({
+            name: "global-github",
+            transport: "streamable-http",
+            url: "https://example.com/mcp"
+          });
+          const called = await github.call("search_repositories", { query: "mcp" });
+          await mcp.disconnect("global-github");
+          console.log(JSON.stringify({ before, called }));
+        `);
+
+        assert.equal(result.error, false);
+        const parsed = JSON.parse(result.output);
+        assert.equal(parsed.before[0].name, "global-github");
+        assert.equal(parsed.called.server, "global-github");
+        assert.equal(parsed.called.tool, "search_repositories");
+        assert.ok(calls.includes("mcp.connect"));
+        assert.ok(calls.includes("mcp.call"));
+        assert.ok(calls.includes("mcp.disconnect"));
     });
 
 

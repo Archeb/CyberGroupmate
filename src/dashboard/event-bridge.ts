@@ -10,6 +10,8 @@ import type { DashboardDeps, WsEvent } from "./types.js";
 import { createLogger } from "../core/logger.js";
 import { llmEvents, type LLMCallEvent, type LLMResponseEvent, type LLMRetryEvent, cancelLLMCall } from "../core/llm.js";
 import { codeActEvents, type CodeActProgressEvent } from "../sandbox/session-runner.js";
+import { contextEvents } from "../context-engine/context-engine.js";
+import type { ContextManifest } from "../context-engine/types.js";
 import { getGroupModelKey } from "../core/chat-id.js";
 
 const log = createLogger("dashboard-bridge");
@@ -25,6 +27,7 @@ export interface LLMLogEntry {
     provider: string;
     timestamp: string;
     messageSummaries: LLMCallEvent["messageSummaries"];
+    contextManifest?: ContextManifest;
     response: LLMResponseEvent | null;
     retries: LLMRetryEvent[];
 }
@@ -48,6 +51,7 @@ export class LLMLogBuffer {
             provider: data.provider,
             timestamp: data.timestamp,
             messageSummaries: data.messageSummaries,
+            contextManifest: data.contextManifest,
             response: null,
             retries: [],
         };
@@ -161,6 +165,7 @@ export class EventBridge {
         this.hookLLMEvents();
         this.hookCodeActEvents();
         this.hookRecordingPipelineEvents();
+        this.hookContextEngine();
     }
 
     addClient(ws: WebSocket): void {
@@ -292,6 +297,17 @@ export class EventBridge {
         });
     }
 
+    /** 订阅 ContextEngine manifest 事件并广播到 WebSocket */
+    private hookContextEngine(): void {
+        contextEvents.on("context:manifest", (manifest: ContextManifest) => {
+            this.broadcast({
+                type: "context:manifest",
+                timestamp: manifest.timestamp,
+                data: manifest,
+            });
+        });
+    }
+
     /** 订阅 Recording Pipeline 事件并广播到 WebSocket */
     private hookRecordingPipelineEvents(): void {
         // 已挂载的 chatId 集合，避免重复 hook
@@ -348,6 +364,7 @@ export class EventBridge {
                             decision: {
                                 should_intervene: decision.should_intervene,
                                 reason: decision.reason,
+                                callbackPotential: topic.callbackPotential ?? 0,
                             },
                         },
                     });

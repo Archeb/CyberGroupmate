@@ -4,9 +4,12 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 
 import {
     disconnectAll,
+    getConnectionConfigs,
     initMcpBridge,
     mcpBridge,
-} from "../src/sandbox/modules/mcp-bridge.js";
+    replaceConnectionConfigs,
+} from "../src/sandbox/modules/mcp-bridge/index.js";
+import { getModuleRegistryCache, refreshModuleRegistryCache } from "../src/subagent/code-act-executor.js";
 
 describe("mcp-bridge Streamable HTTP", () => {
     async function readBody(req: IncomingMessage): Promise<string> {
@@ -16,6 +19,117 @@ describe("mcp-bridge Streamable HTTP", () => {
         }
         return Buffer.concat(chunks).toString("utf-8");
     }
+
+    it("publishes connected MCP tools into the dynamic module registry", async () => {
+        initMcpBridge({
+            persistPath: "",
+            onRegistryChange: () => {
+                refreshModuleRegistryCache();
+            },
+        });
+
+        let serverUrl = "";
+
+        const server = createServer(async (req, res) => {
+            if (req.method !== "POST") {
+                res.writeHead(405);
+                res.end();
+                return;
+            }
+
+            const body = await readBody(req);
+            const msg = JSON.parse(body) as {
+                id?: number;
+                method?: string;
+            };
+
+            if (msg.method === "initialize") {
+                writeJson(
+                    res,
+                    {
+                        jsonrpc: "2.0",
+                        id: msg.id,
+                        result: {
+                            protocolVersion: "2025-03-26",
+                            capabilities: { tools: {} },
+                            serverInfo: { name: "mock-mcp", version: "1.0.0" },
+                        },
+                    },
+                    { "Mcp-Session-Id": "sess-456" }
+                );
+                return;
+            }
+
+            if (msg.method === "notifications/initialized") {
+                res.writeHead(202);
+                res.end();
+                return;
+            }
+
+            if (msg.method === "tools/list") {
+                writeJson(res, {
+                    jsonrpc: "2.0",
+                    id: msg.id,
+                    result: {
+                        tools: [
+                            {
+                                name: "search_repositories",
+                                description: "Search repositories",
+                                inputSchema: {
+                                    type: "object",
+                                    properties: { query: { type: "string" } },
+                                    required: ["query"],
+                                },
+                            },
+                        ],
+                    },
+                });
+                return;
+            }
+
+            res.writeHead(404);
+            res.end();
+        });
+
+        await new Promise<void>((resolve) => {
+            server.listen(0, "127.0.0.1", () => {
+                const address = server.address();
+                if (!address || typeof address === "string") {
+                    throw new Error("Failed to bind mock MCP server");
+                }
+                serverUrl = `http://127.0.0.1:${address.port}/mcp`;
+                resolve();
+            });
+        });
+
+        try {
+            await mcpBridge.connect({
+                name: "github",
+                description: "用于搜索 GitHub 仓库和代码",
+                transport: "streamable-http",
+                url: serverUrl,
+            });
+
+            const registry = getModuleRegistryCache();
+            const githubModule = registry.find((entry) => entry.name === "github");
+            assert.ok(githubModule, "connected MCP server should appear in module registry cache");
+            assert.equal(githubModule?.methods.length, 1);
+            assert.equal(githubModule?.methods[0]?.name, "search_repositories");
+            assert.match(githubModule?.description ?? "", /MCP Server \(1 tools\) via Streamable HTTP/);
+            assert.match(githubModule?.description ?? "", /用于搜索 GitHub 仓库和代码/);
+            assert.deepEqual(getConnectionConfigs(), [{
+                name: "github",
+                description: "用于搜索 GitHub 仓库和代码",
+                transport: "streamable-http",
+                url: serverUrl,
+            }]);
+        } finally {
+            await disconnectAll();
+            await new Promise<void>((resolve, reject) => {
+                server.close((err) => (err ? reject(err) : resolve()));
+            });
+        }
+    });
 
     function writeJson(res: ServerResponse, body: unknown, headers?: Record<string, string>): void {
         res.writeHead(200, {
@@ -111,6 +225,7 @@ describe("mcp-bridge Streamable HTTP", () => {
             }
 
             if (msg.method === "tools/call") {
+                const toolArgs = (msg.params as { arguments?: { value?: unknown } } | undefined)?.arguments;
                 writeJson(res, {
                     jsonrpc: "2.0",
                     id: msg.id,
@@ -118,7 +233,7 @@ describe("mcp-bridge Streamable HTTP", () => {
                         content: [
                             {
                                 type: "text",
-                                text: String(msg.params?.arguments?.value ?? ""),
+                                text: String(toolArgs?.value ?? ""),
                             },
                         ],
                     },
@@ -167,6 +282,101 @@ describe("mcp-bridge Streamable HTTP", () => {
             assert.deepEqual(seenSessionHeaders, ["sess-123", "sess-123", "sess-123", "sess-123"]);
             assert.ok(seenAuthHeaders.every((header) => header === "Bearer test-token"));
             assert.equal(deleteCalled, true);
+        } finally {
+            await disconnectAll();
+            await new Promise<void>((resolve, reject) => {
+                server.close((err) => (err ? reject(err) : resolve()));
+            });
+        }
+    });
+
+    it("exports and replaces global MCP configs", async () => {
+        initMcpBridge({ persistPath: "" });
+
+        let serverUrl = "";
+
+        const server = createServer(async (req, res) => {
+            if (req.method !== "POST") {
+                res.writeHead(405);
+                res.end();
+                return;
+            }
+
+            const body = await readBody(req);
+            const msg = JSON.parse(body) as { id?: number; method?: string };
+
+            if (msg.method === "initialize") {
+                writeJson(res, {
+                    jsonrpc: "2.0",
+                    id: msg.id,
+                    result: {
+                        protocolVersion: "2025-03-26",
+                        capabilities: { tools: {} },
+                        serverInfo: { name: "mock-mcp", version: "1.0.0" },
+                    },
+                }, { "Mcp-Session-Id": "sess-789" });
+                return;
+            }
+
+            if (msg.method === "notifications/initialized") {
+                res.writeHead(202);
+                res.end();
+                return;
+            }
+
+            if (msg.method === "tools/list") {
+                writeJson(res, {
+                    jsonrpc: "2.0",
+                    id: msg.id,
+                    result: {
+                        tools: [
+                            { name: "ping", description: "Ping tool" },
+                        ],
+                    },
+                });
+                return;
+            }
+
+            res.writeHead(404);
+            res.end();
+        });
+
+        await new Promise<void>((resolve) => {
+            server.listen(0, "127.0.0.1", () => {
+                const address = server.address();
+                if (!address || typeof address === "string") {
+                    throw new Error("Failed to bind mock MCP server");
+                }
+                serverUrl = `http://127.0.0.1:${address.port}/mcp`;
+                resolve();
+            });
+        });
+
+        try {
+            await mcpBridge.connect({
+                name: "before-replace",
+                transport: "streamable-http",
+                url: serverUrl,
+            });
+            assert.equal(getConnectionConfigs().length, 1);
+
+            await replaceConnectionConfigs([
+                {
+                    name: "after-replace",
+                    transport: "streamable-http",
+                    url: serverUrl,
+                },
+            ]);
+
+            const configs = getConnectionConfigs();
+            assert.deepEqual(configs, [
+                {
+                    name: "after-replace",
+                    transport: "streamable-http",
+                    url: serverUrl,
+                },
+            ]);
+            assert.deepEqual(mcpBridge.list().map((server) => server.name), ["after-replace"]);
         } finally {
             await disconnectAll();
             await new Promise<void>((resolve, reject) => {

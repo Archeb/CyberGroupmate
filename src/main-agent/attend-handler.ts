@@ -19,7 +19,7 @@ import type { MediaDownloader } from "../core/media-downloader.js";
 import type { ImageCatalog } from "../core/image-catalog.js";
 import { calculateDepth } from "./cosine-decay.js";
 import { buildGroupContext } from "./context-builder.js";
-import { renderPrompt, buildAttentionVariables, buildMainSystemVariables } from "./prompt-renderer.js";
+import { renderPrompt, buildMainSystemVariables } from "../context-engine/template-engine.js";
 import { callLLMWithFallback } from "../core/llm.js";
 import { getRawId, getGroupModelKey } from "../core/chat-id.js";
 import { createLogger } from "../core/logger.js";
@@ -28,6 +28,8 @@ import { loadConfig, resolveComponentProfiles } from "../core/config.js";
 import type { PlatformAdapter } from "../adapter/platform-adapter.js";
 import { generateModuleRoster } from "../sandbox/modules/module-registry.js";
 import { runParallelGrounding } from "./grounding-util.js";
+import { deriveChatType } from "../context-engine/prompt-renderer-utils.js";
+import type { ResolveContext } from "../context-engine/types.js";
 
 const log = createLogger("attend-handler");
 
@@ -44,11 +46,8 @@ function buildObserve(chatId: string): AttendResult {
 /**
  * 构建精简的历史 attend 记录（仅标题 + 增量消息）。
  *
- * 剥离所有瞬态段落（活跃参与者、聊天画像、话题注册表、全局状态快照、
- * 决策记录、任务列表等），仅保留 chatId 标识和增量消息原文。
- *
- * 增量逻辑：通过 mainLoop 的 per-chatId 追踪，只存储上次未见过的新消息。
- * compaction 后追踪被重置，自动退化为全量存储。
+ * @deprecated 由 ContextEngine 的 history 策略替代。
+ * 保留作为向后兼容引用，不再被主流程调用。
  */
 function buildHistoricalAttendEntry(
     chatId: string,
@@ -58,45 +57,21 @@ function buildHistoricalAttendEntry(
     mainLoop: MainAgentLoop,
 ): string {
     const header = `═══ Attend: ${chatTitle ?? chatId} (${getRawId(chatId)}) [L${depth}] ═══`;
-
-    if (rawMessages.length === 0) {
-        return `${header}\n(无消息)`;
-    }
-
-    // 计算增量：找到 lastStoredMsgId 在 rawMessages 中的位置
+    if (rawMessages.length === 0) return `${header}\n(无消息)`;
     const lastStoredId = mainLoop.getLastStoredMsgId(chatId);
     let deltaStartIdx = 0;
-
     if (lastStoredId) {
         const lastIdx = rawMessages.findIndex(m => m.id === lastStoredId);
-        if (lastIdx >= 0) {
-            deltaStartIdx = lastIdx + 1;
-        }
-        // lastStoredId 不在当前消息列表中 → 存全量
-        // （可能间隔太久，旧消息已滑出窗口）
+        if (lastIdx >= 0) deltaStartIdx = lastIdx + 1;
     }
-
     const deltaMessages = rawMessages.slice(deltaStartIdx);
-
-    // 更新追踪到最新消息 ID
     const newestMsg = rawMessages[rawMessages.length - 1];
-    if (newestMsg?.id) {
-        mainLoop.setLastStoredMsgId(chatId, newestMsg.id);
-    }
-
-    if (deltaMessages.length === 0) {
-        return `${header}\n(无新消息)`;
-    }
-
-    // 格式化增量消息（使用 formatMessageLine，不含 vision 富化）
-    const deltaText = deltaMessages
-        .map(m => formatMessageLine(m, { includeMediaTags: true }))
-        .join("\n");
-
+    if (newestMsg?.id) mainLoop.setLastStoredMsgId(chatId, newestMsg.id);
+    if (deltaMessages.length === 0) return `${header}\n(无新消息)`;
+    const deltaText = deltaMessages.map(m => formatMessageLine(m, { includeMediaTags: true })).join("\n");
     const deltaNote = deltaStartIdx > 0
         ? `(增量: ${deltaMessages.length} 条新消息，前 ${deltaStartIdx} 条已在历史中)`
         : `(${deltaMessages.length} 条消息)`;
-
     return `${header}\n${deltaNote}\n${deltaText}`;
 }
 
@@ -178,6 +153,7 @@ export function createAttendHandler(
         // 收集活跃参与者画像（含 aliases + mention），用于 Attend 决策上下文
         const chatAdapter = adapterList?.find(a => entry.chatId.startsWith(a.platform + ":"));
         const activePersons: Array<{ userId: string; displayName: string; recentMessageCount: number }> = [];
+        const activeUserProfiles = [] as NonNullable<ReturnType<typeof buildGroupContext>["activeUserProfiles"]>;
         if (recentMessages?.length) {
             const senderCounts = new Map<string, { name: string; count: number }>();
             for (const m of recentMessages) {
@@ -186,9 +162,11 @@ export function createAttendHandler(
                 const prev = senderCounts.get(uid) ?? { name: String((m as any).displayName ?? (m as any).display_name ?? uid), count: 0 };
                 senderCounts.set(uid, { name: prev.name, count: prev.count + 1 });
             }
+            const profiles = memory.getProfilesForChat(entry.chatId);
+            const profileLimit = depth === 0 ? 2 : Number.POSITIVE_INFINITY;
+            let profileIndex = 0;
             for (const [uid, { name, count }] of senderCounts) {
                 try {
-                    const profiles = memory.getProfilesForChat(entry.chatId);
                     const profile = profiles.find(p => p.userId === uid);
                     const identity = memory.getPersonIdentity(uid);
                     const rawId = getRawId(uid);
@@ -203,6 +181,22 @@ export function createAttendHandler(
                         ...(profile ? { dunbarTier: profile.dunbarTier, relationToAgent: profile.relationToAgent } : {}),
                         ...(identity?.aliases?.length ? { aliases: identity.aliases } : {}),
                     } as any);
+                    if (profileIndex < profileLimit) {
+                        activeUserProfiles.push({
+                            userId: rawId,
+                            username,
+                            mention,
+                            displayName: identity?.displayName ?? name,
+                            aliases: identity?.aliases ?? [],
+                            dunbarTier: profile?.dunbarTier,
+                            rapport: typeof profile?.affinityScore === "number" ? Math.round(profile.affinityScore) : undefined,
+                            traits: profile?.traits ?? [],
+                            communicationStyle: profile?.communicationStyle,
+                            relationToAgent: profile?.relationToAgent,
+                            messageCount: count,
+                        });
+                        profileIndex += 1;
+                    }
                 } catch { /* 非关键路径 */ }
             }
         }
@@ -216,6 +210,14 @@ export function createAttendHandler(
                     return identity?.displayName ?? id;
                 } catch { return id; }
             }),
+            associatedMemories: (() => {
+                if (depth === 0) return undefined;
+                const topic = memory.getTopicById(d.topicId);
+                if (!topic?.associatedMemories?.length) return undefined;
+                if (depth === 1 && (topic.callbackPotential ?? 0) <= 70) return undefined;
+                return topic.associatedMemories;
+            })(),
+            callbackPotential: memory.getTopicById(d.topicId)?.callbackPotential ?? 0,
         }));
 
         const contextPkg = buildGroupContext({
@@ -232,6 +234,7 @@ export function createAttendHandler(
             stickiness: subagent.stickiness,
             pendingCodeActTasks: (subagent.codeActExecutor as any)?.getQueueSize?.() ?? 0,
             activePersons,
+            activeUserProfiles,
         });
 
         // ═══ Phase 5: LLM 决策路径 (subagent.md §12.2 ➋➌➍) ═══
@@ -329,14 +332,12 @@ export function createAttendHandler(
                             .map(m => formatMessageLine(m, { includeMediaTags: true }))
                             .join("\n");
                     } else {
-                        // 使用 enrichMessages 进行 Vision 富化（下载并分析 sticker/photo/gif 等所有带附件消息）
+                        // 使用 enrichMessages 进行 Vision 富化
                         const visionConfig = currentConfig.vision;
                         const visionLlmConfig = currentConfig.llmRouting.vision
                             ? resolveComponentProfiles("vision", currentConfig)
                             : undefined;
-                        // 使用 vision tier LLM 进行媒体富化，而非 attend LLM
                         const enrichLlmConfig = visionLlmConfig?.[0] ?? attendProfiles[0];
-
                         const downloadFn = buildDownloadFn(entry.chatId);
 
                         const { formattedText, imageParts: parsedImageParts } = await enrichMessages(rawMessages, {
@@ -363,8 +364,7 @@ export function createAttendHandler(
                 ? `${Math.round((Date.now() - new Date(entry.lastAttendedAt).getTime()) / 60_000)}分钟`
                 : "从未关注";
 
-            // ➌ Attend 上下文注入（动态内容全部注入 user message，确保 system prompt 可缓存）
-            // 备注 #9: recentDecisions 和 activeTasks 保留完整 composite chatId，让主 Agent 能区分平台来源
+            // ➌ Attend 上下文注入
             const recentDecisions = globalState.getRecentDecisions().slice(-5)
                 .map(d => `- [${d.chatId}] ${d.decision}`).join("\n") || "（无）";
             const activeTasks = globalState.getTaskList()
@@ -372,59 +372,63 @@ export function createAttendHandler(
                 .map(t => `- [${t.priority}][${t.status}] ${t.description}${t.chatId ? ` (群:${t.chatId})` : ""}`)
                 .join("\n") || "（无待办任务）";
 
-            const promptVars = buildAttentionVariables(contextPkg, entry.newMessageCount, {
-                persona: `你是「${persona.name}」。${persona.description}`,
-                lastAttendedAt: entry.lastAttendedAt,
-                timeSinceLastAttend,
-                stickinessLevel: entry.stickinessLevel,
-                priorityMultiplier: subagent.stickiness.priorityMultiplier,
-                tonePreset: subagent.stickiness.level === "CORE" ? "随意友好" :
-                    subagent.stickiness.level === "FAMILIAR" ? "轻松" : "礼貌得体",
-                callbacks: subagent.lastCallbacks.length > 0
-                    ? subagent.lastCallbacks.slice(-3)
-                    : undefined,
-                messages: messagesText || undefined,
-                dispatchedTopicIds: [...subagent.getDispatchedTopicIds()],
-                // 从 system prompt 迁移过来的动态字段
+            // ═══ ContextEngine 声明式渲染 ═══
+            const attendEngine = mainLoop.getAttendEngine();
+            const resolveCtx: ResolveContext = {
+                chatId: entry.chatId,
+                chatTitle: contextPkg.chatTitle ?? groupModel?.chatTitle ?? entry.chatId,
+                chatType: deriveChatType(contextPkg.isDirectMessage),
                 attentionSummary: globalState.getAttentionSummary() || "（无）",
                 recentDecisions,
                 activeTasks,
-            });
+                stickinessLevel: entry.stickinessLevel,
+                snapshotTimestamp: contextPkg.snapshotTimestamp,
+                lastAttendedAt: entry.lastAttendedAt ?? "无记录",
+                timeSinceLastAttend,
+                depth,
+                priorityMultiplier: subagent.stickiness.priorityMultiplier,
+                recentFeedback: groupModel?.recentFeedback ?? undefined,
+                topicDigests: resolvedTopicDigests,
+                rawMessages: rawMessagesForHistory,
+                newMessageCount: entry.newMessageCount,
+                callbacks: subagent.lastCallbacks.length > 0
+                    ? subagent.lastCallbacks.slice(-3) : undefined,
+                groupModel: groupModel ?? undefined,
+                tonePreset: subagent.stickiness.level === "CORE" ? "随意友好" :
+                    subagent.stickiness.level === "FAMILIAR" ? "轻松" : "礼貌得体",
+                activeUserProfiles: activeUserProfiles.length > 0 ? activeUserProfiles : undefined,
+                schedulerTriggers: (entry.source === "SCHEDULER_TRIGGER" && entry.schedulerTriggers?.length)
+                    ? entry.schedulerTriggers.map(t => ({ type: t.type, description: t.description }))
+                    : undefined,
+                dispatchedTopicIds: (() => {
+                    const ids = [...subagent.getDispatchedTopicIds()];
+                    return ids.length > 0 ? ids : undefined;
+                })(),
+            };
 
+            const renderResult = attendEngine.render(resolveCtx);
 
+            // historical + ephemeral 拼入同一条 user message（Anthropic cache 友好）
+            const currentTurnContent = renderResult.ephemeralContent
+                ? `${renderResult.historicalContent}\n\n---\n\n${renderResult.ephemeralContent}`
+                : renderResult.historicalContent;
 
-            // ═══ Scheduler 触发上下文注入 ═══
-            if (entry.source === "SCHEDULER_TRIGGER" && entry.schedulerTriggers?.length) {
-                promptVars.hasSchedulerTriggers = true;
-                promptVars.schedulerTriggers = entry.schedulerTriggers
-                    .map(t => `- [${t.type}] ${t.description}`)
-                    .join("\n");
-            }
-
-            const attentionPrompt = renderPrompt("ATTENTION", promptVars);
-
-            // ➋ 主 Agent 系统 Prompt — 半静态，确保前缀缓存命中 (subagent.md §12.2 ➋)
+            // ═══ System Prompt ═══
             const mainSystemVars = buildMainSystemVariables(persona);
-
-            // ═══ 可指派模块名册注入（放入 system prompt，避免每次 attend 重复占用 token） ═══
             const baseSkills = new Set(currentConfig.subagent?.baseSkills ?? [
-                "runtime", "fs", "skills", "mcp", "cron", "todo", "vision", "shell",
+                "runtime", "fs", "skills", "mcp", "cron", "todo", "memory", "vision", "shell",
             ]);
-            // 平台 adapter 也是 base
             if (currentConfig.telegram) baseSkills.add("telegram");
             if (currentConfig.discord) baseSkills.add("discord");
-            // 注册表中所有 Skills 的 roster（已过滤 baseSkills，包含 TS Skills 和 AgentSkills）
             const { getModuleRegistryCache } = await import("../subagent/code-act-executor.js");
             const moduleRoster = generateModuleRoster(getModuleRegistryCache(), baseSkills);
             if (moduleRoster) {
                 mainSystemVars.hasAvailableSkills = true;
                 mainSystemVars.availableSkillsRoster = moduleRoster;
             }
-
             const mainSystemPrompt = renderPrompt("MAIN_SYSTEM", mainSystemVars);
 
-            // ➝ 构建 messages: [system, ...历史对话, 当前轮 attend prompt]
-            const currentTurnPrompt = `${attentionPrompt}`;
+            // ═══ 构建 LLM messages ═══
             const history = mainLoop.getConversationHistory() as ChatMessage[];
             const historyWithCache = history.map((msg, i) =>
                 i === history.length - 1
@@ -434,7 +438,7 @@ export function createAttendHandler(
             const messages: ChatMessage[] = [
                 { role: "system", content: mainSystemPrompt },
                 ...historyWithCache,
-                { role: "user", content: currentTurnPrompt, imageParts: imageParts.length > 0 ? imageParts : undefined },
+                { role: "user", content: currentTurnContent, imageParts: imageParts.length > 0 ? imageParts : undefined },
             ];
 
             const llmPromise = callLLMWithFallback(
@@ -443,6 +447,7 @@ export function createAttendHandler(
                 {
                     caller: "attend-handler",
                     prefill: `让${persona.name}看看，`,
+                    contextManifest: renderResult.manifest,
                 },
             );
 
@@ -496,6 +501,13 @@ export function createAttendHandler(
                     contentDirection: d.contentDirection,
                     toneGuidance: d.toneGuidance,
                     suggestedEmojis: Array.isArray(d.suggestedEmojis) ? d.suggestedEmojis : undefined,
+                    memoryHints: d.memoryHints && typeof d.memoryHints === "object"
+                        ? {
+                            keywords: Array.isArray(d.memoryHints.keywords) ? d.memoryHints.keywords.map(String) : undefined,
+                            userIds: Array.isArray(d.memoryHints.userIds) ? d.memoryHints.userIds.map(String) : undefined,
+                            timeRange: typeof d.memoryHints.timeRange === "string" ? d.memoryHints.timeRange : undefined,
+                        }
+                        : undefined,
                     confidence: d.confidence ?? 0.5,
                     reason: d.reason ?? "",
 
@@ -505,18 +517,22 @@ export function createAttendHandler(
                 groundingContext,
             };
 
-            // ═══ 追加本轮对话到历史（精简版：仅标题 + 增量消息） ═══
-            // 当前轮完整 prompt 发给 LLM 决策（上方），但存入历史的是精简版
-            // → 剥离瞬态段落 + 同群消息增量存储，大幅减少历史 token 量
-            const historicalContent = buildHistoricalAttendEntry(
-                entry.chatId,
-                contextPkg.chatTitle ?? groupModel?.chatTitle,
-                depth,
-                rawMessagesForHistory,
-                mainLoop,
-            );
-            await mainLoop.appendToHistory({ role: "user", content: historicalContent });
+            // ═══ 追加本轮对话到历史（通过 ContextEngine 的 history 策略自动分离） ═══
+            // historicalContent = persistent + delta-only 部分（ephemeral 已自动排除）
+            await mainLoop.appendToHistory({ role: "user", content: renderResult.historicalContent });
             await mainLoop.appendToHistory({ role: "assistant", content: jsonContent });
+
+            // 提交当前渲染树到 ledger（LLM 成功后才提交）
+            attendEngine.commit(renderResult.tree);
+
+            log.debug("ContextEngine manifest", {
+                chatId: entry.chatId,
+                sections: renderResult.manifest.sections.map(s => ({
+                    name: s.name, changed: s.changed, skipped: s.skipped,
+                    chars: s.renderedChars, delta: s.deltaStats,
+                })),
+                summary: renderResult.manifest.summary,
+            });
 
 
             globalState.recordDecision(entry.chatId,

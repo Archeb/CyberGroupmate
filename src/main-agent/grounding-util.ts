@@ -13,7 +13,7 @@
 
 import { GoogleGenAI } from "@google/genai";
 import type { GroundingConfig } from "../core/config.js";
-import { renderPrompt } from "./prompt-renderer.js";
+import { groundingProvider } from "../context-engine/providers/pipeline-providers.js";
 import { createLogger } from "../core/logger.js";
 import { llmEvents } from "../core/llm.js";
 import type { LLMCallEvent, LLMResponseEvent } from "../core/llm.js";
@@ -346,7 +346,7 @@ export async function runParallelGrounding(
     }
 
     // 2. 渲染 prompt
-    const promptText = renderPrompt("GROUNDING", { sanitizedText });
+    const promptText = groundingProvider.render({ sanitizedText });
 
     // 3. 根据 provider 分发
     try {

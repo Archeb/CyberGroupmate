@@ -13,7 +13,6 @@
   } from "../lib/stores.js";
   import { sendCommand } from "../lib/ws.js";
   import { api, apiBase } from "../lib/api.js";
-  import { escapeHtml } from "../lib/utils.js";
 
   function formatCost(cost) {
     if (cost === 0) return '';
@@ -35,6 +34,7 @@
   let expandedMsgs = {};
   let expandedResp = {};
   let autoExpand = false;
+  let messageViewMode = "structured";
   let currentVisibleIdx = -1;
   let totalMsgCount = 0;
   let detailPane;
@@ -84,6 +84,7 @@
   let prevSelectedId = null;
   $: if (selectedEntry && selectedEntry.callId !== prevSelectedId) {
     prevSelectedId = selectedEntry.callId;
+    messageViewMode = hasStructuredMessageView(selectedEntry) ? "structured" : "raw";
     scrollToLatest();
   }
 
@@ -200,6 +201,149 @@
     empty_response: "空响应",
     user_retry: "手动重试",
   };
+
+  const MANIFEST_CACHE_BADGES = {
+    static: "badge-info",
+    delta: "badge-warning",
+    snapshot: "badge-success",
+    volatile: "badge-secondary",
+  };
+
+  const MANIFEST_HISTORY_BADGES = {
+    persistent: "badge-primary",
+    "delta-only": "badge-warning",
+    ephemeral: "badge-accent",
+    omit: "badge-ghost",
+  };
+
+  function hasContextManifest(entry) {
+    return !!(entry?.contextManifest?.sections?.length);
+  }
+
+  function getManifestCacheBadge(cache) {
+    return MANIFEST_CACHE_BADGES[cache] || "badge-ghost";
+  }
+
+  function getManifestHistoryBadge(history) {
+    return MANIFEST_HISTORY_BADGES[history] || "badge-ghost";
+  }
+
+  function getManifestDiffState(section) {
+    if (section.skipped) {
+      return { label: "skipped", badge: "badge-ghost" };
+    }
+    if (section.cache === "delta" && section.deltaStats) {
+      const added = section.deltaStats.added ?? 0;
+      return added > 0
+        ? { label: `+${added} delta`, badge: "badge-warning" }
+        : { label: "delta 0", badge: "badge-success" };
+    }
+    return section.changed
+      ? { label: "changed", badge: "badge-primary" }
+      : { label: "unchanged", badge: "badge-ghost" };
+  }
+
+  function formatManifestPreview(text, max = 120) {
+    if (!text) return "无预览";
+    return text.length > max ? text.slice(0, max) + "..." : text;
+  }
+
+  function formatDeltaStats(deltaStats) {
+    if (!deltaStats) return "";
+    return `+${deltaStats.added}/${deltaStats.total} · =${deltaStats.unchanged}`;
+  }
+
+  function getManifestCardClass(section) {
+    const classes = [`cache-${section.cache}`];
+    if (section.skipped) classes.push("is-skipped");
+    else if (section.changed) classes.push("is-changed");
+    else classes.push("is-stable");
+    if (section.history === "ephemeral") classes.push("history-ephemeral");
+    return classes.join(" ");
+  }
+
+  function getRenderableManifestSections(entry) {
+    const sections = (entry?.contextManifest?.sections || []).filter(
+      (section) => typeof section.sentContent === "string" && section.sentContent.length > 0,
+    );
+
+    const hasExplicitSentOrder = sections.some(
+      (section) => typeof section.sentOrder === "number" && section.sentOrder >= 0,
+    );
+
+    if (hasExplicitSentOrder) {
+      return [...sections].sort((left, right) => {
+        const leftOrder = typeof left.sentOrder === "number" ? left.sentOrder : Number.MAX_SAFE_INTEGER;
+        const rightOrder = typeof right.sentOrder === "number" ? right.sentOrder : Number.MAX_SAFE_INTEGER;
+        return leftOrder - rightOrder;
+      });
+    }
+
+    const historicalSections = [];
+    const ephemeralSections = [];
+
+    for (const section of sections) {
+      if (section.history === "ephemeral") {
+        ephemeralSections.push(section);
+      } else {
+        historicalSections.push(section);
+      }
+    }
+
+    return [...historicalSections, ...ephemeralSections];
+  }
+
+  function hasStructuredMessageView(entry) {
+    return getRenderableManifestSections(entry).length > 0;
+  }
+
+  function pushStructuredGap(parts, gapText) {
+    if (!gapText || !gapText.trim()) return;
+    const trimmed = gapText.trim();
+    if (trimmed === "---") {
+      parts.push({ kind: "separator", text: trimmed });
+      return;
+    }
+    parts.push({ kind: "raw", text: trimmed });
+  }
+
+  function getStructuredMessageParts(entry, messageSummary) {
+    const sections = getRenderableManifestSections(entry);
+    if (!sections.length || messageSummary?.role !== "user") return null;
+
+    const messageText = messageSummary.contentPreview || "";
+    if (!messageText) return null;
+
+    const parts = [];
+    let cursor = 0;
+    let matchedLength = 0;
+
+    for (const section of sections) {
+      const sentContent = section.sentContent;
+      const matchIndex = messageText.indexOf(sentContent, cursor);
+      if (matchIndex === -1) continue;
+
+      pushStructuredGap(parts, messageText.slice(cursor, matchIndex));
+      parts.push({ kind: "section", section, text: sentContent });
+      matchedLength += sentContent.length;
+      cursor = matchIndex + sentContent.length;
+    }
+
+    pushStructuredGap(parts, messageText.slice(cursor));
+
+    if (matchedLength === 0) return null;
+
+    const requiredMatchLength = messageText.length < 160
+      ? messageText.length * 0.6
+      : messageText.length * 0.45;
+
+    return matchedLength >= requiredMatchLength ? parts : null;
+  }
+
+  function formatStructuredSectionText(text, expanded, max = 140) {
+    if (!text) return "";
+    return expanded || text.length <= max ? text : text.slice(0, max) + "...";
+  }
 </script>
 
 <div class="llm-log-layout">
@@ -310,6 +454,11 @@
                   ? ` (${r.usage.totalTokens}tok)`
                   : ""}{@const cost = calculateCallCost(r.usage, entry.model)}{cost > 0 ? ` ${formatCost(cost)}` : ""}{:else}...{/if}
             </span>
+            {#if hasContextManifest(entry)}
+              <span class="llm-row-manifest" title="{entry.contextManifest.engineId} · {entry.contextManifest.sections.length} sections">
+                <i class="fa-solid fa-layer-group fa-xs"></i>{entry.contextManifest.sections.length}
+              </span>
+            {/if}
             {#if entry.retries?.length > 0}
               <span class="llm-row-retry-badge" title="重试 {entry.retries.length} 次"><i class="fa-solid fa-rotate fa-xs"></i>{entry.retries.length}</span>
             {/if}
@@ -396,6 +545,23 @@
             >
               {#if autoExpand}<i class="fa-solid fa-chevron-down"></i> 收起全部{:else}<i class="fa-solid fa-chevron-up"></i> 展开全部{/if}
             </button>
+            {#if hasStructuredMessageView(selectedEntry)}
+              <span class="llm-nav-divider"></span>
+              <div class="llm-view-toggle">
+                <button
+                  class="btn btn-xs btn-ghost"
+                  class:btn-active={messageViewMode === "structured"}
+                  onclick={() => messageViewMode = "structured"}
+                  title="按 section 查看当前 prompt"
+                >结构化</button>
+                <button
+                  class="btn btn-xs btn-ghost"
+                  class:btn-active={messageViewMode === "raw"}
+                  onclick={() => messageViewMode = "raw"}
+                  title="查看原始 message 列表"
+                >Raw</button>
+              </div>
+            {/if}
             <span class="llm-nav-divider"></span>
             <button class="btn btn-xs btn-ghost" onclick={() => navigateMsg(-1)} title="上一个 message"><i class="fa-solid fa-caret-up"></i></button>
             <span class="llm-nav-pos">
@@ -430,9 +596,59 @@
               : content.length > 200
                 ? content.slice(0, 200) + "..."
                 : content}
+            {@const structuredParts = messageViewMode === "structured"
+              ? getStructuredMessageParts(selectedEntry, m)
+              : null}
             <div class="llm-detail-msg" bind:this={msgElements[mi]} data-msg-idx={mi}>
               <div class="llm-detail-msg-role {roleClass}">{m.role}</div>
-              <div class="llm-detail-msg-content">{displayContent}</div>
+              {#if structuredParts?.length}
+                <div class="llm-structured-sections">
+                  {#each structuredParts as part}
+                    {#if part.kind === "separator"}
+                      <div class="llm-inline-separator">ephemeral split</div>
+                    {:else if part.kind === "raw"}
+                      <div class="llm-inline-raw-gap">{formatStructuredSectionText(part.text, isExpanded, 90)}</div>
+                    {:else}
+                      {@const section = part.section}
+                      {@const diffState = getManifestDiffState(section)}
+                      {@const deltaLabel = formatDeltaStats(section.deltaStats)}
+                      <div class="llm-inline-section {getManifestCardClass(section)}">
+                        <div class="llm-inline-section-head">
+                          <div class="llm-inline-section-meta">
+                            <div class="llm-inline-section-label">{section.label}</div>
+                            <div class="llm-inline-section-source">{section.source}</div>
+                          </div>
+                          <div class="llm-inline-section-badges">
+                            <span class="badge badge-xs {getManifestCacheBadge(section.cache)}">{section.cache}</span>
+                            <span class="badge badge-xs {getManifestHistoryBadge(section.history)}">{section.history}</span>
+                            <span class="badge badge-xs {diffState.badge}">{diffState.label}</span>
+                            {#if deltaLabel}
+                              <span class="badge badge-xs badge-outline">{deltaLabel}</span>
+                            {/if}
+                          </div>
+                        </div>
+                        <div class="llm-inline-section-body">{formatStructuredSectionText(part.text, isExpanded)}</div>
+                        <div class="llm-manifest-hover">
+                          <div class="llm-manifest-hover-title">{section.label}</div>
+                          <div class="llm-manifest-hover-row"><span>source</span><strong>{section.source}</strong></div>
+                          <div class="llm-manifest-hover-row"><span>name</span><strong>{section.name}</strong></div>
+                          <div class="llm-manifest-hover-row"><span>cache</span><strong>{section.cache}</strong></div>
+                          <div class="llm-manifest-hover-row"><span>history</span><strong>{section.history}</strong></div>
+                          <div class="llm-manifest-hover-row"><span>state</span><strong>{diffState.label}</strong></div>
+                          <div class="llm-manifest-hover-row"><span>chars</span><strong>{section.renderedChars}</strong></div>
+                          <div class="llm-manifest-hover-row"><span>tokens</span><strong>{section.estimatedTokens}</strong></div>
+                          {#if section.deltaStats}
+                            <div class="llm-manifest-hover-row"><span>delta</span><strong>{formatDeltaStats(section.deltaStats)}</strong></div>
+                          {/if}
+                          <div class="llm-manifest-hover-preview">{part.text}</div>
+                        </div>
+                      </div>
+                    {/if}
+                  {/each}
+                </div>
+              {:else}
+                <div class="llm-detail-msg-content">{displayContent}</div>
+              {/if}
               {#if content.length > 200}
                 <button
                   class="llm-msg-toggle"
@@ -688,6 +904,15 @@
     flex-shrink: 0;
   }
 
+  .llm-row-manifest {
+    opacity: 0.55;
+    flex-shrink: 0;
+    font-size: 0.65rem;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.2rem;
+  }
+
   .llm-detail-header {
     display: flex;
     flex-direction: column;
@@ -718,6 +943,12 @@
     font-size: 0.7rem;
   }
 
+  .llm-view-toggle {
+    display: inline-flex;
+    gap: 0.25rem;
+    align-items: center;
+  }
+
   .llm-nav-divider {
     width: 1px;
     height: 1em;
@@ -744,6 +975,327 @@
     opacity: 0.6;
     text-transform: uppercase;
     letter-spacing: 0.05em;
+  }
+
+  .llm-structured-sections {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+  }
+
+  .llm-inline-section,
+  .llm-manifest-card {
+    position: relative;
+    padding: 0.6rem 0.7rem;
+    border-radius: 0.45rem;
+    border: 1px solid color-mix(in srgb, var(--color-base-content) 10%, transparent);
+    transition: transform 0.14s ease, border-color 0.14s ease, box-shadow 0.14s ease;
+  }
+
+  .llm-inline-section:hover,
+  .llm-manifest-card:hover {
+    transform: translateY(-1px);
+    border-color: color-mix(in srgb, var(--color-base-content) 18%, transparent);
+    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.12);
+  }
+
+  .llm-inline-section.cache-static,
+  .llm-manifest-card.cache-static {
+    background: color-mix(in srgb, var(--color-info) 12%, var(--color-base-100));
+  }
+
+  .llm-inline-section.cache-delta,
+  .llm-manifest-card.cache-delta {
+    background: color-mix(in srgb, var(--color-warning) 12%, var(--color-base-100));
+  }
+
+  .llm-inline-section.cache-snapshot,
+  .llm-manifest-card.cache-snapshot {
+    background: color-mix(in srgb, var(--color-success) 11%, var(--color-base-100));
+  }
+
+  .llm-inline-section.cache-volatile,
+  .llm-manifest-card.cache-volatile {
+    background: color-mix(in srgb, var(--color-secondary) 11%, var(--color-base-100));
+  }
+
+  .llm-inline-section.is-changed,
+  .llm-manifest-card.is-changed {
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-primary) 20%, transparent);
+  }
+
+  .llm-inline-section.is-stable,
+  .llm-manifest-card.is-stable {
+    opacity: 0.82;
+  }
+
+  .llm-inline-section.is-skipped,
+  .llm-manifest-card.is-skipped {
+    opacity: 0.5;
+    filter: saturate(0.7);
+  }
+
+  .llm-inline-section.history-ephemeral,
+  .llm-manifest-card.history-ephemeral {
+    border-style: dashed;
+  }
+
+  .llm-inline-section-head {
+    display: flex;
+    justify-content: space-between;
+    gap: 0.5rem;
+    align-items: flex-start;
+    margin-bottom: 0.35rem;
+  }
+
+  .llm-inline-section-meta {
+    min-width: 0;
+  }
+
+  .llm-inline-section-label {
+    font-size: 0.75rem;
+    font-weight: 700;
+    line-height: 1.2;
+  }
+
+  .llm-inline-section-source {
+    margin-top: 0.14rem;
+    font-size: 0.62rem;
+    opacity: 0.58;
+    font-family: ui-monospace, monospace;
+    word-break: break-all;
+  }
+
+  .llm-inline-section-badges {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 0.22rem;
+  }
+
+  .llm-inline-section-body {
+    white-space: pre-wrap;
+    word-break: break-word;
+    opacity: 0.86;
+    font-size: 0.76rem;
+    line-height: 1.45;
+  }
+
+  .llm-inline-separator {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.62rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    opacity: 0.45;
+    padding: 0.15rem 0;
+  }
+
+  .llm-inline-separator::before,
+  .llm-inline-separator::after {
+    content: "";
+    flex: 1;
+    height: 1px;
+    background: color-mix(in srgb, var(--color-base-content) 12%, transparent);
+  }
+
+  .llm-inline-separator::before {
+    margin-right: 0.5rem;
+  }
+
+  .llm-inline-separator::after {
+    margin-left: 0.5rem;
+  }
+
+  .llm-inline-raw-gap {
+    font-size: 0.7rem;
+    line-height: 1.4;
+    opacity: 0.6;
+    padding: 0.35rem 0.45rem;
+    border-radius: 0.35rem;
+    background: color-mix(in srgb, var(--color-base-content) 5%, transparent);
+    border: 1px dashed color-mix(in srgb, var(--color-base-content) 10%, transparent);
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  .llm-manifest-summary {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.45rem;
+    align-items: center;
+    margin-bottom: 0.65rem;
+    font-size: 0.72rem;
+    opacity: 0.72;
+  }
+
+  .llm-manifest-summary-chat {
+    font-family: ui-monospace, monospace;
+    opacity: 0.65;
+  }
+
+  .llm-manifest-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 0.5rem;
+  }
+
+  .llm-manifest-card {
+    position: relative;
+    padding: 0.65rem 0.7rem;
+    border-radius: 0.5rem;
+    border: 1px solid color-mix(in srgb, var(--color-base-content) 9%, transparent);
+    overflow: visible;
+    transition: transform 0.14s ease, border-color 0.14s ease, box-shadow 0.14s ease;
+  }
+
+  .llm-manifest-card:hover {
+    transform: translateY(-1px);
+    border-color: color-mix(in srgb, var(--color-base-content) 18%, transparent);
+    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.12);
+  }
+
+  .llm-manifest-card.cache-static {
+    background: color-mix(in srgb, var(--color-info) 12%, var(--color-base-100));
+  }
+
+  .llm-manifest-card.cache-delta {
+    background: color-mix(in srgb, var(--color-warning) 12%, var(--color-base-100));
+  }
+
+  .llm-manifest-card.cache-snapshot {
+    background: color-mix(in srgb, var(--color-success) 11%, var(--color-base-100));
+  }
+
+  .llm-manifest-card.cache-volatile {
+    background: color-mix(in srgb, var(--color-secondary) 11%, var(--color-base-100));
+  }
+
+  .llm-manifest-card.is-changed {
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-primary) 20%, transparent);
+  }
+
+  .llm-manifest-card.is-stable {
+    opacity: 0.82;
+  }
+
+  .llm-manifest-card.is-skipped {
+    opacity: 0.5;
+    filter: saturate(0.7);
+  }
+
+  .llm-manifest-card.history-ephemeral {
+    border-style: dashed;
+  }
+
+  .llm-manifest-card-top {
+    display: flex;
+    justify-content: space-between;
+    gap: 0.5rem;
+    align-items: flex-start;
+    margin-bottom: 0.3rem;
+  }
+
+  .llm-manifest-heading {
+    min-width: 0;
+  }
+
+  .llm-manifest-label {
+    font-size: 0.78rem;
+    font-weight: 700;
+    line-height: 1.2;
+  }
+
+  .llm-manifest-name {
+    font-size: 0.64rem;
+    opacity: 0.55;
+    font-family: ui-monospace, monospace;
+  }
+
+  .llm-manifest-source {
+    font-size: 0.66rem;
+    opacity: 0.62;
+    font-family: ui-monospace, monospace;
+    margin-bottom: 0.35rem;
+    word-break: break-all;
+  }
+
+  .llm-manifest-badges {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem;
+    margin-bottom: 0.45rem;
+  }
+
+  .llm-manifest-preview {
+    font-size: 0.7rem;
+    line-height: 1.4;
+    opacity: 0.75;
+    display: -webkit-box;
+    line-clamp: 3;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    word-break: break-word;
+  }
+
+  .llm-manifest-hover {
+    display: none;
+    position: absolute;
+    left: 0;
+    top: calc(100% + 0.45rem);
+    width: min(360px, 82vw);
+    padding: 0.7rem 0.8rem;
+    border-radius: 0.55rem;
+    border: 1px solid color-mix(in srgb, var(--color-base-content) 16%, transparent);
+    background: color-mix(in srgb, var(--color-base-300) 90%, black 10%);
+    box-shadow: 0 14px 30px rgba(0, 0, 0, 0.22);
+    z-index: 30;
+    pointer-events: none;
+  }
+
+  .llm-manifest-card:hover .llm-manifest-hover {
+    display: block;
+  }
+
+  .llm-manifest-hover-title {
+    font-size: 0.78rem;
+    font-weight: 700;
+    margin-bottom: 0.45rem;
+  }
+
+  .llm-manifest-hover-row {
+    display: flex;
+    gap: 0.5rem;
+    justify-content: space-between;
+    font-size: 0.68rem;
+    margin-bottom: 0.18rem;
+  }
+
+  .llm-manifest-hover-row span {
+    opacity: 0.58;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+  }
+
+  .llm-manifest-hover-row strong {
+    font-weight: 600;
+    text-align: right;
+    word-break: break-word;
+  }
+
+  .llm-manifest-hover-preview {
+    margin-top: 0.5rem;
+    padding-top: 0.45rem;
+    border-top: 1px solid color-mix(in srgb, var(--color-base-content) 10%, transparent);
+    font-size: 0.7rem;
+    line-height: 1.45;
+    white-space: pre-wrap;
+    word-break: break-word;
+    opacity: 0.82;
+    max-height: 180px;
+    overflow: auto;
   }
 
   .llm-detail-msg {
@@ -957,10 +1509,13 @@
     .llm-log-row { gap: 0.2rem; padding: 0.3rem 0.5rem; font-size: 0.65rem; }
     .llm-row-model { max-width: 80px; }
     .llm-row-duration { font-size: 0.6rem; }
+    .llm-row-manifest { font-size: 0.58rem; }
     .llm-detail-header-top { font-size: 0.65rem; }
     .llm-detail-nav-bar { flex-wrap: wrap; }
     .llm-detail-msg-content { font-size: 0.7rem; }
     .llm-detail-response-body { font-size: 0.7rem; padding: 0.4rem 0.5rem; }
     .llm-export-input { width: 130px; }
+    .llm-manifest-grid { grid-template-columns: 1fr; }
+    .llm-manifest-hover { width: min(300px, 75vw); }
   }
 </style>
