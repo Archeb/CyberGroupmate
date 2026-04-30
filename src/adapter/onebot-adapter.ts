@@ -25,6 +25,8 @@ type OneBotMessageSegment = {
     data?: Record<string, unknown>;
 };
 
+type OneBotOutgoingMessage = string | OneBotMessageSegment[];
+
 type OneBotIncomingEvent = {
     post_type?: string;
     message_type?: "private" | "group";
@@ -446,17 +448,18 @@ export class OneBotAdapter implements PlatformAdapter {
     private async sendMedia(chatId: string, media: Record<string, unknown>, opts: Record<string, unknown>): Promise<unknown> {
         const parsed = parseChatId(chatId);
         const segments = await this.buildOutgoingSegments(media, opts);
+        const message = this.renderOutgoingMediaMessage(parsed.groupId != null, segments);
         if (parsed.groupId != null) {
             return this.callAction("send_group_msg", {
                 group_id: Number(parsed.groupId),
-                message: segments,
+                message,
             });
         }
         if (parsed.rawId.startsWith("private:")) {
             const userId = parsed.rawId.slice("private:".length);
             return this.callAction("send_private_msg", {
                 user_id: Number(userId),
-                message: segments,
+                message,
             });
         }
         throw new Error(`Unsupported onebot chatId: ${chatId}`);
@@ -747,6 +750,34 @@ export class OneBotAdapter implements PlatformAdapter {
             segments.push({ type: "text", data: { text: caption } });
         }
         return segments;
+    }
+
+    private renderOutgoingMediaMessage(isGroupChat: boolean, segments: OneBotMessageSegment[]): OneBotOutgoingMessage {
+        if (isGroupChat && segments.some(seg => seg.type === "record")) {
+            return this.stringifyCqSegments(segments);
+        }
+        return segments;
+    }
+
+    private stringifyCqSegments(segments: OneBotMessageSegment[]): string {
+        return segments.map((seg) => {
+            if (seg.type === "text") {
+                return String(seg.data?.text ?? "");
+            }
+            const attrs = Object.entries(seg.data ?? {})
+                .filter(([, value]) => value != null && value !== "")
+                .map(([key, value]) => `${key}=${this.escapeCqValue(String(value))}`)
+                .join(",");
+            return attrs ? `[CQ:${seg.type},${attrs}]` : `[CQ:${seg.type}]`;
+        }).join("");
+    }
+
+    private escapeCqValue(value: string): string {
+        return value
+            .replaceAll("&", "&amp;")
+            .replaceAll("[", "&#91;")
+            .replaceAll("]", "&#93;")
+            .replaceAll(",", "&#44;");
     }
 
     private applyReplyTo(text: string, replyTo: unknown): string | OneBotMessageSegment[] {
