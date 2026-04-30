@@ -30,7 +30,8 @@ declare const onebot: {
     sendText(chatId: string | number, text: string, opts?: { replyTo?: string | number }): Promise<OneBotMessageAck | null>;
 
     /**
-     * 发送媒体消息。支持本地文件路径或 URL。
+        * 发送媒体消息。支持本地文件路径或 URL。
+        * 当 `type` 为 `audio` / `voice` 时，QQ/NapCat 不支持 `replyTo`，该参数会被忽略。
      * @example
      * await onebot.sendMedia(chatId, { type: "image", file: "Downloads/a.png", caption: "图" });
      */

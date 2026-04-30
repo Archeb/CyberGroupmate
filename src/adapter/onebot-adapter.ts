@@ -25,8 +25,6 @@ type OneBotMessageSegment = {
     data?: Record<string, unknown>;
 };
 
-type OneBotOutgoingMessage = string | OneBotMessageSegment[];
-
 type OneBotIncomingEvent = {
     post_type?: string;
     message_type?: "private" | "group";
@@ -447,19 +445,19 @@ export class OneBotAdapter implements PlatformAdapter {
 
     private async sendMedia(chatId: string, media: Record<string, unknown>, opts: Record<string, unknown>): Promise<unknown> {
         const parsed = parseChatId(chatId);
-        const segments = await this.buildOutgoingSegments(media, opts);
-        const message = this.renderOutgoingMediaMessage(parsed.groupId != null, segments);
+        const sanitizedOpts = this.sanitizeOutgoingMediaOptions(chatId, media, opts);
+        const segments = await this.buildOutgoingSegments(media, sanitizedOpts);
         if (parsed.groupId != null) {
             return this.callAction("send_group_msg", {
                 group_id: Number(parsed.groupId),
-                message,
+                message: segments,
             });
         }
         if (parsed.rawId.startsWith("private:")) {
             const userId = parsed.rawId.slice("private:".length);
             return this.callAction("send_private_msg", {
                 user_id: Number(userId),
-                message,
+                message: segments,
             });
         }
         throw new Error(`Unsupported onebot chatId: ${chatId}`);
@@ -752,32 +750,20 @@ export class OneBotAdapter implements PlatformAdapter {
         return segments;
     }
 
-    private renderOutgoingMediaMessage(isGroupChat: boolean, segments: OneBotMessageSegment[]): OneBotOutgoingMessage {
-        if (isGroupChat && segments.some(seg => seg.type === "record")) {
-            return this.stringifyCqSegments(segments);
+    private sanitizeOutgoingMediaOptions(chatId: string, media: Record<string, unknown>, opts: Record<string, unknown>): Record<string, unknown> {
+        const mediaType = String(media.type ?? "");
+        if ((mediaType !== "audio" && mediaType !== "voice") || opts.replyTo == null) {
+            return opts;
         }
-        return segments;
-    }
 
-    private stringifyCqSegments(segments: OneBotMessageSegment[]): string {
-        return segments.map((seg) => {
-            if (seg.type === "text") {
-                return String(seg.data?.text ?? "");
-            }
-            const attrs = Object.entries(seg.data ?? {})
-                .filter(([, value]) => value != null && value !== "")
-                .map(([key, value]) => `${key}=${this.escapeCqValue(String(value))}`)
-                .join(",");
-            return attrs ? `[CQ:${seg.type},${attrs}]` : `[CQ:${seg.type}]`;
-        }).join("");
-    }
+        log.warn("OneBot 语音暂不支持 replyTo，已忽略该参数", {
+            chatId,
+            replyTo: String(opts.replyTo),
+        });
 
-    private escapeCqValue(value: string): string {
-        return value
-            .replaceAll("&", "&amp;")
-            .replaceAll("[", "&#91;")
-            .replaceAll("]", "&#93;")
-            .replaceAll(",", "&#44;");
+        const nextOpts = { ...opts };
+        delete nextOpts.replyTo;
+        return nextOpts;
     }
 
     private applyReplyTo(text: string, replyTo: unknown): string | OneBotMessageSegment[] {
