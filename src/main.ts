@@ -44,6 +44,12 @@ import type { PlatformAdapter } from "./adapter/platform-adapter.js";
 import { SubagentManager } from "./subagent/subagent-manager.js";
 import { DynamicAttentionQueue } from "./subagent/attention-queue.js";
 import { CallbackQueue } from "./subagent/callback-queue.js";
+import { AttentionAccumulator } from "./accumulator/attention-accumulator.js";
+import {
+    createDirectAddressItem,
+    createSchedulerItem,
+    queueEntryToTopicSignalItem,
+} from "./accumulator/queue-entry-adapter.js";
 import { MainAgentLoop } from "./main-agent/main-agent-loop.js";
 import { GlobalState } from "./main-agent/global-state.js";
 import { createAttendHandler } from "./main-agent/attend-handler.js";
@@ -52,6 +58,7 @@ import { evaluateStickiness, createStickiness, updateStickiness } from "./subage
 import { matchesCron } from "./core/cron-matcher.js";
 import { autoReconnect as autoReconnectMcp, initMcpBridge, mcpBridge } from "./sandbox/modules/mcp-bridge/index.js";
 import { refreshModuleRegistryCache } from "./subagent/code-act-executor.js";
+import type { AttentionItem, AttentionLayer } from "./accumulator/types.js";
 
 const log = createLogger("main");
 
@@ -442,9 +449,29 @@ async function main(): Promise<void> {
         filePath: join(DATA_DIR, "global-state.json"),
         autoSaveInterval: 30000,
     });
+    const accumulator = new AttentionAccumulator(globalState, {
+        windowMs: appConfig.subagent?.pollInterval ?? 5000,
+    });
+    accumulator.restoreSignalPool();
+
+    const mirrorAccumulatorIngress = (
+        layer: AttentionLayer,
+        item: Omit<AttentionItem, "layer">,
+    ): void => {
+        if (q3.isBlocked(item.chatId)) {
+            log.debug("Accumulator 镜像跳过 blocked chat", {
+                chatId: item.chatId,
+                layer,
+                source: item.source,
+            });
+            return;
+        }
+        accumulator.ingest(layer, item);
+    };
 
     log.info("Subagent 组件初始化完成", {
         attentionQueueMaxSize: appConfig.subagent?.attentionQueue?.maxSize ?? 100,
+        restoredSignalPoolSize: accumulator.getSignalPoolSize(),
     });
 
     // FeedbackLoop 创建（需要在 subagentManager 之后，以支持 per-group registryLookup）
@@ -459,8 +486,14 @@ async function main(): Promise<void> {
             if (!sub) return;
             // 重置 lastAgentReplyAt 使 triage 允许介入（绕过防重复守卫）
             sub.updateLastAgentReplyAt(0);
-            q3.enqueueOrUpdate(sub.buildQueueEntry());
+            const entry = sub.buildQueueEntry();
+            q3.enqueueOrUpdate(entry);
             q3.boost(chatId, 15);
+            mirrorAccumulatorIngress(0, createDirectAddressItem(chatId, {
+                reason: "feedback-loop",
+                triggerText,
+                queueEntry: entry,
+            }));
             log.info("追问检测 → Q3 入队", { chatId, triggerText: triggerText.slice(0, 50) });
         },
     );
@@ -582,6 +615,7 @@ async function main(): Promise<void> {
             sub.on("triage-engage", (cid: string) => {
                 const isBlocked = q3.isBlocked(cid);
                 const entry = sub.buildQueueEntry();
+                mirrorAccumulatorIngress(2, queueEntryToTopicSignalItem(entry));
                 log.info("triage-engage → Q3 入队", {
                     chatId: cid,
                     isBlocked,
@@ -614,7 +648,16 @@ async function main(): Promise<void> {
         const hasNameMention = mentionKeywords.length > 0 && mentionKeywords.some(kw => messageText.includes(kw));
 
         if (isDM || isMention || hasNameMention) {
-            q3.enqueueOrUpdate(sub.buildQueueEntry("DIRECT_ADDRESS"));
+            const entry = sub.buildQueueEntry("DIRECT_ADDRESS");
+            q3.enqueueOrUpdate(entry);
+            mirrorAccumulatorIngress(0, createDirectAddressItem(chatId, {
+                reason: isDM ? "DM" : isMention ? "@mention" : "name-mention",
+                queueEntry: entry,
+                event: {
+                    messageId: event.messageId ?? event.id,
+                    userId: event.userId ?? event.senderId,
+                },
+            }));
             log.info("即时 → Q3 入队", {
                 chatId,
                 reason: isDM ? "DM" : isMention ? "@mention" : "文本提及",
@@ -1012,6 +1055,12 @@ async function main(): Promise<void> {
             }];
             q3.enqueueOrUpdate(entry);
             q3.boost(reminder.chatId, 80);
+            mirrorAccumulatorIngress(1, createSchedulerItem(reminder.chatId, {
+                type: "reminder",
+                id: reminder.id,
+                description: reminder.description,
+                queueEntry: entry,
+            }));
             log.info("Reminder 到期 → Q3", { id: reminder.id, desc: reminder.description.slice(0, 80), chatId: reminder.chatId });
         }
 
@@ -1057,6 +1106,12 @@ async function main(): Promise<void> {
             }];
             q3.enqueueOrUpdate(entry);
             q3.boost(evt.chatId, 80);
+            mirrorAccumulatorIngress(1, createSchedulerItem(evt.chatId, {
+                type: "cron",
+                id: evt.id,
+                description: taskDesc,
+                queueEntry: entry,
+            }));
             log.info("Cron 触发 → Q3", { id: evt.id, name: evt.description, chatId: evt.chatId });
         }
     }, 30_000);
@@ -1162,6 +1217,7 @@ async function main(): Promise<void> {
         _metricsStopFn?.();
 
         // 保存全局状态并释放其自动保存计时器
+        accumulator.dispose();
         globalState.dispose();
 
         // 释放其余资源
