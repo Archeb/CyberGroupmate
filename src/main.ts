@@ -51,12 +51,13 @@ import {
 } from "./accumulator/queue-entry-adapter.js";
 import { MainAgentLoop } from "./main-agent/main-agent-loop.js";
 import { GlobalState } from "./main-agent/global-state.js";
-import { createAttendHandler } from "./main-agent/attend-handler.js";
-import { createDispatchHandler } from "./main-agent/dispatch-handler.js";
+import { createMetaSessionHandler } from "./main-agent/meta-session-handler.js";
 import { evaluateStickiness, createStickiness, updateStickiness } from "./subagent/stickiness.js";
 import { matchesCron } from "./core/cron-matcher.js";
 import { autoReconnect as autoReconnectMcp, initMcpBridge, mcpBridge } from "./sandbox/modules/mcp-bridge/index.js";
-import { refreshModuleRegistryCache } from "./subagent/code-act-executor.js";
+import { CodeActExecutor, refreshModuleRegistryCache } from "./subagent/code-act-executor.js";
+import { MetaSandbox } from "./meta-sandbox/meta-sandbox.js";
+import { buildMetaApiContext } from "./meta-sandbox/meta-api/index.js";
 
 const log = createLogger("main");
 
@@ -820,42 +821,93 @@ async function main(): Promise<void> {
 
 
 
-    // Attend handler: 主 Agent LLM 决策逻辑（subagent.md §12.2 ➛➜➝）
-    mainLoop.setAttendHandler(createAttendHandler({
-        memory,
-        globalState,
-        subagentManager,
-        mainLoop,
+    const sendTyping = async (chatId: string) => {
+        const adapter = getAdapterForChat(chatId);
+        if (!adapter) {
+            return;
+        }
+        const typingMethod = `${adapter.platform}.sendTyping`;
+        await adapter.handleCall(typingMethod, [chatId]);
+    };
 
-        persona: appConfig.persona,
-        adapters,
-        mediaDownloader: sharedMediaDownloader,
-        imageCatalog,
-
-    }));
-
-    // Dispatch handler: 分派任务到 CodeActExecutor / Deferred Re-entry
-    mainLoop.setDispatchHandler(createDispatchHandler({
-        memory,
-        globalState,
-        subagentManager,
-        sandboxPool,
-        nc,
-        accumulator,
-        q5,
-
-        persona: appConfig.persona,
-        appConfig,
-        adapters,
-        sendTyping: async (chatId: string) => {
-            const adapter = getAdapterForChat(chatId);
-            if (adapter) {
-                const typingMethod = `${adapter.platform}.sendTyping`;
-                await adapter.handleCall(typingMethod, [chatId]);
+    const buildDownloadFn = (chatId: string) => {
+        const adapter = adapters.find((item) => chatId.startsWith(item.platform + ":"));
+        if (!adapter) {
+            return undefined;
+        }
+        return async (fileId: string): Promise<Buffer> => {
+            const result = await adapter.handleCall(`${adapter.platform}.downloadMedia`, [fileId]);
+            if (Buffer.isBuffer(result)) {
+                return result;
             }
+            if (result && typeof result === "object" && "buffer" in result) {
+                return Buffer.from((result as { buffer: string }).buffer, "base64");
+            }
+            throw new Error(`downloadMedia: unexpected result type: ${typeof result}`);
+        };
+    };
+
+    const metaApiContext = buildMetaApiContext({
+        memory,
+        subagentManager,
+        globalState,
+        accumulator,
+        groundingConfig: appConfig.grounding,
+        onTaskDispatched: (task) => {
+            metricsInstance?.groupCollector.onAttend(task.chatId, "REPLY");
         },
-        mediaDownloader: sharedMediaDownloader,
-        imageCatalog,
+        initializeExecutor: (executor, chatId) => {
+            const realExecutor = executor as CodeActExecutor;
+            const currentConfig = loadConfig();
+            const persona = currentConfig.persona;
+            const visionConfig = currentConfig.vision;
+            const visionLlmConfig = currentConfig.llmRouting.vision
+                ? resolveComponentProfiles("vision", currentConfig)[0]
+                : undefined;
+            const chatAdapter = adapters.find((item) => chatId.startsWith(item.platform + ":"));
+            const formatMention = chatAdapter
+                ? (rawId: string, username?: string) => chatAdapter.formatMention(rawId, username)
+                : undefined;
+
+            realExecutor.setCallbackHandler((cb) => {
+                q5.enqueue(cb);
+                accumulator.unblock(cb.chatId);
+
+                setTimeout(() => {
+                    try {
+                        const sub = subagentManager.get(cb.chatId);
+                        if (sub?.recordingPipeline) {
+                            sub.recordingPipeline.flush();
+                        }
+                    } catch (error) {
+                        log.debug("post-session flush failed", { chatId: cb.chatId, error: String(error) });
+                    }
+                }, 60_000);
+            });
+            realExecutor.setDependencies(
+                sandboxPool,
+                nc,
+                persona,
+                memory,
+                visionConfig,
+                buildDownloadFn(chatId),
+                sendTyping,
+                visionLlmConfig,
+                sharedMediaDownloader,
+                formatMention,
+            );
+        },
+    });
+    const metaSandbox = new MetaSandbox(metaApiContext);
+
+    mainLoop.setMetaSessionHandler(createMetaSessionHandler({
+        getPersona: () => loadConfig().persona,
+        globalState,
+        sandbox: metaSandbox,
+        getLlmConfigs: () => resolveComponentProfiles("meta", loadConfig()),
+        maxTurns: 10,
+        codeTimeout: 30_000,
+        llmTimeoutMs: 60_000,
     }));
 
     log.info("MainAgentLoop 配置完成");
@@ -973,13 +1025,6 @@ async function main(): Promise<void> {
             if (eventType !== "nc.message") return;
             const chatId = String(event.chatId ?? "");
             if (chatId) metricsInstance!.groupCollector.onMessage(chatId);
-        });
-
-        // Hook 2: attend 决策后更新 group_attends_total
-        mainLoop.setOnAttendComplete((chatId, result) => {
-            for (const d of result.decisions) {
-                metricsInstance!.groupCollector.onAttend(chatId, d.action);
-            }
         });
 
         log.info("指标 exporter 已启动", {

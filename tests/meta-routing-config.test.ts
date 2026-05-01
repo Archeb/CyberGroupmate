@@ -1,0 +1,76 @@
+import { after, describe, it } from "node:test";
+import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { clearConfigCache, loadConfig, resolveComponentProfiles } from "../src/core/config.js";
+
+const tempDirs: string[] = [];
+
+function tempDir(): string {
+    const dir = join(tmpdir(), `meta-routing-${randomUUID()}`);
+    mkdirSync(dir, { recursive: true });
+    tempDirs.push(dir);
+    return dir;
+}
+
+after(() => {
+    clearConfigCache();
+    for (const dir of tempDirs) {
+        if (existsSync(dir)) {
+            rmSync(dir, { recursive: true, force: true });
+        }
+    }
+});
+
+describe("config meta routing", () => {
+    it("resolves llm_routing.meta profiles", () => {
+        const dir = tempDir();
+        const configPath = join(dir, "config.yaml");
+
+        writeFileSync(configPath, [
+            "llm_profiles:",
+            "  primary:",
+            "    provider: openai",
+            "    base_url: https://example.invalid/v1",
+            "    api_key: key-primary",
+            "    model: model-primary",
+            "    temperature: 0.1",
+            "    max_tokens: 1000",
+            "  fallback:",
+            "    provider: openai",
+            "    base_url: https://example.invalid/v1",
+            "    api_key: key-fallback",
+            "    model: model-fallback",
+            "    temperature: 0.2",
+            "    max_tokens: 2000",
+            "llm_routing:",
+            "  meta:",
+            "    - primary",
+            "    - fallback",
+            "persona:",
+            "  name: test",
+            "  description: test",
+            "notification:",
+            "  mention_keywords: []",
+            "reflection: {}",
+            "embedding:",
+            "  provider: local",
+            "  base_url: https://example.invalid/v1",
+            "  api_key: ''",
+            "  model: embed-local",
+            "  dimensions: 128",
+            "  similarity_metric: cosine",
+        ].join("\n"));
+
+        clearConfigCache();
+        const config = loadConfig(configPath, true);
+        const profiles = resolveComponentProfiles("meta", config);
+
+        assert.equal(profiles.length, 2);
+        assert.equal(profiles[0]?.model, "model-primary");
+        assert.equal(profiles[1]?.model, "model-fallback");
+    });
+});

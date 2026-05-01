@@ -98,12 +98,12 @@ export interface EmbeddingConfig {
 }
 
 /** 组件路由中可配置超时的组件名 */
-export type RoutingComponentKey = 'attend' | 'session' | 'recording_cluster' | 'recording_triage' | 'reflection' | 'compact' | 'memory' | 'vision';
+export type RoutingComponentKey = 'meta' | 'session' | 'recording_cluster' | 'recording_triage' | 'reflection' | 'compact' | 'memory' | 'vision';
 
 /** 组件级 LLM 路由 — 每个组件可指定一个或多个 profile（fallback chain） */
 export interface LLMRoutingConfig {
-    /** 注意力决策（attend-handler） */
-    attend?: string | string[];
+    /** Meta-CodeAct 主循环编排 */
+    meta?: string | string[];
     /** CodeAct 多轮交互（session-runner） */
     session?: string | string[];
     /** 话题聚类（recording-pipeline Step 1） */
@@ -505,7 +505,7 @@ export function loadConfig(configPath?: string, forceReload?: boolean): AppConfi
     // 解析 per-component timeouts
     const rawTimeouts = (fileRouting.timeouts ?? {}) as Record<string, unknown>;
     const parsedTimeouts: LLMRoutingConfig['timeouts'] = {};
-    for (const key of ['attend', 'session', 'recording_cluster', 'recording_triage', 'recording', 'reflection', 'compact', 'memory', 'vision'] as const) {
+    for (const key of ['meta', 'session', 'recording_cluster', 'recording_triage', 'recording', 'reflection', 'compact', 'memory', 'vision'] as const) {
         if (rawTimeouts[key] != null) {
             parsedTimeouts[key] = num(rawTimeouts[key], 60000);
         }
@@ -514,7 +514,7 @@ export function loadConfig(configPath?: string, forceReload?: boolean): AppConfi
     // 兼容旧配置：如果只配了 recording，同时应用到 cluster 和 triage
     const recordingFallback = parseRoutingValue(fileRouting.recording);
     const llmRouting: LLMRoutingConfig = {
-        attend: parseRoutingValue(fileRouting.attend),
+        meta: parseRoutingValue(fileRouting.meta),
         session: parseRoutingValue(fileRouting.session),
         recording_cluster: parseRoutingValue(fileRouting.recording_cluster) ?? recordingFallback,
         recording_triage: parseRoutingValue(fileRouting.recording_triage) ?? recordingFallback,

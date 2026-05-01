@@ -94,8 +94,8 @@ llm_profiles:
 # 支持单个字符串或数组（fallback chain），未配置的组件使用第一个 profile
 # 数组模式下，第一个 profile 失败（配额耗尽/429）时自动切换到下一个
 llm_routing:
-  # attend — 注意力决策（判断是否回复）
-  attend: gemini-flash
+  # meta — Meta-CodeAct 主循环编排
+  meta: gemini-flash
   # session — CodeAct 多轮交互（实际生成回复）
   # 单个 profile:
   session: gemini-pro

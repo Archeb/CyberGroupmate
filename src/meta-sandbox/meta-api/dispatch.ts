@@ -36,6 +36,7 @@ export interface DispatchApiDeps {
     subagentManager: SubagentManagerReader;
     memory: MemoryStoreV2;
     accumulator: AttentionAccumulator;
+    onTaskDispatched?: (task: CodeActReplyTask) => void | Promise<void>;
     groundingConfig?: GroundingConfig;
     groundingRunner?: (
         config: GroundingConfig,
@@ -73,6 +74,7 @@ export function createDispatchApi(deps: DispatchApiDeps) {
 
             executor.enqueue(task);
             deps.accumulator.markActioned(chatId);
+            await deps.onTaskDispatched?.(task);
 
             return { taskId };
         },

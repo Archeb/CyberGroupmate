@@ -6,6 +6,7 @@ describe("createDispatchApi", () => {
     it("builds and enqueues a CodeActReplyTask with serialized context and grounding", async () => {
         const enqueued: any[] = [];
         const marked: string[] = [];
+        const dispatched: string[] = [];
         const subagent = {
             chatId: "telegram:1",
             codeActExecutor: {
@@ -27,6 +28,9 @@ describe("createDispatchApi", () => {
                     marked.push(chatId);
                 },
             } as any,
+            onTaskDispatched: (task) => {
+                dispatched.push(`${task.chatId}:${task.decisions[0]?.action}`);
+            },
             groundingConfig: {
                 provider: "google",
                 apiKey: "test",
@@ -46,6 +50,7 @@ describe("createDispatchApi", () => {
         assert.equal(result.taskId, "task-meta-1");
         assert.equal(enqueued.length, 1);
         assert.deepEqual(marked, ["telegram:1"]);
+        assert.deepEqual(dispatched, ["telegram:1:REPLY"]);
         assert.equal(enqueued[0].taskId, "task-meta-1");
         assert.equal(enqueued[0].decisions[0].action, "REPLY");
         assert.equal(enqueued[0].contextSnapshot.contentDirection, "reply with a concise answer");

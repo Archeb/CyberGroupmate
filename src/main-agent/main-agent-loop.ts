@@ -1,40 +1,22 @@
 /**
- * main-agent-loop.ts — 主 Agent 注意力循环
+ * main-agent-loop.ts — 主 Agent Meta-CodeAct 循环
  *
- * 主循环：
- * Phase 1: 收集 Q5 callback
- * Phase 2: flush AttentionAccumulator
- * Phase 3: 逐个处理 AttentionSet
- * Phase 4: 构建 GroupContextPackage
- * Phase 5: 主 Agent 决策
- * Phase 6: 分派 CodeActReplyTask
- * Phase 7: 持久化全局状态
- *
- * 参考设计：subagent.md §8, subtask.md S5
+ * 当前实现：
+ * 1. drain Q5 callbacks
+ * 2. flush AttentionAccumulator
+ * 3. 将整组 AttentionSet 交给单一 Meta session handler
+ * 4. 持久化 session digest / global state
  */
 
 import { CallbackQueue } from "../subagent/callback-queue.js";
 import { SubagentManager } from "../subagent/subagent-manager.js";
 import { GlobalState } from "./global-state.js";
-import type {
-    AttentionQueueEntry,
-    SubagentCallback,
-    AttendResult,
-} from "../subagent/types.js";
+import type { AttentionQueueEntry, SubagentCallback, AttendResult, Decision } from "../subagent/types.js";
 import { DEFAULT_SUBAGENT_CONFIG } from "../subagent/types.js";
 import type { ChatMessage } from "../core/llm.js";
 import type { AttentionItem } from "../accumulator/types.js";
 import { AttentionAccumulator } from "../accumulator/attention-accumulator.js";
-
-import { resolveComponentProfiles } from "../core/config.js";
-import { ContextEngine } from "../context-engine/context-engine.js";
-import { getAttendProviders } from "../context-engine/providers/attend-providers.js";
-// renderPrompt/buildCallbackVariables no longer needed — callback uses callbackProvider.render()
-import { shouldCompact, compact as contextManagerCompact } from "../memory-v2/context-manager.js";
 import { createLogger } from "../core/logger.js";
-import { getRawId } from "../core/chat-id.js";
-import { callbackProvider } from "../context-engine/providers/pipeline-providers.js";
-import { deriveChatType } from "../context-engine/prompt-renderer-utils.js";
 
 const log = createLogger("main-agent-loop");
 
@@ -42,13 +24,13 @@ const log = createLogger("main-agent-loop");
 export interface MainAgentLoopConfig {
     /** 轮询间隔 (ms)。默认 5000 */
     pollInterval: number;
-    /** 每旋转最大 attend 群组数。默认 3 */
+    /** 兼容旧配置项：当前 Meta loop 每 tick 只运行一次 session */
     maxAttendsPerTick: number;
-    /** Cosine Decay 周期。默认 20 */
+    /** 兼容旧配置项，当前未使用 */
     cosineDecayCyclePeriod: number;
-    /** Compaction 后保留的最近消息条数。默认 10 */
+    /** 兼容旧配置项，当前未使用 */
     retainAfterCompact: number;
-    /** 紧急截断硬上限（仅当 compact 失败/未配置时生效）。默认 100 */
+    /** 兼容旧配置项，当前未使用 */
     hardCapMessages: number;
 }
 
@@ -61,14 +43,7 @@ const DEFAULT_LOOP_CONFIG: MainAgentLoopConfig = {
 };
 
 /**
- * MainAgentLoop — 主 Agent 注意力循环
- *
- * 串行处理，模拟人类注意力的轮询模式。
- * 每个 tick:
- * 1. 收集 callback
- * 2. flush 当前注意力窗口
- * 3. attend 本轮释放的群组
- * 4. 分派任务
+ * MainAgentLoop — 主 Agent Meta-CodeAct 循环
  */
 export class MainAgentLoop {
     private config: MainAgentLoopConfig;
@@ -90,36 +65,11 @@ export class MainAgentLoop {
     private circuitBreakerBackoff: number = 30_000; // 初始 30s
     private static readonly CB_MAX_BACKOFF = 10 * 60_000; // 最大 10min
 
-    /**
-     * 主 Agent LLM 对话历史
-     * 按时间顺序存放：attend 上下文 (user) → 决策 (assistant) → callback (user) → ...
-     * 使用 LLM compact 作为唯一的历史管理机制，硬上限截断仅作安全网。
-     */
+    /** Dashboard 仍会读取此接口；Meta path 当前不再维护旧 conversation history。 */
     private conversationHistory: ChatMessage[] = [];
 
-    /**
-     * 同群消息增量追踪：chatId → 上次存入历史的最新 messageId。
-     * 用于 attend-handler 构建增量历史记录，避免跨轮次重复存储相同消息。
-     * Compaction 成功后重置。
-     * @deprecated 由 ContextEngine.ledger 的 messages provider delta 追踪替代
-     */
-    private lastStoredMsgId = new Map<string, string>();
-
-    /**
-     * Context Engine — 声明式 prompt 组装引擎（attend 层）。
-     * 所有 attend prompt 的数据管理、delta 计算、渲染都通过此引擎完成。
-     * Ledger 在 compaction/硬截断后自动 reset。
-     */
-    private _attendEngine: ContextEngine;
-
-
-    /** 外部 attend handler（由 main.ts 集成注入） */
-    private attendHandler: ((entry: AttentionQueueEntry) => Promise<AttendResult | null>) | null = null;
-
-    /** 外部 dispatch handler */
-    private dispatchHandler: ((result: AttendResult) => Promise<void>) | null = null;
-
-
+    /** 外部 Meta session handler */
+    private metaSessionHandler: ((entries: AttentionQueueEntry[], callbacks: SubagentCallback[]) => Promise<MetaTurnResult | null>) | null = null;
 
     /** attend 完成后的回调（metrics 使用） */
     private onAttendCompleteCallback: ((chatId: string, decisions: AttendResult) => void) | null = null;
@@ -136,26 +86,13 @@ export class MainAgentLoop {
         this.subagentManager = subagentManager;
         this.globalState = globalState ?? null;
         this.config = { ...DEFAULT_LOOP_CONFIG, ...config };
-
-        // 初始化 attend ContextEngine，注册所有 attend providers
-        this._attendEngine = new ContextEngine("attend");
-        this._attendEngine.registerAll(getAttendProviders());
     }
 
     /**
-     * 设置 attend handler
-     * 当主循环 dequeue 一个群组后，调用此 handler 由外部决策逻辑处理
+     * 设置 Meta session handler
      */
-    setAttendHandler(handler: (entry: AttentionQueueEntry) => Promise<AttendResult | null>): void {
-        this.attendHandler = handler;
-    }
-
-    /**
-     * 设置 dispatch handler
-     * 当决策完成后，调用此 handler 分派任务
-     */
-    setDispatchHandler(handler: (result: AttendResult) => Promise<void>): void {
-        this.dispatchHandler = handler;
+    setMetaSessionHandler(handler: (entries: AttentionQueueEntry[], callbacks: SubagentCallback[]) => Promise<MetaTurnResult | null>): void {
+        this.metaSessionHandler = handler;
     }
 
 
@@ -226,6 +163,7 @@ export class MainAgentLoop {
         phase1Callbacks: number;
         phase2Eval: { activeCount: number; blockedCount: number };
         phase3Attended: string[];
+        phase4MetaEndReason: string | null;
         phase5Decisions: AttendResult[];
     }> {
         this.tickCount++;
@@ -235,10 +173,6 @@ export class MainAgentLoop {
         // ═══ Phase 1: Drain Callbacks (Q5) ═══
         const callbacks = this.callbackQueue.drain();
         for (const cb of callbacks) {
-            await this.appendToHistory({
-                role: "user",
-                content: formatCallbackMessage(cb),
-            });
             const cbSubagent = this.subagentManager.get(cb.chatId);
             if (cbSubagent) {
                 cbSubagent.markTaskComplete(cb.taskId);
@@ -264,7 +198,7 @@ export class MainAgentLoop {
 
         const attended: string[] = [];
         const decisions: AttendResult[] = [];
-        const attendedThisTick = new Set<string>();
+        let metaEndReason: string | null = null;
 
         const cbOpen = Date.now() < this.circuitBreakerOpenUntil;
         if (cbOpen) {
@@ -278,30 +212,13 @@ export class MainAgentLoop {
         const releasedItems = attentionSet?.items ? [...attentionSet.items] : [];
 
         if (!cbOpen) {
-            for (let i = 0; i < this.config.maxAttendsPerTick; i++) {
-                if (i > 0) {
-                    const midCallbacks = this.callbackQueue.drain();
-                    for (const cb of midCallbacks) {
-                        callbacks.push(cb);
-                        await this.appendToHistory({
-                            role: "user",
-                            content: formatCallbackMessage(cb),
-                        });
-                        const cbSubagent = this.subagentManager.get(cb.chatId);
-                        if (cbSubagent) {
-                            cbSubagent.markTaskComplete(cb.taskId);
-                            cbSubagent.addCallback(cb);
-                        }
-                        this.accumulator.unblock(cb.chatId);
-                    }
-                }
+            const uniqueEntries: AttentionQueueEntry[] = [];
+            const attendedThisTick = new Set<string>();
 
-                const item = releasedItems.shift();
-                if (!item) break;
-
+            for (const item of releasedItems) {
                 if (attendedThisTick.has(item.chatId)) {
                     this.accumulator.requeue(item);
-                    log.debug("Phase 3: 同 tick 重复 attend，放回 accumulator", { chatId: item.chatId, layer: item.layer });
+                    log.debug("同 tick 重复 chat，放回 accumulator", { chatId: item.chatId, layer: item.layer });
                     continue;
                 }
 
@@ -312,50 +229,55 @@ export class MainAgentLoop {
 
                 attendedThisTick.add(entry.chatId);
                 attended.push(entry.chatId);
+                uniqueEntries.push(entry);
+            }
 
-                let result: AttendResult | null = null;
-                if (this.attendHandler) {
-                    result = await this.attendHandler(entry);
+            if (uniqueEntries.length > 0) {
+                if (!this.metaSessionHandler) {
+                    log.warn("metaSessionHandler 未设置，跳过", { groups: uniqueEntries.map((entry) => entry.chatId) });
                 } else {
-                    log.warn("attendHandler 未设置，跳过", { chatId: entry.chatId });
-                }
-
-                if (result) {
-                    decisions.push(result);
-                    if (item.layer === 2) {
-                        this.accumulator.markActioned(entry.chatId);
-                    }
-
                     try {
-                        this.onAttendCompleteCallback?.(entry.chatId, result);
-                    } catch (e) {
-                        log.debug("onAttendComplete callback error", { error: String(e) });
-                    }
-
-                    if (this.dispatchHandler) {
-                        await this.dispatchHandler(result);
-                    }
-
-                    await this.manageHistory();
-                }
-
-                const subagent = this.subagentManager.get(entry.chatId);
-                if (subagent) {
-                    subagent.markAttended();
-                    if (subagent.recordingPipeline) {
-                        subagent.recordingPipeline.flush({ clusterOnly: true }).catch(err => {
-                            log.warn("attend 后 pipeline flush 失败", {
-                                chatId: entry.chatId,
-                                error: String(err),
-                            });
-                        });
+                        const result = await this.metaSessionHandler(uniqueEntries, callbacks);
+                        metaEndReason = result?.endReason ?? null;
+                        if (result?.sessionDigest && this.globalState) {
+                            this.globalState.addSessionDigest(result.sessionDigest);
+                        }
+                        if (result) {
+                            this.resetCircuitBreaker();
+                            for (const attendResult of result.attendResults ?? []) {
+                                decisions.push(attendResult);
+                                try {
+                                    this.onAttendCompleteCallback?.(attendResult.chatId, attendResult);
+                                } catch (error) {
+                                    log.debug("onAttendComplete callback error", { error: String(error) });
+                                }
+                            }
+                        }
+                    } catch (error) {
+                        const message = error instanceof Error ? error.message : String(error);
+                        if (looksLikeQuotaError(message)) {
+                            this.tripCircuitBreaker(message);
+                        }
+                        throw error;
                     }
                 }
             }
-        }
 
-        for (const item of releasedItems) {
-            this.accumulator.requeue(item);
+            for (const entry of uniqueEntries) {
+                const subagent = this.subagentManager.get(entry.chatId);
+                if (!subagent) {
+                    continue;
+                }
+                subagent.markAttended();
+                if (subagent.recordingPipeline) {
+                    subagent.recordingPipeline.flush({ clusterOnly: true }).catch((error) => {
+                        log.warn("Meta turn 后 pipeline flush 失败", {
+                            chatId: entry.chatId,
+                            error: String(error),
+                        });
+                    });
+                }
+            }
         }
 
         if (this.globalState) {
@@ -376,6 +298,7 @@ export class MainAgentLoop {
                 blockedCount: evaluation.blockedCount,
             },
             phase3Attended: attended,
+            phase4MetaEndReason: metaEndReason,
             phase5Decisions: decisions,
         };
     }
@@ -402,104 +325,11 @@ export class MainAgentLoop {
     }
 
 
-    // ─── 对话历史管理 ───
-
-    /**
-     * 追加消息到主 Agent 对话历史。
-     *
-     * 仅做 push，不截断。历史管理由 manageHistory() 统一处理。
-     */
-    async appendToHistory(msg: ChatMessage): Promise<void> {
-        this.conversationHistory.push(msg);
-    }
-
-    /**
-     * 统一的对话历史管理入口。
-     *
-     * 应在任务完成后（dispatch 之后）调用，避免 compact 延迟任务分派。
-     *
-     * 流程：
-     * 1. token 超预算 → 触发 LLM compaction，压缩旧消息为 briefing
-     * 2. compaction 成功后重置消息增量追踪
-     * 3. compaction 失败/未配置且消息数超硬上限 → 紧急截断（安全网）
-     */
-    async manageHistory(): Promise<void> {
-        const compactConfigs = resolveComponentProfiles("compact");
-
-        // ─── 尝试 LLM Compaction ───
-        if (compactConfigs.length > 0 && shouldCompact(this.conversationHistory, undefined, compactConfigs[0])) {
-            try {
-                log.info("主 Agent 对话历史 compact: token 超预算", {
-                    messageCount: this.conversationHistory.length,
-                });
-                this.conversationHistory = await contextManagerCompact(
-                    this.conversationHistory,
-                    compactConfigs,
-                );
-                // Compaction 成功 → 重置消息增量追踪 + Context Engine ledger
-                // 旧消息已被压缩为 briefing，下次 attend 需存完整消息
-                this.lastStoredMsgId.clear();
-                this._attendEngine.ledger.reset();
-                log.info("主 Agent 对话历史 compact 完成", {
-                    afterCount: this.conversationHistory.length,
-                    deltaTrackingReset: true,
-                });
-                return;
-            } catch (err) {
-                log.warn("主 Agent 对话历史 compact 失败，检查硬上限", {
-                    error: String(err),
-                });
-            }
-        }
-
-        // ─── 安全网：硬上限截断 ───
-        // 仅当 compaction 失败/未配置且消息数过多时触发
-        if (this.conversationHistory.length > this.config.hardCapMessages) {
-            const before = this.conversationHistory.length;
-            this.conversationHistory = this.conversationHistory.slice(
-                -this.config.retainAfterCompact,
-            );
-            // 硬截断也需要重置增量追踪 + Context Engine ledger
-            this.lastStoredMsgId.clear();
-            this._attendEngine.ledger.reset();
-            log.warn("主 Agent 对话历史硬上限截断（安全网）", {
-                before,
-                after: this.conversationHistory.length,
-                hardCap: this.config.hardCapMessages,
-            });
-        }
-    }
-
-    // ─── 消息增量追踪 ───
-
-    /**
-     * 获取指定 chatId 上次存入历史的最新 messageId。
-     * 用于 attend-handler 计算增量消息。
-     */
-    getLastStoredMsgId(chatId: string): string | undefined {
-        return this.lastStoredMsgId.get(chatId);
-    }
-
-    /**
-     * 更新指定 chatId 的最新存储 messageId。
-     */
-    setLastStoredMsgId(chatId: string, msgId: string): void {
-        this.lastStoredMsgId.set(chatId, msgId);
-    }
-
     /**
      * 获取当前对话历史（供 attendHandler 构建 LLM messages 使用）
      */
     getConversationHistory(): ReadonlyArray<ChatMessage> {
         return this.conversationHistory;
-    }
-
-    /**
-     * 获取 attend 层的 ContextEngine 实例。
-     * attend-handler 通过此引擎进行声明式 prompt 组装。
-     */
-    getAttendEngine(): ContextEngine {
-        return this._attendEngine;
     }
 
     /**
@@ -559,36 +389,10 @@ export class MainAgentLoop {
     }
 }
 
-// ─── 模块级辅助函数 ───
-
-/**
- * 将 SubagentCallback 格式化为对话历史中的 user 消息。
- * 使用 callbackProvider 的结构化数据 + render（统一视图层）。
- */
-export function formatCallbackMessage(cb: SubagentCallback, chatTitle?: string): string {
-    const isCompleted = cb.status === "COMPLETED";
-    const sentMessages = cb.sentMessages?.length
-        ? cb.sentMessages.map(m => {
-            const text = m.text.length > 80 ? m.text.slice(0, 80) + "..." : m.text;
-            return `- "${text}"`;
-        }).join("\n")
-        : "（无）";
-
-    const data = {
-        chatId: getRawId(cb.chatId),
-        chatType: deriveChatType(cb.isDirectMessage),
-        chatTitle: chatTitle ?? cb.chatTitle ?? cb.chatId,
-        taskId: cb.taskId,
-        executionType: cb.executionType,
-        status: cb.status,
-        durationMs: cb.durationMs,
-        isCompleted,
-        sentMessages,
-        summary: cb.summary,
-        error: cb.error ?? undefined,
-    };
-
-    return callbackProvider.render(data);
+export interface MetaTurnResult {
+    endReason: string;
+    sessionDigest?: string;
+    attendResults?: AttendResult[];
 }
 
 function extractSchedulerTriggers(payload: unknown): Array<{ id: string; type: "reminder" | "cron"; description: string }> {
@@ -604,4 +408,12 @@ function extractSchedulerTriggers(payload: unknown): Array<{ id: string; type: "
     }
 
     return [];
+}
+
+function looksLikeQuotaError(message: string): boolean {
+    return message.includes("429")
+        || message.includes("quota")
+        || message.includes("RESOURCE_EXHAUSTED")
+        || message.includes("rate limit")
+        || message.includes("overloaded");
 }
