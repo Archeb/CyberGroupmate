@@ -11,7 +11,7 @@ export const wsStatus = writable('disconnected');
 // ─── App State (from snapshot) ───
 export const appState = writable({
   groups: [],
-  queue: { active: [], dequeued: [] },
+  queue: { active: [], dequeued: [], blockedChatIds: [] },
   pendingCallbacks: [],
   globalState: {},
   sandboxPool: {},

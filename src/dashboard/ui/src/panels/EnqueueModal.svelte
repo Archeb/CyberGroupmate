@@ -24,13 +24,13 @@
 
 <dialog bind:this={modal} class="modal">
   <div class="modal-box">
-    <h3 class="text-lg font-bold">手动入队 Q3</h3>
+    <h3 class="text-lg font-bold">手动注入 Accumulator</h3>
     <div class="py-4 space-y-3">
       <input type="text" placeholder="ChatId" class="input input-bordered w-full" bind:value={chatId} />
-      <input type="number" placeholder="优先级 (0-100)" class="input input-bordered w-full" bind:value={priority} />
+      <input type="number" placeholder="Pressure (0-100)" class="input input-bordered w-full" bind:value={priority} />
     </div>
     <div class="modal-action">
-      <button class="btn btn-primary" onclick={doEnqueue}>入队</button>
+      <button class="btn btn-primary" onclick={doEnqueue}>注入</button>
       <form method="dialog"><button class="btn">取消</button></form>
     </div>
   </div>

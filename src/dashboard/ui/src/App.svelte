@@ -44,9 +44,6 @@
     refreshTimer = setInterval(async () => {
       try {
         const snapshot = await api('/overview');
-        if (Array.isArray(snapshot.queue)) {
-          snapshot.queue = { active: snapshot.queue, dequeued: [] };
-        }
         appState.set(snapshot);
       } catch { /* ignore */ }
     }, 5000);
