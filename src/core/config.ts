@@ -237,6 +237,20 @@ export interface ContextBudgetConfig {
     maxBriefingTokens?: number;
 }
 
+/** Meta-CodeAct 历史保留预算 */
+export interface MetaHistoryBudgetConfig {
+    /** 超过该字符数后触发批量裁剪。默认 18000 */
+    softCharLimit?: number;
+    /** 触发裁剪后回落到的字符目标。默认 10000 */
+    trimTargetChars?: number;
+    /** 至少保留的消息条数。默认 8 */
+    minMessages?: number;
+    /** 极端短消息场景下的硬条数上限。默认 48 */
+    hardMessageLimit?: number;
+    /** 命中硬上限后的回落条数。默认 32 */
+    trimTargetMessages?: number;
+}
+
 /** Subagent 系统外部配置（从 config.yaml 加载） */
 export interface SubagentExternalConfig {
     maxSandboxInstances?: number;
@@ -284,6 +298,7 @@ export interface SubagentExternalConfig {
         maxSessionMessages?: number;
         maxTurns?: number;
     };
+    metaHistory?: MetaHistoryBudgetConfig;
     scheduler?: {
         /** 每个群最大 reminder 数量。默认 10 */
         maxReminders?: number;
@@ -778,6 +793,7 @@ function parseSubagentConfig(fileConfig: Record<string, unknown>): SubagentExter
     const rawGS = (raw.global_state ?? {}) as Record<string, unknown>;
     const rawCA = (raw.code_act ?? {}) as Record<string, unknown>;
     const rawCD = (raw.cosine_decay ?? {}) as Record<string, unknown>;
+    const rawMH = (raw.meta_history ?? {}) as Record<string, unknown>;
     const rawSched = (raw.scheduler ?? {}) as Record<string, unknown>;
 
     // Parse stickiness levels
@@ -833,6 +849,13 @@ function parseSubagentConfig(fileConfig: Record<string, unknown>): SubagentExter
             maxExecutionTimeMs: rawCA.max_execution_time_ms != null ? num(rawCA.max_execution_time_ms, 60000) : undefined,
             maxSessionMessages: rawCA.max_session_messages != null ? num(rawCA.max_session_messages, 100) : undefined,
             maxTurns: rawCA.max_turns != null ? num(rawCA.max_turns, 30) : undefined,
+        } : undefined,
+        metaHistory: Object.keys(rawMH).length > 0 ? {
+            softCharLimit: rawMH.soft_char_limit != null ? num(rawMH.soft_char_limit, 18000) : undefined,
+            trimTargetChars: rawMH.trim_target_chars != null ? num(rawMH.trim_target_chars, 10000) : undefined,
+            minMessages: rawMH.min_messages != null ? num(rawMH.min_messages, 8) : undefined,
+            hardMessageLimit: rawMH.hard_message_limit != null ? num(rawMH.hard_message_limit, 48) : undefined,
+            trimTargetMessages: rawMH.trim_target_messages != null ? num(rawMH.trim_target_messages, 32) : undefined,
         } : undefined,
         scheduler: Object.keys(rawSched).length > 0 ? {
             maxReminders: rawSched.max_reminders != null ? num(rawSched.max_reminders, 10) : undefined,
@@ -1372,6 +1395,14 @@ export function serializeConfigToObject(config: AppConfig): Record<string, unkno
                 max_turns: sa.codeAct.maxTurns,
             };
         }
+        if (sa.metaHistory) {
+            s.meta_history = {};
+            if (sa.metaHistory.softCharLimit != null) (s.meta_history as any).soft_char_limit = sa.metaHistory.softCharLimit;
+            if (sa.metaHistory.trimTargetChars != null) (s.meta_history as any).trim_target_chars = sa.metaHistory.trimTargetChars;
+            if (sa.metaHistory.minMessages != null) (s.meta_history as any).min_messages = sa.metaHistory.minMessages;
+            if (sa.metaHistory.hardMessageLimit != null) (s.meta_history as any).hard_message_limit = sa.metaHistory.hardMessageLimit;
+            if (sa.metaHistory.trimTargetMessages != null) (s.meta_history as any).trim_target_messages = sa.metaHistory.trimTargetMessages;
+        }
         if (sa.scheduler) {
             s.scheduler = {};
             if (sa.scheduler.maxReminders != null) (s.scheduler as any).max_reminders = sa.scheduler.maxReminders;
@@ -1541,6 +1572,31 @@ export function validateConfig(config: unknown): { valid: boolean; errors: strin
             if (typeof cb[field] === "number" && (cb[field] as number < 0 || cb[field] as number > 1)) {
                 errors.push(`contextBudget.${field} 应在 0-1 之间`);
             }
+        }
+    }
+
+    const subagent = c.subagent as Record<string, unknown> | undefined;
+    const metaHistory = subagent?.metaHistory as Record<string, unknown> | undefined;
+    if (metaHistory) {
+        const positiveFields = ["softCharLimit", "trimTargetChars", "minMessages", "hardMessageLimit", "trimTargetMessages"];
+        for (const field of positiveFields) {
+            if (metaHistory[field] != null && (!(typeof metaHistory[field] === "number") || (metaHistory[field] as number) <= 0)) {
+                errors.push(`subagent.metaHistory.${field} 应大于 0`);
+            }
+        }
+        if (
+            typeof metaHistory.softCharLimit === "number"
+            && typeof metaHistory.trimTargetChars === "number"
+            && metaHistory.trimTargetChars > metaHistory.softCharLimit
+        ) {
+            errors.push("subagent.metaHistory.trimTargetChars 不能大于 softCharLimit");
+        }
+        if (
+            typeof metaHistory.hardMessageLimit === "number"
+            && typeof metaHistory.trimTargetMessages === "number"
+            && metaHistory.trimTargetMessages > metaHistory.hardMessageLimit
+        ) {
+            errors.push("subagent.metaHistory.trimTargetMessages 不能大于 hardMessageLimit");
         }
     }
 

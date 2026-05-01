@@ -14,6 +14,7 @@ import { contextEvents } from "../context-engine/context-engine.js";
 import type { ContextManifest } from "../context-engine/types.js";
 import { getGroupModelKey } from "../core/chat-id.js";
 import { getMetaCodeActState } from "../meta-sandbox/meta-session-runner.js";
+import { getMetaHistoryWindowStatus } from "../main-agent/meta-history-retention.js";
 
 const log = createLogger("dashboard-bridge");
 
@@ -433,6 +434,7 @@ export class EventBridge {
         }
 
         const metaCodeAct = getMetaCodeActState();
+        const metaHistoryStatus = getMetaHistoryWindowStatus(globalState.getMetaSessionHistory());
 
         return {
             groups,
@@ -442,6 +444,7 @@ export class EventBridge {
                 sessionSize: metaCodeAct.sessionSize,
                 executionCount: metaCodeAct.executionCount,
                 isProcessing: metaCodeAct.isProcessing,
+                historyBudget: metaHistoryStatus,
             },
             queue: accumulator.getSnapshot(),
             pendingCallbacks: q5.peek(),

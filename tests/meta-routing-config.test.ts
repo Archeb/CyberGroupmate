@@ -73,4 +73,50 @@ describe("config meta routing", () => {
         assert.equal(profiles[0]?.model, "model-primary");
         assert.equal(profiles[1]?.model, "model-fallback");
     });
+
+    it("parses subagent.meta_history budget config", () => {
+        const dir = tempDir();
+        const configPath = join(dir, "config.yaml");
+
+        writeFileSync(configPath, [
+            "llm_profiles:",
+            "  default:",
+            "    provider: openai",
+            "    base_url: https://example.invalid/v1",
+            "    api_key: key-default",
+            "    model: model-default",
+            "    temperature: 0.1",
+            "    max_tokens: 1000",
+            "llm_routing: {}",
+            "persona:",
+            "  name: test",
+            "  description: test",
+            "notification:",
+            "  mention_keywords: []",
+            "reflection: {}",
+            "embedding:",
+            "  provider: local",
+            "  base_url: https://example.invalid/v1",
+            "  api_key: ''",
+            "  model: embed-local",
+            "  dimensions: 128",
+            "  similarity_metric: cosine",
+            "subagent:",
+            "  meta_history:",
+            "    soft_char_limit: 22000",
+            "    trim_target_chars: 12000",
+            "    min_messages: 10",
+            "    hard_message_limit: 60",
+            "    trim_target_messages: 40",
+        ].join("\n"));
+
+        clearConfigCache();
+        const config = loadConfig(configPath, true);
+
+        assert.equal(config.subagent?.metaHistory?.softCharLimit, 22000);
+        assert.equal(config.subagent?.metaHistory?.trimTargetChars, 12000);
+        assert.equal(config.subagent?.metaHistory?.minMessages, 10);
+        assert.equal(config.subagent?.metaHistory?.hardMessageLimit, 60);
+        assert.equal(config.subagent?.metaHistory?.trimTargetMessages, 40);
+    });
 });

@@ -1,5 +1,6 @@
+import { getGroupModelKey } from "../../core/chat-id.js";
+import type { IMemoryStoreV2 } from "../../memory-v2/index.js";
 import type { StickinessLevel } from "../../subagent/types.js";
-import type { SubagentManager } from "../../subagent/subagent-manager.js";
 
 export interface AgentStatus {
     chatId: string;
@@ -24,21 +25,27 @@ type SubagentReader = {
     codeActExecutor?: ExecutorReader | null;
 };
 
-type SubagentManagerReader = Pick<SubagentManager, "getAllSubagents">;
+type SubagentManagerReader = {
+    getAllSubagents: () => SubagentReader[];
+};
+type MemoryReader = Pick<IMemoryStoreV2, "getGroupModel">;
 
-export function createAgentsApi(subagentManager: SubagentManagerReader) {
+export function createAgentsApi(subagentManager: SubagentManagerReader, memory: MemoryReader) {
     return {
         listStatus: async (): Promise<AgentStatus[]> => {
             return subagentManager.getAllSubagents()
-                .map((subagent) => toAgentStatus(subagent as SubagentReader))
+                .map((subagent) => toAgentStatus(subagent as SubagentReader, memory))
                 .sort((left, right) => right.lastActiveAt.localeCompare(left.lastActiveAt));
         },
     };
 }
 
-function toAgentStatus(subagent: SubagentReader): AgentStatus {
+function toAgentStatus(subagent: SubagentReader, memory: MemoryReader): AgentStatus {
+    const groupModel = memory.getGroupModel(getGroupModelKey(subagent.chatId));
+
     return {
         chatId: subagent.chatId,
+        chatTitle: groupModel?.chatTitle || undefined,
         queueSize: subagent.codeActExecutor?.getQueueSize?.() ?? 0,
         isProcessing: subagent.codeActExecutor?.isProcessing?.() ?? false,
         lastActiveAt: new Date(subagent.lastActivityAt).toISOString(),

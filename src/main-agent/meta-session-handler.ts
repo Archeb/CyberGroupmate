@@ -15,10 +15,10 @@ import { loadConfig } from "../core/config.js";
 import { generateModuleRoster } from "../sandbox/modules/module-registry.js";
 import type { ActiveUserProfile, AttentionQueueEntry, MetaSessionHistoryEntry, SubagentCallback, TopicDigest } from "../subagent/types.js";
 import type { GlobalState } from "./global-state.js";
+import { trimMetaSessionHistoryWindow } from "./meta-history-retention.js";
 
 const log = createLogger("meta-session-handler");
 const DEFAULT_BASE_SKILLS = ["runtime", "fs", "skills", "mcp", "cron", "todo", "memory", "vision", "shell"];
-const MAX_META_SESSION_HISTORY_MESSAGES = 12;
 type MetaHistoryMessage = Pick<MetaSessionHistoryEntry, "role" | "content">;
 const META_HISTORY_SECTION_ALLOWLIST = new Set([
     "meta.session_digests",
@@ -254,9 +254,7 @@ function appendMetaSessionHistory(history: ChatMessage[], messages: MetaHistoryM
         history.push({ role: message.role, content: message.content.trim() });
     }
 
-    if (history.length > MAX_META_SESSION_HISTORY_MESSAGES) {
-        history.splice(0, history.length - MAX_META_SESSION_HISTORY_MESSAGES);
-    }
+    trimMetaSessionHistoryWindow(history);
 }
 
 function collectMetaSessionHistory(messages: ChatMessage[]): MetaHistoryMessage[] {
@@ -444,11 +442,12 @@ await memory.searchEntities(query: string, options?: {
 }>
 \`\`\`
 
-## agents — 下属状态
+## agents — 查询聊天列表/获取下属状态
 
 \`\`\`ts
 await agents.listStatus(): Promise<{
   chatId: string,
+    chatTitle?: string,       // 群标题 / 私聊对象名
   queueSize: number,        // Q4 积压任务数
   isProcessing: boolean,    // 当前是否在执行
   lastActiveAt: string,     // 最后活跃时间

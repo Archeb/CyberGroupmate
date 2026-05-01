@@ -29,7 +29,7 @@ export function buildMetaApiContext(deps: BuildMetaApiContextDeps) {
     return {
         conversations: createConversationsApi(deps.memory),
         memory: createMemoryApi(deps.memory),
-        agents: createAgentsApi(deps.subagentManager),
+        agents: createAgentsApi(deps.subagentManager, deps.memory),
         dispatch: createDispatchApi({
             memory: deps.memory,
             subagentManager: deps.subagentManager,

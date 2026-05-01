@@ -77,6 +77,28 @@ describe("S6: Global State", () => {
         gs.dispose();
     });
 
+    it("#4b metaSessionHistory uses a hysteresis window instead of trimming every overflow", () => {
+        const dir = tempDir();
+        const gs = new GlobalState({ filePath: join(dir, "s.json"), autoSaveInterval: 0 });
+        const chunk = "x".repeat(1500);
+
+        for (let i = 0; i < 12; i++) {
+            gs.appendMetaSessionHistory([{ role: "assistant", content: `m${i}-${chunk}` }]);
+        }
+
+        const history = gs.getMetaSessionHistory();
+        assert.equal(history.length, 8);
+        assert.equal(history[0]?.content.startsWith("m4-"), true);
+        assert.equal(history.at(-1)?.content.startsWith("m11-"), true);
+
+        gs.appendMetaSessionHistory([{ role: "user", content: `tail-${"y".repeat(200)}` }]);
+        const nextHistory = gs.getMetaSessionHistory();
+        assert.equal(nextHistory.length, 9);
+        assert.equal(nextHistory[0]?.content.startsWith("m4-"), true);
+        assert.equal(nextHistory.at(-1)?.content.startsWith("tail-"), true);
+        gs.dispose();
+    });
+
     it("#5 save + load 持久化", () => {
         const dir = tempDir();
         const path = join(dir, "s.json");

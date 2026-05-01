@@ -29,6 +29,7 @@ import {
     requestCancelMetaCodeActSession,
     resetMetaCodeActState,
 } from "../meta-sandbox/meta-session-runner.js";
+import { getMetaHistoryWindowStatus } from "../main-agent/meta-history-retention.js";
 
 const log = createLogger("dashboard-api");
 const SKILLS_ROOT = join(process.cwd(), "workspace", "skills");
@@ -643,7 +644,10 @@ export function createApiRouter(deps: DashboardDeps, bridge: EventBridge): Route
     // ─── CodeAct ───
     router.get("/codeact/:chatId", (req, res) => {
         if (req.params.chatId === META_CODEACT_CHAT_ID) {
-            res.json(getMetaCodeActState());
+            res.json({
+                ...getMetaCodeActState(),
+                historyBudget: getMetaHistoryWindowStatus(deps.globalState.getMetaSessionHistory()),
+            });
             return;
         }
 

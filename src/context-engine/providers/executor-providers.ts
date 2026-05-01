@@ -235,7 +235,7 @@ export const executorDecisionsProvider: SectionProvider<{
 }> = {
     schema: {
         name: "executor.decisions",
-        label: "参考回复方式",
+        label: "行动决策",
         source: "attend-handler.decisions",
         cache: "volatile",
         history: "persistent",
@@ -252,7 +252,7 @@ export const executorDecisionsProvider: SectionProvider<{
     },
     render(data) {
         return [
-            "## 参考回复方式",
+            "## 行动决策",
             "",
             data.decisions,
             `语气: ${data.toneGuidance}`,
@@ -498,11 +498,11 @@ export const executorFooterProvider: SectionProvider<true> = {
 export function getExecutorTaskProviders(): SectionProvider[] {
     return [
         executorHeaderProvider,
-        executorDecisionsProvider,
         executorTopicSummaryProvider,
         executorPersonContextProvider,
         executorMemoryContextProvider,
         executorTargetMessagesProvider,
+        executorDecisionsProvider,
         executorStickersProvider,
         executorGroundingProvider,
         executorFooterProvider,

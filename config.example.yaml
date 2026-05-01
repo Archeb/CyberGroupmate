@@ -375,6 +375,17 @@ metrics:
 #   code_act:
 #     # 最大交互轮次 (30)
 #     max_turns: 30
+#   meta_history:
+#     # 超过该字符数后，Meta 历史触发批量裁剪 (18000)
+#     soft_char_limit: 18000
+#     # 命中软上限后回落到的字符窗口 (10000)
+#     trim_target_chars: 10000
+#     # 无论如何至少保留多少条消息 (8)
+#     min_messages: 8
+#     # 极端短消息场景下的硬上限条数 (48)
+#     hard_message_limit: 48
+#     # 命中硬上限后回落到的消息条数 (32)
+#     trim_target_messages: 32
 
 # ─── MCP Servers 预配置 ───
 # 在 Sandbox 启动时自动连接的 MCP Server 列表。

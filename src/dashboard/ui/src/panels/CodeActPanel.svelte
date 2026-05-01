@@ -13,6 +13,7 @@
 
   $: groups = $appState.groups;
   $: metaCodeAct = $appState.metaCodeAct || { chatId: META_CHAT_ID, sessionSize: 0, executionCount: 0, queueSize: 0, isProcessing: false };
+  $: metaHistoryBudget = sessionData.historyBudget || metaCodeAct.historyBudget;
   $: if ($activeTab === 'codeact' && $selectedCodeActChatId) refreshSession($selectedCodeActChatId);
 
   // 获取当前选中 chat 的实时进度事件
@@ -210,6 +211,26 @@
           </div>
         </div>
 
+        {#if isMetaChat($selectedCodeActChatId) && metaHistoryBudget}
+          <div class="meta-budget-card shrink-0 mb-3">
+            <div class="meta-budget-header">
+              <span>Meta 历史窗口</span>
+              {#if metaHistoryBudget.willTrimOnNextAppend}
+                <span class="badge badge-xs badge-warning">下次追加会裁剪</span>
+              {:else}
+                <span class="badge badge-xs badge-ghost">窗口内</span>
+              {/if}
+            </div>
+            <div class="meta-budget-grid">
+              <div><span class="label">当前字符</span><span class="value">{metaHistoryBudget.currentChars} / {metaHistoryBudget.softCharLimit}</span></div>
+              <div><span class="label">当前消息</span><span class="value">{metaHistoryBudget.currentMessages} / {metaHistoryBudget.hardMessageLimit}</span></div>
+              <div><span class="label">字符回落</span><span class="value">{metaHistoryBudget.trimTargetChars}</span></div>
+              <div><span class="label">消息回落</span><span class="value">{metaHistoryBudget.trimTargetMessages}</span></div>
+              <div><span class="label">最少保留</span><span class="value">{metaHistoryBudget.minMessages}</span></div>
+            </div>
+          </div>
+        {/if}
+
         <!-- Session content + real-time progress -->
         <div bind:this={sessionEl} class="overflow-y-auto flex-1 min-h-0 space-y-2" onscroll={onSessionScroll}>
           <!-- Historical session messages (from REST API) -->
@@ -325,6 +346,40 @@
   letter-spacing: 0.08em;
   color: var(--color-primary-content);
   background: color-mix(in srgb, var(--color-primary) 78%, black 10%);
+}
+
+.meta-budget-card {
+  border: 1px solid color-mix(in srgb, var(--color-base-content) 10%, transparent);
+  border-radius: 0.75rem;
+  padding: 0.75rem;
+  background: color-mix(in srgb, var(--color-base-200) 45%, transparent);
+}
+
+.meta-budget-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  margin-bottom: 0.6rem;
+}
+
+.meta-budget-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 0.45rem 0.75rem;
+  font-size: 0.75rem;
+}
+
+.meta-budget-grid .label {
+  display: block;
+  opacity: 0.6;
+  margin-bottom: 0.15rem;
+}
+
+.meta-budget-grid .value {
+  font-weight: 600;
 }
 
 /* ── Session messages ── */

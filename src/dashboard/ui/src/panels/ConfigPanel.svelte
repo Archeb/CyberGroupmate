@@ -57,7 +57,7 @@
     { id: "embedding", label: "Embedding", icon: "fa-vector-square" },
     { id: "vision", label: "Vision", icon: "fa-eye" },
     { id: "dashboard", label: "Dashboard", icon: "fa-gauge-high" },
-    { id: "subagent", label: "Subagent", icon: "fa-robot" },
+    { id: "subagent", label: "CodeAct", icon: "fa-robot" },
     { id: "recordingPipeline", label: "Recording", icon: "fa-tape" },
     { id: "systemPrompts", label: "System Prompts", icon: "fa-file-lines" },
     { id: "grounding", label: "Grounding", icon: "fa-globe" },
@@ -104,6 +104,7 @@
       if (config.subagent.restrictAdapterWritesToBoundChat == null) {
         config.subagent.restrictAdapterWritesToBoundChat = false;
       }
+      if (!config.subagent.metaHistory) config.subagent.metaHistory = {};
       if (!config.subagent.baseSkills) config.subagent.baseSkills = [
         "runtime", "fs", "skills", "mcp", "cron", "todo", "memory", "vision", "shell",
       ];

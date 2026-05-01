@@ -27,6 +27,7 @@ import type {
 } from "../subagent/types.js";
 import { createLogger } from "../core/logger.js";
 import { randomUUID } from "node:crypto";
+import { trimMetaSessionHistoryWindow } from "./meta-history-retention.js";
 
 const log = createLogger("global-state");
 
@@ -44,7 +45,6 @@ const DEFAULT_CONFIG: GlobalStateConfig = {
 };
 
 const MAX_SESSION_DIGESTS = 10;
-const MAX_META_SESSION_HISTORY_MESSAGES = 12;
 
 /**
  * GlobalState — 主 Agent 全局状态管理器
@@ -213,9 +213,7 @@ export class GlobalState {
             appended += 1;
         }
 
-        if (this.state.metaSessionHistory.length > MAX_META_SESSION_HISTORY_MESSAGES) {
-            this.state.metaSessionHistory.splice(0, this.state.metaSessionHistory.length - MAX_META_SESSION_HISTORY_MESSAGES);
-        }
+        trimMetaSessionHistoryWindow(this.state.metaSessionHistory);
 
         if (appended > 0) {
             this.markDirty();
