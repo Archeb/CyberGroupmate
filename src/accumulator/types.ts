@@ -25,6 +25,22 @@ export interface AttentionSet {
     triggerReason: "window" | "preempt";
 }
 
+export interface ReleasedAttentionRecord {
+    item: AttentionItem;
+    releasedAt: number;
+}
+
+export interface AttentionSnapshotItem extends AttentionItem {
+    kind: "pending" | "signal";
+    blocked: boolean;
+}
+
+export interface AttentionAccumulatorSnapshot {
+    active: AttentionSnapshotItem[];
+    dequeued: ReleasedAttentionRecord[];
+    blockedChatIds: string[];
+}
+
 export interface PressureParticipant {
     messageCount: number;
     totalChars: number;

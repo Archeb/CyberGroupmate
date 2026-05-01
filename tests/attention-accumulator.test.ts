@@ -158,4 +158,82 @@ describe("AttentionAccumulator", () => {
         assert.equal(gs2.getSignalPool()[0]?.ignoredCount, 0);
         gs2.dispose();
     });
+
+    it("blocks chats, drops queued items, and ignores ingress until unblocked", () => {
+        const { accumulator, globalState } = createAccumulator();
+        accumulator.ingest(2, {
+            chatId: "telegram:1",
+            source: "TOPIC_SIGNAL",
+            payload: { label: "blocked" },
+            enqueuedAt: 0,
+            pressure: 10,
+        });
+        accumulator.block("telegram:1");
+
+        assert.equal(accumulator.getSignalPoolSize(), 0);
+        accumulator.ingest(0, {
+            chatId: "telegram:1",
+            source: "DIRECT_ADDRESS",
+            payload: { reason: "DM" },
+            enqueuedAt: 10,
+        });
+        assert.equal(accumulator.flush(10), null);
+
+        accumulator.unblock("telegram:1");
+        accumulator.ingest(0, {
+            chatId: "telegram:1",
+            source: "DIRECT_ADDRESS",
+            payload: { reason: "DM" },
+            enqueuedAt: 20,
+        });
+        const set = accumulator.flush(20);
+        assert.ok(set);
+        assert.equal(set?.items[0]?.chatId, "telegram:1");
+        globalState.dispose();
+    });
+
+    it("requeues unprocessed pending items for the next flush", () => {
+        const { accumulator, globalState } = createAccumulator();
+        accumulator.ingest(1, {
+            chatId: "telegram:1",
+            source: "CALLBACK",
+            payload: { taskId: "a" },
+            enqueuedAt: 0,
+        });
+
+        const firstSet = accumulator.flush(1_000);
+        assert.ok(firstSet);
+        accumulator.requeue(firstSet!.items[0]!);
+
+        const secondSet = accumulator.flush(1_000);
+        assert.ok(secondSet);
+        assert.equal(secondSet?.items[0]?.chatId, "telegram:1");
+        globalState.dispose();
+    });
+
+    it("exposes active, dequeued, and blocked state snapshots", () => {
+        const { accumulator, globalState } = createAccumulator();
+        accumulator.ingest(1, {
+            chatId: "telegram:1",
+            source: "CALLBACK",
+            payload: { taskId: "a" },
+            enqueuedAt: 0,
+        });
+        accumulator.ingest(2, {
+            chatId: "telegram:2",
+            source: "TOPIC_SIGNAL",
+            payload: { label: "signal" },
+            enqueuedAt: 0,
+            pressure: 10,
+        });
+        accumulator.block("telegram:3");
+        accumulator.flush(1_000);
+
+        const snapshot = accumulator.getSnapshot();
+        assert.deepEqual(snapshot.blockedChatIds, ["telegram:3"]);
+        assert.equal(snapshot.active.length, 1);
+        assert.equal(snapshot.active[0]?.kind, "signal");
+        assert.equal(snapshot.dequeued.length, 2);
+        globalState.dispose();
+    });
 });

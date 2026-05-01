@@ -1,7 +1,15 @@
 import { GlobalState } from "../main-agent/global-state.js";
 import { createLogger } from "../core/logger.js";
 import type { SignalPoolItem } from "../subagent/types.js";
-import type { AttentionItem, AttentionLayer, AttentionSet, AttentionSource } from "./types.js";
+import type {
+    AttentionAccumulatorSnapshot,
+    AttentionItem,
+    AttentionLayer,
+    AttentionSet,
+    AttentionSnapshotItem,
+    AttentionSource,
+    ReleasedAttentionRecord,
+} from "./types.js";
 
 const log = createLogger("attention-accumulator");
 
@@ -33,6 +41,13 @@ function compareAttentionItems(left: AttentionItem, right: AttentionItem): numbe
     return left.enqueuedAt - right.enqueuedAt;
 }
 
+function cloneAttentionItem(item: AttentionItem): AttentionItem {
+    return {
+        ...item,
+        payload: item.payload,
+    };
+}
+
 export interface AttentionAccumulatorConfig {
     windowMs?: number;
     topN?: number;
@@ -43,6 +58,9 @@ export class AttentionAccumulator {
     private signalPool: AttentionItem[] = [];
     private preempted = false;
     private windowStartedAt: number | null = null;
+    private blockedChatIds = new Set<string>();
+    private dequeueHistory: ReleasedAttentionRecord[] = [];
+    private readonly maxDequeueHistory = 50;
     private readonly windowMs: number;
     private readonly topN: number;
 
@@ -60,6 +78,11 @@ export class AttentionAccumulator {
     }
 
     ingest(layer: AttentionLayer, item: Omit<AttentionItem, "layer">): void {
+        if (this.blockedChatIds.has(item.chatId)) {
+            log.debug("ingest: ignored blocked chat", { chatId: item.chatId, layer, source: item.source });
+            return;
+        }
+
         const entry: AttentionItem = {
             ...item,
             layer,
@@ -78,6 +101,66 @@ export class AttentionAccumulator {
         }
         if (layer === 0) {
             this.preempted = true;
+        }
+    }
+
+    requeue(item: AttentionItem): void {
+        if (item.layer === 2 || this.blockedChatIds.has(item.chatId)) {
+            return;
+        }
+
+        this.pending.push(cloneAttentionItem(item));
+        if (this.windowStartedAt === null) {
+            this.windowStartedAt = item.enqueuedAt;
+        } else {
+            this.windowStartedAt = Math.min(this.windowStartedAt, item.enqueuedAt);
+        }
+        if (item.layer === 0) {
+            this.preempted = true;
+        }
+    }
+
+    block(chatId: string): void {
+        this.blockedChatIds.add(chatId);
+        const pendingBefore = this.pending.length;
+        const signalBefore = this.signalPool.length;
+
+        this.pending = this.pending.filter((item) => item.chatId !== chatId);
+        this.signalPool = this.signalPool.filter((item) => item.chatId !== chatId);
+        if (this.pending.length === 0) {
+            this.windowStartedAt = null;
+            this.preempted = false;
+        }
+        if (this.signalPool.length !== signalBefore) {
+            this.persistSignalPool();
+        }
+
+        log.debug("block", {
+            chatId,
+            removedPending: pendingBefore - this.pending.length,
+            removedSignals: signalBefore - this.signalPool.length,
+        });
+    }
+
+    unblock(chatId: string): void {
+        this.blockedChatIds.delete(chatId);
+    }
+
+    isBlocked(chatId: string): boolean {
+        return this.blockedChatIds.has(chatId);
+    }
+
+    remove(chatId: string): void {
+        this.blockedChatIds.delete(chatId);
+        this.pending = this.pending.filter((item) => item.chatId !== chatId);
+        const signalBefore = this.signalPool.length;
+        this.signalPool = this.signalPool.filter((item) => item.chatId !== chatId);
+        if (this.pending.length === 0) {
+            this.windowStartedAt = null;
+            this.preempted = false;
+        }
+        if (this.signalPool.length !== signalBefore) {
+            this.persistSignalPool();
         }
     }
 
@@ -105,7 +188,11 @@ export class AttentionAccumulator {
 
         const items = [...this.pending, ...releasedSignals]
             .sort(compareAttentionItems)
-            .map(item => ({ ...item }));
+            .map(cloneAttentionItem);
+
+        for (const item of items) {
+            this.pushDequeueHistory(item, now);
+        }
 
         this.pending = [];
         this.preempted = false;
@@ -137,8 +224,50 @@ export class AttentionAccumulator {
         return this.signalPool.length;
     }
 
+    getActiveCount(): number {
+        return this.pending.length + this.signalPool.length;
+    }
+
+    getBlockedCount(): number {
+        return this.blockedChatIds.size;
+    }
+
+    getSnapshot(): AttentionAccumulatorSnapshot {
+        const active: AttentionSnapshotItem[] = [
+            ...this.pending.map((item) => ({
+                ...cloneAttentionItem(item),
+                kind: "pending" as const,
+                blocked: false,
+            })),
+            ...this.signalPool.map((item) => ({
+                ...cloneAttentionItem(item),
+                kind: "signal" as const,
+                blocked: false,
+            })),
+        ].sort(compareSnapshotItems);
+
+        return {
+            active,
+            dequeued: this.dequeueHistory.map((record) => ({
+                item: cloneAttentionItem(record.item),
+                releasedAt: record.releasedAt,
+            })),
+            blockedChatIds: [...this.blockedChatIds].sort(),
+        };
+    }
+
     dispose(): void {
         this.persistSignalPool();
+    }
+
+    private pushDequeueHistory(item: AttentionItem, releasedAt: number): void {
+        this.dequeueHistory.push({
+            item: cloneAttentionItem(item),
+            releasedAt,
+        });
+        if (this.dequeueHistory.length > this.maxDequeueHistory) {
+            this.dequeueHistory.shift();
+        }
     }
 
     private persistSignalPool(): void {
@@ -153,4 +282,8 @@ export class AttentionAccumulator {
             }))
         );
     }
+}
+
+function compareSnapshotItems(left: AttentionSnapshotItem, right: AttentionSnapshotItem): number {
+    return compareAttentionItems(left, right);
 }

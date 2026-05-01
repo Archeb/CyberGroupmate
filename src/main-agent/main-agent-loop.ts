@@ -1,19 +1,18 @@
 /**
  * main-agent-loop.ts — 主 Agent 注意力循环
  *
- * 7 阶段循环 (subagent.md §8)：
+ * 主循环：
  * Phase 1: 收集 Q5 callback
- * Phase 2: Q3 evaluate (时间衰减)
- * Phase 3: dequeue 最高优先级群组
+ * Phase 2: flush AttentionAccumulator
+ * Phase 3: 逐个处理 AttentionSet
  * Phase 4: 构建 GroupContextPackage
  * Phase 5: 主 Agent 决策
  * Phase 6: 分派 CodeActReplyTask
- * Phase 7: 更新 Q3 状态
+ * Phase 7: 持久化全局状态
  *
  * 参考设计：subagent.md §8, subtask.md S5
  */
 
-import { DynamicAttentionQueue } from "../subagent/attention-queue.js";
 import { CallbackQueue } from "../subagent/callback-queue.js";
 import { SubagentManager } from "../subagent/subagent-manager.js";
 import { GlobalState } from "./global-state.js";
@@ -24,6 +23,8 @@ import type {
 } from "../subagent/types.js";
 import { DEFAULT_SUBAGENT_CONFIG } from "../subagent/types.js";
 import type { ChatMessage } from "../core/llm.js";
+import type { AttentionItem } from "../accumulator/types.js";
+import { AttentionAccumulator } from "../accumulator/attention-accumulator.js";
 
 import { resolveComponentProfiles } from "../core/config.js";
 import { ContextEngine } from "../context-engine/context-engine.js";
@@ -65,15 +66,15 @@ const DEFAULT_LOOP_CONFIG: MainAgentLoopConfig = {
  * 串行处理，模拟人类注意力的轮询模式。
  * 每个 tick:
  * 1. 收集 callback
- * 2. 评估 Q3
- * 3. dequeue 并 attend 最高优先级群组
+ * 2. flush 当前注意力窗口
+ * 3. attend 本轮释放的群组
  * 4. 分派任务
  */
 export class MainAgentLoop {
     private config: MainAgentLoopConfig;
 
     /** 依赖组件 */
-    private attentionQueue: DynamicAttentionQueue;
+     private accumulator: AttentionAccumulator;
     private callbackQueue: CallbackQueue;
     private subagentManager: SubagentManager;
     private globalState: GlobalState | null;
@@ -124,13 +125,13 @@ export class MainAgentLoop {
     private onAttendCompleteCallback: ((chatId: string, decisions: AttendResult) => void) | null = null;
 
     constructor(
-        attentionQueue: DynamicAttentionQueue,
+        accumulator: AttentionAccumulator,
         callbackQueue: CallbackQueue,
         subagentManager: SubagentManager,
         config?: Partial<MainAgentLoopConfig>,
         globalState?: GlobalState | null,
     ) {
-        this.attentionQueue = attentionQueue;
+        this.accumulator = accumulator;
         this.callbackQueue = callbackQueue;
         this.subagentManager = subagentManager;
         this.globalState = globalState ?? null;
@@ -232,56 +233,39 @@ export class MainAgentLoop {
         log.debug("tick: 开始", { tickCount: this.tickCount });
 
         // ═══ Phase 1: Drain Callbacks (Q5) ═══
-        // subagent.md §4.5: drain → markTaskComplete → unblock
         const callbacks = this.callbackQueue.drain();
         for (const cb of callbacks) {
-            // 追加到对话历史（LLM 可见）
             await this.appendToHistory({
                 role: "user",
                 content: formatCallbackMessage(cb),
             });
-            // 标记任务完成
             const cbSubagent = this.subagentManager.get(cb.chatId);
             if (cbSubagent) {
                 cbSubagent.markTaskComplete(cb.taskId);
                 cbSubagent.addCallback(cb);
             }
-            // 解除阻塞
-            this.attentionQueue.unblock(cb.chatId);
-
-
+            this.accumulator.unblock(cb.chatId);
         }
 
-        // ═══ Phase 2: 动态队列评估 (Q3) ═══
-        // 入队条件：triage-engage（RecordingPipeline 话题介入）。
-        // Observer 告警（engagement 超阈值）不作为入队触发——engagement 仅用于 Q3 内部优先级排序。
-        // 直接寻址（@mention/DM/文本提及）由 main.ts nc.onPush 即时入队，不经过 Phase 2。
-        for (const sa of this.subagentManager.getAllSubagents()) {
-            if (!sa.hasTriageEngaged) {
-                continue;
-            }
-            const entry = sa.buildQueueEntry();
-            this.attentionQueue.enqueueOrUpdate(entry);
-        }
+        const evaluation = {
+            activeCount: this.accumulator.getActiveCount(),
+            blockedCount: this.accumulator.getBlockedCount(),
+        };
 
-        const evaluation = this.attentionQueue.evaluate();
-
-        // 问题 #1: 输出当前队列快照，让运维知道有哪些群在排队
-        const queueSnapshot = this.attentionQueue.getAll();
-        if (queueSnapshot.length > 0) {
+        const queueSnapshot = this.accumulator.getSnapshot();
+        if (queueSnapshot.active.length > 0 || queueSnapshot.blockedChatIds.length > 0) {
             log.info("tick: 队列快照", {
                 tickCount: this.tickCount,
-                queueSize: queueSnapshot.length,
-                groups: queueSnapshot.map(e => `${e.chatId}(p=${e.priority.toFixed(1)}${e.blocked ? ",blocked" : ""})`).join(", "),
+                activeCount: queueSnapshot.active.length,
+                blockedCount: queueSnapshot.blockedChatIds.length,
+                groups: queueSnapshot.active.map((item) => `${item.chatId}(L${item.layer}${item.kind === "signal" ? `,p=${(item.pressure ?? 0).toFixed(1)}` : ""})`).join(", "),
             });
         }
 
-        // ═══ Phase 3-6: 按 maxAttendsPerTick 处理 ═══
         const attended: string[] = [];
         const decisions: AttendResult[] = [];
-        const attendedThisTick = new Set<string>();  // 同 tick 防重复 attend
+        const attendedThisTick = new Set<string>();
 
-        // Circuit Breaker 检查：主 LLM 不可用时跳过 attend
         const cbOpen = Date.now() < this.circuitBreakerOpenUntil;
         if (cbOpen) {
             log.warn("tick: circuit breaker OPEN，跳过 Phase 3-6", {
@@ -290,94 +274,90 @@ export class MainAgentLoop {
             });
         }
 
+        const attentionSet = cbOpen ? null : this.accumulator.flush();
+        const releasedItems = attentionSet?.items ? [...attentionSet.items] : [];
+
         if (!cbOpen) {
-        for (let i = 0; i < this.config.maxAttendsPerTick; i++) {
-            // Fix 6: 在每次 attend 迭代之间 drain Q5
-            // (subagent.md §4.5 "→ 立即回到 Phase 1")
-            if (i > 0) {
-                const midCallbacks = this.callbackQueue.drain();
-                for (const cb of midCallbacks) {
-                    callbacks.push(cb);
-                    await this.appendToHistory({
-                        role: "user",
-                        content: formatCallbackMessage(cb),
-                    });
-                    const cbSubagent = this.subagentManager.get(cb.chatId);
-                    if (cbSubagent) {
-                        cbSubagent.markTaskComplete(cb.taskId);
-                        cbSubagent.addCallback(cb);
-                    }
-                    this.attentionQueue.unblock(cb.chatId);
-                }
-            }
-
-            // ─── Phase 3: dequeue 最高优先级群组 ───
-            const entry = this.attentionQueue.dequeue();
-            if (!entry) break;
-
-            // 同 tick 防重复：LLM 调用期间新消息可能导致同一群被重入队
-            // Fix: 放回队列而非丢弃——dequeue() 已从 Map 删除 entry，
-            // 如果直接 continue 会导致 entry 丢失（无 LLM 调用）
-            if (attendedThisTick.has(entry.chatId)) {
-                this.attentionQueue.enqueueOrUpdate(entry);
-                log.debug("Phase 3: 同 tick 重复 attend，放回队列", { chatId: entry.chatId, priority: entry.priority });
-                continue;
-            }
-            attendedThisTick.add(entry.chatId);
-
-            attended.push(entry.chatId);
-
-            // ─── Phase 4-5: 构建上下文 + 决策 ───
-            let result: AttendResult | null = null;
-
-            if (this.attendHandler) {
-                result = await this.attendHandler(entry);
-            } else {
-                log.warn("attendHandler 未设置，跳过", { chatId: entry.chatId });
-            }
-
-            if (result) {
-                decisions.push(result);
-
-                // ─── attend 完成回调（metrics hook）───
-                try {
-                    this.onAttendCompleteCallback?.(entry.chatId, result);
-                } catch (e) {
-                    log.debug("onAttendComplete callback error", { error: String(e) });
-                }
-
-                // ─── Phase 6: dispatch ───
-                if (this.dispatchHandler) {
-                    await this.dispatchHandler(result);
-                }
-
-                // ─── Phase 6.5: dispatch 完成后管理对话历史 ───
-                // 统一入口：token 超预算时 compact，硬上限截断作安全网
-                await this.manageHistory();
-            }
-
-            // 更新 subagent attend 状态
-            const subagent = this.subagentManager.get(entry.chatId);
-            if (subagent) {
-                subagent.markAttended();
-
-                // attend 后立即触发 RecordingPipeline flush（仅聚类，不 triage）。
-                // 路径 1（DM/mention）入队时 pipeline 可能尚未 flush，
-                // 此处补一次聚类使下一轮 attend 的 topicDigests 不为空。
-                // clusterOnly=true: 刚 attend 过的话题不需要重新 triage。
-                // flush() 内部有 isFlushing 锁 + buffer 空检查，不会与定时 flush 冲突。
-                if (subagent.recordingPipeline) {
-                    subagent.recordingPipeline.flush({ clusterOnly: true }).catch(err => {
-                        log.warn("attend 后 pipeline flush 失败", {
-                            chatId: entry.chatId,
-                            error: String(err),
+            for (let i = 0; i < this.config.maxAttendsPerTick; i++) {
+                if (i > 0) {
+                    const midCallbacks = this.callbackQueue.drain();
+                    for (const cb of midCallbacks) {
+                        callbacks.push(cb);
+                        await this.appendToHistory({
+                            role: "user",
+                            content: formatCallbackMessage(cb),
                         });
-                    });
+                        const cbSubagent = this.subagentManager.get(cb.chatId);
+                        if (cbSubagent) {
+                            cbSubagent.markTaskComplete(cb.taskId);
+                            cbSubagent.addCallback(cb);
+                        }
+                        this.accumulator.unblock(cb.chatId);
+                    }
+                }
+
+                const item = releasedItems.shift();
+                if (!item) break;
+
+                if (attendedThisTick.has(item.chatId)) {
+                    this.accumulator.requeue(item);
+                    log.debug("Phase 3: 同 tick 重复 attend，放回 accumulator", { chatId: item.chatId, layer: item.layer });
+                    continue;
+                }
+
+                const entry = this.buildAttendEntry(item);
+                if (!entry) {
+                    continue;
+                }
+
+                attendedThisTick.add(entry.chatId);
+                attended.push(entry.chatId);
+
+                let result: AttendResult | null = null;
+                if (this.attendHandler) {
+                    result = await this.attendHandler(entry);
+                } else {
+                    log.warn("attendHandler 未设置，跳过", { chatId: entry.chatId });
+                }
+
+                if (result) {
+                    decisions.push(result);
+                    if (item.layer === 2) {
+                        this.accumulator.markActioned(entry.chatId);
+                    }
+
+                    try {
+                        this.onAttendCompleteCallback?.(entry.chatId, result);
+                    } catch (e) {
+                        log.debug("onAttendComplete callback error", { error: String(e) });
+                    }
+
+                    if (this.dispatchHandler) {
+                        await this.dispatchHandler(result);
+                    }
+
+                    await this.manageHistory();
+                }
+
+                const subagent = this.subagentManager.get(entry.chatId);
+                if (subagent) {
+                    subagent.markAttended();
+                    if (subagent.recordingPipeline) {
+                        subagent.recordingPipeline.flush({ clusterOnly: true }).catch(err => {
+                            log.warn("attend 后 pipeline flush 失败", {
+                                chatId: entry.chatId,
+                                error: String(err),
+                            });
+                        });
+                    }
                 }
             }
         }
-        } // end if (!cbOpen)
-        // ═══ Phase 7: 更新全局状态 ═══
+
+        for (const item of releasedItems) {
+            this.accumulator.requeue(item);
+        }
+
         if (this.globalState) {
             this.globalState.save();
         }
@@ -529,6 +509,40 @@ export class MainAgentLoop {
         return this.conversationHistory.length;
     }
 
+    private buildAttendEntry(item: AttentionItem): AttentionQueueEntry | null {
+        const subagent = this.subagentManager.get(item.chatId);
+        if (!subagent) {
+            return null;
+        }
+
+        let entry: AttentionQueueEntry;
+        switch (item.source) {
+            case "DIRECT_ADDRESS":
+                entry = subagent.buildQueueEntry("DIRECT_ADDRESS");
+                break;
+            case "SCHEDULER":
+            case "WAKE_CONDITION":
+                entry = subagent.buildQueueEntry("SCHEDULER_TRIGGER");
+                entry.schedulerTriggers = extractSchedulerTriggers(item.payload);
+                break;
+            case "CALLBACK":
+                entry = subagent.buildQueueEntry("DEFERRED_RE_ENTRY");
+                break;
+            case "TOPIC_SIGNAL":
+            default:
+                entry = subagent.buildQueueEntry();
+                break;
+        }
+
+        entry.enqueuedAt = item.enqueuedAt;
+        if (typeof item.pressure === "number") {
+            const boundedPressure = Math.max(0, Math.min(100, item.pressure));
+            entry.priority = boundedPressure;
+            entry.basePriority = boundedPressure;
+        }
+        return entry;
+    }
+
     // ─── 内部方法 ───
 
     private scheduleNext(): void {
@@ -575,4 +589,19 @@ export function formatCallbackMessage(cb: SubagentCallback, chatTitle?: string):
     };
 
     return callbackProvider.render(data);
+}
+
+function extractSchedulerTriggers(payload: unknown): Array<{ id: string; type: "reminder" | "cron"; description: string }> {
+    if (!payload || typeof payload !== "object") {
+        return [];
+    }
+
+    if ("type" in payload && "id" in payload && "description" in payload) {
+        const type = payload.type;
+        if ((type === "reminder" || type === "cron") && typeof payload.id === "string" && typeof payload.description === "string") {
+            return [{ id: payload.id, type, description: payload.description }];
+        }
+    }
+
+    return [];
 }

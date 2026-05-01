@@ -457,9 +457,9 @@ export function createApiRouter(deps: DashboardDeps, bridge: EventBridge): Route
         }
     });
 
-    // ─── Attention Queue (Q3) ───
+    // ─── Attention Queue ───
     router.get("/queue", (_req, res) => {
-        res.json({ active: deps.q3.getAll(), dequeued: deps.q3.getDequeueHistory() });
+        res.json(deps.accumulator.getSnapshot());
     });
 
     router.post("/queue/enqueue", (req, res) => {
@@ -467,25 +467,35 @@ export function createApiRouter(deps: DashboardDeps, bridge: EventBridge): Route
         if (!chatId) { res.status(400).json({ error: "chatId required" }); return; }
         const sub = deps.subagentManager.get(chatId);
         if (!sub) { res.status(404).json({ error: "chat not found" }); return; }
-        const entry = sub.buildQueueEntry();
-        if (priority) entry.priority = Number(priority);
-        deps.q3.enqueueOrUpdate(entry);
-        bridge.broadcast({ type: "queue:update", timestamp: new Date().toISOString(), data: deps.q3.getAll() });
-        log.info("手动入队 Q3", { chatId, priority });
+        deps.accumulator.ingest(0, {
+            chatId,
+            source: "DIRECT_ADDRESS",
+            payload: { reason: "dashboard-manual" },
+            enqueuedAt: Date.now(),
+            pressure: Number(priority) || 0,
+        });
+        bridge.broadcast({ type: "queue:update", timestamp: new Date().toISOString(), data: deps.accumulator.getSnapshot() });
+        log.info("手动注入 accumulator", { chatId, priority });
         res.json({ ok: true });
     });
 
     router.post("/queue/boost", (req, res) => {
         const { chatId, amount } = req.body;
         if (!chatId) { res.status(400).json({ error: "chatId required" }); return; }
-        deps.q3.boost(chatId, Number(amount) || 20);
-        bridge.broadcast({ type: "queue:update", timestamp: new Date().toISOString(), data: deps.q3.getAll() });
+        deps.accumulator.ingest(0, {
+            chatId,
+            source: "DIRECT_ADDRESS",
+            payload: { reason: "dashboard-boost" },
+            enqueuedAt: Date.now(),
+            pressure: Number(amount) || 20,
+        });
+        bridge.broadcast({ type: "queue:update", timestamp: new Date().toISOString(), data: deps.accumulator.getSnapshot() });
         res.json({ ok: true });
     });
 
     router.delete("/queue/:chatId", (req, res) => {
-        deps.q3.remove(req.params.chatId);
-        bridge.broadcast({ type: "queue:update", timestamp: new Date().toISOString(), data: deps.q3.getAll() });
+        deps.accumulator.remove(req.params.chatId);
+        bridge.broadcast({ type: "queue:update", timestamp: new Date().toISOString(), data: deps.accumulator.getSnapshot() });
         res.json({ ok: true });
     });
 
@@ -652,7 +662,7 @@ export function createApiRouter(deps: DashboardDeps, bridge: EventBridge): Route
                 await deps.sandboxPool.destroy(chatId);
             }
 
-            deps.q3.unblock(chatId);
+            deps.accumulator.unblock(chatId);
             log.info("CodeAct 手动取消", { chatId });
             res.json({ ok: true, message: "Execution cancel requested, queue cleared and sandbox destroyed" });
         } catch (err) {

@@ -351,9 +351,9 @@ export const sandboxPoolIdle = registry.register(
     new Gauge(),
 );
 
-export const q3QueueSize = registry.register(
-    "cybergroupmate_q3_queue_size",
-    "注意力队列（Q3）当前待处理群组数",
+export const accumulatorQueueSize = registry.register(
+    "cybergroupmate_accumulator_queue_size",
+    "AttentionAccumulator 当前待处理群组数",
     new Gauge(),
 );
 

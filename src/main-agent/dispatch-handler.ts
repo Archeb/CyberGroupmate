@@ -3,7 +3,7 @@
  *
  * 从 main.ts 提取的任务分派逻辑：
  * - REPLY → 构建 CodeActReplyTask + 创建/获取 CodeActExecutor → enqueue
- * - DEFER → 重新入队 Q3 (DEFERRED_RE_ENTRY)
+ * - DEFER → 重新注入 AttentionAccumulator
  * - OBSERVE / IGNORE → 仅记录
  *
  * 参考设计：subagent.md §13.2 B1/B2, subtask.md S3/S4
@@ -16,7 +16,6 @@ import type { MemoryStoreV2 } from "../memory-v2/index.js";
 
 import type { SandboxPool } from "../sandbox/sandbox-pool.js";
 import type { NotificationCenter } from "../event/notification-center.js";
-import type { DynamicAttentionQueue } from "../subagent/attention-queue.js";
 import type { CallbackQueue } from "../subagent/callback-queue.js";
 import type { GlobalState } from "./global-state.js";
 import { CodeActExecutor } from "../subagent/code-act-executor.js";
@@ -32,6 +31,7 @@ import type { AppConfig } from "../core/config.js";
 import type { PlatformAdapter } from "../adapter/platform-adapter.js";
 import { getGroupModelKey, getRawId } from "../core/chat-id.js";
 import { TopicRegistry } from "../pipeline/topic-registry.js";
+import type { AttentionAccumulator } from "../accumulator/attention-accumulator.js";
 
 const log = createLogger("dispatch-handler");
 
@@ -149,7 +149,7 @@ export interface DispatchHandlerDeps {
     subagentManager: SubagentManager;
     sandboxPool: SandboxPool;
     nc: NotificationCenter;
-    q3: DynamicAttentionQueue;
+    accumulator: AttentionAccumulator;
     q5: CallbackQueue;
     persona: { name: string; description: string };
 
@@ -173,7 +173,7 @@ export interface DispatchHandlerDeps {
 export function createDispatchHandler(
     deps: DispatchHandlerDeps,
 ): (result: AttendResult) => Promise<void> {
-    const { memory, globalState, subagentManager, sandboxPool, nc, q3, q5, appConfig: _appConfig, adapters: adapterList, sendTyping, mediaDownloader, imageCatalog } = deps;
+    const { memory, globalState, subagentManager, sandboxPool, nc, accumulator, q5, appConfig: _appConfig, adapters: adapterList, sendTyping, mediaDownloader, imageCatalog } = deps;
     // 构建下载函数（根据 chatId 平台路由到对应 adapter）
     const buildDownloadFn = (chatId: string) => {
         if (!adapterList?.length) return undefined;
@@ -443,8 +443,7 @@ export function createDispatchHandler(
                             sentPreviews: cb.sentMessages?.map(m => m.text.length > 60 ? m.text.slice(0, 60) + "..." : m.text),
                             durationMs: cb.durationMs,
                         });
-                        // Unblock in Q3 when callback arrives
-                        q3.unblock(cb.chatId);
+                        accumulator.unblock(cb.chatId);
 
                         // Post-session: 1 分钟后触发 RecordingPipeline flush
                         // 追踪话题变化 + triage 判断是否需要再次介入
@@ -498,14 +497,17 @@ export function createDispatchHandler(
                     topicSummary: topicSummary ? topicSummary.slice(0, 100) : "(无)",
                 });
             } else if (decision.action === "DEFER") {
-                // Fix 2: DEFERRED_RE_ENTRY — 延迟重新入队 (subagent.md §13.1 D1)
-                q3.enqueueOrUpdate({
+                accumulator.ingest(1, {
                     chatId: result.chatId,
-                    source: "DEFERRED_RE_ENTRY",
-                    priority: Math.max(0, (subagent.observer.getEngagementScore() * subagent.stickiness.priorityMultiplier) * 0.5),
-                    basePriority: Math.max(0, (subagent.observer.getEngagementScore() * subagent.stickiness.priorityMultiplier) * 0.5),
+                    source: "CALLBACK",
+                    payload: {
+                        type: "defer",
+                        reason: decision.reason,
+                        topicId: decision.topicId,
+                    },
+                    enqueuedAt: Date.now(),
                 });
-                log.info("DEFER → 重新入队", {
+                log.info("DEFER → 重新注入 accumulator", {
                     chatId: result.chatId,
                     reason: decision.reason,
                     topicId: decision.topicId,
@@ -521,7 +523,7 @@ export function createDispatchHandler(
         }
 
         if (hasCodeActTask) {
-            q3.block(result.chatId, "CodeAct executing");
+            accumulator.block(result.chatId);
         }
     };
 }

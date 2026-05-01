@@ -45,7 +45,7 @@ export interface AdditionalMemoryContext {
 
 // ─── Observer 产出 ───
 
-/** 话题摘要（Observer → Q3 AttentionQueueEntry） */
+/** 话题摘要（Observer → AttentionQueueEntry 快照） */
 export interface TopicDigest {
     /** Pipeline Topic ID */
     topicId: string;
@@ -72,7 +72,7 @@ export interface TopicDigest {
 }
 
 
-// ─── 注意力队列 (Q3) ───
+// ─── 主循环 attend 快照 ───
 
 /** 注意力队列条目 */
 export interface AttentionQueueEntry {

@@ -7,8 +7,8 @@
  * - RecordingPipeline (per-group): 该群的话题聚类 + 记忆沉淀
  * - CodeActExecutor: CodeAct 执行器（S3 实现后注入）
  *
- * RecordingPipeline 的 topic:triage-passed 事件自动更新 Observer
- * 的 topicDigests，同时 emit triage-engage 事件驱动 Q3 入队。
+ * RecordingPipeline 的 topic:triage-passed 事件会 emit triage-engage，
+ * 由主入口直接注入 AttentionAccumulator。
  *
  * 参考设计：subagent.md §3, architecture_v2.md §2.2
  */
@@ -88,9 +88,6 @@ export class GroupSubagent extends EventEmitter {
     /** 最近的 Subagent 回调结果（保留最近 5 条） */
     lastCallbacks: SubagentCallback[] = [];
 
-    /** 自上次 attend 以来，是否有话题通过 triage（ENGAGE），用于 Phase 2 守卫 */
-    hasTriageEngaged: boolean = false;
-
     /** 已分派回复任务的 topicId 集合（防重复分派），值为分派时间戳 */
     private dispatchedTopicIds = new Map<string, number>();
 
@@ -128,9 +125,7 @@ export class GroupSubagent extends EventEmitter {
                     })),
                 });
 
-                // 标记有话题需要介入，触发 Q3 重新入队（一次 flush 只触发一次）
-                this.hasTriageEngaged = true;
-                log.info("triage-engage: emitting", { chatId: this.chatId, hasTriageEngaged: this.hasTriageEngaged, listenerCount: this.listenerCount("triage-engage") });
+                log.info("triage-engage: emitting", { chatId: this.chatId, listenerCount: this.listenerCount("triage-engage") });
                 this.emit("triage-engage", this.chatId);
             });
 
@@ -176,7 +171,7 @@ export class GroupSubagent extends EventEmitter {
     }
 
     /**
-     * 构建 AttentionQueueEntry（供 Q3 入队）
+    * 构建 AttentionQueueEntry 快照，供主循环 attend 适配使用
      */
     buildQueueEntry(sourceOverride?: AttentionQueueEntry["source"]): AttentionQueueEntry {
         const engagement = this.observer.getEngagementScore();
@@ -224,7 +219,6 @@ export class GroupSubagent extends EventEmitter {
         this.lastAttendedAt = new Date().toISOString();
         this.attendCount++;
         this.observer.clearBuffer();
-        this.hasTriageEngaged = false;  // attend 后重置 triage-engage 标记
         this.pruneDispatchedTopics();   // 清理已归档话题的 dispatched 记录
         log.debug("markAttended", {
             chatId: this.chatId,

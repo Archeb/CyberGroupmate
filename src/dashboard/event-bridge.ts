@@ -408,7 +408,7 @@ export class EventBridge {
     }
 
     buildSnapshot(): Record<string, unknown> {
-        const { subagentManager, q3, q5, mainLoop, globalState, sandboxPool, feedbackLoop } = this.deps;
+        const { subagentManager, accumulator, q5, mainLoop, globalState, sandboxPool, feedbackLoop } = this.deps;
 
         // 群组概览
         const groups: Record<string, unknown>[] = [];
@@ -424,7 +424,6 @@ export class EventBridge {
                 stickiness: sub.stickiness.level,
                 lastAttendedAt: sub.lastAttendedAt,
                 attendCount: sub.attendCount,
-                hasTriageEngaged: sub.hasTriageEngaged,
                 lastAgentReplyAt: sub.lastAgentReplyAt,
                 codeActQueueSize: (sub.codeActExecutor as any)?.getQueueSize?.() ?? 0,
                 codeActProcessing: (sub.codeActExecutor as any)?.isProcessing?.() ?? false,
@@ -436,7 +435,7 @@ export class EventBridge {
 
         return {
             groups,
-            queue: { active: q3.getAll(), dequeued: q3.getDequeueHistory() },
+            queue: accumulator.getSnapshot(),
             pendingCallbacks: q5.peek(),
             globalState: globalState.getState(),
             sandboxPool: sandboxPool.getStats(),

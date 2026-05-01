@@ -130,7 +130,7 @@ export class Observer {
 
     /**
      * 检查文本是否包含 mentionKeywords 中的任意关键字
-     * 用于 Q3 即时入队判定（文本提及 agent 名字等）
+    * 用于即时注意力注入判定（文本提及 agent 名字等）
      */
     hasMentionKeyword(text: string): boolean {
         if (this.config.mentionKeywords.length === 0) return false;

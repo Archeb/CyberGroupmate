@@ -2,11 +2,11 @@
  * main.ts — Orchestrator / Main Agent ↔ Subagent Architecture
  *
  * 系统入口点。管理 agent 的完整生命周期：
- * PlatformAdapter → NC → MessageLogWriter + GroupDispatcher → Observer → Q3
+ * PlatformAdapter → NC → MessageLogWriter + GroupDispatcher → Observer → Accumulator
  * → MainAgentLoop → DecisionMaker → CodeActExecutor → Q5 → GlobalState
  *
  * 架构切换自 subagent.md v0.5.0:
- * - 主 Agent: 快层·决策者，拥有全局上下文，串行轮询 Q3 做出决策
+ * - 主 Agent: 快层·决策者，拥有全局上下文，串行轮询 Accumulator 做出决策
  * - Subagent: 慢层·执行者，per-group Observer + CodeActExecutor
  */
 
@@ -42,7 +42,6 @@ import { OneBotAdapter } from "./adapter/onebot-adapter.js";
 import type { PlatformAdapter } from "./adapter/platform-adapter.js";
 
 import { SubagentManager } from "./subagent/subagent-manager.js";
-import { DynamicAttentionQueue } from "./subagent/attention-queue.js";
 import { CallbackQueue } from "./subagent/callback-queue.js";
 import { AttentionAccumulator } from "./accumulator/attention-accumulator.js";
 import {
@@ -58,7 +57,6 @@ import { evaluateStickiness, createStickiness, updateStickiness } from "./subage
 import { matchesCron } from "./core/cron-matcher.js";
 import { autoReconnect as autoReconnectMcp, initMcpBridge, mcpBridge } from "./sandbox/modules/mcp-bridge/index.js";
 import { refreshModuleRegistryCache } from "./subagent/code-act-executor.js";
-import type { AttentionItem, AttentionLayer } from "./accumulator/types.js";
 
 const log = createLogger("main");
 
@@ -440,10 +438,6 @@ async function main(): Promise<void> {
     if (restoredChatIds.length > 0) {
         log.info("已恢复 subagent sessions", { count: restoredChatIds.length, chatIds: restoredChatIds });
     }
-    const q3 = new DynamicAttentionQueue({
-        timeDecayPerSecond: appConfig.subagent?.attentionQueue?.timeDecayPerSecond ?? 0.001,
-        maxSize: appConfig.subagent?.attentionQueue?.maxSize ?? 100,
-    });
     const q5 = new CallbackQueue();
     const globalState = new GlobalState({
         filePath: join(DATA_DIR, "global-state.json"),
@@ -454,28 +448,11 @@ async function main(): Promise<void> {
     });
     accumulator.restoreSignalPool();
 
-    const mirrorAccumulatorIngress = (
-        layer: AttentionLayer,
-        item: Omit<AttentionItem, "layer">,
-    ): void => {
-        if (q3.isBlocked(item.chatId)) {
-            log.debug("Accumulator 镜像跳过 blocked chat", {
-                chatId: item.chatId,
-                layer,
-                source: item.source,
-            });
-            return;
-        }
-        accumulator.ingest(layer, item);
-    };
-
     log.info("Subagent 组件初始化完成", {
-        attentionQueueMaxSize: appConfig.subagent?.attentionQueue?.maxSize ?? 100,
         restoredSignalPoolSize: accumulator.getSignalPoolSize(),
     });
 
     // FeedbackLoop 创建（需要在 subagentManager 之后，以支持 per-group registryLookup）
-    // architecture_v2.md §3 Q3 路径 (5): 追问检测 → Q3 入队
     const feedbackLoop = new FeedbackLoop(
         memory,
         nc,
@@ -486,22 +463,19 @@ async function main(): Promise<void> {
             if (!sub) return;
             // 重置 lastAgentReplyAt 使 triage 允许介入（绕过防重复守卫）
             sub.updateLastAgentReplyAt(0);
-            const entry = sub.buildQueueEntry();
-            q3.enqueueOrUpdate(entry);
-            q3.boost(chatId, 15);
-            mirrorAccumulatorIngress(0, createDirectAddressItem(chatId, {
+            accumulator.ingest(0, createDirectAddressItem(chatId, {
                 reason: "feedback-loop",
                 triggerText,
-                queueEntry: entry,
+                queueEntry: sub.buildQueueEntry(),
             }));
-            log.info("追问检测 → Q3 入队", { chatId, triggerText: triggerText.slice(0, 50) });
+            log.info("追问检测 → Accumulator", { chatId, triggerText: triggerText.slice(0, 50) });
         },
     );
 
     // ─── NC.onPush: 消息实时处理管线 ───
     // mentionKeywords 现在在每次消息到达时动态从 loadConfig() 读取（支持热重载）
 
-    // Hook 2: 消息分发到 per-group GroupSubagent (Observer + RecordingPipeline) → 更新 Q3
+    // Hook 2: 消息分发到 per-group GroupSubagent (Observer + RecordingPipeline)
     nc.onPush(event => {
         if (shuttingDown) return;
         const chatId = String(event.chatId ?? "");
@@ -549,7 +523,7 @@ async function main(): Promise<void> {
                 agentSub.recordingPipeline.onMessage(agentMsg);
             }
 
-            return; // agent 消息不走后续 Observer/Q3 逻辑
+            return; // agent 消息不走后续 Observer/Accumulator 逻辑
         }
 
         // 接收所有消息类型事件（TelegramAdapter 使用 "nc.message"）
@@ -610,35 +584,25 @@ async function main(): Promise<void> {
         }
 
         const sub = subagentManager.getOrCreate(chatId);
-        // 监听 triage-engage 事件：RecordingPipeline flush 后 triage 通过时触发 Q3 重入队
+        // RecordingPipeline triage 通过时直接注入 AttentionAccumulator
         if (!sub.listenerCount("triage-engage")) {
             sub.on("triage-engage", (cid: string) => {
-                const isBlocked = q3.isBlocked(cid);
                 const entry = sub.buildQueueEntry();
-                mirrorAccumulatorIngress(2, queueEntryToTopicSignalItem(entry));
-                log.info("triage-engage → Q3 入队", {
+                accumulator.ingest(2, queueEntryToTopicSignalItem(entry));
+                log.info("triage-engage → Accumulator", {
                     chatId: cid,
-                    isBlocked,
+                    isBlocked: accumulator.isBlocked(cid),
                     priority: entry.priority,
                     callbackPotential: entry.callbackPotential ?? 0,
                     source: entry.source,
                     topicDigestCount: entry.topicDigests?.length,
-                    hasTriageEngaged: sub.hasTriageEngaged,
                 });
-                if (!isBlocked) {
-                    q3.enqueueOrUpdate(entry);
-                } else {
-                    log.warn("triage-engage: Q3 入队被阻塞，chatId 在 blockedChatIds 中", { chatId: cid });
-                }
             });
         }
         // Per-group: Observer + RecordingPipeline 同时处理消息 (subagent.md §3.1)
         sub.onMessage(event);
 
-        // Q3 入队策略（architecture_v2.md §3）：
-        // - 正常路径：RecordingPipeline flush → triage → triage-engage 事件 → Q3 入队
-        // - 紧急路径：DM / @mention / 文本提及 agent 名字 → 立即 Q3 入队
-        // Observer engagement 仅用于 Q3 内部优先级排序，不作为入队触发条件。
+        // 紧急路径：DM / @mention / 文本提及 agent 名字 → 立即注入 Layer 0。
         const isDM = !!event.isDirectMessage;
         const isMention = !!event.mentionsAgent;
         // 文本提及检测：检查消息内容是否包含配置的 mention_keywords（agent 名字等）
@@ -649,8 +613,7 @@ async function main(): Promise<void> {
 
         if (isDM || isMention || hasNameMention) {
             const entry = sub.buildQueueEntry("DIRECT_ADDRESS");
-            q3.enqueueOrUpdate(entry);
-            mirrorAccumulatorIngress(0, createDirectAddressItem(chatId, {
+            accumulator.ingest(0, createDirectAddressItem(chatId, {
                 reason: isDM ? "DM" : isMention ? "@mention" : "name-mention",
                 queueEntry: entry,
                 event: {
@@ -658,7 +621,7 @@ async function main(): Promise<void> {
                     userId: event.userId ?? event.senderId,
                 },
             }));
-            log.info("即时 → Q3 入队", {
+            log.info("即时 → Layer0", {
                 chatId,
                 reason: isDM ? "DM" : isMention ? "@mention" : "文本提及",
                 engagement: sub.observer.getEngagementScore(),
@@ -724,8 +687,8 @@ async function main(): Promise<void> {
         }
     });
 
-    // Hook 4: 追问实时检测 (architecture_v2.md §3 Q3 路径 5)
-    // 在 FeedbackLoop 的追问窗口内检测同群用户消息并触发 Q3 入队
+    // Hook 4: 追问实时检测
+    // 在 FeedbackLoop 的追问窗口内检测同群用户消息并触发 accumulator 注入
     nc.onPush(event => {
         if (shuttingDown) return;
         const chatId = String(event.chatId ?? "");
@@ -849,7 +812,7 @@ async function main(): Promise<void> {
     if (reflectionInterval.unref) reflectionInterval.unref();
 
     // ─── MainAgentLoop 配置 ───
-    const mainLoop = new MainAgentLoop(q3, q5, subagentManager, {
+    const mainLoop = new MainAgentLoop(accumulator, q5, subagentManager, {
         pollInterval: appConfig.subagent?.pollInterval ?? 5000,
         maxAttendsPerTick: 3,
         cosineDecayCyclePeriod: appConfig.subagent?.cosineDecay?.defaultCyclePeriod ?? 20,
@@ -878,7 +841,7 @@ async function main(): Promise<void> {
         subagentManager,
         sandboxPool,
         nc,
-        q3,
+        accumulator,
         q5,
 
         persona: appConfig.persona,
@@ -957,7 +920,7 @@ async function main(): Promise<void> {
             {
                 nc,
                 subagentManager,
-                q3,
+                accumulator,
                 q5,
                 mainLoop,
                 globalState,
@@ -999,7 +962,7 @@ async function main(): Promise<void> {
     if (metricsEnabled) {
         const { startMetrics } = await import("./metrics/index.js");
         metricsInstance = await startMetrics(
-            { subagentManager, sandboxPool, q3, q5, mainLoop, feedbackLoop },
+            { subagentManager, sandboxPool, accumulator, q5, mainLoop, feedbackLoop },
             appConfig.metrics,
         );
 
@@ -1037,7 +1000,7 @@ async function main(): Promise<void> {
 
     // ─── 统一调度器 Watchdog ───
     // 每 30 秒检查到期 reminder 和匹配的 cron 事件
-    // 触发时通过 Q3 注意力队列唤醒主 Agent，而非直接执行代码
+    // 触发时通过 AttentionAccumulator 唤醒主 Agent，而非直接执行代码
     const schedulerWatchdogInterval = setInterval(() => {
         const now = new Date();
 
@@ -1053,15 +1016,13 @@ async function main(): Promise<void> {
                 type: "reminder",
                 description: reminder.description,
             }];
-            q3.enqueueOrUpdate(entry);
-            q3.boost(reminder.chatId, 80);
-            mirrorAccumulatorIngress(1, createSchedulerItem(reminder.chatId, {
+            accumulator.ingest(1, createSchedulerItem(reminder.chatId, {
                 type: "reminder",
                 id: reminder.id,
                 description: reminder.description,
                 queueEntry: entry,
             }));
-            log.info("Reminder 到期 → Q3", { id: reminder.id, desc: reminder.description.slice(0, 80), chatId: reminder.chatId });
+            log.info("Reminder 到期 → Layer1", { id: reminder.id, desc: reminder.description.slice(0, 80), chatId: reminder.chatId });
         }
 
         // ── 清理过期已触发 Reminder（超过 7 天） ──
@@ -1104,15 +1065,13 @@ async function main(): Promise<void> {
                 type: "cron",
                 description: taskDesc,
             }];
-            q3.enqueueOrUpdate(entry);
-            q3.boost(evt.chatId, 80);
-            mirrorAccumulatorIngress(1, createSchedulerItem(evt.chatId, {
+            accumulator.ingest(1, createSchedulerItem(evt.chatId, {
                 type: "cron",
                 id: evt.id,
                 description: taskDesc,
                 queueEntry: entry,
             }));
-            log.info("Cron 触发 → Q3", { id: evt.id, name: evt.description, chatId: evt.chatId });
+            log.info("Cron 触发 → Layer1", { id: evt.id, name: evt.description, chatId: evt.chatId });
         }
     }, 30_000);
     if (schedulerWatchdogInterval.unref) schedulerWatchdogInterval.unref();

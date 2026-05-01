@@ -131,7 +131,7 @@ export interface PersonaConfig {
 }
 
 export interface NotificationConfig {
-    /** 触发 Q3 即时入队 + Observer 提权的关键词（agent 名字等） */
+    /** 触发即时注意力注入 + Observer 提权的关键词（agent 名字等） */
     mentionKeywords: string[];
 }
 
