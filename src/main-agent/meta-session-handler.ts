@@ -130,6 +130,12 @@ function renderAttentionEntry(entry: AttentionQueueEntry): string {
     const triggerLines = entry.schedulerTriggers?.length
         ? entry.schedulerTriggers.map((trigger) => `  - ${trigger.type}:${trigger.id} ${trigger.description}`).join("\n")
         : "  - (none)";
+    const recentMessageLines = entry.recentMessages?.length
+        ? entry.recentMessages.map((message) => {
+            const sender = message.displayName?.trim() || message.userId || "unknown";
+            return `  - [${message.timestamp}] ${sender}: ${formatRecentMessageText(message.text)}`;
+        }).join("\n")
+        : "  - (none)";
 
     return [
         `### ${entry.chatId}`,
@@ -137,12 +143,22 @@ function renderAttentionEntry(entry: AttentionQueueEntry): string {
         `- priority: ${entry.priority}`,
         `- newMessageCount: ${entry.newMessageCount}`,
         `- engagementScore: ${entry.engagementScore ?? 0}`,
+        `- directAddressReason: ${entry.directAddressReason ?? "(none)"}`,
         `- stickinessLevel: ${entry.stickinessLevel}`,
         `- callbackPotential: ${entry.callbackPotential ?? 0}`,
         `- urgentSignals: ${entry.urgentSignals?.join(", ") ?? "(none)"}`,
         `- schedulerTriggers:\n${triggerLines}`,
+        `- recentMessages:\n${recentMessageLines}`,
         `- topicDigests:\n${topicLines}`,
     ].join("\n");
+}
+
+function formatRecentMessageText(text: string): string {
+    const flattened = text.replace(/\s+/g, " ").trim();
+    if (flattened.length <= 160) {
+        return flattened;
+    }
+    return `${flattened.slice(0, 157)}...`;
 }
 
 function safeJson(value: unknown): string {
@@ -162,12 +178,83 @@ function loadRequiredPrompt(relativePath: string): string {
 }
 
 function buildMetaApiReference(): string {
-    return [
-        "- conversations.query(filters): 跨群检索消息、话题与回调线索。",
-        "- memory.searchEntities(query, options?): 检索人物、别名、core facts、近期会话和 topic 关键字。",
-        "- agents.listStatus(): 查看各群 Subagent 的运行状态与积压。",
-        "- dispatch.taskToGroup(chatId, taskSpec): 向指定群派发 CodeAct 回复任务。",
-        "- memo.set/get/delete/list: 读写跨会话备忘录。",
-        "- schedule.wakeOnCondition(condition): 注册 delay / callback_received 唤醒条件。",
-    ].join("\n");
+    return `## conversations — 跨群检索
+
+\`\`\`ts
+await conversations.query(filters?: {
+  chatIds?: string[],    // 限定群组 ID，空则搜索全部
+  keywords?: string[],   // 全文关键词，支持多个（OR 逻辑）
+  userId?: string,       // 限定发言者 ID（如 "telegram:123456"）
+  after?: string,        // ISO 时间下限
+  before?: string,       // ISO 时间上限
+  limit?: number         // 结果数上限（默认 20，最大 100）
+}): Promise<{
+  messages: { messageId, chatId, userId, displayName, content, timestamp }[],
+  topics: { topicId, chatId, label, summary, keywords, participants, startedAt, endedAt, sentiment, callbackPotential }[]
+}>
+\`\`\`
+
+## memory — 跨群实体检索
+
+\`\`\`ts
+await memory.searchEntities(query: string, options?: {
+  chatId?: string,             // 限定群组
+  after?: string,              // ISO 时间下限
+  before?: string,             // ISO 时间上限
+  categories?: string[],       // 事实分类过滤
+  limit?: number               // 默认 10，最大 50
+}): Promise<{
+  identities: { identity: { userId, aliases, displayName }, profile: { recentFacts, dunbarTier } }[],
+  recentSessions: { topicId, chatId, label, summary, keywords, participants }[],
+  coreFacts: { factId, subject, content, category, updatedAt }[],
+  topicKeywords: string[]
+}>
+\`\`\`
+
+## agents — 下属状态
+
+\`\`\`ts
+await agents.listStatus(): Promise<{
+  chatId: string,
+  queueSize: number,        // Q4 积压任务数
+  isProcessing: boolean,    // 当前是否在执行
+  lastActiveAt: string,     // 最后活跃时间
+  stickinessLevel: "CORE" | "FAMILIAR" | "ACQUAINTANCE" | "STRANGER"
+}[]>
+\`\`\`
+
+## dispatch — 任务派发
+
+\`\`\`ts
+await dispatch.taskToGroup(chatId: string, taskSpec: {
+  contentDirection: string,  // 必填：行动方向，告诉 Subagent 往哪个方向回复
+  toneGuidance?: string,     // 语气指导（轻松 / 正式 / 简短等）
+  context?: any,             // 跨群上下文，直接注入给 Subagent 的 prompt
+  useSkills?: string[]       // 需要额外加载的 Skill 模块名
+}): Promise<{ taskId: string }>
+\`\`\`
+dispatch 会自动将 context 序列化后注入 Subagent 的任务 prompt。你查到的跨群信息、事实、讨论记录都可以放在 context 里。
+
+## memo — 跨会话备忘录
+
+\`\`\`ts
+await memo.set(key: string, value: any, ttlMinutes?: number): Promise<void>
+await memo.get(key: string): Promise<any | null>
+await memo.delete(key: string): Promise<void>
+await memo.list(): Promise<{ key, value, expiresAt? }[]>
+\`\`\`
+memo 用于跨会话状态管理。设置 ttlMinutes 可自动过期。
+
+## schedule — 唤醒调度
+
+\`\`\`ts
+// 延迟唤醒：ms 毫秒后系统将唤醒你
+await schedule.wakeOnCondition({ type: "delay", ms: number }): Promise<{ conditionId, reminderId }>
+
+// 等待回调：Subagent 完成指定 taskId 后唤醒你
+await schedule.wakeOnCondition({ type: "callback_received", taskId: string }): Promise<{ conditionId }>
+
+// 取消唤醒条件
+await schedule.cancel(conditionId: string): Promise<{ removedWakeCondition, removedReminderIds }>
+\`\`\``;
 }

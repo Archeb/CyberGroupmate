@@ -23,7 +23,6 @@ const log = createLogger("template-engine");
 /** Prompt 类型 → 文件名映射 */
 const PROMPT_FILE_MAP: Record<string, string> = {
     EXECUTION: "executor/subagent-execution.md",
-    MAIN_SYSTEM: "main-agent/mainagent-main-system.md",
 };
 
 export type PromptType = keyof typeof PROMPT_FILE_MAP;
@@ -132,17 +131,3 @@ export function renderTemplate(template: string, variables: Record<string, unkno
     return result.trim();
 }
 
-/**
- * 从 persona 构建 MAIN_SYSTEM prompt 的变量（半静态）
- *
- * 可指派模块名册（hasAvailableSkills / availableSkillsRoster）在 attend-handler 中
- * 动态注入到返回的 vars 对象上。
- */
-export function buildMainSystemVariables(
-    persona: { name: string; description: string },
-): Record<string, unknown> {
-    return {
-        personaName: persona.name,
-        personaDescription: persona.description,
-    };
-}

@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { AttentionAccumulator } from "../src/accumulator/attention-accumulator.js";
+import { createDirectAddressItem } from "../src/accumulator/queue-entry-adapter.js";
 import type { LLMConfig } from "../src/core/config.js";
 import { GlobalState } from "../src/main-agent/global-state.js";
 import { createMetaSessionHandler } from "../src/main-agent/meta-session-handler.js";
@@ -228,6 +229,77 @@ describe("MainAgentLoop meta session path", () => {
         }]);
         assert.equal(globalState.getWakeConditions().length, 0);
         assert.equal(globalState.getSessionDigests()[0]?.content, "woke from callback");
+
+        globalState.dispose();
+    });
+
+    it("includes recent direct-address messages in the meta prompt", async () => {
+        const dir = tempDir();
+        const globalState = new GlobalState({
+            filePath: join(dir, "global-state.json"),
+            autoSaveInterval: 0,
+        });
+        const accumulator = new AttentionAccumulator(globalState, { windowMs: 0, topN: 2 });
+        const callbackQueue = new CallbackQueue();
+        const subagentManager = new SubagentManager({ sessionsDir: join(dir, "sessions") });
+        const loop = new MainAgentLoop(accumulator, callbackQueue, subagentManager, {}, globalState);
+        const subagent = subagentManager.getOrCreate("telegram:g1");
+
+        subagent.onMessage({
+            _id: "evt-1",
+            _ts: "2026-05-01T14:28:01.000Z",
+            type: "telegram.message",
+            chatId: "telegram:g1",
+            userId: "telegram:u1",
+            displayName: "阿喵",
+            text: "在吗在吗",
+            messageId: "7305",
+        });
+
+        accumulator.ingest(0, {
+            ...createDirectAddressItem("telegram:g1", { reason: "DM" }, 1),
+            pressure: 90,
+        });
+
+        const metaApiContext = buildMetaApiContext({
+            memory: {} as any,
+            subagentManager,
+            globalState,
+            accumulator,
+            executorFactory: () => ({
+                enqueue: () => undefined,
+                setSessionFilePath: () => undefined,
+                getSessionFilePath: () => null,
+                loadSession: () => undefined,
+            } as any),
+            initializeExecutor: async () => undefined,
+        });
+        const sandbox = new MetaSandbox(metaApiContext);
+
+        let lastUserPrompt = "";
+        loop.setMetaSessionHandler(createMetaSessionHandler({
+            getPersona: () => ({ name: "测试编排者", description: "验证 recentMessages 会进入 Meta prompt" }),
+            globalState,
+            sandbox,
+            getLlmConfigs: () => [TEST_LLM_CONFIG],
+            llmCaller: async (messages) => {
+                lastUserPrompt = messages.at(-1)?.content ?? "";
+                return {
+                    content: [
+                        "[SESSION_DIGEST]saw direct-address message[/SESSION_DIGEST]",
+                        "<end_turn>",
+                    ].join("\n"),
+                };
+            },
+        }));
+
+        const result = await loop.tick();
+
+        assert.equal(result.phase4MetaEndReason, "end_turn");
+        assert.match(lastUserPrompt, /在吗在吗/);
+        assert.match(lastUserPrompt, /阿喵/);
+        assert.match(lastUserPrompt, /directAddressReason: DM/);
+        assert.match(lastUserPrompt, /recentMessages/);
 
         globalState.dispose();
     });

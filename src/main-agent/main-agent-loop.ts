@@ -341,6 +341,7 @@ export class MainAgentLoop {
             case "DIRECT_ADDRESS":
                 if (!subagent) return null;
                 entry = subagent.buildQueueEntry("DIRECT_ADDRESS");
+                entry.directAddressReason = extractDirectAddressReason(item.payload);
                 break;
             case "SCHEDULER":
             case "WAKE_CONDITION":
@@ -404,6 +405,13 @@ function extractSchedulerTriggers(payload: unknown): Array<{ id: string; type: "
     }
 
     return [];
+}
+
+function extractDirectAddressReason(payload: unknown): string | undefined {
+    if (!payload || typeof payload !== "object") {
+        return undefined;
+    }
+    return typeof payload.reason === "string" ? payload.reason : undefined;
 }
 
 function createSyntheticMetaEntry(item: AttentionItem): AttentionQueueEntry {

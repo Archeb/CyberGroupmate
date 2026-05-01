@@ -197,6 +197,7 @@ export class GroupSubagent extends EventEmitter {
             snapshotTimestamp: new Date().toISOString(),
             callbackPotential: maxCallbackPotential,
             hasHighCallbackPotential: maxCallbackPotential > 70,
+            recentMessages: this.observer.getMessageSnapshot(5),
         };
     }
 

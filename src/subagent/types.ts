@@ -71,6 +71,13 @@ export interface TopicDigest {
     callbackPotential?: number;
 }
 
+export interface AttentionRecentMessage {
+    userId: string;
+    displayName?: string;
+    text: string;
+    timestamp: string;
+}
+
 
 // ─── 主循环 attend 快照 ───
 
@@ -104,6 +111,8 @@ export interface AttentionQueueEntry {
     // ─── subagent.md §2.2 补齐字段 ───
     /** Engagement 评分 (0-100) */
     engagementScore?: number;
+    /** DIRECT_ADDRESS 的触发原因（DM / @mention / name-mention） */
+    directAddressReason?: string;
     /** 紧急信号列表（如 @mention、关键词命中等） */
     urgentSignals?: string[];
     /** 快照时间戳 */
@@ -114,6 +123,8 @@ export interface AttentionQueueEntry {
     callbackPotential?: number;
     /** 是否存在高 callbackPotential 话题 */
     hasHighCallbackPotential?: boolean;
+    /** 最近原始消息快照，用于 Meta 在话题摘要缺失时仍能看到内容 */
+    recentMessages?: AttentionRecentMessage[];
 }
 
 /** AttentionQueue 评估结果 */

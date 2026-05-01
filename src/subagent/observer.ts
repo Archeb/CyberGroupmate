@@ -186,14 +186,20 @@ export class Observer {
      */
     getMessageSnapshot(upTo: number = 20): Array<{
         userId: string;
+        displayName?: string;
         text: string;
-        timestamp: number;
+        timestamp: string;
     }> {
         const slice = this.buffer.slice(-upTo);
         return slice.map(m => ({
             userId: String(m.event.userId ?? m.event.user_id ?? m.event.senderId ?? ""),
+            displayName: typeof m.event.displayName === "string"
+                ? m.event.displayName
+                : typeof m.event.display_name === "string"
+                    ? m.event.display_name
+                    : undefined,
             text: String(m.event.text ?? m.event.message ?? ""),
-            timestamp: m.timestamp,
+            timestamp: new Date(m.timestamp).toISOString(),
         }));
     }
 

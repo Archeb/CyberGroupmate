@@ -4,7 +4,7 @@
 
 export { ContextEngine, contextEvents } from "./context-engine.js";
 export { ContextLedger } from "./context-ledger.js";
-export { renderPrompt, renderTemplate, loadTemplate, buildMainSystemVariables } from "./template-engine.js";
+export { renderPrompt, renderTemplate, loadTemplate } from "./template-engine.js";
 export type {
     SectionProvider,
     SectionSchema,
