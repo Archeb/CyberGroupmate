@@ -39,7 +39,6 @@ export const appState = writable({
 // ─── Messages ───
 export const messages = writable([]);
 const MAX_MESSAGES = 500;
-      if (!config.subagent.metaHistory) config.subagent.metaHistory = {};
 
 export function addMessage(data, timestamp) {
   messages.update(msgs => {
