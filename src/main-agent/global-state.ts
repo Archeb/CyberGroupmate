@@ -19,6 +19,7 @@ import type {
     MainAgentGlobalState,
     SchedulerEvent,
     MemoEntry,
+    MetaSessionHistoryEntry,
     SessionDigestEntry,
     SignalPoolItem,
     WakeCondition,
@@ -43,6 +44,7 @@ const DEFAULT_CONFIG: GlobalStateConfig = {
 };
 
 const MAX_SESSION_DIGESTS = 10;
+const MAX_META_SESSION_HISTORY_MESSAGES = 12;
 
 /**
  * GlobalState — 主 Agent 全局状态管理器
@@ -188,6 +190,42 @@ export class GlobalState {
         return [...this.state.sessionDigests];
     }
 
+    appendMetaSessionHistory(
+        messages: Array<Pick<MetaSessionHistoryEntry, "role" | "content"> & Partial<Pick<MetaSessionHistoryEntry, "timestamp">>>,
+    ): void {
+        let appended = 0;
+
+        for (const message of messages) {
+            if (!message || (message.role !== "assistant" && message.role !== "user")) {
+                continue;
+            }
+
+            const content = String(message.content ?? "").trim();
+            if (!content) {
+                continue;
+            }
+
+            this.state.metaSessionHistory.push({
+                role: message.role,
+                content,
+                timestamp: message.timestamp ?? new Date().toISOString(),
+            });
+            appended += 1;
+        }
+
+        if (this.state.metaSessionHistory.length > MAX_META_SESSION_HISTORY_MESSAGES) {
+            this.state.metaSessionHistory.splice(0, this.state.metaSessionHistory.length - MAX_META_SESSION_HISTORY_MESSAGES);
+        }
+
+        if (appended > 0) {
+            this.markDirty();
+        }
+    }
+
+    getMetaSessionHistory(): MetaSessionHistoryEntry[] {
+        return [...this.state.metaSessionHistory];
+    }
+
     getSignalPool(): SignalPoolItem[] {
         return [...this.state.signalPool];
     }
@@ -302,6 +340,7 @@ export class GlobalState {
             schedulerEvents: Array.isArray(obj.schedulerEvents) ? obj.schedulerEvents : def.schedulerEvents,
             memos: Array.isArray(obj.memos) ? obj.memos as MemoEntry[] : def.memos,
             sessionDigests: Array.isArray(obj.sessionDigests) ? obj.sessionDigests as SessionDigestEntry[] : def.sessionDigests,
+            metaSessionHistory: Array.isArray(obj.metaSessionHistory) ? obj.metaSessionHistory as MetaSessionHistoryEntry[] : def.metaSessionHistory,
             signalPool: Array.isArray(obj.signalPool) ? obj.signalPool as SignalPoolItem[] : def.signalPool,
             wakeConditions: Array.isArray(obj.wakeConditions) ? obj.wakeConditions as WakeConditionRecord[] : def.wakeConditions,
         };
@@ -312,6 +351,7 @@ export class GlobalState {
             schedulerEvents: [],
             memos: [],
             sessionDigests: [],
+            metaSessionHistory: [],
             signalPool: [],
             wakeConditions: [],
         };

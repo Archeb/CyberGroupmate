@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
-import type { ChatMessage, LLMResponse } from "../src/core/llm.js";
+import type { ChatMessage, LLMCallOptions, LLMResponse } from "../src/core/llm.js";
 import type { LLMConfig } from "../src/core/config.js";
 import { createMetaSessionHandler } from "../src/main-agent/meta-session-handler.js";
 import { MetaSandbox } from "../src/meta-sandbox/meta-sandbox.js";
@@ -143,6 +143,8 @@ describe("createMetaSessionHandler", () => {
             globalState: {
                 getSessionDigests: () => [],
                 memoList: () => [],
+                getMetaSessionHistory: () => [],
+                appendMetaSessionHistory: () => undefined,
             },
             memory: createMemoryStub() as any,
             sandbox,
@@ -181,5 +183,85 @@ describe("createMetaSessionHandler", () => {
         assert.doesNotMatch(secondPrompt, /## 活跃参与者 \(更新\)/);
         assert.match(secondPrompt, /## 聊天画像/);
         assert.match(secondPrompt, /## 当前注意力元数据/);
+    });
+
+    it("replays prior meta assistant history, exposes assignable skills, and forwards merged manifests", async () => {
+        const sandbox = new MetaSandbox({});
+        const persistedHistory: Array<{ role: "assistant" | "user"; content: string; timestamp: string }> = [];
+        const llmCalls: Array<{ messages: ChatMessage[]; options?: LLMCallOptions }> = [];
+        const responses: LLMResponse[] = [
+            {
+                content: [
+                    "先做一次查询。",
+                    "",
+                    "```ts",
+                    "console.log(\"meta-history\");",
+                    "```",
+                    "",
+                    "[SESSION_DIGEST]stored history[/SESSION_DIGEST]",
+                    "<end_turn>",
+                ].join("\n"),
+            },
+            {
+                content: [
+                    "[SESSION_DIGEST]reused prior history[/SESSION_DIGEST]",
+                    "<end_turn>",
+                ].join("\n"),
+            },
+        ];
+
+        const globalStateStub = {
+            getSessionDigests: () => [],
+            memoList: () => [],
+            getMetaSessionHistory: () => [...persistedHistory],
+            appendMetaSessionHistory: (messages: Array<{ role: "assistant" | "user"; content: string }>) => {
+                const timestamp = new Date().toISOString();
+                for (const message of messages) {
+                    persistedHistory.push({ ...message, timestamp });
+                }
+            },
+        };
+
+        const createHandler = () => createMetaSessionHandler({
+            getPersona: () => ({ name: "测试编排者", description: "验证 meta session history + manifest" }),
+            globalState: globalStateStub,
+            memory: createMemoryStub() as any,
+            sandbox,
+            getLlmConfigs: () => [TEST_LLM_CONFIG],
+            llmCaller: async (messages, _configs, options): Promise<LLMResponse> => {
+                llmCalls.push({
+                    messages: messages.map((message) => ({ ...message })),
+                    options,
+                });
+                const next = responses.shift();
+                assert.ok(next);
+                return next;
+            },
+        });
+
+        const entry = createEntry();
+
+        await createHandler()([entry], []);
+        assert.ok(persistedHistory.length >= 2);
+
+        await createHandler()([entry], []);
+
+        const firstSystemPrompt = String(llmCalls[0]?.messages[0]?.content ?? "");
+        assert.match(firstSystemPrompt, /可分配技能模块/);
+        assert.ok(llmCalls[0]?.options?.contextManifest);
+        assert.ok((llmCalls[0]?.options?.contextManifest?.sections?.length ?? 0) > 0);
+
+        const secondCallMessages = llmCalls[1]?.messages ?? [];
+        const priorAssistant = secondCallMessages.find((message) => message.role === "assistant");
+        assert.ok(priorAssistant);
+        assert.match(priorAssistant.content, /先做一次查询/);
+        assert.match(priorAssistant.content, /\[执行代码已剥离\]/);
+        assert.doesNotMatch(priorAssistant.content, /console\.log/);
+        assert.doesNotMatch(priorAssistant.content, /<end_turn>/);
+
+        const priorObservation = secondCallMessages.find((message) =>
+            message.role === "user" && /MetaSandbox observation/.test(message.content)
+        );
+        assert.ok(priorObservation);
     });
 });

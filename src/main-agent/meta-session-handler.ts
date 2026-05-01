@@ -7,18 +7,23 @@ import { ContextEngine } from "../context-engine/context-engine.js";
 import { deriveChatType } from "../context-engine/prompt-renderer-utils.js";
 import { getMetaProviders } from "../context-engine/providers/meta-providers.js";
 import { renderTemplate } from "../context-engine/template-engine.js";
-import type { SectionNode } from "../context-engine/types.js";
+import type { ContextManifest, SectionNode } from "../context-engine/types.js";
 import type { IMemoryStoreV2 } from "../memory-v2/index.js";
 import type { MetaSandbox } from "../meta-sandbox/meta-sandbox.js";
 import { runMetaSession, type MetaLLMCaller, type MetaSessionResult } from "../meta-sandbox/meta-session-runner.js";
-import type { ActiveUserProfile, AttentionQueueEntry, SubagentCallback, TopicDigest } from "../subagent/types.js";
+import { loadConfig } from "../core/config.js";
+import { generateModuleRoster } from "../sandbox/modules/module-registry.js";
+import type { ActiveUserProfile, AttentionQueueEntry, MetaSessionHistoryEntry, SubagentCallback, TopicDigest } from "../subagent/types.js";
 import type { GlobalState } from "./global-state.js";
 
 const log = createLogger("meta-session-handler");
+const DEFAULT_BASE_SKILLS = ["runtime", "fs", "skills", "mcp", "cron", "todo", "memory", "vision", "shell"];
+const MAX_META_SESSION_HISTORY_MESSAGES = 12;
+type MetaHistoryMessage = Pick<MetaSessionHistoryEntry, "role" | "content">;
 
 export interface MetaSessionHandlerDeps {
     getPersona: () => { name?: string; description?: string } | undefined;
-    globalState: Pick<GlobalState, "getSessionDigests" | "memoList">;
+    globalState: Pick<GlobalState, "getSessionDigests" | "memoList" | "getMetaSessionHistory" | "appendMetaSessionHistory">;
     memory: Pick<IMemoryStoreV2, "getGroupModel" | "getProfilesForChat" | "getPersonIdentity" | "getTopicById">;
     sandbox: MetaSandbox;
     getLlmConfigs: () => LLMConfig[];
@@ -31,6 +36,10 @@ export interface MetaSessionHandlerDeps {
 export function createMetaSessionHandler(deps: MetaSessionHandlerDeps) {
     const engine = new ContextEngine("meta-agent");
     engine.registerAll(getMetaProviders());
+    const sessionHistory: ChatMessage[] = deps.globalState.getMetaSessionHistory().map((message) => ({
+        role: message.role,
+        content: message.content,
+    }));
 
     return async (
         entries: AttentionQueueEntry[],
@@ -45,7 +54,8 @@ export function createMetaSessionHandler(deps: MetaSessionHandlerDeps) {
             throw new Error("Meta session requires at least one LLM profile");
         }
 
-        const { messages, renderTrees } = await buildMetaMessages(deps, engine, entries, callbacks);
+        const { messages, renderTrees, contextManifest } = await buildMetaMessages(deps, engine, sessionHistory, entries, callbacks);
+        const initialMessageCount = messages.length;
         log.info("运行 Meta session", {
             groups: entries.map((entry) => entry.chatId),
             callbacks: callbacks.length,
@@ -56,7 +66,14 @@ export function createMetaSessionHandler(deps: MetaSessionHandlerDeps) {
             codeTimeout: deps.codeTimeout,
             llmCaller: deps.llmCaller,
             llmTimeoutMs: deps.llmTimeoutMs,
+            contextManifest,
         });
+
+        if (result.messages.length > initialMessageCount) {
+            const historyMessages = collectMetaSessionHistory(result.messages.slice(initialMessageCount));
+            appendMetaSessionHistory(sessionHistory, historyMessages);
+            deps.globalState.appendMetaSessionHistory(historyMessages);
+        }
 
         if (result.endReason !== "error" || result.turns.length > 0) {
             for (const tree of renderTrees) {
@@ -71,21 +88,23 @@ export function createMetaSessionHandler(deps: MetaSessionHandlerDeps) {
 async function buildMetaMessages(
     deps: MetaSessionHandlerDeps,
     engine: ContextEngine,
+    sessionHistory: ChatMessage[],
     entries: AttentionQueueEntry[],
     callbacks: SubagentCallback[],
-): Promise<{ messages: ChatMessage[]; renderTrees: SectionNode[][] }> {
+): Promise<{ messages: ChatMessage[]; renderTrees: SectionNode[][]; contextManifest: ContextManifest }> {
     const persona = deps.getPersona() ?? {};
-    const systemPrompt = loadRequiredPrompt("meta-agent/meta-system.md");
+    const systemPrompt = await buildMetaSystemPrompt(persona);
     const messages: ChatMessage[] = [
         {
             role: "system",
-            content: renderTemplate(systemPrompt, {
-                personaName: persona.name ?? "赛博群友",
-                personaDescription: persona.description ?? "跨群编排 agent",
-                metaApiReference: buildMetaApiReference(),
-            }),
+            content: systemPrompt,
         },
     ];
+    const manifests: ContextManifest[] = [];
+
+    if (sessionHistory.length > 0) {
+        messages.push(...sessionHistory.map((message) => ({ ...message })));
+    }
 
     const historicalParts: string[] = [];
     const ephemeralParts: string[] = [];
@@ -97,6 +116,7 @@ async function buildMetaMessages(
         callbacks,
     });
     renderTrees.push(globalRender.tree);
+    manifests.push(globalRender.manifest);
     if (globalRender.historicalContent) {
         historicalParts.push(globalRender.historicalContent);
     }
@@ -107,6 +127,7 @@ async function buildMetaMessages(
     for (const entry of entries) {
         const renderResult = engine.render(await buildMetaResolveContext(deps, entry));
         renderTrees.push(renderResult.tree);
+        manifests.push(renderResult.manifest);
         if (renderResult.historicalContent) {
             historicalParts.push(renderResult.historicalContent);
         }
@@ -119,6 +140,7 @@ async function buildMetaMessages(
         currentTurnInstruction: "请检查是否需要跨群检索、分派任务、写 memo 或注册 wake condition。若无需动作，请直接结束本轮。",
     });
     renderTrees.push(instructionRender.tree);
+    manifests.push(instructionRender.manifest);
     if (instructionRender.ephemeralContent) {
         ephemeralParts.push(instructionRender.ephemeralContent);
     }
@@ -140,7 +162,100 @@ async function buildMetaMessages(
     return {
         messages,
         renderTrees,
+        contextManifest: mergeContextManifests(manifests),
     };
+}
+
+async function buildMetaSystemPrompt(persona: { name?: string; description?: string }): Promise<string> {
+    const systemPrompt = loadRequiredPrompt("meta-agent/meta-system.md");
+    return renderTemplate(systemPrompt, {
+        personaName: persona.name ?? "赛博群友",
+        personaDescription: persona.description ?? "跨群编排 agent",
+        metaApiReference: buildMetaApiReference(),
+        availableSkillsRoster: await buildAssignableSkillsRoster(),
+    });
+}
+
+async function buildAssignableSkillsRoster(): Promise<string> {
+    try {
+        const currentConfig = loadConfig();
+        const baseSkills = new Set(currentConfig.subagent?.baseSkills ?? DEFAULT_BASE_SKILLS);
+
+        if (currentConfig.telegram) baseSkills.add("telegram");
+        if (currentConfig.discord) baseSkills.add("discord");
+        if ((currentConfig as { onebot?: unknown }).onebot) baseSkills.add("onebot");
+
+        const { getModuleRegistryCache } = await import("../subagent/code-act-executor.js");
+        const roster = generateModuleRoster(getModuleRegistryCache(), baseSkills).trim();
+        return roster || "- （当前没有可额外指派的模块）";
+    } catch (error) {
+        log.warn("构建可分配技能名册失败", { error: String(error) });
+        return "- （技能名册暂不可用）";
+    }
+}
+
+function mergeContextManifests(manifests: ContextManifest[]): ContextManifest {
+    const sections = manifests.flatMap((manifest) => manifest.sections.map((section) => ({ ...section })));
+    const historicalSections = sections.filter((section) =>
+        section.sentPhase === "historical"
+        && typeof section.sentContent === "string"
+        && section.sentContent.length > 0
+    );
+    const ephemeralSections = sections.filter((section) =>
+        section.sentPhase === "ephemeral"
+        && typeof section.sentContent === "string"
+        && section.sentContent.length > 0
+    );
+    const chatIds = [...new Set(manifests
+        .map((manifest) => manifest.chatId)
+        .filter((chatId): chatId is string => typeof chatId === "string" && chatId.length > 0))];
+
+    historicalSections.forEach((section, index) => {
+        section.sentOrder = index;
+    });
+    ephemeralSections.forEach((section, index) => {
+        section.sentOrder = historicalSections.length + index;
+    });
+
+    const activeSections = sections.filter((section) => !section.skipped);
+
+    return {
+        timestamp: new Date().toISOString(),
+        chatId: chatIds.length === 1 ? chatIds[0] : (chatIds.length > 1 ? "__meta__" : undefined),
+        engineId: manifests[0]?.engineId ?? "meta-agent",
+        sections,
+        summary: {
+            totalSections: sections.length,
+            activeSections: activeSections.length,
+            skippedSections: sections.length - activeSections.length,
+            totalChars: activeSections.reduce((sum, section) => sum + section.renderedChars, 0),
+            historicalChars: historicalSections.reduce((sum, section) => sum + (section.sentContent?.length ?? 0), 0),
+            ephemeralChars: ephemeralSections.reduce((sum, section) => sum + (section.sentContent?.length ?? 0), 0),
+            estimatedTokens: activeSections.reduce((sum, section) => sum + section.estimatedTokens, 0),
+        },
+    };
+}
+
+function appendMetaSessionHistory(history: ChatMessage[], messages: MetaHistoryMessage[]): void {
+    for (const message of messages) {
+        if (!message.content.trim()) {
+            continue;
+        }
+        history.push({ role: message.role, content: message.content.trim() });
+    }
+
+    if (history.length > MAX_META_SESSION_HISTORY_MESSAGES) {
+        history.splice(0, history.length - MAX_META_SESSION_HISTORY_MESSAGES);
+    }
+}
+
+function collectMetaSessionHistory(messages: ChatMessage[]): MetaHistoryMessage[] {
+    return messages.flatMap((message) => {
+        if ((message.role !== "assistant" && message.role !== "user") || !message.content.trim()) {
+            return [];
+        }
+        return [{ role: message.role, content: message.content.trim() }];
+    });
 }
 
 async function buildMetaResolveContext(

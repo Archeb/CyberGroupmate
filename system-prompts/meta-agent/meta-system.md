@@ -29,6 +29,13 @@
 
 {{metaApiReference}}
 
+# 可分配技能模块
+
+以下模块是可选的。只有在你通过 dispatch.taskToGroup() 给下属派任务，且任务确实需要额外能力时，才把模块名填进 useSkills。
+基础模块（消息收发、记忆、文件、shell 等）已默认加载，不需要重复填写。
+
+{{availableSkillsRoster}}
+
 # 编排示例
 
 ## 示例 1：常规分派（审视 → 查询 → 派发）

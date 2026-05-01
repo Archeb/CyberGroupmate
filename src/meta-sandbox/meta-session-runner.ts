@@ -3,6 +3,7 @@ import { callLLMWithFallback, type ChatMessage, type LLMCallOptions, type LLMRes
 import type { LLMConfig } from "../core/config.js";
 import { createLogger } from "../core/logger.js";
 import type { MetaSandbox } from "./meta-sandbox.js";
+import type { ContextManifest } from "../context-engine/types.js";
 
 const log = createLogger("meta-session");
 
@@ -17,6 +18,7 @@ export interface MetaSessionConfig {
     codeTimeout?: number;
     llmCaller?: MetaLLMCaller;
     llmTimeoutMs?: number;
+    contextManifest?: ContextManifest;
 }
 
 export interface MetaSessionTurn {
@@ -116,6 +118,7 @@ export async function runMetaSession(
             const response = await llmCaller(messages, llmConfigs, {
                 caller: "meta-session",
                 timeoutMs: config.llmTimeoutMs,
+                ...(config.contextManifest ? { contextManifest: config.contextManifest } : {}),
             });
             const assistantMessage = response.content.trim();
             const parsed = parseMetaResponse(assistantMessage);
@@ -167,5 +170,8 @@ function formatObservation(output: string): string {
 }
 
 function stripCodeBlocksForHistory(content: string): string {
-    return content.replace(CODE_BLOCK_IN_HISTORY_RE, "[执行代码已剥离]");
+    return content
+        .replace(CODE_BLOCK_IN_HISTORY_RE, "[执行代码已剥离]")
+        .replace(new RegExp(END_TURN_MARKER, "g"), "")
+        .trim();
 }

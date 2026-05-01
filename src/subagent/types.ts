@@ -393,6 +393,12 @@ export interface SessionDigestEntry {
     createdAt: string;
 }
 
+export interface MetaSessionHistoryEntry {
+    role: "user" | "assistant";
+    content: string;
+    timestamp: string;
+}
+
 export interface SignalPoolItem {
     chatId: string;
     source: string;
@@ -422,6 +428,8 @@ export interface MainAgentGlobalState {
     memos: MemoEntry[];
     /** Meta-CodeAct 历史会话摘要 */
     sessionDigests: SessionDigestEntry[];
+    /** Meta-CodeAct 精简对话历史（assistant/user） */
+    metaSessionHistory: MetaSessionHistoryEntry[];
     /** Accumulator 信号池 */
     signalPool: SignalPoolItem[];
     /** Meta-CodeAct 唤醒条件 */

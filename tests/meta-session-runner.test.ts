@@ -1,7 +1,8 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import type { ChatMessage, LLMResponse } from "../src/core/llm.js";
+import type { ChatMessage, LLMCallOptions, LLMResponse } from "../src/core/llm.js";
 import type { LLMConfig } from "../src/core/config.js";
+import type { ContextManifest } from "../src/context-engine/types.js";
 import { MetaSandbox } from "../src/meta-sandbox/meta-sandbox.js";
 import { compactThinking, extractSessionDigest, parseMetaResponse, runMetaSession } from "../src/meta-sandbox/meta-session-runner.js";
 
@@ -56,6 +57,22 @@ describe("runMetaSession", () => {
             },
         });
         const llmCalls: ChatMessage[][] = [];
+        const llmOptions: Array<LLMCallOptions | undefined> = [];
+        const contextManifest: ContextManifest = {
+            timestamp: "2026-05-02T00:00:00.000Z",
+            chatId: "__meta__",
+            engineId: "meta-agent",
+            sections: [],
+            summary: {
+                totalSections: 0,
+                activeSections: 0,
+                skippedSections: 0,
+                totalChars: 0,
+                historicalChars: 0,
+                ephemeralChars: 0,
+                estimatedTokens: 0,
+            },
+        };
         const responses: LLMResponse[] = [
             {
                 content: [
@@ -81,8 +98,10 @@ describe("runMetaSession", () => {
             sandbox,
             [TEST_LLM_CONFIG],
             {
-                llmCaller: async (messages) => {
+                contextManifest,
+                llmCaller: async (messages, _configs, options) => {
                     llmCalls.push(messages.map((message) => ({ ...message })));
+                    llmOptions.push(options);
                     const next = responses.shift();
                     assert.ok(next);
                     return next;
@@ -94,10 +113,12 @@ describe("runMetaSession", () => {
         assert.equal(result.turns.length, 2);
         assert.equal(result.sessionDigest, "resolved answer and logged it");
         assert.match(result.turns[0].observation ?? "", /42/);
+        assert.equal(llmOptions[0]?.contextManifest, contextManifest);
         assert.match(llmCalls[1][llmCalls[1].length - 1].content, /MetaSandbox observation/);
         assert.match(llmCalls[1][llmCalls[1].length - 1].content, /42/);
         assert.match(llmCalls[1][llmCalls[1].length - 2].content, /\[执行代码已剥离\]/);
         assert.doesNotMatch(llmCalls[1][llmCalls[1].length - 2].content, /const value = 1/);
+        assert.doesNotMatch(llmCalls[1][llmCalls[1].length - 2].content, /<end_turn>/);
     });
 
     it("returns no_code when the model emits no runnable code", async () => {
