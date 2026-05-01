@@ -378,6 +378,37 @@ export interface SchedulerEvent {
     lastTriggeredAt?: string;
 }
 
+export interface MemoEntry {
+    key: string;
+    value: unknown;
+    expiresAt?: string;
+    createdAt: string;
+}
+
+export interface SessionDigestEntry {
+    content: string;
+    createdAt: string;
+}
+
+export interface SignalPoolItem {
+    chatId: string;
+    source: string;
+    payload: unknown;
+    enqueuedAt: number;
+    pressure: number;
+    ignoredCount: number;
+}
+
+export type WakeCondition =
+    | { type: "delay"; ms: number }
+    | { type: "callback_received"; taskId: string };
+
+export interface WakeConditionRecord {
+    id: string;
+    condition: WakeCondition;
+    registeredAt: string;
+}
+
 // ─── 全局状态 ───
 
 /** 主 Agent 全局状态 */
@@ -408,6 +439,14 @@ export interface MainAgentGlobalState {
     notes: AgentNote[];
     /** 调度事件（定时提醒 + cron 任务） */
     schedulerEvents: SchedulerEvent[];
+    /** Meta-CodeAct 全局备忘录 */
+    memos: MemoEntry[];
+    /** Meta-CodeAct 历史会话摘要 */
+    sessionDigests: SessionDigestEntry[];
+    /** Accumulator 信号池 */
+    signalPool: SignalPoolItem[];
+    /** Meta-CodeAct 唤醒条件 */
+    wakeConditions: WakeConditionRecord[];
 }
 
 /** Agent 任务 */

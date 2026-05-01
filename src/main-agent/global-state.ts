@@ -14,7 +14,17 @@
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import type { MainAgentGlobalState, AgentTask, AgentNote, SchedulerEvent } from "../subagent/types.js";
+import type {
+    MainAgentGlobalState,
+    AgentTask,
+    AgentNote,
+    SchedulerEvent,
+    MemoEntry,
+    SessionDigestEntry,
+    SignalPoolItem,
+    WakeCondition,
+    WakeConditionRecord,
+} from "../subagent/types.js";
 import { createLogger } from "../core/logger.js";
 import { randomUUID } from "node:crypto";
 
@@ -35,6 +45,8 @@ const DEFAULT_CONFIG: GlobalStateConfig = {
     maxRecentDecisions: 50,
     autoSaveInterval: 30000,
 };
+
+const MAX_SESSION_DIGESTS = 10;
 
 /**
  * GlobalState — 主 Agent 全局状态管理器
@@ -267,6 +279,98 @@ export class GlobalState {
         return [...this.state.schedulerEvents];
     }
 
+    // ─── Meta-CodeAct 状态 ───
+
+    memoSet(key: string, value: unknown, ttlMinutes?: number): void {
+        const createdAt = new Date().toISOString();
+        const expiresAt = typeof ttlMinutes === "number" && ttlMinutes > 0
+            ? new Date(Date.now() + ttlMinutes * 60_000).toISOString()
+            : undefined;
+        const memo: MemoEntry = { key, value, createdAt, expiresAt };
+        const existingIndex = this.state.memos.findIndex(item => item.key === key);
+        if (existingIndex >= 0) {
+            this.state.memos.splice(existingIndex, 1, memo);
+        } else {
+            this.state.memos.push(memo);
+        }
+        this.markDirty();
+    }
+
+    memoGet(key: string): unknown | null {
+        this.cleanExpiredMemos();
+        const memo = this.state.memos.find(item => item.key === key);
+        return memo ? memo.value : null;
+    }
+
+    memoDelete(key: string): void {
+        const index = this.state.memos.findIndex(item => item.key === key);
+        if (index === -1) return;
+        this.state.memos.splice(index, 1);
+        this.markDirty();
+    }
+
+    memoList(): Array<{ key: string; value: unknown; expiresAt?: string }> {
+        this.cleanExpiredMemos();
+        return this.state.memos.map(({ key, value, expiresAt }) => ({ key, value, expiresAt }));
+    }
+
+    cleanExpiredMemos(): number {
+        const now = new Date().toISOString();
+        const before = this.state.memos.length;
+        this.state.memos = this.state.memos.filter(item => !item.expiresAt || item.expiresAt > now);
+        const removed = before - this.state.memos.length;
+        if (removed > 0) this.markDirty();
+        return removed;
+    }
+
+    addSessionDigest(content: string): void {
+        const entry: SessionDigestEntry = {
+            content,
+            createdAt: new Date().toISOString(),
+        };
+        this.state.sessionDigests.push(entry);
+        while (this.state.sessionDigests.length > MAX_SESSION_DIGESTS) {
+            this.state.sessionDigests.shift();
+        }
+        this.markDirty();
+    }
+
+    getSessionDigests(): SessionDigestEntry[] {
+        return [...this.state.sessionDigests];
+    }
+
+    getSignalPool(): SignalPoolItem[] {
+        return [...this.state.signalPool];
+    }
+
+    setSignalPool(items: SignalPoolItem[]): void {
+        this.state.signalPool = [...items];
+        this.markDirty();
+    }
+
+    addWakeCondition(condition: WakeCondition): string {
+        const wakeCondition: WakeConditionRecord = {
+            id: randomUUID(),
+            condition,
+            registeredAt: new Date().toISOString(),
+        };
+        this.state.wakeConditions.push(wakeCondition);
+        this.markDirty();
+        return wakeCondition.id;
+    }
+
+    removeWakeCondition(id: string): boolean {
+        const index = this.state.wakeConditions.findIndex(item => item.id === id);
+        if (index === -1) return false;
+        this.state.wakeConditions.splice(index, 1);
+        this.markDirty();
+        return true;
+    }
+
+    getWakeConditions(): WakeConditionRecord[] {
+        return [...this.state.wakeConditions];
+    }
+
     /** 获取已到期的提醒（未触发的，triggerAt <= now） */
     getDueReminders(): SchedulerEvent[] {
         const now = new Date().toISOString();
@@ -353,6 +457,10 @@ export class GlobalState {
             attentionSummary: typeof obj.attentionSummary === "string" ? obj.attentionSummary : def.attentionSummary,
             notes: Array.isArray(obj.notes) ? obj.notes : def.notes,
             schedulerEvents: Array.isArray(obj.schedulerEvents) ? obj.schedulerEvents : def.schedulerEvents,
+            memos: Array.isArray(obj.memos) ? obj.memos as MemoEntry[] : def.memos,
+            sessionDigests: Array.isArray(obj.sessionDigests) ? obj.sessionDigests as SessionDigestEntry[] : def.sessionDigests,
+            signalPool: Array.isArray(obj.signalPool) ? obj.signalPool as SignalPoolItem[] : def.signalPool,
+            wakeConditions: Array.isArray(obj.wakeConditions) ? obj.wakeConditions as WakeConditionRecord[] : def.wakeConditions,
         };
     }
 
@@ -365,6 +473,10 @@ export class GlobalState {
             attentionSummary: "",
             notes: [],
             schedulerEvents: [],
+            memos: [],
+            sessionDigests: [],
+            signalPool: [],
+            wakeConditions: [],
         };
     }
 }
