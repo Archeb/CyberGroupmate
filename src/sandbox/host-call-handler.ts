@@ -18,7 +18,6 @@ import { GlobalState } from "../main-agent/global-state.js";
 import type { PlatformAdapter } from "../adapter/platform-adapter.js";
 import { SandboxPool } from "./sandbox-pool.js";
 import { type Sandbox } from "./sandbox.js";
-import { createTaskListSkill, buildTaskListHostCalls } from "./skills/task-list.js";
 
 const log = createLogger("sandbox-host-calls");
 
@@ -417,12 +416,6 @@ export function createSandboxHostCallHandler(chatId: string, deps: CreateSandbox
         if (method === "mcp.call") {
             const [serverName, toolName, toolArgs] = args as [string, string, Record<string, unknown> | undefined];
             return mcpBridge.call(serverName, toolName, toolArgs ?? {});
-        }
-
-        const taskListSkill = createTaskListSkill(globalState);
-        const taskListCalls = buildTaskListHostCalls(taskListSkill);
-        if (method in taskListCalls) {
-            return taskListCalls[method](args[0]);
         }
 
         const currentEnvPlan = getCurrentEnvPlan();
