@@ -1,9 +1,10 @@
 <script>
   import { appState, selectedCodeActChatId, activeTab, codeActProgress, clearCodeActProgress } from '../lib/stores.js';
   import { api } from '../lib/api.js';
-  import { shortId, getGroupLabel, formatCodeActContent, isAtBottom, scrollToBottom, getPlatform, platformLabel } from '../lib/utils.js';
+  import { getGroupLabel, formatCodeActContent, isAtBottom, scrollToBottom, getPlatform, platformLabel } from '../lib/utils.js';
   import { onDestroy, tick } from 'svelte';
 
+  const META_CHAT_ID = '__meta__';
   let sessionData = { session: [], queueSize: 0, sessionSize: '-', executionCount: '-', isProcessing: false };
   let pollTimer = null;
   let sessionEl;
@@ -11,6 +12,7 @@
   let showSidebar = false;
 
   $: groups = $appState.groups;
+  $: metaCodeAct = $appState.metaCodeAct || { chatId: META_CHAT_ID, sessionSize: 0, executionCount: 0, queueSize: 0, isProcessing: false };
   $: if ($activeTab === 'codeact' && $selectedCodeActChatId) refreshSession($selectedCodeActChatId);
 
   // 获取当前选中 chat 的实时进度事件
@@ -51,17 +53,41 @@
 
   async function cancelCodeAct() {
     if (!$selectedCodeActChatId) return;
-    if (!confirm(`确认取消 ${$selectedCodeActChatId} 的 CodeAct 执行？`)) return;
+    if (!confirm(getCancelConfirmMessage($selectedCodeActChatId))) return;
     await api(`/codeact/${$selectedCodeActChatId}/cancel`, { method: 'POST' });
     await refreshSession($selectedCodeActChatId);
   }
 
   async function resetCodeActSession() {
     if (!$selectedCodeActChatId || sessionData.isProcessing) return;
-    if (!confirm(`确认重置 ${$selectedCodeActChatId} 的 CodeAct Session？这会清空当前 runner 上下文。`)) return;
+    if (!confirm(getResetConfirmMessage($selectedCodeActChatId))) return;
     await api(`/codeact/${$selectedCodeActChatId}/reset-session`, { method: 'POST' });
     clearCodeActProgress($selectedCodeActChatId);
     await refreshSession($selectedCodeActChatId, true);
+  }
+
+  function isMetaChat(chatId) {
+    return chatId === META_CHAT_ID;
+  }
+
+  function getCodeActLabel(chatId) {
+    return isMetaChat(chatId) ? 'Meta' : getGroupLabel(chatId);
+  }
+
+  function getCodeActTitle(chatId) {
+    return isMetaChat(chatId) ? 'Meta-CodeAct' : chatId;
+  }
+
+  function getCancelConfirmMessage(chatId) {
+    return isMetaChat(chatId)
+      ? '确认取消 Meta CodeAct 执行？当前只支持在轮次边界协作式终止。'
+      : `确认取消 ${chatId} 的 CodeAct 执行？`;
+  }
+
+  function getResetConfirmMessage(chatId) {
+    return isMetaChat(chatId)
+      ? '确认重置 Meta CodeAct Session？这会清空当前 Meta runner 上下文。'
+      : `确认重置 ${chatId} 的 CodeAct Session？这会清空当前 runner 上下文。`;
   }
 
   /** 获取 phase 的中文标签和样式类 */
@@ -72,6 +98,7 @@
       case 'observation': return { label: '📋 输出', cls: 'phase-observation' };
       case 'new_messages': return { label: '📩 新消息', cls: 'phase-new-messages' };
       case 'task': return { label: '📝 任务', cls: 'phase-task' };
+      case 'type_resolving': return { label: '🔎 类型解析', cls: 'phase-thinking' };
       case 'end': return { label: '✅ 结束', cls: 'phase-end' };
       default: return { label: phase, cls: '' };
     }
@@ -97,6 +124,21 @@
       <div class="card-body p-3 min-h-0">
         <h3 class="card-title text-sm">群组选择</h3>
         <div class="space-y-1 overflow-y-auto flex-1 min-h-0">
+          <button class="chat-item meta-item" class:active={$selectedCodeActChatId === META_CHAT_ID}
+               onclick={() => selectChat(META_CHAT_ID)} title="Meta-CodeAct">
+            <span class="flex items-center gap-1">
+              <span class="meta-badge">META</span>
+              Meta
+            </span>
+            <span class="flex items-center gap-1">
+              {#if metaCodeAct.isProcessing}
+                <span class="badge badge-xs badge-warning animate-pulse">执行中</span>
+              {:else if metaCodeAct.sessionSize > 0}
+                <span class="badge badge-sm badge-ghost">{metaCodeAct.sessionSize}</span>
+              {/if}
+            </span>
+          </button>
+
           {#each groups as g}
             {@const isActive = $selectedCodeActChatId === g.chatId}
             <button class="chat-item" class:active={isActive}
@@ -128,7 +170,7 @@
             CodeAct Session
             {#if $selectedCodeActChatId}
               {#if getPlatform($selectedCodeActChatId)}<span class="platform-badge platform-{getPlatform($selectedCodeActChatId)}">{platformLabel(getPlatform($selectedCodeActChatId))}</span>{/if}
-              <span class="text-xs opacity-60">{getGroupLabel($selectedCodeActChatId)}</span>
+              <span class="text-xs opacity-60">{getCodeActLabel($selectedCodeActChatId)}</span>
             {/if}
             {#if sessionData.isProcessing}
               <span class="badge badge-xs badge-warning animate-pulse ml-1">执行中</span>
@@ -138,7 +180,7 @@
             <div class="flex gap-1">
               <button
                 class="btn btn-xs btn-ghost"
-                title={sessionData.isProcessing ? '执行中，请先取消当前任务再重置 Session' : '清空当前 CodeAct runner 上下文'}
+                title={sessionData.isProcessing ? '执行中，请先取消当前任务再重置 Session' : (isMetaChat($selectedCodeActChatId) ? '清空当前 Meta CodeAct runner 上下文' : '清空当前 CodeAct runner 上下文')}
                 disabled={sessionData.isProcessing}
                 onclick={resetCodeActSession}
               >
@@ -266,6 +308,24 @@
 
 .chat-item:hover { background: var(--color-base-200); }
 .chat-item.active { background: color-mix(in srgb, var(--color-primary) 15%, transparent); color: var(--color-primary); }
+
+.meta-item {
+  margin-bottom: 0.35rem;
+}
+
+.meta-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 2.2rem;
+  padding: 0.05rem 0.35rem;
+  border-radius: 999px;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--color-primary-content);
+  background: color-mix(in srgb, var(--color-primary) 78%, black 10%);
+}
 
 /* ── Session messages ── */
 .codeact-msg {

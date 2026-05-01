@@ -11,6 +11,7 @@ export const wsStatus = writable('disconnected');
 // ─── App State (from snapshot) ───
 export const appState = writable({
   groups: [],
+  metaCodeAct: { chatId: '__meta__', queueSize: 0, sessionSize: 0, executionCount: 0, isProcessing: false },
   queue: { active: [], dequeued: [], blockedChatIds: [] },
   pendingCallbacks: [],
   globalState: {},

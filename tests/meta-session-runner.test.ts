@@ -4,7 +4,16 @@ import type { ChatMessage, LLMCallOptions, LLMResponse } from "../src/core/llm.j
 import type { LLMConfig } from "../src/core/config.js";
 import type { ContextManifest } from "../src/context-engine/types.js";
 import { MetaSandbox } from "../src/meta-sandbox/meta-sandbox.js";
-import { compactThinking, extractSessionDigest, parseMetaResponse, runMetaSession } from "../src/meta-sandbox/meta-session-runner.js";
+import { codeActEvents } from "../src/sandbox/session-runner.js";
+import {
+    META_CODEACT_CHAT_ID,
+    compactThinking,
+    extractSessionDigest,
+    getMetaCodeActState,
+    parseMetaResponse,
+    resetMetaCodeActState,
+    runMetaSession,
+} from "../src/meta-sandbox/meta-session-runner.js";
 
 const TEST_LLM_CONFIG: LLMConfig = {
     provider: "openai",
@@ -50,6 +59,79 @@ describe("extractSessionDigest", () => {
 });
 
 describe("runMetaSession", () => {
+    it("tracks meta codeact state and emits progress events for the dashboard", async () => {
+        resetMetaCodeActState();
+        const sandbox = new MetaSandbox({
+            tools: {
+                answer: async () => 7,
+            },
+        });
+        const progressEvents: any[] = [];
+        const onProgress = (event: unknown) => {
+            const data = event as { chatId?: string };
+            if (data.chatId === META_CODEACT_CHAT_ID) {
+                progressEvents.push(event);
+            }
+        };
+        codeActEvents.on("codeact:progress", onProgress);
+
+        try {
+            const responses: LLMResponse[] = [
+                {
+                    content: [
+                        "先执行一段代码。",
+                        "",
+                        "```ts",
+                        "return await tools.answer();",
+                        "```",
+                    ].join("\n"),
+                },
+                {
+                    content: "结束。\n[SESSION_DIGEST]meta state captured[/SESSION_DIGEST]\n<end_turn>",
+                },
+            ];
+
+            const result = await runMetaSession(
+                [
+                    { role: "system", content: "system" },
+                    { role: "user", content: "meta task" },
+                ],
+                sandbox,
+                [TEST_LLM_CONFIG],
+                {
+                    llmCaller: async () => {
+                        const next = responses.shift();
+                        assert.ok(next);
+                        return next;
+                    },
+                },
+            );
+
+            assert.equal(result.endReason, "end_turn");
+
+            const state = getMetaCodeActState();
+            assert.equal(state.chatId, META_CODEACT_CHAT_ID);
+            assert.equal(state.isProcessing, false);
+            assert.equal(state.executionCount, 1);
+            assert.ok(state.session.length >= 4);
+            assert.match(state.session.at(-1)?.content ?? "", /MetaSandbox observation|结束/);
+
+            assert.deepEqual(
+                progressEvents.map((event) => event.phase),
+                ["task", "thinking", "executing", "observation", "thinking", "end"],
+            );
+            assert.equal(progressEvents[0]?.chatId, META_CODEACT_CHAT_ID);
+            assert.match(progressEvents[0]?.userMessage ?? "", /meta task/);
+            assert.match(progressEvents[1]?.thinking ?? "", /先执行一段代码/);
+            assert.equal(progressEvents[2]?.codeBlocks?.[0]?.code, "return await tools.answer();");
+            assert.match(progressEvents[3]?.executionOutput ?? "", /7/);
+            assert.equal(progressEvents.at(-1)?.endReason, "end_turn");
+        } finally {
+            codeActEvents.off("codeact:progress", onProgress);
+            resetMetaCodeActState();
+        }
+    });
+
     it("executes code, feeds observation back, and ends on end_turn", async () => {
         const sandbox = new MetaSandbox({
             tools: {

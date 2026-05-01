@@ -23,6 +23,12 @@ import {
     reloadAllPrompts,
 } from "../core/prompt-loader.js";
 import { getConnectionConfigs, mcpBridge, replaceConnectionConfigs, type McpServerConfig } from "../sandbox/modules/mcp-bridge/index.js";
+import {
+    META_CODEACT_CHAT_ID,
+    getMetaCodeActState,
+    requestCancelMetaCodeActSession,
+    resetMetaCodeActState,
+} from "../meta-sandbox/meta-session-runner.js";
 
 const log = createLogger("dashboard-api");
 const SKILLS_ROOT = join(process.cwd(), "workspace", "skills");
@@ -636,6 +642,11 @@ export function createApiRouter(deps: DashboardDeps, bridge: EventBridge): Route
 
     // ─── CodeAct ───
     router.get("/codeact/:chatId", (req, res) => {
+        if (req.params.chatId === META_CODEACT_CHAT_ID) {
+            res.json(getMetaCodeActState());
+            return;
+        }
+
         const sub = deps.subagentManager.get(req.params.chatId);
         if (!sub) { res.status(404).json({ error: "chat not found" }); return; }
         const executor = sub.codeActExecutor as CodeActExecutor | null;
@@ -652,6 +663,17 @@ export function createApiRouter(deps: DashboardDeps, bridge: EventBridge): Route
 
     router.post("/codeact/:chatId/cancel", async (req, res) => {
         const chatId = req.params.chatId;
+        if (chatId === META_CODEACT_CHAT_ID) {
+            const ok = requestCancelMetaCodeActSession();
+            res.json({
+                ok: true,
+                message: ok
+                    ? "Meta execution cancel requested"
+                    : "No active Meta execution",
+            });
+            return;
+        }
+
         try {
             const sub = deps.subagentManager.get(chatId);
             const executor = sub?.codeActExecutor as CodeActExecutor | null;
@@ -671,6 +693,19 @@ export function createApiRouter(deps: DashboardDeps, bridge: EventBridge): Route
     });
 
     router.post("/codeact/:chatId/reset-session", (req, res) => {
+        if (req.params.chatId === META_CODEACT_CHAT_ID) {
+            const state = getMetaCodeActState();
+            if (state.isProcessing) {
+                res.status(409).json({ error: "meta codeact is processing, cancel it before resetting session" });
+                return;
+            }
+
+            resetMetaCodeActState();
+            log.info("Meta CodeAct session 已重置");
+            res.json({ ok: true, message: "Meta session cleared" });
+            return;
+        }
+
         const sub = deps.subagentManager.get(req.params.chatId);
         if (!sub) { res.status(404).json({ error: "chat not found" }); return; }
         const executor = sub.codeActExecutor as CodeActExecutor | null;

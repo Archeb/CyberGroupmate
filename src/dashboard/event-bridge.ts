@@ -13,6 +13,7 @@ import { codeActEvents, type CodeActProgressEvent } from "../sandbox/session-run
 import { contextEvents } from "../context-engine/context-engine.js";
 import type { ContextManifest } from "../context-engine/types.js";
 import { getGroupModelKey } from "../core/chat-id.js";
+import { getMetaCodeActState } from "../meta-sandbox/meta-session-runner.js";
 
 const log = createLogger("dashboard-bridge");
 
@@ -431,8 +432,17 @@ export class EventBridge {
             });
         }
 
+        const metaCodeAct = getMetaCodeActState();
+
         return {
             groups,
+            metaCodeAct: {
+                chatId: metaCodeAct.chatId,
+                queueSize: metaCodeAct.queueSize,
+                sessionSize: metaCodeAct.sessionSize,
+                executionCount: metaCodeAct.executionCount,
+                isProcessing: metaCodeAct.isProcessing,
+            },
             queue: accumulator.getSnapshot(),
             pendingCallbacks: q5.peek(),
             globalState: globalState.getState(),

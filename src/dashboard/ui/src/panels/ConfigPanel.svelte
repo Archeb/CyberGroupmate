@@ -74,7 +74,7 @@
   };
 
   const ROUTING_COMPONENTS = [
-    { key: "attend", label: "注意力决策", desc: "判断是否需要回复" },
+    { key: "meta", label: "Meta-CodeAct", desc: "跨群编排与任务分派" },
     { key: "session", label: "CodeAct 交互", desc: "生成回复内容" },
     { key: "recording_cluster", label: "话题聚类", desc: "消息→话题分组" },
     { key: "recording_triage", label: "话题 Triage", desc: "摘要 + 介入判断" },
