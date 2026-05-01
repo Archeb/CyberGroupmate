@@ -20,6 +20,12 @@ const log = createLogger("meta-session-handler");
 const DEFAULT_BASE_SKILLS = ["runtime", "fs", "skills", "mcp", "cron", "todo", "memory", "vision", "shell"];
 const MAX_META_SESSION_HISTORY_MESSAGES = 12;
 type MetaHistoryMessage = Pick<MetaSessionHistoryEntry, "role" | "content">;
+const META_HISTORY_SECTION_ALLOWLIST = new Set([
+    "meta.session_digests",
+    "meta.attend_header",
+    "meta.topic_digests",
+    "meta.messages",
+]);
 
 export interface MetaSessionHandlerDeps {
     getPersona: () => { name?: string; description?: string } | undefined;
@@ -54,7 +60,7 @@ export function createMetaSessionHandler(deps: MetaSessionHandlerDeps) {
             throw new Error("Meta session requires at least one LLM profile");
         }
 
-        const { messages, renderTrees, contextManifest } = await buildMetaMessages(deps, engine, sessionHistory, entries, callbacks);
+        const { messages, renderTrees, contextManifest, historySeedMessage } = await buildMetaMessages(deps, engine, sessionHistory, entries, callbacks);
         const initialMessageCount = messages.length;
         log.info("运行 Meta session", {
             groups: entries.map((entry) => entry.chatId),
@@ -69,8 +75,11 @@ export function createMetaSessionHandler(deps: MetaSessionHandlerDeps) {
             contextManifest,
         });
 
-        if (result.messages.length > initialMessageCount) {
-            const historyMessages = collectMetaSessionHistory(result.messages.slice(initialMessageCount));
+        if (historySeedMessage || result.messages.length > initialMessageCount) {
+            const historyMessages = collectMetaSessionHistory([
+                ...(historySeedMessage ? [historySeedMessage] : []),
+                ...result.messages.slice(initialMessageCount),
+            ]);
             appendMetaSessionHistory(sessionHistory, historyMessages);
             deps.globalState.appendMetaSessionHistory(historyMessages);
         }
@@ -91,7 +100,7 @@ async function buildMetaMessages(
     sessionHistory: ChatMessage[],
     entries: AttentionQueueEntry[],
     callbacks: SubagentCallback[],
-): Promise<{ messages: ChatMessage[]; renderTrees: SectionNode[][]; contextManifest: ContextManifest }> {
+): Promise<{ messages: ChatMessage[]; renderTrees: SectionNode[][]; contextManifest: ContextManifest; historySeedMessage: MetaHistoryMessage | null }> {
     const persona = deps.getPersona() ?? {};
     const systemPrompt = await buildMetaSystemPrompt(persona);
     const messages: ChatMessage[] = [
@@ -163,6 +172,7 @@ async function buildMetaMessages(
         messages,
         renderTrees,
         contextManifest: mergeContextManifests(manifests),
+        historySeedMessage: buildHistorySeedMessage(mergeContextManifests(manifests)),
     };
 }
 
@@ -256,6 +266,30 @@ function collectMetaSessionHistory(messages: ChatMessage[]): MetaHistoryMessage[
         }
         return [{ role: message.role, content: message.content.trim() }];
     });
+}
+
+function buildHistorySeedMessage(contextManifest: ContextManifest): MetaHistoryMessage | null {
+    const sections = contextManifest.sections
+        .filter((section) =>
+            section.sentPhase === "historical"
+            && typeof section.sentContent === "string"
+            && section.sentContent.length > 0
+            && META_HISTORY_SECTION_ALLOWLIST.has(section.name)
+        )
+        .sort((left, right) => {
+            const leftOrder = typeof left.sentOrder === "number" ? left.sentOrder : Number.MAX_SAFE_INTEGER;
+            const rightOrder = typeof right.sentOrder === "number" ? right.sentOrder : Number.MAX_SAFE_INTEGER;
+            return leftOrder - rightOrder;
+        });
+
+    if (sections.length === 0) {
+        return null;
+    }
+
+    return {
+        role: "user",
+        content: sections.map((section) => section.sentContent).join("\n\n").trim(),
+    };
 }
 
 async function buildMetaResolveContext(

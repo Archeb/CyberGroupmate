@@ -166,23 +166,29 @@ describe("createMetaSessionHandler", () => {
             ?.filter((message) => message.role === "user")
             .map((message) => message.content)
             .join("\n\n") ?? "";
-        const secondPrompt = llmCalls[1]
+        const secondUserMessages = llmCalls[1]
             ?.filter((message) => message.role === "user")
-            .map((message) => message.content)
-            .join("\n\n") ?? "";
+            .map((message) => message.content) ?? [];
+        const secondPrompt = secondUserMessages.join("\n\n");
+        const replayedHistoricalPrompt = secondUserMessages[0] ?? "";
+        const currentHistoricalPrompt = secondUserMessages.at(-2) ?? "";
+        const currentEphemeralPrompt = secondUserMessages.at(-1) ?? "";
 
         assert.match(firstPrompt, /## 新消息/);
         assert.match(firstPrompt, /在吗在吗/);
         assert.match(firstPrompt, /## 话题注册表增量/);
-        assert.match(firstPrompt, /阿喵偏好短句沟通/);
+        assert.doesNotMatch(firstPrompt, /阿喵偏好短句沟通/);
         assert.match(firstPrompt, /## 活跃参与者 \(更新\)/);
         assert.match(firstPrompt, /## 聊天画像/);
 
-        assert.doesNotMatch(secondPrompt, /## 新消息/);
-        assert.doesNotMatch(secondPrompt, /## 话题注册表增量/);
-        assert.doesNotMatch(secondPrompt, /## 活跃参与者 \(更新\)/);
-        assert.match(secondPrompt, /## 聊天画像/);
-        assert.match(secondPrompt, /## 当前注意力元数据/);
+        assert.match(replayedHistoricalPrompt, /## 新消息/);
+        assert.match(replayedHistoricalPrompt, /## 话题注册表增量/);
+        assert.doesNotMatch(currentHistoricalPrompt, /## 新消息/);
+        assert.doesNotMatch(currentHistoricalPrompt, /## 话题注册表增量/);
+        assert.doesNotMatch(currentHistoricalPrompt, /## 活跃参与者 \(更新\)/);
+        assert.match(currentHistoricalPrompt, /# 注意力切换:/);
+        assert.match(currentEphemeralPrompt, /## 聊天画像/);
+        assert.match(currentEphemeralPrompt, /## 当前注意力元数据/);
     });
 
     it("replays prior meta assistant history, exposes assignable skills, and forwards merged manifests", async () => {
@@ -211,7 +217,10 @@ describe("createMetaSessionHandler", () => {
         ];
 
         const globalStateStub = {
-            getSessionDigests: () => [],
+            getSessionDigests: () => ([
+                { createdAt: "2026-05-01T00:00:00.000Z", content: "meta digest 1" },
+                { createdAt: "2026-05-01T01:00:00.000Z", content: "meta digest 2" },
+            ]),
             memoList: () => [],
             getMetaSessionHistory: () => [...persistedHistory],
             appendMetaSessionHistory: (messages: Array<{ role: "assistant" | "user"; content: string }>) => {
@@ -243,6 +252,17 @@ describe("createMetaSessionHandler", () => {
 
         await createHandler()([entry], []);
         assert.ok(persistedHistory.length >= 2);
+        const persistedPrompt = persistedHistory.find((message) =>
+            message.role === "user" && message.content.includes("# 注意力切换:")
+        );
+        assert.ok(persistedPrompt);
+        assert.match(persistedPrompt.content, /# 历史 Session Digests/);
+        assert.match(persistedPrompt.content, /# 注意力切换:/);
+        assert.match(persistedPrompt.content, /## 话题注册表/);
+        assert.match(persistedPrompt.content, /## 新消息/);
+        assert.doesNotMatch(persistedPrompt.content, /## 当前注意力元数据/);
+        assert.doesNotMatch(persistedPrompt.content, /## 聊天画像/);
+        assert.doesNotMatch(persistedPrompt.content, /请检查是否需要跨群检索/);
 
         await createHandler()([entry], []);
 
@@ -252,6 +272,12 @@ describe("createMetaSessionHandler", () => {
         assert.ok((llmCalls[0]?.options?.contextManifest?.sections?.length ?? 0) > 0);
 
         const secondCallMessages = llmCalls[1]?.messages ?? [];
+        const priorPrompt = secondCallMessages.find((message) =>
+            message.role === "user" && message.content.includes("# 注意力切换:")
+        );
+        assert.ok(priorPrompt);
+        assert.match(priorPrompt.content, /# 历史 Session Digests/);
+        assert.doesNotMatch(priorPrompt.content, /## 当前注意力元数据/);
         const priorAssistant = secondCallMessages.find((message) => message.role === "assistant");
         assert.ok(priorAssistant);
         assert.match(priorAssistant.content, /先做一次查询/);

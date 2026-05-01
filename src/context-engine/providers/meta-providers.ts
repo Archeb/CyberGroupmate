@@ -10,12 +10,17 @@ import { deriveChatType, formatTopicList, type FormattableTopic } from "../promp
 import { formatMessageLine, type RawMessage } from "../../core/message-enricher.js";
 import { getDunbarTierLabel, getRawId } from "../../core/chat-id.js";
 
+const META_ASSOCIATED_MEMORIES_ENABLED = false;
+
 function scopeByChatId(ctx: ResolveContext): string | undefined {
     return typeof ctx.chatId === "string" && ctx.chatId.length > 0 ? ctx.chatId : undefined;
 }
 
 interface MetaHistoricalData {
     sessionDigests: Array<{ createdAt: string; content: string }>;
+}
+
+interface MetaMemosData {
     memos: Array<{ key: string; value: unknown; expiresAt?: string | null }>;
 }
 
@@ -92,7 +97,7 @@ function getAssociatedMemorySignature(memory: AssociatedMemory): string {
 }
 
 function getTopicDigestSignature(digest: TopicDigest): string {
-    const associatedMemories = digest.associatedMemories?.length
+    const associatedMemories = META_ASSOCIATED_MEMORIES_ENABLED && digest.associatedMemories?.length
         ? [...digest.associatedMemories]
             .map(getAssociatedMemorySignature)
             .sort((left, right) => left.localeCompare(right))
@@ -131,7 +136,7 @@ function getProfileSignature(profile: ActiveUserProfile): string {
 }
 
 function formatAssociatedMemories(memories?: AssociatedMemory[]): string[] {
-    if (!memories?.length) {
+    if (!META_ASSOCIATED_MEMORIES_ENABLED || !memories?.length) {
         return [];
     }
 
@@ -168,35 +173,84 @@ function toRawMessage(message: AttentionRecentMessage): RawMessage {
 
 export const metaHistoricalProvider: SectionProvider<MetaHistoricalData> = {
     schema: {
-        name: "meta.historical",
-        label: "Meta 历史摘要",
-        source: "globalState",
+        name: "meta.session_digests",
+        label: "Meta 历史 Session Digests",
+        source: "globalState.sessionDigests",
+        cache: "delta",
+        history: "delta-only",
+    },
+    resolve(ctx) {
+        const sessionDigests = (ctx.sessionDigests as MetaHistoricalData["sessionDigests"] | undefined) ?? [];
+        if (sessionDigests.length === 0) {
+            return null;
+        }
+        return { sessionDigests: sessionDigests.slice(-10) };
+    },
+    diff(current, committed): DiffResult<MetaHistoricalData> {
+        if (!committed) {
+            return {
+                full: current,
+                delta: current,
+                stats: { total: current.sessionDigests.length, added: current.sessionDigests.length, unchanged: 0 },
+            };
+        }
+
+        const committedSet = new Set(
+            committed.sessionDigests.map((item) => `${item.createdAt}::${item.content}`)
+        );
+        const deltaDigests = current.sessionDigests.filter(
+            (item) => !committedSet.has(`${item.createdAt}::${item.content}`)
+        );
+
+        return {
+            full: current,
+            delta: { sessionDigests: deltaDigests },
+            stats: {
+                total: current.sessionDigests.length,
+                added: deltaDigests.length,
+                unchanged: current.sessionDigests.length - deltaDigests.length,
+            },
+        };
+    },
+    render(data) {
+        return [
+            "# 历史 Session Digests",
+            ...data.sessionDigests.map((item) => `- [${item.createdAt}] ${item.content}`),
+        ].join("\n");
+    },
+    renderDelta(delta) {
+        if (delta.sessionDigests.length === 0) {
+            return "";
+        }
+
+        return [
+            "# 历史 Session Digests",
+            `(增量: ${delta.sessionDigests.length} 条)`,
+            ...delta.sessionDigests.map((item) => `- [${item.createdAt}] ${item.content}`),
+        ].join("\n");
+    },
+};
+
+export const metaMemosProvider: SectionProvider<MetaMemosData> = {
+    schema: {
+        name: "meta.memos",
+        label: "Meta 全局备忘录",
+        source: "globalState.memos",
         cache: "snapshot",
         history: "persistent",
     },
     resolve(ctx) {
-        const sessionDigests = (ctx.sessionDigests as MetaHistoricalData["sessionDigests"] | undefined) ?? [];
-        const memos = (ctx.memos as MetaHistoricalData["memos"] | undefined) ?? [];
-        if (sessionDigests.length === 0 && memos.length === 0) {
+        const memos = (ctx.memos as MetaMemosData["memos"] | undefined) ?? [];
+        if (memos.length === 0) {
             return null;
         }
-        return { sessionDigests, memos };
+        return { memos };
     },
     render(data) {
-        const parts: string[] = [];
-        if (data.sessionDigests.length > 0) {
-            parts.push([
-                "# 历史 Session Digests",
-                ...data.sessionDigests.map((item) => `- [${item.createdAt}] ${item.content}`),
-            ].join("\n"));
-        }
-        if (data.memos.length > 0) {
-            parts.push([
-                "# 当前全局备忘录",
-                ...data.memos.map((item) => `- ${item.key}: ${safeJson(item.value)}${item.expiresAt ? ` (expiresAt=${item.expiresAt})` : ""}`),
-            ].join("\n"));
-        }
-        return parts.join("\n\n");
+        return [
+            "# 当前全局备忘录",
+            ...data.memos.map((item) => `- ${item.key}: ${safeJson(item.value)}${item.expiresAt ? ` (expiresAt=${item.expiresAt})` : ""}`),
+        ].join("\n");
     },
 };
 
@@ -259,7 +313,7 @@ export const metaAttendMetaProvider: SectionProvider<MetaAttendMetaData> = {
         label: "Meta 决策元数据",
         source: "attention.entry",
         cache: "volatile",
-        history: "persistent",
+        history: "ephemeral",
     },
     scopeKey(ctx) {
         return scopeByChatId(ctx);
@@ -588,6 +642,7 @@ function safeJson(value: unknown): string {
 export function getMetaProviders(): SectionProvider[] {
     return [
         metaHistoricalProvider,
+        metaMemosProvider,
         metaCallbacksProvider,
         metaAttendHeaderProvider,
         metaAttendMetaProvider,
