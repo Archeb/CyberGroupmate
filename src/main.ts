@@ -910,6 +910,7 @@ async function main(): Promise<void> {
     mainLoop.setMetaSessionHandler(createMetaSessionHandler({
         getPersona: () => loadConfig().persona,
         globalState,
+        memory,
         sandbox: metaSandbox,
         getLlmConfigs: () => resolveComponentProfiles("meta", loadConfig()),
         maxTurns: 10,

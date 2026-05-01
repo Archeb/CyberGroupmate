@@ -96,6 +96,8 @@ describe("runMetaSession", () => {
         assert.match(result.turns[0].observation ?? "", /42/);
         assert.match(llmCalls[1][llmCalls[1].length - 1].content, /MetaSandbox observation/);
         assert.match(llmCalls[1][llmCalls[1].length - 1].content, /42/);
+        assert.match(llmCalls[1][llmCalls[1].length - 2].content, /\[执行代码已剥离\]/);
+        assert.doesNotMatch(llmCalls[1][llmCalls[1].length - 2].content, /const value = 1/);
     });
 
     it("returns no_code when the model emits no runnable code", async () => {

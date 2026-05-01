@@ -185,6 +185,7 @@ export class Observer {
      * 返回最近 upTo 条 buffer 中的消息事件，供上下文构建使用。
      */
     getMessageSnapshot(upTo: number = 20): Array<{
+        messageId: string;
         userId: string;
         displayName?: string;
         text: string;
@@ -192,6 +193,7 @@ export class Observer {
     }> {
         const slice = this.buffer.slice(-upTo);
         return slice.map(m => ({
+            messageId: String(m.event.messageId ?? m.event.id ?? m.event._id ?? `${this.chatId}:${m.timestamp}`),
             userId: String(m.event.userId ?? m.event.user_id ?? m.event.senderId ?? ""),
             displayName: typeof m.event.displayName === "string"
                 ? m.event.displayName

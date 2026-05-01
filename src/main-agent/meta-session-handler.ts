@@ -1,11 +1,17 @@
 import type { LLMConfig } from "../core/config.js";
 import type { ChatMessage } from "../core/llm.js";
+import { getGroupModelKey } from "../core/chat-id.js";
 import { createLogger } from "../core/logger.js";
 import { loadPromptFile } from "../core/prompt-loader.js";
+import { ContextEngine } from "../context-engine/context-engine.js";
+import { deriveChatType } from "../context-engine/prompt-renderer-utils.js";
+import { getMetaProviders } from "../context-engine/providers/meta-providers.js";
 import { renderTemplate } from "../context-engine/template-engine.js";
+import type { SectionNode } from "../context-engine/types.js";
+import type { IMemoryStoreV2 } from "../memory-v2/index.js";
 import type { MetaSandbox } from "../meta-sandbox/meta-sandbox.js";
 import { runMetaSession, type MetaLLMCaller, type MetaSessionResult } from "../meta-sandbox/meta-session-runner.js";
-import type { AttentionQueueEntry, SubagentCallback } from "../subagent/types.js";
+import type { ActiveUserProfile, AttentionQueueEntry, SubagentCallback, TopicDigest } from "../subagent/types.js";
 import type { GlobalState } from "./global-state.js";
 
 const log = createLogger("meta-session-handler");
@@ -13,6 +19,7 @@ const log = createLogger("meta-session-handler");
 export interface MetaSessionHandlerDeps {
     getPersona: () => { name?: string; description?: string } | undefined;
     globalState: Pick<GlobalState, "getSessionDigests" | "memoList">;
+    memory: Pick<IMemoryStoreV2, "getGroupModel" | "getProfilesForChat" | "getPersonIdentity" | "getTopicById">;
     sandbox: MetaSandbox;
     getLlmConfigs: () => LLMConfig[];
     llmCaller?: MetaLLMCaller;
@@ -22,6 +29,9 @@ export interface MetaSessionHandlerDeps {
 }
 
 export function createMetaSessionHandler(deps: MetaSessionHandlerDeps) {
+    const engine = new ContextEngine("meta-agent");
+    engine.registerAll(getMetaProviders());
+
     return async (
         entries: AttentionQueueEntry[],
         callbacks: SubagentCallback[],
@@ -35,26 +45,35 @@ export function createMetaSessionHandler(deps: MetaSessionHandlerDeps) {
             throw new Error("Meta session requires at least one LLM profile");
         }
 
-        const messages = buildMetaMessages(deps, entries, callbacks);
+        const { messages, renderTrees } = await buildMetaMessages(deps, engine, entries, callbacks);
         log.info("运行 Meta session", {
             groups: entries.map((entry) => entry.chatId),
             callbacks: callbacks.length,
         });
 
-        return runMetaSession(messages, deps.sandbox, llmConfigs, {
+        const result = await runMetaSession(messages, deps.sandbox, llmConfigs, {
             maxTurns: deps.maxTurns,
             codeTimeout: deps.codeTimeout,
             llmCaller: deps.llmCaller,
             llmTimeoutMs: deps.llmTimeoutMs,
         });
+
+        if (result.endReason !== "error" || result.turns.length > 0) {
+            for (const tree of renderTrees) {
+                engine.commit(tree);
+            }
+        }
+
+        return result;
     };
 }
 
-function buildMetaMessages(
+async function buildMetaMessages(
     deps: MetaSessionHandlerDeps,
+    engine: ContextEngine,
     entries: AttentionQueueEntry[],
     callbacks: SubagentCallback[],
-): ChatMessage[] {
+): Promise<{ messages: ChatMessage[]; renderTrees: SectionNode[][] }> {
     const persona = deps.getPersona() ?? {};
     const systemPrompt = loadRequiredPrompt("meta-agent/meta-system.md");
     const messages: ChatMessage[] = [
@@ -68,104 +87,169 @@ function buildMetaMessages(
         },
     ];
 
-    const historicalContent = renderHistoricalContext(deps.globalState);
-    if (historicalContent) {
-        messages.push({ role: "user", content: historicalContent });
-    }
+    const historicalParts: string[] = [];
+    const ephemeralParts: string[] = [];
+    const renderTrees: SectionNode[][] = [];
 
-    messages.push({
-        role: "user",
-        content: renderCurrentTurn(entries, callbacks),
+    const globalRender = engine.render({
+        sessionDigests: deps.globalState.getSessionDigests(),
+        memos: deps.globalState.memoList(),
+        callbacks,
     });
-
-    return messages;
-}
-
-function renderHistoricalContext(globalState: Pick<GlobalState, "getSessionDigests" | "memoList">): string {
-    const digests = globalState.getSessionDigests();
-    const memos = globalState.memoList();
-    const parts: string[] = [];
-
-    if (digests.length > 0) {
-        parts.push([
-            "## 历史 Session Digests",
-            ...digests.map((item) => `- [${item.createdAt}] ${item.content}`),
-        ].join("\n"));
+    renderTrees.push(globalRender.tree);
+    if (globalRender.historicalContent) {
+        historicalParts.push(globalRender.historicalContent);
+    }
+    if (globalRender.ephemeralContent) {
+        ephemeralParts.push(globalRender.ephemeralContent);
     }
 
-    if (memos.length > 0) {
-        parts.push([
-            "## 当前全局备忘录",
-            ...memos.map((item) => `- ${item.key}: ${safeJson(item.value)}${item.expiresAt ? ` (expiresAt=${item.expiresAt})` : ""}`),
-        ].join("\n"));
+    for (const entry of entries) {
+        const renderResult = engine.render(await buildMetaResolveContext(deps, entry));
+        renderTrees.push(renderResult.tree);
+        if (renderResult.historicalContent) {
+            historicalParts.push(renderResult.historicalContent);
+        }
+        if (renderResult.ephemeralContent) {
+            ephemeralParts.push(renderResult.ephemeralContent);
+        }
     }
 
-    return parts.join("\n\n");
-}
-
-function renderCurrentTurn(entries: AttentionQueueEntry[], callbacks: SubagentCallback[]): string {
-    const template = loadRequiredPrompt("meta-agent/meta-attention.md");
-    const callbacksSection = callbacks.length > 0
-        ? [
-            "## 新到达的 Subagent Callbacks",
-            ...callbacks.map((cb) => `- ${cb.chatId}: status=${cb.status}, taskId=${cb.taskId}, summary=${cb.summary}`),
-        ].join("\n")
-        : "";
-    const attentionSetSection = [
-        "## 当前 Attention Set",
-        ...entries.map(renderAttentionEntry),
-    ].join("\n\n");
-
-    return renderTemplate(template, {
-        callbacksSection,
-        attentionSetSection,
+    const instructionRender = engine.render({
         currentTurnInstruction: "请检查是否需要跨群检索、分派任务、写 memo 或注册 wake condition。若无需动作，请直接结束本轮。",
     });
-}
-
-function renderAttentionEntry(entry: AttentionQueueEntry): string {
-    const topicLines = entry.topicDigests.length > 0
-        ? entry.topicDigests.map((topic) => `  - ${topic.topicId}: ${topic.label} | ${topic.summary} | keywords=${topic.keywords.join(", ")}`).join("\n")
-        : "  - (none)";
-    const triggerLines = entry.schedulerTriggers?.length
-        ? entry.schedulerTriggers.map((trigger) => `  - ${trigger.type}:${trigger.id} ${trigger.description}`).join("\n")
-        : "  - (none)";
-    const recentMessageLines = entry.recentMessages?.length
-        ? entry.recentMessages.map((message) => {
-            const sender = message.displayName?.trim() || message.userId || "unknown";
-            return `  - [${message.timestamp}] ${sender}: ${formatRecentMessageText(message.text)}`;
-        }).join("\n")
-        : "  - (none)";
-
-    return [
-        `### ${entry.chatId}`,
-        `- source: ${entry.source}`,
-        `- priority: ${entry.priority}`,
-        `- newMessageCount: ${entry.newMessageCount}`,
-        `- engagementScore: ${entry.engagementScore ?? 0}`,
-        `- directAddressReason: ${entry.directAddressReason ?? "(none)"}`,
-        `- stickinessLevel: ${entry.stickinessLevel}`,
-        `- callbackPotential: ${entry.callbackPotential ?? 0}`,
-        `- urgentSignals: ${entry.urgentSignals?.join(", ") ?? "(none)"}`,
-        `- schedulerTriggers:\n${triggerLines}`,
-        `- recentMessages:\n${recentMessageLines}`,
-        `- topicDigests:\n${topicLines}`,
-    ].join("\n");
-}
-
-function formatRecentMessageText(text: string): string {
-    const flattened = text.replace(/\s+/g, " ").trim();
-    if (flattened.length <= 160) {
-        return flattened;
+    renderTrees.push(instructionRender.tree);
+    if (instructionRender.ephemeralContent) {
+        ephemeralParts.push(instructionRender.ephemeralContent);
     }
-    return `${flattened.slice(0, 157)}...`;
+
+    if (historicalParts.length > 0) {
+        messages.push({
+            role: "user",
+            content: historicalParts.join("\n\n"),
+        });
+    }
+
+    if (ephemeralParts.length > 0) {
+        messages.push({
+            role: "user",
+            content: ephemeralParts.join("\n\n"),
+        });
+    }
+
+    return {
+        messages,
+        renderTrees,
+    };
 }
 
-function safeJson(value: unknown): string {
-    try {
-        return JSON.stringify(value);
-    } catch {
-        return String(value);
+async function buildMetaResolveContext(
+    deps: MetaSessionHandlerDeps,
+    entry: AttentionQueueEntry,
+): Promise<Record<string, unknown>> {
+    const isSyntheticMeta = entry.chatId === "__meta__";
+    const groupModel = isSyntheticMeta
+        ? null
+        : deps.memory.getGroupModel(getGroupModelKey(entry.chatId));
+    const topicDigests = enrichTopicDigests(entry.topicDigests, deps.memory);
+    const activeUserProfiles = isSyntheticMeta ? [] : buildActiveUserProfiles(entry, deps.memory);
+    const isDirectMessage = groupModel?.isDirectMessage ?? entry.directAddressReason === "DM";
+    const chatType = isSyntheticMeta ? "系统" : deriveChatType(isDirectMessage);
+
+    return {
+        chatId: entry.chatId,
+        chatTitle: isSyntheticMeta ? "Meta 调度" : (groupModel?.chatTitle ?? entry.chatId),
+        chatType,
+        isDirectMessage,
+        source: entry.source,
+        priority: entry.priority,
+        newMessageCount: entry.newMessageCount,
+        engagementScore: entry.engagementScore ?? 0,
+        stickinessLevel: entry.stickinessLevel,
+        directAddressReason: entry.directAddressReason,
+        callbackPotential: entry.callbackPotential,
+        urgentSignals: entry.urgentSignals,
+        schedulerTriggers: entry.schedulerTriggers,
+        topicDigests,
+        recentMessages: entry.recentMessages,
+        groupModel: groupModel ?? undefined,
+        tonePreset: tonePresetFor(entry.stickinessLevel),
+        activeUserProfiles: activeUserProfiles.length > 0 ? activeUserProfiles : undefined,
+    };
+}
+
+function enrichTopicDigests(
+    topicDigests: TopicDigest[],
+    memory: Pick<IMemoryStoreV2, "getTopicById">,
+): TopicDigest[] {
+    return topicDigests.map((digest) => {
+        const topic = memory.getTopicById(digest.topicId);
+        return {
+            ...digest,
+            associatedMemories: digest.associatedMemories ?? topic?.associatedMemories,
+            callbackPotential: digest.callbackPotential ?? topic?.callbackPotential ?? 0,
+        };
+    });
+}
+
+function buildActiveUserProfiles(
+    entry: AttentionQueueEntry,
+    memory: Pick<IMemoryStoreV2, "getProfilesForChat" | "getPersonIdentity">,
+): ActiveUserProfile[] {
+    const recentMessages = entry.recentMessages ?? [];
+    const senderCounts = new Map<string, number>();
+
+    for (const message of recentMessages) {
+        if (!message.userId) continue;
+        senderCounts.set(message.userId, (senderCounts.get(message.userId) ?? 0) + 1);
+    }
+
+    if (senderCounts.size === 0) {
+        for (const participant of entry.topicDigests.flatMap((digest) => digest.participants)) {
+            if (!participant) continue;
+            senderCounts.set(participant, 0);
+        }
+    }
+
+    const profiles = memory.getProfilesForChat(entry.chatId);
+    const profilesByUserId = new Map(profiles.map((profile) => [profile.userId, profile]));
+    const result: ActiveUserProfile[] = [];
+
+    for (const [userId, messageCount] of senderCounts) {
+        const identity = memory.getPersonIdentity(userId);
+        const profile = profilesByUserId.get(userId);
+        result.push({
+            userId,
+            displayName: identity?.displayName ?? recentMessages.find((message) => message.userId === userId)?.displayName ?? userId,
+            aliases: identity?.aliases ?? [],
+            dunbarTier: profile?.dunbarTier,
+            rapport: typeof profile?.affinityScore === "number" ? Math.round(profile.affinityScore) : undefined,
+            traits: profile?.traits ?? [],
+            communicationStyle: profile?.communicationStyle,
+            relationToAgent: profile?.relationToAgent,
+            messageCount,
+            username: identity?.username,
+        });
+    }
+
+    return result.sort((left, right) => {
+        if (right.messageCount !== left.messageCount) {
+            return right.messageCount - left.messageCount;
+        }
+        return left.userId.localeCompare(right.userId);
+    });
+}
+
+function tonePresetFor(stickinessLevel: AttentionQueueEntry["stickinessLevel"]): string {
+    switch (stickinessLevel) {
+        case "CORE":
+            return "随意友好";
+        case "FAMILIAR":
+            return "轻松自然";
+        case "ACQUAINTANCE":
+            return "礼貌简洁";
+        default:
+            return "克制观察";
     }
 }
 

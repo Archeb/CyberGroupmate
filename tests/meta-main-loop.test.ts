@@ -17,6 +17,15 @@ import { CallbackQueue } from "../src/subagent/callback-queue.js";
 import { SubagentManager } from "../src/subagent/subagent-manager.js";
 import type { AttentionQueueEntry } from "../src/subagent/types.js";
 
+function createMetaMemoryStub() {
+    return {
+        getGroupModel: () => null,
+        getProfilesForChat: () => [],
+        getPersonIdentity: () => null,
+        getTopicById: () => null,
+    };
+}
+
 const tempDirs: string[] = [];
 
 function tempDir(): string {
@@ -142,6 +151,7 @@ describe("MainAgentLoop meta session path", () => {
         loop.setMetaSessionHandler(createMetaSessionHandler({
             getPersona: () => ({ name: "测试编排者", description: "验证真实 meta session dispatch" }),
             globalState,
+            memory: createMetaMemoryStub() as any,
             sandbox,
             getLlmConfigs: () => [TEST_LLM_CONFIG],
             llmCaller: async () => ({
@@ -280,10 +290,14 @@ describe("MainAgentLoop meta session path", () => {
         loop.setMetaSessionHandler(createMetaSessionHandler({
             getPersona: () => ({ name: "测试编排者", description: "验证 recentMessages 会进入 Meta prompt" }),
             globalState,
+            memory: createMetaMemoryStub() as any,
             sandbox,
             getLlmConfigs: () => [TEST_LLM_CONFIG],
             llmCaller: async (messages) => {
-                lastUserPrompt = messages.at(-1)?.content ?? "";
+                lastUserPrompt = messages
+                    .filter((message) => message.role === "user")
+                    .map((message) => message.content)
+                    .join("\n\n");
                 return {
                     content: [
                         "[SESSION_DIGEST]saw direct-address message[/SESSION_DIGEST]",
@@ -299,7 +313,7 @@ describe("MainAgentLoop meta session path", () => {
         assert.match(lastUserPrompt, /在吗在吗/);
         assert.match(lastUserPrompt, /阿喵/);
         assert.match(lastUserPrompt, /directAddressReason: DM/);
-        assert.match(lastUserPrompt, /recentMessages/);
+        assert.match(lastUserPrompt, /## 新消息/);
 
         globalState.dispose();
     });

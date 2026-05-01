@@ -10,6 +10,7 @@ const DEFAULT_MAX_TURNS = 10;
 const DEFAULT_CODE_TIMEOUT_MS = 30_000;
 const END_TURN_MARKER = "<end_turn>";
 const CODE_FENCE_LANGS = "typescript|ts|javascript|js";
+const CODE_BLOCK_IN_HISTORY_RE = /```(?:typescript|ts|javascript|js)\s*\n[\s\S]*?\n```/g;
 
 export interface MetaSessionConfig {
     maxTurns?: number;
@@ -129,7 +130,7 @@ export async function runMetaSession(
             };
 
             turns.push(turnRecord);
-            messages.push({ role: "assistant", content: assistantMessage });
+            messages.push({ role: "assistant", content: stripCodeBlocksForHistory(assistantMessage) });
 
             if (!parsed.code) {
                 return finalize(hasEndTurn ? "end_turn" : "no_code");
@@ -163,4 +164,8 @@ export async function runMetaSession(
 
 function formatObservation(output: string): string {
     return `[MetaSandbox observation]\n${output}`;
+}
+
+function stripCodeBlocksForHistory(content: string): string {
+    return content.replace(CODE_BLOCK_IN_HISTORY_RE, "[执行代码已剥离]");
 }

@@ -72,6 +72,7 @@ export interface TopicDigest {
 }
 
 export interface AttentionRecentMessage {
+    messageId: string;
     userId: string;
     displayName?: string;
     text: string;
