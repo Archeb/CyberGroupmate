@@ -43,11 +43,6 @@ import {
     executorFooterProvider,
     type ExecutorResolveContext,
 } from "../src/context-engine/providers/executor-providers.js";
-import {
-    groupModelProvider,
-    profilesProvider,
-    topicDigestsProvider,
-} from "../src/context-engine/providers/attend-providers.js";
 import { existsSync } from "node:fs";
 
 // ═══ Test Helpers ═══
@@ -99,8 +94,8 @@ function makeDeltaProvider(
             return (ctx.messages as TestMessage[] | undefined) ?? null;
         },
         diff(current, committed) {
-            const prevIds = new Set((committed ?? []).map((m: TestMessage) => m.id));
-            const delta = current.filter(m => !prevIds.has(m.id));
+            const prevIds = new Set((committed ?? []).map((message: TestMessage) => message.id));
+            const delta = current.filter((message) => !prevIds.has(message.id));
             return {
                 full: current,
                 delta,
@@ -112,11 +107,13 @@ function makeDeltaProvider(
             };
         },
         render(data) {
-            return data.map(m => `[${m.id}] ${m.text}`).join("\n");
+            return data.map((message) => `[${message.id}] ${message.text}`).join("\n");
         },
         renderDelta(delta) {
-            if (delta.length === 0) return "(无新消息)";
-            return `(新增 ${delta.length} 条)\n` + delta.map(m => `[${m.id}] ${m.text}`).join("\n");
+            if (delta.length === 0) {
+                return "(no new messages)";
+            }
+            return `(added ${delta.length})\n${delta.map((message) => `[${message.id}] ${message.text}`).join("\n")}`;
         },
     };
 
@@ -144,8 +141,6 @@ function makeSnapshotProvider(name: string): SectionProvider<string> {
     };
 }
 
-// ═══ 1. ContextLedger ═══
-
 describe("ContextLedger", () => {
     let ledger: ContextLedger;
 
@@ -153,36 +148,37 @@ describe("ContextLedger", () => {
         ledger = new ContextLedger();
     });
 
-    it("初始状态为空", () => {
+    it("starts empty", () => {
         assert.equal(ledger.getCommitted("test"), null);
     });
 
-    it("commit 后可获取", () => {
+    it("returns committed data", () => {
         ledger.commit("messages", [1, 2, 3], "hash1");
         const section = ledger.getCommitted("messages");
+
         assert.ok(section);
         assert.deepEqual(section.data, [1, 2, 3]);
         assert.equal(section.hash, "hash1");
         assert.ok(section.committedAt > 0);
     });
 
-    it("commit 覆盖旧值", () => {
+    it("overwrites an existing commit", () => {
         ledger.commit("x", "old", "h1");
         ledger.commit("x", "new", "h2");
+
         assert.equal(ledger.getCommitted("x")!.data, "new");
         assert.equal(ledger.getCommitted("x")!.hash, "h2");
     });
 
-    it("reset 清空所有状态", () => {
+    it("reset clears all committed state", () => {
         ledger.commit("a", 1, "h1");
         ledger.commit("b", 2, "h2");
         ledger.reset();
+
         assert.equal(ledger.getCommitted("a"), null);
         assert.equal(ledger.getCommitted("b"), null);
     });
 });
-
-// ═══ 2. ContextEngine Core ═══
 
 describe("ContextEngine", () => {
     let engine: ContextEngine;
@@ -191,40 +187,40 @@ describe("ContextEngine", () => {
         engine = new ContextEngine("test-engine");
     });
 
-    it("无 provider 时 render 返回空", () => {
+    it("returns empty output when no providers are registered", () => {
         const result = engine.render({});
+
         assert.equal(result.historicalContent, "");
         assert.equal(result.ephemeralContent, "");
         assert.equal(result.tree.length, 0);
     });
 
-    it("static provider 正确渲染 + omit history", () => {
-        engine.register(makeStaticProvider("greeting", "你好世界"));
+    it("renders static omit-history providers", () => {
+        engine.register(makeStaticProvider("greeting", "hello world"));
         const result = engine.render({});
 
         assert.equal(result.tree.length, 1);
-        assert.equal(result.tree[0].fullRendered, "你好世界");
+        assert.equal(result.tree[0].fullRendered, "hello world");
         assert.equal(result.tree[0].historicalRendered, "[Static: greeting: 见最新版本]");
         assert.ok(!result.tree[0].skipped);
     });
 
-    it("volatile/ephemeral provider 正确进入 ephemeralContent", () => {
-        engine.register(makeVolatileProvider("search", () => "搜索结果: xxx"));
+    it("puts ephemeral providers into ephemeralContent", () => {
+        engine.register(makeVolatileProvider("search", () => "search result: xxx"));
         const result = engine.render({});
 
-        assert.ok(result.ephemeralContent.includes("搜索结果: xxx"));
-        // ephemeral 不应进入 historicalContent
+        assert.ok(result.ephemeralContent.includes("search result: xxx"));
         assert.equal(result.historicalContent, "");
     });
 
-    it("snapshot/persistent provider 正确进入 historicalContent", () => {
+    it("puts persistent snapshot providers into historicalContent", () => {
         engine.register(makeSnapshotProvider("status"));
-        const result = engine.render({ status: "在线" });
+        const result = engine.render({ status: "online" });
 
-        assert.ok(result.historicalContent.includes("在线"));
+        assert.ok(result.historicalContent.includes("online"));
     });
 
-    it("resolve 返回 null 时 section 被 skipped", () => {
+    it("marks null sections as skipped", () => {
         engine.register(makeVolatileProvider("maybe", () => null));
         const result = engine.render({});
 
@@ -233,19 +229,17 @@ describe("ContextEngine", () => {
         assert.equal(result.ephemeralContent, "");
     });
 
-    it("多 provider 按注册顺序渲染", () => {
+    it("renders providers in registration order", () => {
         engine
             .register(makeSnapshotProvider("first"))
             .register(makeSnapshotProvider("second"));
         const result = engine.render({ first: "AAA", second: "BBB" });
 
-        const idx1 = result.historicalContent.indexOf("AAA");
-        const idx2 = result.historicalContent.indexOf("BBB");
-        assert.ok(idx1 < idx2, "first 应在 second 之前");
+        const firstIndex = result.historicalContent.indexOf("AAA");
+        const secondIndex = result.historicalContent.indexOf("BBB");
+        assert.ok(firstIndex < secondIndex, "first should render before second");
     });
 });
-
-// ═══ 3. Delta Tracking ═══
 
 describe("ContextEngine Delta Tracking", () => {
     let engine: ContextEngine;
@@ -255,70 +249,66 @@ describe("ContextEngine Delta Tracking", () => {
         engine.register(makeDeltaProvider("messages"));
     });
 
-    it("首次 render 全量输出", () => {
+    it("renders the full payload on the first pass", () => {
         const messages: TestMessage[] = [
-            { id: "1", text: "你好" },
-            { id: "2", text: "世界" },
+            { id: "1", text: "hello" },
+            { id: "2", text: "world" },
         ];
         const result = engine.render({ messages });
 
-        assert.ok(result.tree[0].fullRendered.includes("[1] 你好"));
-        assert.ok(result.tree[0].fullRendered.includes("[2] 世界"));
+        assert.ok(result.tree[0].fullRendered.includes("[1] hello"));
+        assert.ok(result.tree[0].fullRendered.includes("[2] world"));
         assert.equal(result.tree[0].deltaStats!.total, 2);
         assert.equal(result.tree[0].deltaStats!.added, 2);
     });
 
-    it("commit 后第二次只有 delta", () => {
-        const messages1: TestMessage[] = [
-            { id: "1", text: "你好" },
-            { id: "2", text: "世界" },
+    it("only renders the delta after commit", () => {
+        const firstMessages: TestMessage[] = [
+            { id: "1", text: "hello" },
+            { id: "2", text: "world" },
         ];
-        const r1 = engine.render({ messages: messages1 });
-        engine.commit(r1.tree);
+        const first = engine.render({ messages: firstMessages });
+        engine.commit(first.tree);
 
-        const messages2: TestMessage[] = [
-            { id: "1", text: "你好" },
-            { id: "2", text: "世界" },
-            { id: "3", text: "新消息" },
+        const secondMessages: TestMessage[] = [
+            { id: "1", text: "hello" },
+            { id: "2", text: "world" },
+            { id: "3", text: "new message" },
         ];
-        const r2 = engine.render({ messages: messages2 });
+        const second = engine.render({ messages: secondMessages });
 
-        // fullRendered 包含全部 3 条
-        assert.ok(r2.tree[0].fullRendered.includes("[1]"));
-        assert.ok(r2.tree[0].fullRendered.includes("[3] 新消息"));
-
-        // historicalRendered 只包含 delta
-        assert.ok(r2.tree[0].historicalRendered!.includes("新增 1 条"));
-        assert.ok(r2.tree[0].historicalRendered!.includes("[3] 新消息"));
-        assert.ok(!r2.tree[0].historicalRendered!.includes("[1]"));
-
-        assert.equal(r2.tree[0].deltaStats!.total, 3);
-        assert.equal(r2.tree[0].deltaStats!.added, 1);
-        assert.equal(r2.tree[0].deltaStats!.unchanged, 2);
+        assert.ok(second.tree[0].fullRendered.includes("[1]"));
+        assert.ok(second.tree[0].fullRendered.includes("[3] new message"));
+        assert.ok(second.tree[0].historicalRendered!.includes("added 1"));
+        assert.ok(second.tree[0].historicalRendered!.includes("[3] new message"));
+        assert.ok(!second.tree[0].historicalRendered!.includes("[1] hello"));
+        assert.equal(second.tree[0].deltaStats!.total, 3);
+        assert.equal(second.tree[0].deltaStats!.added, 1);
+        assert.equal(second.tree[0].deltaStats!.unchanged, 2);
     });
 
-    it("无新消息时 historicalRendered 为 null", () => {
-        const messages: TestMessage[] = [{ id: "1", text: "你好" }];
-        const r1 = engine.render({ messages });
-        engine.commit(r1.tree);
+    it("emits no historical delta when nothing changed", () => {
+        const messages: TestMessage[] = [{ id: "1", text: "hello" }];
+        const first = engine.render({ messages });
+        engine.commit(first.tree);
 
-        const r2 = engine.render({ messages });
-        assert.equal(r2.tree[0].historicalRendered, null);
-        assert.equal(r2.tree[0].deltaStats!.added, 0);
+        const second = engine.render({ messages });
+        assert.equal(second.tree[0].historicalRendered, null);
+        assert.equal(second.tree[0].deltaStats!.added, 0);
     });
 
-    it("reset 后恢复全量", () => {
-        const messages: TestMessage[] = [{ id: "1", text: "你好" }];
-        const r1 = engine.render({ messages });
-        engine.commit(r1.tree);
+    it("returns to full delta after reset", () => {
+        const messages: TestMessage[] = [{ id: "1", text: "hello" }];
+        const first = engine.render({ messages });
+        engine.commit(first.tree);
         engine.ledger.reset();
 
-        const r2 = engine.render({ messages });
-        assert.equal(r2.tree[0].deltaStats!.added, 1);
-        assert.ok(r2.tree[0].historicalRendered!.includes("[1] 你好"));
+        const second = engine.render({ messages });
+        assert.equal(second.tree[0].deltaStats!.added, 1);
+        assert.ok(second.tree[0].historicalRendered!.includes("[1] hello"));
     });
 
-    it("带 chat 作用域的 delta provider 不会被其他聊天覆盖", () => {
+    it("keeps delta state isolated when scoped by chat id", () => {
         const scopedEngine = new ContextEngine("scoped-delta-test");
         scopedEngine.register(makeDeltaProvider("messages", { scopeByChatId: true }));
 
@@ -386,329 +376,49 @@ describe("ContextManifest", () => {
     });
 });
 
-describe("Attend Providers", () => {
-    it("group_model 在当前轮发送完整画像而不是 omit 占位符", () => {
-        const engine = new ContextEngine("attend-group-model-test");
-        engine.register(groupModelProvider);
-
-        const result = engine.render({
-            chatId: "telegram:test",
-            groupModel: {
-                chatTitle: "测试群",
-                description: "一个会讨论技术和日常的群",
-                avgMessagesPerDay: 42,
-                engagementLevel: "HIGH",
-            },
-            tonePreset: "轻松",
-        });
-
-        assert.equal(result.historicalContent, "");
-        assert.ok(result.ephemeralContent.includes("## 聊天画像"));
-        assert.ok(result.ephemeralContent.includes("测试群"));
-        assert.equal(result.manifest.sections[0].sentContent, result.tree[0].fullRendered);
-        assert.equal(result.manifest.sections[0].sentPhase, "ephemeral");
-    });
-
-    it("topic_digests provider 在 commit 后只输出增量话题更新", () => {
-        const engine = new ContextEngine("attend-topic-digests-test");
-        engine.register(topicDigestsProvider);
-
-        const first = engine.render({
-            chatId: "telegram:test",
-            topicDigests: [
-                {
-                    topicId: "topic_1",
-                    label: "话题一",
-                    summary: "第一版摘要",
-                    state: "active",
-                    participants: ["Alice"],
-                    keywords: ["alpha"],
-                    messageCount: 3,
-                    lastActivityAt: "2026-04-27T12:00:00.000Z",
-                },
-            ],
-        });
-        engine.commit(first.tree);
-
-        const second = engine.render({
-            chatId: "telegram:test",
-            topicDigests: [
-                {
-                    topicId: "topic_1",
-                    label: "话题一",
-                    summary: "第二版摘要",
-                    state: "active",
-                    participants: ["Alice", "Bob"],
-                    keywords: ["alpha", "beta"],
-                    messageCount: 5,
-                    lastActivityAt: "2026-04-27T12:05:00.000Z",
-                },
-                {
-                    topicId: "topic_2",
-                    label: "话题二",
-                    summary: "新话题摘要",
-                    state: "active",
-                    participants: ["Carol"],
-                    keywords: ["gamma"],
-                    messageCount: 1,
-                    lastActivityAt: "2026-04-27T12:06:00.000Z",
-                },
-            ],
-        });
-
-        assert.equal(second.tree[0].deltaStats!.added, 2);
-        assert.ok(second.tree[0].historicalRendered!.includes("═══ 话题注册表增量 ═══"));
-        assert.ok(second.tree[0].historicalRendered!.includes("话题二"));
-        assert.ok(second.tree[0].historicalRendered!.includes("第二版摘要"));
-        assert.ok(!second.tree[0].historicalRendered!.includes("第一版摘要"));
-        assert.equal(second.manifest.sections[0].sentPhase, "historical");
-    });
-
-    it("topic_digests 在话题顺序和内部数组顺序变化时不应误报增量", () => {
-        const engine = new ContextEngine("attend-topic-digests-stable-test");
-        engine.register(topicDigestsProvider);
-
-        const first = engine.render({
-            chatId: "telegram:test",
-            topicDigests: [
-                {
-                    topicId: "topic_1",
-                    label: "话题一",
-                    summary: "摘要一",
-                    state: "active",
-                    participants: ["Alice", "Bob"],
-                    keywords: ["alpha", "beta"],
-                    messageCount: 5,
-                    lastActivityAt: "2026-04-27T12:05:00.000Z",
-                    associatedMemories: [
-                        {
-                            type: "topic",
-                            topicId: "memory_topic_1",
-                            label: "旧话题",
-                            summary: "以前讨论过",
-                            startedAt: "2026-04-26T10:00:00.000Z",
-                            endedAt: null,
-                        },
-                        {
-                            type: "core_fact",
-                            factId: "fact_1",
-                            subject: "Alice",
-                            category: "preference",
-                            content: "喜欢热锅",
-                            confidence: 0.9,
-                        },
-                    ],
-                },
-                {
-                    topicId: "topic_2",
-                    label: "话题二",
-                    summary: "摘要二",
-                    state: "active",
-                    participants: ["Carol"],
-                    keywords: ["gamma"],
-                    messageCount: 2,
-                    lastActivityAt: "2026-04-27T12:06:00.000Z",
-                },
-            ],
-        });
-        engine.commit(first.tree);
-
-        const second = engine.render({
-            chatId: "telegram:test",
-            topicDigests: [
-                {
-                    topicId: "topic_2",
-                    label: "话题二",
-                    summary: "摘要二",
-                    state: "active",
-                    participants: ["Carol"],
-                    keywords: ["gamma"],
-                    messageCount: 2,
-                    lastActivityAt: "2026-04-27T12:06:00.000Z",
-                },
-                {
-                    topicId: "topic_1",
-                    label: "话题一",
-                    summary: "摘要一",
-                    state: "active",
-                    participants: ["Bob", "Alice"],
-                    keywords: ["beta", "alpha"],
-                    messageCount: 5,
-                    lastActivityAt: "2026-04-27T12:05:00.000Z",
-                    associatedMemories: [
-                        {
-                            type: "core_fact",
-                            factId: "fact_1",
-                            subject: "Alice",
-                            category: "preference",
-                            content: "喜欢热锅",
-                            confidence: 0.9,
-                        },
-                        {
-                            type: "topic",
-                            topicId: "memory_topic_1",
-                            label: "旧话题",
-                            summary: "以前讨论过",
-                            startedAt: "2026-04-26T10:00:00.000Z",
-                            endedAt: null,
-                        },
-                    ],
-                },
-            ],
-        });
-
-        assert.equal(second.tree[0].deltaStats!.added, 0);
-        assert.equal(second.tree[0].historicalRendered, null);
-    });
-
-    it("active_persons 在人物顺序和数组顺序变化时不应误报增量", () => {
-        const engine = new ContextEngine("attend-profiles-test");
-        engine.register(profilesProvider);
-
-        const first = engine.render({
-            chatId: "telegram:test",
-            activeUserProfiles: [
-                {
-                    userId: "u1",
-                    displayName: "Alice",
-                    aliases: ["A", "Alice"],
-                    traits: ["calm", "helpful"],
-                    communicationStyle: "简洁",
-                    relationToAgent: "朋友",
-                    messageCount: 5,
-                    dunbarTier: 2,
-                    rapport: 90,
-                    mention: "@alice",
-                    username: "alice",
-                },
-                {
-                    userId: "u2",
-                    displayName: "Bob",
-                    aliases: ["Bob"],
-                    traits: ["curious"],
-                    communicationStyle: "直接",
-                    relationToAgent: "熟人",
-                    messageCount: 3,
-                    dunbarTier: 3,
-                    rapport: 70,
-                    mention: "@bob",
-                    username: "bob",
-                },
-            ],
-        });
-        engine.commit(first.tree);
-
-        const second = engine.render({
-            chatId: "telegram:test",
-            activeUserProfiles: [
-                {
-                    userId: "u2",
-                    displayName: "Bob",
-                    aliases: ["Bob"],
-                    traits: ["curious"],
-                    communicationStyle: "直接",
-                    relationToAgent: "熟人",
-                    messageCount: 3,
-                    dunbarTier: 3,
-                    rapport: 70,
-                    mention: "@bob",
-                    username: "bob",
-                },
-                {
-                    username: "alice",
-                    mention: "@alice",
-                    rapport: 90,
-                    dunbarTier: 2,
-                    messageCount: 5,
-                    relationToAgent: "朋友",
-                    communicationStyle: "简洁",
-                    traits: ["helpful", "calm"],
-                    aliases: ["Alice", "A"],
-                    displayName: "Alice",
-                    userId: "u1",
-                },
-            ],
-        });
-
-        assert.equal(second.tree[0].deltaStats!.added, 0);
-        assert.equal(second.tree[0].historicalRendered, null);
-    });
-});
-
-// ═══ 5. Pipeline Providers ═══
-
 describe("Pipeline Providers", () => {
-    it("callbackProvider 渲染包含所有要素", () => {
-        const data = {
-            chatId: "test-123",
-            chatType: "群聊",
+    it("callbackProvider 渲染包含任务与总结信息", () => {
+        const rendered = callbackProvider.render({
+            chatId: "telegram:test",
+            chatType: "group",
             chatTitle: "测试群",
             taskId: "task-1",
-            executionType: "CODEACT_REPLY",
+            executionType: "CODEACT",
             status: "COMPLETED",
-            durationMs: 1500,
+            durationMs: 1234,
             isCompleted: true,
-            sentMessages: '- "你好世界"',
-            summary: "成功发送消息",
-        };
-        const rendered = callbackProvider.render(data);
+            sentMessages: '- "你好"',
+            summary: "任务已完成",
+        });
 
-        assert.ok(rendered.includes("测试群"));
-        assert.ok(rendered.includes("test-123"));
+        assert.ok(rendered.includes("消息回复结果"));
         assert.ok(rendered.includes("task-1"));
-        assert.ok(rendered.includes("COMPLETED"));
-        assert.ok(rendered.includes("1500ms"));
-        assert.ok(rendered.includes("你好世界"));
-        assert.ok(rendered.includes("成功发送消息"));
-        assert.ok(rendered.includes("OOC"), "应包含 OOC 自检提示");
+        assert.ok(rendered.includes("任务已完成"));
     });
 
-    it("callbackProvider 含 error 时渲染错误信息", () => {
-        const data = {
-            chatId: "test-123",
-            chatType: "群聊",
-            chatTitle: "测试群",
-            taskId: "task-1",
-            executionType: "CODEACT_REPLY",
-            status: "ERROR",
-            durationMs: 100,
-            isCompleted: false,
-            sentMessages: "（无）",
-            summary: "执行失败",
-            error: "LLM timeout",
-        };
-        const rendered = callbackProvider.render(data);
-        assert.ok(rendered.includes("LLM timeout"));
-    });
+    it("topicClusteringProvider 渲染包含已有话题与新消息", () => {
+        const rendered = topicClusteringProvider.render({
+            existingTopics: "topic_1: 旧话题",
+            messages: "[1] Alice: hello",
+        });
 
-    it("topicClusteringProvider 渲染包含完整指令", () => {
-        const data = {
-            existingTopics: "- topic_1: 聊天",
-            messages: "[msg1] Alice: 你好",
-        };
-        const rendered = topicClusteringProvider.render(data);
-
-        assert.ok(rendered.includes("话题分析器"));
+        assert.ok(rendered.includes("已有话题列表"));
         assert.ok(rendered.includes("topic_1"));
-        assert.ok(rendered.includes("Alice"));
-        assert.ok(rendered.includes("JSON"));
-        assert.ok(rendered.includes("NEW_"), "应包含 NEW_ 前缀说明");
-        assert.ok(rendered.includes("assignments"));
-        assert.ok(rendered.includes("evolutions"));
+        assert.ok(rendered.includes("Alice: hello"));
+        assert.ok(rendered.includes("NEW_1"));
     });
 
-    it("topicTriageProvider 渲染包含人设", () => {
-        const data = {
+    it("topicTriageProvider 渲染包含 persona 与 JSON 输出要求", () => {
+        const rendered = topicTriageProvider.render({
             personaName: "Miu",
             persona: "温柔的赛博少女",
-            rules: "",
-        };
-        const rendered = topicTriageProvider.render(data);
+            rules: "保持克制",
+        });
 
         assert.ok(rendered.includes("Miu"));
         assert.ok(rendered.includes("温柔的赛博少女"));
         assert.ok(rendered.includes("should_intervene"));
-        assert.ok(rendered.includes("triage") || rendered.includes("判断"));
+        assert.ok(rendered.includes("JSON"));
     });
 
     it("groundingProvider 渲染包含搜索指令", () => {

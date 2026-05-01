@@ -34,6 +34,7 @@ export function buildMetaApiContext(deps: BuildMetaApiContextDeps) {
             memory: deps.memory,
             subagentManager: deps.subagentManager,
             accumulator: deps.accumulator,
+            onTaskDispatched: deps.onTaskDispatched,
             groundingConfig: deps.groundingConfig,
             groundingRunner: deps.groundingRunner,
             executorFactory: deps.executorFactory,

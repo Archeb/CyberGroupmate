@@ -2,7 +2,7 @@ import type { LLMConfig } from "../core/config.js";
 import type { ChatMessage } from "../core/llm.js";
 import { createLogger } from "../core/logger.js";
 import type { MetaSandbox } from "../meta-sandbox/meta-sandbox.js";
-import { runMetaSession, type MetaSessionResult } from "../meta-sandbox/meta-session-runner.js";
+import { runMetaSession, type MetaLLMCaller, type MetaSessionResult } from "../meta-sandbox/meta-session-runner.js";
 import type { AttentionQueueEntry, SubagentCallback } from "../subagent/types.js";
 import type { GlobalState } from "./global-state.js";
 
@@ -13,6 +13,7 @@ export interface MetaSessionHandlerDeps {
     globalState: Pick<GlobalState, "getSessionDigests" | "memoList">;
     sandbox: MetaSandbox;
     getLlmConfigs: () => LLMConfig[];
+    llmCaller?: MetaLLMCaller;
     maxTurns?: number;
     codeTimeout?: number;
     llmTimeoutMs?: number;
@@ -41,6 +42,7 @@ export function createMetaSessionHandler(deps: MetaSessionHandlerDeps) {
         return runMetaSession(messages, deps.sandbox, llmConfigs, {
             maxTurns: deps.maxTurns,
             codeTimeout: deps.codeTimeout,
+            llmCaller: deps.llmCaller,
             llmTimeoutMs: deps.llmTimeoutMs,
         });
     };
