@@ -343,15 +343,6 @@ export interface Decision {
 
 
 /** Agent 工作笔记 */
-export interface AgentNote {
-    id: string;
-    content: string;
-    tags: string[];
-    relatedChatId?: string;
-    expiresAt?: string;
-    createdAt: string;
-}
-
 /** 调度事件（scheduler 命名空间） */
 export interface SchedulerEvent {
     /** 任务 ID */
@@ -413,30 +404,6 @@ export interface WakeConditionRecord {
 
 /** 主 Agent 全局状态 */
 export interface MainAgentGlobalState {
-    /** 最后活跃时间 */
-    lastActiveAt: string;
-    /** 当前任务列表 */
-    taskList: AgentTask[];
-    /** 最近决策记录（最近 50 条） */
-    recentDecisions: Array<{
-        chatId: string;
-        decision: string;
-        timestamp: string;
-    }>;
-    /** 跨群待办事项 */
-    pendingFollowups: Array<{
-        id: string;
-        sourceChatId: string;
-        targetChatId: string;
-        description: string;
-        status: "PENDING" | "IN_PROGRESS" | "DONE";
-        createdAt: string;
-        completedAt?: string;
-    }>;
-    /** 当前的注意力总结 */
-    attentionSummary: string;
-    /** Agent 工作笔记 */
-    notes: AgentNote[];
     /** 调度事件（定时提醒 + cron 任务） */
     schedulerEvents: SchedulerEvent[];
     /** Meta-CodeAct 全局备忘录 */
@@ -447,18 +414,6 @@ export interface MainAgentGlobalState {
     signalPool: SignalPoolItem[];
     /** Meta-CodeAct 唤醒条件 */
     wakeConditions: WakeConditionRecord[];
-}
-
-/** Agent 任务 */
-export interface AgentTask {
-    id: string;
-    description: string;
-    status: "PENDING" | "IN_PROGRESS" | "DONE" | "CANCELLED";
-    chatId?: string;
-    priority: "LOW" | "MEDIUM" | "HIGH";
-    createdAt: string;
-    updatedAt: string;
-    completedAt?: string;
 }
 
 // ─── 配置 ───

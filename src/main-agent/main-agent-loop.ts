@@ -232,16 +232,9 @@ export class MainAgentLoop {
         log.debug("tick: 开始", { tickCount: this.tickCount });
 
         // ═══ Phase 1: Drain Callbacks (Q5) ═══
-        // subagent.md §4.5: drain → recordDecision → markTaskComplete → unblock
+        // subagent.md §4.5: drain → markTaskComplete → unblock
         const callbacks = this.callbackQueue.drain();
         for (const cb of callbacks) {
-            // 记录到 GlobalState（持久化审计）
-            if (this.globalState) {
-                this.globalState.recordDecision(
-                    cb.chatId,
-                    `CALLBACK: ${cb.executionType} ${cb.status} (${cb.summary})`,
-                );
-            }
             // 追加到对话历史（LLM 可见）
             await this.appendToHistory({
                 role: "user",
@@ -269,17 +262,6 @@ export class MainAgentLoop {
             }
             const entry = sa.buildQueueEntry();
             this.attentionQueue.enqueueOrUpdate(entry);
-        }
-
-        // Fix 7: pendingFollowups 驱动的优先级提升 (subagent.md 场景 5)
-        if (this.globalState) {
-            const followups = this.globalState.getPendingFollowups();
-            for (const fu of followups) {
-                if (fu.status === "PENDING" || fu.status === "IN_PROGRESS") {
-                    this.attentionQueue.boost(fu.targetChatId, 20);
-                    log.debug("Phase 2: followup boost", { targetChatId: fu.targetChatId, description: fu.description });
-                }
-            }
         }
 
         const evaluation = this.attentionQueue.evaluate();
@@ -316,12 +298,6 @@ export class MainAgentLoop {
                 const midCallbacks = this.callbackQueue.drain();
                 for (const cb of midCallbacks) {
                     callbacks.push(cb);
-                    if (this.globalState) {
-                        this.globalState.recordDecision(
-                            cb.chatId,
-                            `CALLBACK: ${cb.executionType} ${cb.status} (${cb.summary})`,
-                        );
-                    }
                     await this.appendToHistory({
                         role: "user",
                         content: formatCallbackMessage(cb),
@@ -403,10 +379,6 @@ export class MainAgentLoop {
         } // end if (!cbOpen)
         // ═══ Phase 7: 更新全局状态 ═══
         if (this.globalState) {
-            const queueSnapshot = this.attentionQueue.getAll();
-            const summary = `Tick #${this.tickCount}: attended ${attended.length} groups, ` +
-                `${callbacks.length} callbacks, ${queueSnapshot.length} in queue`;
-            this.globalState.updateAttentionSummary(summary);
             this.globalState.save();
         }
 

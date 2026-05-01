@@ -280,7 +280,6 @@ export interface SubagentExternalConfig {
         batchMessageThreshold?: number;
     };
     globalState?: {
-        maxRecentDecisions?: number;
         autoSaveInterval?: number;
     };
     codeAct?: {
@@ -834,7 +833,6 @@ function parseSubagentConfig(fileConfig: Record<string, unknown>): SubagentExter
             batchMessageThreshold: rawDec.batch_message_threshold != null ? num(rawDec.batch_message_threshold, 10) : undefined,
         } : undefined,
         globalState: Object.keys(rawGS).length > 0 ? {
-            maxRecentDecisions: rawGS.max_recent_decisions != null ? num(rawGS.max_recent_decisions, 50) : undefined,
             autoSaveInterval: rawGS.auto_save_interval != null ? num(rawGS.auto_save_interval, 30000) : undefined,
         } : undefined,
         codeAct: Object.keys(rawCA).length > 0 ? {
@@ -1371,7 +1369,6 @@ export function serializeConfigToObject(config: AppConfig): Record<string, unkno
         }
         if (sa.globalState) {
             s.global_state = {
-                max_recent_decisions: sa.globalState.maxRecentDecisions,
                 auto_save_interval: sa.globalState.autoSaveInterval,
             };
         }

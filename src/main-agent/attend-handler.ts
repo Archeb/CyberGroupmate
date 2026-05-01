@@ -365,12 +365,11 @@ export function createAttendHandler(
                 : "从未关注";
 
             // ➌ Attend 上下文注入
-            const recentDecisions = globalState.getRecentDecisions().slice(-5)
-                .map(d => `- [${d.chatId}] ${d.decision}`).join("\n") || "（无）";
-            const activeTasks = globalState.getTaskList()
-                .filter(t => t.status !== "DONE" && t.status !== "CANCELLED")
-                .map(t => `- [${t.priority}][${t.status}] ${t.description}${t.chatId ? ` (群:${t.chatId})` : ""}`)
-                .join("\n") || "（无待办任务）";
+            const sessionDigests = globalState.getSessionDigests().slice(-5)
+                .map(d => `- [${d.createdAt}] ${d.content}`).join("\n") || "（无）";
+            const activeMemos = globalState.memoList()
+                .map(m => `- ${m.key}: ${JSON.stringify(m.value)}${m.expiresAt ? ` (过期: ${m.expiresAt})` : ""}`)
+                .join("\n") || "（无活跃备忘录）";
 
             // ═══ ContextEngine 声明式渲染 ═══
             const attendEngine = mainLoop.getAttendEngine();
@@ -378,9 +377,8 @@ export function createAttendHandler(
                 chatId: entry.chatId,
                 chatTitle: contextPkg.chatTitle ?? groupModel?.chatTitle ?? entry.chatId,
                 chatType: deriveChatType(contextPkg.isDirectMessage),
-                attentionSummary: globalState.getAttentionSummary() || "（无）",
-                recentDecisions,
-                activeTasks,
+                sessionDigests,
+                activeMemos,
                 stickinessLevel: entry.stickinessLevel,
                 snapshotTimestamp: contextPkg.snapshotTimestamp,
                 lastAttendedAt: entry.lastAttendedAt ?? "无记录",
@@ -533,10 +531,6 @@ export function createAttendHandler(
                 })),
                 summary: renderResult.manifest.summary,
             });
-
-
-            globalState.recordDecision(entry.chatId,
-                `LLM_DECISION: ${llmResult.replyMode} (${llmResult.decisions.length} decisions, engagement=${Math.round(entry.priority)}, depth=L${depth})`);
             log.info("LLM 决策完成", {
                 chatId: entry.chatId,
                 replyMode: llmResult.replyMode,
@@ -578,8 +572,6 @@ export function createAttendHandler(
                     error: errMsg.slice(0, 200),
                 });
                 mainLoop.tripCircuitBreaker(errMsg);
-                globalState.recordDecision(entry.chatId,
-                    `CIRCUIT_BREAKER: 配额耗尽 (error=${errMsg.slice(0, 100)})`);
                 return buildObserve(entry.chatId);
             }
 
@@ -588,9 +580,6 @@ export function createAttendHandler(
                 chatId: entry.chatId,
                 error: errMsg.slice(0, 200),
             });
-
-            globalState.recordDecision(entry.chatId,
-                `LLM_FAILED: OBSERVE (error=${errMsg.slice(0, 100)})`);
             return buildObserve(entry.chatId);
         }
     };

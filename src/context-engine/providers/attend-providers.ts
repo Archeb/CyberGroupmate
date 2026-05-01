@@ -37,9 +37,8 @@ export interface AttendMetaData {
 }
 
 export interface GlobalStateData {
-    attentionSummary: string;
-    recentDecisions: string;
-    activeTasks: string;
+    sessionDigests: string;
+    activeMemos: string;
 }
 
 export interface TopicDigestData {
@@ -164,7 +163,7 @@ export const attendHeaderProvider: SectionProvider<AttendHeaderData> = {
     },
 };
 
-/** 全局状态：attentionSummary + recentDecisions + activeTasks */
+/** 全局状态：sessionDigests + activeMemos */
 export const globalStateProvider: SectionProvider<GlobalStateData> = {
     schema: {
         name: "global_state",
@@ -175,13 +174,12 @@ export const globalStateProvider: SectionProvider<GlobalStateData> = {
     },
     resolve(ctx) {
         return {
-            attentionSummary: (ctx.attentionSummary as string) ?? "（无）",
-            recentDecisions: (ctx.recentDecisions as string) ?? "（无）",
-            activeTasks: (ctx.activeTasks as string) ?? "（无待办任务）",
+            sessionDigests: (ctx.sessionDigests as string) ?? "（无）",
+            activeMemos: (ctx.activeMemos as string) ?? "（无活跃备忘录）",
         };
     },
     render(data) {
-        return `## 全局状态快照\n${data.attentionSummary}\n\n## 最近决策记录\n${data.recentDecisions}\n\n## 当前任务列表\n${data.activeTasks}`;
+        return `## 最近会话摘要\n${data.sessionDigests}\n\n## 当前备忘录\n${data.activeMemos}`;
     },
 };
 

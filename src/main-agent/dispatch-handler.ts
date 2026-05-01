@@ -445,7 +445,6 @@ export function createDispatchHandler(
                         });
                         // Unblock in Q3 when callback arrives
                         q3.unblock(cb.chatId);
-                        globalState.recordDecision(cb.chatId, `CALLBACK: ${cb.executionType} ${cb.status} (${cb.summary})`);
 
                         // Post-session: 1 分钟后触发 RecordingPipeline flush
                         // 追踪话题变化 + triage 判断是否需要再次介入
@@ -511,7 +510,6 @@ export function createDispatchHandler(
                     reason: decision.reason,
                     topicId: decision.topicId,
                 });
-                globalState.recordDecision(result.chatId, `DEFERRED: ${decision.reason}`);
             } else if (decision.action === "OBSERVE" || decision.action === "IGNORE") {
                 // 仅记录，不分派
                 log.debug("决策: 不操作", {

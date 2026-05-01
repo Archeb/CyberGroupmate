@@ -491,7 +491,14 @@ export function createApiRouter(deps: DashboardDeps, bridge: EventBridge): Route
 
     // ─── Decisions & GlobalState ───
     router.get("/decisions", (_req, res) => {
-        res.json(deps.globalState.getRecentDecisions());
+        res.json(
+            deps.globalState.getSessionDigests().map((digest) => ({
+                chatId: "__meta__",
+                decision: digest.content,
+                content: digest.content,
+                timestamp: digest.createdAt,
+            }))
+        );
     });
 
     router.get("/global-state", (_req, res) => {
