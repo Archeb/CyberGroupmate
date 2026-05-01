@@ -1,0 +1,161 @@
+import { after, describe, it } from "node:test";
+import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
+import { rmSync, existsSync, mkdirSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { AttentionAccumulator } from "../src/accumulator/attention-accumulator.js";
+import { calculatePressure } from "../src/accumulator/pressure.js";
+import { GlobalState } from "../src/main-agent/global-state.js";
+
+const tempDirs: string[] = [];
+
+function tempDir(): string {
+    const dir = join(tmpdir(), `accumulator-${randomUUID()}`);
+    mkdirSync(dir, { recursive: true });
+    tempDirs.push(dir);
+    return dir;
+}
+
+after(() => {
+    for (const dir of tempDirs) {
+        if (existsSync(dir)) rmSync(dir, { recursive: true, force: true });
+    }
+});
+
+function createAccumulator() {
+    const dir = tempDir();
+    const globalState = new GlobalState({ filePath: join(dir, "state.json"), autoSaveInterval: 0 });
+    const accumulator = new AttentionAccumulator(globalState, { windowMs: 1_000, topN: 2 });
+    return { accumulator, globalState };
+}
+
+describe("AttentionAccumulator", () => {
+    it("calculates pressure with tier, stickiness and age factors", () => {
+        const pressure = calculatePressure({
+            participants: [{ messageCount: 2, totalChars: 300, dunbarTier: 1 }],
+            stickinessLevel: "CORE",
+            ageMinutes: 5,
+            ignoredCount: 0,
+        });
+        assert.equal(pressure, 1320);
+    });
+
+    it("applies ignored penalty to pressure", () => {
+        const pressure = calculatePressure({
+            participants: [{ messageCount: 2, totalChars: 300, dunbarTier: 1 }],
+            stickinessLevel: "CORE",
+            ageMinutes: 5,
+            ignoredCount: 1,
+        });
+        assert.equal(pressure, 396);
+    });
+
+    it("waits for window before flushing layer 1 items", () => {
+        const { accumulator, globalState } = createAccumulator();
+        accumulator.ingest(1, {
+            chatId: "telegram:1",
+            source: "CALLBACK",
+            payload: { taskId: "a" },
+            enqueuedAt: 0,
+        });
+
+        assert.equal(accumulator.flush(500), null);
+        const set = accumulator.flush(1_000);
+        assert.ok(set);
+        assert.equal(set?.triggerReason, "window");
+        assert.equal(set?.items.length, 1);
+        globalState.dispose();
+    });
+
+    it("flushes immediately when a layer 0 item preempts", () => {
+        const { accumulator, globalState } = createAccumulator();
+        accumulator.ingest(1, {
+            chatId: "telegram:1",
+            source: "CALLBACK",
+            payload: { taskId: "a" },
+            enqueuedAt: 0,
+        });
+        accumulator.ingest(0, {
+            chatId: "telegram:2",
+            source: "DIRECT_ADDRESS",
+            payload: { preview: "在吗" },
+            enqueuedAt: 100,
+        });
+
+        const set = accumulator.flush(100);
+        assert.ok(set);
+        assert.equal(set?.triggerReason, "preempt");
+        assert.equal(set?.items[0]?.layer, 0);
+        globalState.dispose();
+    });
+
+    it("releases only top N signals and persists ignored counts", () => {
+        const { accumulator, globalState } = createAccumulator();
+        accumulator.ingest(2, {
+            chatId: "telegram:1",
+            source: "TOPIC_SIGNAL",
+            payload: { label: "A" },
+            enqueuedAt: 0,
+            pressure: 10,
+        });
+        accumulator.ingest(2, {
+            chatId: "telegram:2",
+            source: "TOPIC_SIGNAL",
+            payload: { label: "B" },
+            enqueuedAt: 1,
+            pressure: 30,
+        });
+        accumulator.ingest(2, {
+            chatId: "telegram:3",
+            source: "TOPIC_SIGNAL",
+            payload: { label: "C" },
+            enqueuedAt: 2,
+            pressure: 20,
+        });
+
+        const set = accumulator.flush(2_000);
+        assert.ok(set);
+        assert.equal(set?.items.length, 2);
+        assert.deepEqual(
+            set?.items.map((item) => item.chatId),
+            ["telegram:2", "telegram:3"],
+        );
+        assert.deepEqual(
+            globalState.getSignalPool().map((item) => ({ chatId: item.chatId, ignoredCount: item.ignoredCount })),
+            [
+                { chatId: "telegram:1", ignoredCount: 0 },
+                { chatId: "telegram:2", ignoredCount: 1 },
+                { chatId: "telegram:3", ignoredCount: 1 },
+            ],
+        );
+        globalState.dispose();
+    });
+
+    it("restores persisted signal pool and resets ignored count on markActioned", () => {
+        const dir = tempDir();
+        const path = join(dir, "state.json");
+        const gs1 = new GlobalState({ filePath: path, autoSaveInterval: 0 });
+        const acc1 = new AttentionAccumulator(gs1, { windowMs: 1_000, topN: 2 });
+        acc1.ingest(2, {
+            chatId: "telegram:1",
+            source: "TOPIC_SIGNAL",
+            payload: { label: "persisted" },
+            enqueuedAt: 0,
+            pressure: 12,
+        });
+        acc1.flush(2_000);
+        gs1.save();
+        gs1.dispose();
+
+        const gs2 = new GlobalState({ filePath: path, autoSaveInterval: 0 });
+        const acc2 = new AttentionAccumulator(gs2, { windowMs: 1_000, topN: 2 });
+        acc2.restoreSignalPool();
+        assert.equal(acc2.getSignalPoolSize(), 1);
+        assert.equal(gs2.getSignalPool()[0]?.ignoredCount, 1);
+        acc2.markActioned("telegram:1");
+        assert.equal(gs2.getSignalPool()[0]?.ignoredCount, 0);
+        gs2.dispose();
+    });
+});
