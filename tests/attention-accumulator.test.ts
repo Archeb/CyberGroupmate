@@ -24,10 +24,10 @@ after(() => {
     }
 });
 
-function createAccumulator() {
+function createAccumulator(config?: ConstructorParameters<typeof AttentionAccumulator>[1]) {
     const dir = tempDir();
     const globalState = new GlobalState({ filePath: join(dir, "state.json"), autoSaveInterval: 0 });
-    const accumulator = new AttentionAccumulator(globalState, { windowMs: 1_000, topN: 2 });
+    const accumulator = new AttentionAccumulator(globalState, { windowMs: 1_000, topN: 2, ...config });
     return { accumulator, globalState };
 }
 
@@ -130,6 +130,41 @@ describe("AttentionAccumulator", () => {
                 { chatId: "telegram:3", ignoredCount: 1 },
             ],
         );
+        globalState.dispose();
+    });
+
+    it("recalculates topic signal pressure after a signal is ignored", () => {
+        const { accumulator, globalState } = createAccumulator({ topN: 1 });
+        accumulator.ingest(2, {
+            chatId: "telegram:1",
+            source: "TOPIC_SIGNAL",
+            payload: {
+                pressureInput: {
+                    participants: [{ messageCount: 2, totalChars: 300, dunbarTier: 1 }],
+                    stickinessLevel: "CORE",
+                },
+            },
+            enqueuedAt: 0,
+        });
+        accumulator.ingest(2, {
+            chatId: "telegram:2",
+            source: "TOPIC_SIGNAL",
+            payload: {
+                pressureInput: {
+                    participants: [{ messageCount: 1, totalChars: 200, dunbarTier: 1 }],
+                    stickinessLevel: "CORE",
+                },
+            },
+            enqueuedAt: 0,
+        });
+
+        const firstSet = accumulator.flush(0);
+        assert.ok(firstSet);
+        assert.deepEqual(firstSet?.items.map((item) => item.chatId), ["telegram:1"]);
+
+        const secondSet = accumulator.flush(60_000);
+        assert.ok(secondSet);
+        assert.deepEqual(secondSet?.items.map((item) => item.chatId), ["telegram:2"]);
         globalState.dispose();
     });
 

@@ -140,7 +140,12 @@ export async function runMetaSession(
             messages.push({ role: "user", content: formatObservation(execution.output) });
 
             if (execution.error) {
-                return finalize("error", execution.output);
+                log.warn("Meta session code execution failed", {
+                    sessionId,
+                    turn,
+                    error: execution.output,
+                });
+                continue;
             }
 
             if (hasEndTurn) {

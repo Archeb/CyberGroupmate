@@ -63,7 +63,7 @@ export interface TopicDigest {
     messageCount: number;
     /** 最后活跃时间 */
     lastActivityAt: string;
-    /** Triage 判断理由（should_intervene=true 时填充） */
+    /** Triage 判断理由 / 行动提示 */
     triageReason?: string;
     /** 与当前话题程序化关联的记忆 */
     associatedMemories?: AssociatedMemory[];
@@ -109,7 +109,7 @@ export interface AttentionQueueEntry {
     /** 快照时间戳 */
     snapshotTimestamp?: string;
     /** Scheduler 触发描述列表（watchdog 注入，source=SCHEDULER_TRIGGER 时存在） */
-    schedulerTriggers?: Array<{ id: string; type: "reminder" | "cron"; description: string }>;
+    schedulerTriggers?: Array<{ id: string; type: "reminder" | "cron" | "wake_condition"; description: string }>;
     /** 当前队列快照中的最大 callbackPotential */
     callbackPotential?: number;
     /** 是否存在高 callbackPotential 话题 */

@@ -417,7 +417,7 @@ describe("Pipeline Providers", () => {
 
         assert.ok(rendered.includes("Miu"));
         assert.ok(rendered.includes("温柔的赛博少女"));
-        assert.ok(rendered.includes("should_intervene"));
+        assert.ok(rendered.includes("不要输出是否介入的二元判断"));
         assert.ok(rendered.includes("JSON"));
     });
 

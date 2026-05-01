@@ -63,9 +63,7 @@ export type TopicState =
 
 /** 话题级 Triage 的结构化输出 */
 export interface TriageDecision {
-    /** 是否应该介入 */
-    should_intervene: boolean;
-    /** 判断理由 */
+    /** 判断理由 / 行动提示 */
     reason: string;
 }
 
@@ -326,8 +324,7 @@ export interface TopicSummaryTriageResult {
     topics: Array<{
         topicId: string;
         summary: string;
-        /** Triage 结果 */
-        should_intervene: boolean;
+        /** Triage 元数据 */
         reason: string;
     }>;
 }

@@ -86,7 +86,7 @@ function handleEvent(event) {
     case 'recording:flush-start':
     case 'recording:flush-complete':
     case 'recording:flush-error':
-    case 'recording:triage-passed':
+    case 'recording:topics-signaled':
       handleRecordingEvent({ ...event.data, _type: event.type, _timestamp: event.timestamp });
       break;
   }

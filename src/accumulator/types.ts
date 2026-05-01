@@ -53,3 +53,8 @@ export interface PressureInput {
     ageMinutes: number;
     ignoredCount: number;
 }
+
+export interface DynamicSignalPressureInput {
+    participants: PressureParticipant[];
+    stickinessLevel: StickinessLevel;
+}

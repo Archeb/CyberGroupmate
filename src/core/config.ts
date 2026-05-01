@@ -271,9 +271,6 @@ export interface SubagentExternalConfig {
     observer?: {
         engagementWindowMs?: number;
     };
-    mainLoop?: {
-        maxAttendsPerTick?: number;
-    };
     decision?: {
         batchThreshold?: number;
         noneThreshold?: number;
@@ -824,9 +821,6 @@ function parseSubagentConfig(fileConfig: Record<string, unknown>): SubagentExter
         observer: Object.keys(rawObs).length > 0 ? {
             engagementWindowMs: rawObs.engagement_window_ms != null ? num(rawObs.engagement_window_ms, 300000) : undefined,
         } : undefined,
-        mainLoop: Object.keys(rawML).length > 0 ? {
-            maxAttendsPerTick: rawML.max_attends_per_tick != null ? num(rawML.max_attends_per_tick, 3) : undefined,
-        } : undefined,
         decision: Object.keys(rawDec).length > 0 ? {
             batchThreshold: rawDec.batch_threshold != null ? num(rawDec.batch_threshold, 50) : undefined,
             noneThreshold: rawDec.none_threshold != null ? num(rawDec.none_threshold, 10) : undefined,
@@ -1359,7 +1353,6 @@ export function serializeConfigToObject(config: AppConfig): Record<string, unkno
             };
         }
         if (sa.observer) s.observer = { engagement_window_ms: sa.observer.engagementWindowMs };
-        if (sa.mainLoop) s.main_loop = { max_attends_per_tick: sa.mainLoop.maxAttendsPerTick };
         if (sa.decision) {
             s.decision = {
                 batch_threshold: sa.decision.batchThreshold,

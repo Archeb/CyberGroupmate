@@ -13,10 +13,10 @@ import { SubagentManager } from "../subagent/subagent-manager.js";
 import { GlobalState } from "./global-state.js";
 import type { AttentionQueueEntry, SubagentCallback, AttendResult, Decision } from "../subagent/types.js";
 import { DEFAULT_SUBAGENT_CONFIG } from "../subagent/types.js";
-import type { ChatMessage } from "../core/llm.js";
 import type { AttentionItem } from "../accumulator/types.js";
 import { AttentionAccumulator } from "../accumulator/attention-accumulator.js";
 import { createLogger } from "../core/logger.js";
+import { buildWakeConditionPayload, matchCallbackWakeConditions } from "./wake-conditions.js";
 
 const log = createLogger("main-agent-loop");
 
@@ -24,22 +24,10 @@ const log = createLogger("main-agent-loop");
 export interface MainAgentLoopConfig {
     /** 轮询间隔 (ms)。默认 5000 */
     pollInterval: number;
-    /** 兼容旧配置项：当前 Meta loop 每 tick 只运行一次 session */
-    maxAttendsPerTick: number;
-    /** 兼容旧配置项，当前未使用 */
-    cosineDecayCyclePeriod: number;
-    /** 兼容旧配置项，当前未使用 */
-    retainAfterCompact: number;
-    /** 兼容旧配置项，当前未使用 */
-    hardCapMessages: number;
 }
 
 const DEFAULT_LOOP_CONFIG: MainAgentLoopConfig = {
     pollInterval: DEFAULT_SUBAGENT_CONFIG.pollInterval,
-    maxAttendsPerTick: 3,
-    cosineDecayCyclePeriod: 20,
-    retainAfterCompact: 10,
-    hardCapMessages: 100,
 };
 
 /**
@@ -64,9 +52,6 @@ export class MainAgentLoop {
     private circuitBreakerOpenUntil: number = 0;
     private circuitBreakerBackoff: number = 30_000; // 初始 30s
     private static readonly CB_MAX_BACKOFF = 10 * 60_000; // 最大 10min
-
-    /** Dashboard 仍会读取此接口；Meta path 当前不再维护旧 conversation history。 */
-    private conversationHistory: ChatMessage[] = [];
 
     /** 外部 Meta session handler */
     private metaSessionHandler: ((entries: AttentionQueueEntry[], callbacks: SubagentCallback[]) => Promise<MetaTurnResult | null>) | null = null;
@@ -179,6 +164,26 @@ export class MainAgentLoop {
                 cbSubagent.addCallback(cb);
             }
             this.accumulator.unblock(cb.chatId);
+
+            if (this.globalState) {
+                const matches = matchCallbackWakeConditions(cb, this.globalState.getWakeConditions());
+                for (const match of matches) {
+                    this.globalState.removeWakeCondition(match.conditionId);
+                    this.accumulator.ingest(1, {
+                        chatId: "__meta__",
+                        source: "WAKE_CONDITION",
+                        enqueuedAt: Date.now(),
+                        payload: buildWakeConditionPayload(match, {
+                            callback: {
+                                taskId: cb.taskId,
+                                chatId: cb.chatId,
+                                status: cb.status,
+                                summary: cb.summary,
+                            },
+                        }),
+                    });
+                }
+            }
         }
 
         const evaluation = {
@@ -325,41 +330,32 @@ export class MainAgentLoop {
     }
 
 
-    /**
-     * 获取当前对话历史（供 attendHandler 构建 LLM messages 使用）
-     */
-    getConversationHistory(): ReadonlyArray<ChatMessage> {
-        return this.conversationHistory;
-    }
-
-    /**
-     * 获取对话历史长度
-     */
-    getConversationHistorySize(): number {
-        return this.conversationHistory.length;
-    }
-
     private buildAttendEntry(item: AttentionItem): AttentionQueueEntry | null {
         const subagent = this.subagentManager.get(item.chatId);
-        if (!subagent) {
+        if (!subagent && !(item.chatId === "__meta__" && item.source === "WAKE_CONDITION")) {
             return null;
         }
 
         let entry: AttentionQueueEntry;
         switch (item.source) {
             case "DIRECT_ADDRESS":
+                if (!subagent) return null;
                 entry = subagent.buildQueueEntry("DIRECT_ADDRESS");
                 break;
             case "SCHEDULER":
             case "WAKE_CONDITION":
-                entry = subagent.buildQueueEntry("SCHEDULER_TRIGGER");
+                entry = subagent
+                    ? subagent.buildQueueEntry("SCHEDULER_TRIGGER")
+                    : createSyntheticMetaEntry(item);
                 entry.schedulerTriggers = extractSchedulerTriggers(item.payload);
                 break;
             case "CALLBACK":
+                if (!subagent) return null;
                 entry = subagent.buildQueueEntry("DEFERRED_RE_ENTRY");
                 break;
             case "TOPIC_SIGNAL":
             default:
+                if (!subagent) return null;
                 entry = subagent.buildQueueEntry();
                 break;
         }
@@ -395,19 +391,37 @@ export interface MetaTurnResult {
     attendResults?: AttendResult[];
 }
 
-function extractSchedulerTriggers(payload: unknown): Array<{ id: string; type: "reminder" | "cron"; description: string }> {
+function extractSchedulerTriggers(payload: unknown): Array<{ id: string; type: "reminder" | "cron" | "wake_condition"; description: string }> {
     if (!payload || typeof payload !== "object") {
         return [];
     }
 
     if ("type" in payload && "id" in payload && "description" in payload) {
         const type = payload.type;
-        if ((type === "reminder" || type === "cron") && typeof payload.id === "string" && typeof payload.description === "string") {
+        if ((type === "reminder" || type === "cron" || type === "wake_condition") && typeof payload.id === "string" && typeof payload.description === "string") {
             return [{ id: payload.id, type, description: payload.description }];
         }
     }
 
     return [];
+}
+
+function createSyntheticMetaEntry(item: AttentionItem): AttentionQueueEntry {
+    return {
+        chatId: "__meta__",
+        source: "SCHEDULER_TRIGGER",
+        priority: Math.max(1, item.pressure ?? 1),
+        basePriority: Math.max(1, item.pressure ?? 1),
+        enqueuedAt: item.enqueuedAt,
+        lastAttendedAt: null,
+        attendCount: 0,
+        blocked: false,
+        newMessageCount: 0,
+        topicDigests: [],
+        stickinessLevel: "STRANGER",
+        engagementScore: 0,
+        snapshotTimestamp: new Date(item.enqueuedAt).toISOString(),
+    };
 }
 
 function looksLikeQuotaError(message: string): boolean {

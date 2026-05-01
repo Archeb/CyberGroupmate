@@ -88,7 +88,7 @@ export const topicTriageProvider: SectionProvider<TopicTriageData> = {
     },
     render(data) {
         return [
-            `你是「${data.personaName}」，正在回顾最近的对话记录，并判断哪些话题需要你重新介入。`,
+            `你是「${data.personaName}」，正在回顾最近的对话记录，并为每个话题补充摘要和后续行动提示。`,
             "",
             data.persona,
             "",
@@ -97,7 +97,7 @@ export const topicTriageProvider: SectionProvider<TopicTriageData> = {
             "- 可以选择性介入：之前忘了回复的别人的请求、悬空（没有人理睬）的提问、关系超级好的人的的闲聊。",
             "- 绝不介入：争吵、自己未参与过的话题、不熟悉的人的话题、私密对话、敏感话题、已有专业人士在解答、和你关系不好的人的话题",
             "- 私聊情况下，回头看的时候，可以根据自己的喜好，进行适当追问/提及过去的话题。如果话题已经结束太久，或者有其他不适合追问的情况，则不建议追问。",
-            "- 不是一定要选一个接入，大部分时候宁可错过，不可冒犯。",
+            "- 不要输出是否介入的二元判断；所有话题都会进入后续信号池。",
             "",
             '请输出 JSON 格式：',
             '{',
@@ -105,8 +105,7 @@ export const topicTriageProvider: SectionProvider<TopicTriageData> = {
             '    {',
             '      "topicId": "<话题ID>",',
             '      "summary": "<2-3句话摘要，和标题不重复>",',
-            '      "should_intervene": true/false,',
-            '      "reason": "<判断理由，如介入则包含行动方向（注意事项）>"',
+            '      "reason": "<行动提示、风险提醒或补充上下文；没有特别建议时给出简短观察结论>"',
             '    }',
             '  ]',
             '}',

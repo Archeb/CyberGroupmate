@@ -44,7 +44,7 @@
       case 'recording:flush-start': return { label: '🚀 Flush 开始', cls: 'evt-flush-start' };
       case 'recording:flush-complete': return { label: '✅ Flush 完成', cls: 'evt-flush-complete' };
       case 'recording:flush-error': return { label: '❌ Flush 错误', cls: 'evt-flush-error' };
-      case 'recording:triage-passed': return { label: '🎯 Triage 通过', cls: 'evt-triage-passed' };
+      case 'recording:topics-signaled': return { label: '🎯 Topic Signal', cls: 'evt-topics-signaled' };
       default: return { label: type, cls: '' };
     }
   }
@@ -184,21 +184,17 @@
                   <div class="rp-event-body text-error">{evt.error}</div>
                 {/if}
 
-                {#if evt._type === 'recording:triage-passed'}
+                {#if evt._type === 'recording:topics-signaled'}
                   <div class="rp-event-body">
                     <div>话题: <strong>{evt.topicLabel}</strong></div>
-                    {#if evt.decision}
-                      <div class="rp-decision">
-                        <span class="badge badge-xs" class:badge-success={evt.decision.should_intervene} class:badge-ghost={!evt.decision.should_intervene}>
-                          {evt.decision.should_intervene ? '介入' : '观望'}
-                        </span>
-                        {#if evt.decision.callbackPotential > 0}
-                          <span class="badge badge-xs badge-info">cbp: {evt.decision.callbackPotential}</span>
-                        {/if}
-                      </div>
-                      {#if evt.decision.reason}
-                        <div class="rp-decision-reason">{evt.decision.reason}</div>
+                    <div class="rp-decision">
+                      <span class="badge badge-xs badge-info">pressure: {evt.pressure}</span>
+                      {#if evt.callbackPotential > 0}
+                        <span class="badge badge-xs badge-info">cbp: {evt.callbackPotential}</span>
                       {/if}
+                    </div>
+                    {#if evt.reason}
+                      <div class="rp-decision-reason">{evt.reason}</div>
                     {/if}
                   </div>
                 {/if}
@@ -270,7 +266,7 @@
 .rp-event.evt-flush-start { border-left-color: var(--color-info); background: color-mix(in srgb, var(--color-info) 5%, transparent); }
 .rp-event.evt-flush-complete { border-left-color: var(--color-success); background: color-mix(in srgb, var(--color-success) 5%, transparent); }
 .rp-event.evt-flush-error { border-left-color: var(--color-error); background: color-mix(in srgb, var(--color-error) 5%, transparent); }
-.rp-event.evt-triage-passed { border-left-color: var(--color-warning); background: color-mix(in srgb, var(--color-warning) 5%, transparent); }
+.rp-event.evt-topics-signaled { border-left-color: var(--color-warning); background: color-mix(in srgb, var(--color-warning) 5%, transparent); }
 
 .rp-event-header {
   display: flex;

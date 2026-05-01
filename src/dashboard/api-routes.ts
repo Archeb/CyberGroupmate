@@ -733,11 +733,6 @@ export function createApiRouter(deps: DashboardDeps, bridge: EventBridge): Route
         res.json({ activeWindows: deps.feedbackLoop.getActiveWindows() });
     });
 
-    // ─── Main Agent Conversation History ───
-    router.get("/main-agent/history", (_req, res) => {
-        res.json(deps.mainLoop.getConversationHistory());
-    });
-
     // ─── Callbacks (Q5) ───
     router.get("/callbacks", (_req, res) => {
         res.json(deps.q5.peek());

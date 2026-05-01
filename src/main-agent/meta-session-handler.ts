@@ -1,6 +1,8 @@
 import type { LLMConfig } from "../core/config.js";
 import type { ChatMessage } from "../core/llm.js";
 import { createLogger } from "../core/logger.js";
+import { loadPromptFile } from "../core/prompt-loader.js";
+import { renderTemplate } from "../context-engine/template-engine.js";
 import type { MetaSandbox } from "../meta-sandbox/meta-sandbox.js";
 import { runMetaSession, type MetaLLMCaller, type MetaSessionResult } from "../meta-sandbox/meta-session-runner.js";
 import type { AttentionQueueEntry, SubagentCallback } from "../subagent/types.js";
@@ -54,10 +56,15 @@ function buildMetaMessages(
     callbacks: SubagentCallback[],
 ): ChatMessage[] {
     const persona = deps.getPersona() ?? {};
+    const systemPrompt = loadRequiredPrompt("meta-agent/meta-system.md");
     const messages: ChatMessage[] = [
         {
             role: "system",
-            content: buildSystemPrompt(persona.name ?? "赛博群友", persona.description ?? "跨群编排 agent"),
+            content: renderTemplate(systemPrompt, {
+                personaName: persona.name ?? "赛博群友",
+                personaDescription: persona.description ?? "跨群编排 agent",
+                metaApiReference: buildMetaApiReference(),
+            }),
         },
     ];
 
@@ -72,19 +79,6 @@ function buildMetaMessages(
     });
 
     return messages;
-}
-
-function buildSystemPrompt(personaName: string, personaDescription: string): string {
-    return [
-        `你是「${personaName}」，现在正在跨群编排多个聊天任务。`,
-        personaDescription,
-        "你运行在 MetaSandbox 中，可以直接调用以下 Meta API：conversations、memory、agents、dispatch、memo、schedule。",
-        "如果需要采取动作，输出一个单独的 ```ts 代码块，在代码中直接 await 这些 API。",
-        "如果本轮不需要动作，不要输出代码，直接结束。",
-        "禁止使用 setTimeout/setInterval 之类的自调度方式；需要未来唤醒时使用 schedule.wakeOnCondition()。",
-        "本轮结束时必须输出 <end_turn>，并在思考文本中包含 [SESSION_DIGEST]...[/SESSION_DIGEST]，摘要写清楚你做了什么、还在等什么。",
-        "你的目标不是给出最终回复内容，而是完成跨群编排、检索、分发和状态管理。",
-    ].filter(Boolean).join("\n\n");
 }
 
 function renderHistoricalContext(globalState: Pick<GlobalState, "getSessionDigests" | "memoList">): string {
@@ -110,23 +104,23 @@ function renderHistoricalContext(globalState: Pick<GlobalState, "getSessionDiges
 }
 
 function renderCurrentTurn(entries: AttentionQueueEntry[], callbacks: SubagentCallback[]): string {
-    const parts: string[] = [];
-
-    if (callbacks.length > 0) {
-        parts.push([
+    const template = loadRequiredPrompt("meta-agent/meta-attention.md");
+    const callbacksSection = callbacks.length > 0
+        ? [
             "## 新到达的 Subagent Callbacks",
             ...callbacks.map((cb) => `- ${cb.chatId}: status=${cb.status}, taskId=${cb.taskId}, summary=${cb.summary}`),
-        ].join("\n"));
-    }
-
-    parts.push([
+        ].join("\n")
+        : "";
+    const attentionSetSection = [
         "## 当前 Attention Set",
         ...entries.map(renderAttentionEntry),
-    ].join("\n\n"));
+    ].join("\n\n");
 
-    parts.push("请检查是否需要跨群检索、分派任务、写 memo 或注册 wake condition。若无需动作，请直接结束本轮。");
-
-    return parts.join("\n\n");
+    return renderTemplate(template, {
+        callbacksSection,
+        attentionSetSection,
+        currentTurnInstruction: "请检查是否需要跨群检索、分派任务、写 memo 或注册 wake condition。若无需动作，请直接结束本轮。",
+    });
 }
 
 function renderAttentionEntry(entry: AttentionQueueEntry): string {
@@ -157,4 +151,23 @@ function safeJson(value: unknown): string {
     } catch {
         return String(value);
     }
+}
+
+function loadRequiredPrompt(relativePath: string): string {
+    const content = loadPromptFile(relativePath);
+    if (!content) {
+        throw new Error(`Missing prompt file: ${relativePath}`);
+    }
+    return content;
+}
+
+function buildMetaApiReference(): string {
+    return [
+        "- conversations.query(filters): 跨群检索消息、话题与回调线索。",
+        "- memory.searchEntities(query, options?): 检索人物、别名、core facts、近期会话和 topic 关键字。",
+        "- agents.listStatus(): 查看各群 Subagent 的运行状态与积压。",
+        "- dispatch.taskToGroup(chatId, taskSpec): 向指定群派发 CodeAct 回复任务。",
+        "- memo.set/get/delete/list: 读写跨会话备忘录。",
+        "- schedule.wakeOnCondition(condition): 注册 delay / callback_received 唤醒条件。",
+    ].join("\n");
 }

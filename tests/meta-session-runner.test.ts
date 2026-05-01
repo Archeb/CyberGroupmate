@@ -116,25 +116,37 @@ describe("runMetaSession", () => {
         assert.equal(result.turns.length, 1);
     });
 
-    it("stops with error when sandbox execution fails", async () => {
+    it("feeds sandbox errors back to the model and allows a repair turn", async () => {
         const sandbox = new MetaSandbox({});
         const result = await runMetaSession(
             [{ role: "system", content: "system" }],
             sandbox,
             [TEST_LLM_CONFIG],
             {
-                llmCaller: async () => ({
-                    content: [
-                        "```js",
-                        "throw new Error(\"boom\");",
-                        "```",
-                    ].join("\n"),
-                }),
+                llmCaller: async (messages) => {
+                    const lastMessage = messages.at(-1)?.content ?? "";
+                    if (!lastMessage.includes("MetaSandbox observation")) {
+                        return {
+                            content: [
+                                "```js",
+                                "throw new Error(\"boom\");",
+                                "```",
+                            ].join("\n"),
+                        };
+                    }
+
+                    assert.match(lastMessage, /boom/);
+                    return {
+                        content: "已根据报错修正。\n[SESSION_DIGEST]recovered after sandbox error[/SESSION_DIGEST]\n<end_turn>",
+                    };
+                },
             },
         );
 
-        assert.equal(result.endReason, "error");
-        assert.match(result.error ?? "", /boom/);
+        assert.equal(result.endReason, "end_turn");
+        assert.equal(result.error, undefined);
+        assert.equal(result.sessionDigest, "recovered after sandbox error");
+        assert.equal(result.turns.length, 2);
         assert.match(result.turns[0].observation ?? "", /boom/);
     });
 

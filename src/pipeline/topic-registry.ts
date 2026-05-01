@@ -458,9 +458,8 @@ export class TopicRegistry extends EventEmitter {
             lastActivityAt: new Date(topic.createdAt ?? Date.now()).toISOString(),
             associatedMemories: topic.associatedMemories,
             callbackPotential: topic.callbackPotential,
-            // 传递 triageReason：当 triage 判定 should_intervene 时，无论话题状态如何都传递
-            // 这是 attend-handler 做出回复决策的关键输入
-            ...(topic.decision?.should_intervene && topic.decision?.reason
+            // 传递 triageReason：供 attend-handler 判断是否需要介入以及如何介入
+            ...(topic.decision?.reason
                 ? { triageReason: topic.decision.reason }
                 : {}),
         };
@@ -485,7 +484,7 @@ export class TopicRegistry extends EventEmitter {
             createdAt: topic.createdAt,
             participants: [...(topic.participantIds ?? [])].map(resolver),
             messageCount: topic.messageIds?.length ?? 0,
-            triageReason: topic.decision?.should_intervene ? topic.decision?.reason : undefined,
+            triageReason: topic.decision?.reason,
             callbackPotential: topic.callbackPotential,
         };
     }

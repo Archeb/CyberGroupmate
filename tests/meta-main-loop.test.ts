@@ -49,10 +49,10 @@ describe("MainAgentLoop meta session path", () => {
             filePath: join(dir, "global-state.json"),
             autoSaveInterval: 0,
         });
-        const accumulator = new AttentionAccumulator(globalState, { windowMs: 1_000, topN: 2 });
+        const accumulator = new AttentionAccumulator(globalState, { windowMs: 0, topN: 2 });
         const callbackQueue = new CallbackQueue();
         const subagentManager = new SubagentManager({ sessionsDir: join(dir, "sessions") });
-        const loop = new MainAgentLoop(accumulator, callbackQueue, subagentManager, { maxAttendsPerTick: 2 }, globalState);
+        const loop = new MainAgentLoop(accumulator, callbackQueue, subagentManager, {}, globalState);
 
         subagentManager.getOrCreate("telegram:g1");
         subagentManager.getOrCreate("telegram:g2");
@@ -103,10 +103,10 @@ describe("MainAgentLoop meta session path", () => {
             filePath: join(dir, "global-state.json"),
             autoSaveInterval: 0,
         });
-        const accumulator = new AttentionAccumulator(globalState, { windowMs: 1_000, topN: 2 });
+        const accumulator = new AttentionAccumulator(globalState, { windowMs: 0, topN: 2 });
         const callbackQueue = new CallbackQueue();
         const subagentManager = new SubagentManager({ sessionsDir: join(dir, "sessions") });
-        const loop = new MainAgentLoop(accumulator, callbackQueue, subagentManager, { maxAttendsPerTick: 2 }, globalState);
+        const loop = new MainAgentLoop(accumulator, callbackQueue, subagentManager, {}, globalState);
 
         subagentManager.getOrCreate("telegram:g1");
 
@@ -181,6 +181,53 @@ describe("MainAgentLoop meta session path", () => {
         assert.equal(enqueuedTasks[0]?.contextSnapshot.personContext, JSON.stringify({ source: "meta-session" }));
         assert.deepEqual(Array.from(enqueuedTasks[0]?.useSkills ?? []), ["memory"]);
         assert.equal(globalState.getSessionDigests()[0]?.content, "dispatched task to telegram:g1");
+
+        globalState.dispose();
+    });
+
+    it("consumes callback_received wake conditions and wakes a synthetic __meta__ turn", async () => {
+        const dir = tempDir();
+        const globalState = new GlobalState({
+            filePath: join(dir, "global-state.json"),
+            autoSaveInterval: 0,
+        });
+        const accumulator = new AttentionAccumulator(globalState, { windowMs: 0, topN: 2 });
+        const callbackQueue = new CallbackQueue();
+        const subagentManager = new SubagentManager({ sessionsDir: join(dir, "sessions") });
+        const loop = new MainAgentLoop(accumulator, callbackQueue, subagentManager, {}, globalState);
+
+        const wakeConditionId = globalState.addWakeCondition({ type: "callback_received", taskId: "task-cb-1" });
+        callbackQueue.enqueue({
+            taskId: "task-cb-1",
+            chatId: "telegram:g1",
+            executionType: "CODEACT",
+            status: "COMPLETED",
+            summary: "done",
+            durationMs: 100,
+            createdAt: new Date().toISOString(),
+        });
+
+        let receivedEntries: AttentionQueueEntry[] = [];
+        loop.setMetaSessionHandler(async (entries) => {
+            receivedEntries = entries;
+            return {
+                endReason: "end_turn",
+                sessionDigest: "woke from callback",
+            };
+        });
+
+        const result = await loop.tick();
+
+        assert.equal(result.phase1Callbacks, 1);
+        assert.deepEqual(result.phase3Attended, ["__meta__"]);
+        assert.deepEqual(receivedEntries.map((entry) => entry.chatId), ["__meta__"]);
+        assert.deepEqual(receivedEntries[0]?.schedulerTriggers, [{
+            id: wakeConditionId,
+            type: "wake_condition",
+            description: "callback received for task-cb-1",
+        }]);
+        assert.equal(globalState.getWakeConditions().length, 0);
+        assert.equal(globalState.getSessionDigests()[0]?.content, "woke from callback");
 
         globalState.dispose();
     });

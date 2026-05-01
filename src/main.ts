@@ -47,11 +47,11 @@ import { AttentionAccumulator } from "./accumulator/attention-accumulator.js";
 import {
     createDirectAddressItem,
     createSchedulerItem,
-    queueEntryToTopicSignalItem,
 } from "./accumulator/queue-entry-adapter.js";
 import { MainAgentLoop } from "./main-agent/main-agent-loop.js";
 import { GlobalState } from "./main-agent/global-state.js";
 import { createMetaSessionHandler } from "./main-agent/meta-session-handler.js";
+import { buildWakeConditionPayload, matchDelayWakeReminder } from "./main-agent/wake-conditions.js";
 import { evaluateStickiness, createStickiness, updateStickiness } from "./subagent/stickiness.js";
 import { matchesCron } from "./core/cron-matcher.js";
 import { autoReconnect as autoReconnectMcp, initMcpBridge, mcpBridge } from "./sandbox/modules/mcp-bridge/index.js";
@@ -407,6 +407,7 @@ async function main(): Promise<void> {
 
     // ─── Subagent 架构组件初始化 ───
     // 注意: message_log 落盘由 RecordingPipeline Step 4 负责，不再需要独立的 MessageLogWriter hook
+    let accumulator: AttentionAccumulator;
     const subagentManager = new SubagentManager({
         observerConfig: {
             engagementWindowMs: 5 * 60 * 1000,
@@ -418,6 +419,29 @@ async function main(): Promise<void> {
             personaDescription: appConfig.persona?.description ?? "赛博群友",
             memory,
             pipelineConfig: appConfig.recordingPipeline,
+            publishTopicSignals: (signals) => {
+                for (const signal of signals) {
+                    accumulator.ingest(2, {
+                        chatId: signal.chatId,
+                        source: "TOPIC_SIGNAL",
+                        payload: signal.payload,
+                        enqueuedAt: signal.enqueuedAt,
+                        pressure: signal.pressure,
+                    });
+                }
+
+                if (signals.length > 0) {
+                    log.info("topic-signals → Accumulator", {
+                        chatId: signals[0]?.chatId,
+                        count: signals.length,
+                        topics: signals.map((signal) => ({
+                            topicId: signal.topicId,
+                            pressure: signal.pressure,
+                            callbackPotential: signal.callbackPotential,
+                        })),
+                    });
+                }
+            },
         },
         memory,  // 用于启动时恢复 TopicRegistry
         sessionsDir: SESSIONS_DIR,
@@ -444,7 +468,7 @@ async function main(): Promise<void> {
         filePath: join(DATA_DIR, "global-state.json"),
         autoSaveInterval: 30000,
     });
-    const accumulator = new AttentionAccumulator(globalState, {
+    accumulator = new AttentionAccumulator(globalState, {
         windowMs: appConfig.subagent?.pollInterval ?? 5000,
     });
     accumulator.restoreSignalPool();
@@ -585,21 +609,6 @@ async function main(): Promise<void> {
         }
 
         const sub = subagentManager.getOrCreate(chatId);
-        // RecordingPipeline triage 通过时直接注入 AttentionAccumulator
-        if (!sub.listenerCount("triage-engage")) {
-            sub.on("triage-engage", (cid: string) => {
-                const entry = sub.buildQueueEntry();
-                accumulator.ingest(2, queueEntryToTopicSignalItem(entry));
-                log.info("triage-engage → Accumulator", {
-                    chatId: cid,
-                    isBlocked: accumulator.isBlocked(cid),
-                    priority: entry.priority,
-                    callbackPotential: entry.callbackPotential ?? 0,
-                    source: entry.source,
-                    topicDigestCount: entry.topicDigests?.length,
-                });
-            });
-        }
         // Per-group: Observer + RecordingPipeline 同时处理消息 (subagent.md §3.1)
         sub.onMessage(event);
 
@@ -815,8 +824,6 @@ async function main(): Promise<void> {
     // ─── MainAgentLoop 配置 ───
     const mainLoop = new MainAgentLoop(accumulator, q5, subagentManager, {
         pollInterval: appConfig.subagent?.pollInterval ?? 5000,
-        maxAttendsPerTick: 3,
-        cosineDecayCyclePeriod: appConfig.subagent?.cosineDecay?.defaultCyclePeriod ?? 20,
     }, globalState);
 
 
@@ -1053,6 +1060,30 @@ async function main(): Promise<void> {
         const dueReminders = globalState.getDueReminders();
         for (const reminder of dueReminders) {
             globalState.markReminderTriggered(reminder.id);
+
+            const wakeMatch = matchDelayWakeReminder(reminder, globalState.getWakeConditions());
+            if (wakeMatch) {
+                globalState.removeWakeCondition(wakeMatch.conditionId);
+                accumulator.ingest(1, {
+                    chatId: "__meta__",
+                    source: "WAKE_CONDITION",
+                    enqueuedAt: Date.now(),
+                    payload: buildWakeConditionPayload(wakeMatch, { reminderId: reminder.id }),
+                });
+                log.info("Meta wake delay 到期 → Layer1", {
+                    reminderId: reminder.id,
+                    conditionId: wakeMatch.conditionId,
+                });
+                continue;
+            }
+
+            if (reminder.chatId === "__meta__") {
+                log.warn("__meta__ reminder 缺少匹配 wake condition，已跳过", {
+                    reminderId: reminder.id,
+                    description: reminder.description,
+                });
+                continue;
+            }
 
             const sub = subagentManager.getOrCreate(reminder.chatId);
             const entry = sub.buildQueueEntry("SCHEDULER_TRIGGER");

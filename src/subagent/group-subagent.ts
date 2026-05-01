@@ -7,8 +7,7 @@
  * - RecordingPipeline (per-group): 该群的话题聚类 + 记忆沉淀
  * - CodeActExecutor: CodeAct 执行器（S3 实现后注入）
  *
- * RecordingPipeline 的 topic:triage-passed 事件会 emit triage-engage，
- * 由主入口直接注入 AttentionAccumulator。
+ * RecordingPipeline 会直接发布 topic signal 到主入口注入 AttentionAccumulator。
  *
  * 参考设计：subagent.md §3, architecture_v2.md §2.2
  */
@@ -30,6 +29,7 @@ import type { MemoryStoreV2 } from "../memory-v2/index.js";
 import type { EmbeddingConfig, RecordingPipelineConfig } from "../core/config.js";
 import type { Message } from "../pipeline/types.js";
 import { createLogger } from "../core/logger.js";
+import type { TopicSignalEntry } from "../pipeline/topic-signal.js";
 
 const log = createLogger("group-subagent");
 
@@ -39,6 +39,7 @@ export interface RecordingPipelineDeps {
     memory?: MemoryStoreV2;
     embeddingConfig?: EmbeddingConfig;
     pipelineConfig?: RecordingPipelineConfig;
+    publishTopicSignals?: (signals: TopicSignalEntry[]) => void;
 }
 
 /** GroupSubagent 构造参数 */
@@ -112,22 +113,9 @@ export class GroupSubagent extends EventEmitter {
                 deps.memory,
                 deps.embeddingConfig,
                 deps.pipelineConfig,
+                deps.publishTopicSignals,
+                () => this.stickiness.level,
             );
-
-            this.recordingPipeline.on("topics:triage-passed", (passedTopics: Array<{ topic: any; decision: any }>) => {
-                log.info("话题通过 Triage（批量）", {
-                    chatId: this.chatId,
-                    count: passedTopics.length,
-                    topics: passedTopics.map(({ topic, decision }) => ({
-                        topicId: topic.id,
-                        label: topic.label,
-                        reason: decision?.reason,
-                    })),
-                });
-
-                log.info("triage-engage: emitting", { chatId: this.chatId, listenerCount: this.listenerCount("triage-engage") });
-                this.emit("triage-engage", this.chatId);
-            });
 
             // TopicRegistry archived 事件：话题归档时通知 memory
             this.topicRegistry.on("topic:archived", (topic: any) => {

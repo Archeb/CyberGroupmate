@@ -1,5 +1,6 @@
 import { GlobalState } from "../main-agent/global-state.js";
 import { createLogger } from "../core/logger.js";
+import { calculatePressure } from "./pressure.js";
 import type { SignalPoolItem } from "../subagent/types.js";
 import type {
     AttentionAccumulatorSnapshot,
@@ -8,6 +9,7 @@ import type {
     AttentionSet,
     AttentionSnapshotItem,
     AttentionSource,
+    DynamicSignalPressureInput,
     ReleasedAttentionRecord,
 } from "./types.js";
 
@@ -33,12 +35,35 @@ function toAttentionItem(item: SignalPoolItem): AttentionItem {
     };
 }
 
-function compareAttentionItems(left: AttentionItem, right: AttentionItem): number {
+function hasDynamicPressureInput(payload: unknown): payload is { pressureInput: DynamicSignalPressureInput } {
+    if (!payload || typeof payload !== "object") return false;
+    const maybePressureInput = (payload as { pressureInput?: DynamicSignalPressureInput }).pressureInput;
+    return !!maybePressureInput
+        && Array.isArray(maybePressureInput.participants)
+        && typeof maybePressureInput.stickinessLevel === "string";
+}
+
+function resolvePressure(item: AttentionItem, now: number): number {
+    if (!hasDynamicPressureInput(item.payload)) {
+        return item.pressure ?? 0;
+    }
+
+    return calculatePressure({
+        participants: item.payload.pressureInput.participants,
+        stickinessLevel: item.payload.pressureInput.stickinessLevel,
+        ageMinutes: Math.max(0, (now - item.enqueuedAt) / 60_000),
+        ignoredCount: item.ignoredCount ?? 0,
+    });
+}
+
+function compareAttentionItemsAt(now: number) {
+    return (left: AttentionItem, right: AttentionItem): number => {
     if (left.layer !== right.layer) return left.layer - right.layer;
-    const leftPressure = left.pressure ?? 0;
-    const rightPressure = right.pressure ?? 0;
+    const leftPressure = resolvePressure(left, now);
+    const rightPressure = resolvePressure(right, now);
     if (leftPressure !== rightPressure) return rightPressure - leftPressure;
     return left.enqueuedAt - right.enqueuedAt;
+    };
 }
 
 function cloneAttentionItem(item: AttentionItem): AttentionItem {
@@ -90,6 +115,7 @@ export class AttentionAccumulator {
         };
 
         if (layer === 2) {
+            entry.pressure = resolvePressure(entry, entry.enqueuedAt);
             this.signalPool.push(entry);
             this.persistSignalPool();
             return;
@@ -178,16 +204,18 @@ export class AttentionAccumulator {
             return null;
         }
 
+        this.refreshSignalPoolPressures(now);
         const releasedSignals = [...this.signalPool]
-            .sort(compareAttentionItems)
+            .sort(compareAttentionItemsAt(now))
             .slice(0, this.topN);
 
         for (const signal of releasedSignals) {
             signal.ignoredCount = (signal.ignoredCount ?? 0) + 1;
+            signal.pressure = resolvePressure(signal, now);
         }
 
         const items = [...this.pending, ...releasedSignals]
-            .sort(compareAttentionItems)
+            .sort(compareAttentionItemsAt(now))
             .map(cloneAttentionItem);
 
         for (const item of items) {
@@ -212,6 +240,7 @@ export class AttentionAccumulator {
             if (signal.chatId !== chatId) continue;
             if ((signal.ignoredCount ?? 0) !== 0) {
                 signal.ignoredCount = 0;
+                signal.pressure = resolvePressure(signal, Date.now());
                 changed = true;
             }
         }
@@ -233,6 +262,7 @@ export class AttentionAccumulator {
     }
 
     getSnapshot(): AttentionAccumulatorSnapshot {
+        this.refreshSignalPoolPressures(Date.now());
         const active: AttentionSnapshotItem[] = [
             ...this.pending.map((item) => ({
                 ...cloneAttentionItem(item),
@@ -271,6 +301,7 @@ export class AttentionAccumulator {
     }
 
     private persistSignalPool(): void {
+        this.refreshSignalPoolPressures(Date.now());
         this.globalState.setSignalPool(
             this.signalPool.map((item) => ({
                 chatId: item.chatId,
@@ -282,8 +313,14 @@ export class AttentionAccumulator {
             }))
         );
     }
+
+    private refreshSignalPoolPressures(now: number): void {
+        for (const signal of this.signalPool) {
+            signal.pressure = resolvePressure(signal, now);
+        }
+    }
 }
 
 function compareSnapshotItems(left: AttentionSnapshotItem, right: AttentionSnapshotItem): number {
-    return compareAttentionItems(left, right);
+    return compareAttentionItemsAt(Date.now())(left, right);
 }

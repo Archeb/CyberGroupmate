@@ -30,9 +30,10 @@ import type {
     TopicSummaryTriageResult,
     Topic,
     TopicState,
-    TriageDecision,
 } from "./types.js";
 import type { RecordingPipelineConfig } from "../core/config.js";
+import { buildTopicSignalEntries, type TopicSignalEntry } from "./topic-signal.js";
+import type { StickinessLevel } from "../subagent/types.js";
 
 const log = createLogger("recording-pipeline");
 
@@ -58,7 +59,7 @@ const DEFAULT_EAGER_SILENCE = 30 * 1000;       // 30 sec
  * - `flush:start` (messageCount: number)
  * - `flush:complete` (topics: Topic[])
  * - `flush:error` (error: Error)
- * - `topics:triage-passed` (triagePassedTopics: Array<{ topic: Topic, decision: TriageDecision }>)
+ * - `topics:signaled` (signals: TopicSignalEntry[])
  */
 export class RecordingPipeline extends EventEmitter {
     private buffer: Message[] = [];
@@ -83,6 +84,8 @@ export class RecordingPipeline extends EventEmitter {
         private memory?: MemoryStoreV2,
         private embeddingConfig?: EmbeddingConfig,
         pipelineConfig?: RecordingPipelineConfig,
+        private publishTopicSignals?: (signals: TopicSignalEntry[]) => void,
+        private getStickinessLevel: () => StickinessLevel = () => "STRANGER",
     ) {
         super();
         this.minFlushSize = pipelineConfig?.minFlushSize ?? DEFAULT_MIN_FLUSH_SIZE;
@@ -219,7 +222,12 @@ export class RecordingPipeline extends EventEmitter {
                     : await this.llmTopicSummaryTriage(chatMessages, clustering, chatId);
 
                 // ─── Step 3: 更新 TopicRegistry ───
-                const { topics: updatedTopics, clusterIdMap } = this.updateRegistry(chatId, chatMessages, clustering, triageResult);
+                const {
+                    topics: updatedTopics,
+                    signalReadyTopics,
+                    clusterIdMap,
+                    topicMessagesById,
+                } = this.updateRegistry(chatId, chatMessages, clustering, triageResult);
 
                 // ─── Step 4: Memory V2 写入 ───
                 if (this.memory) {
@@ -313,6 +321,18 @@ export class RecordingPipeline extends EventEmitter {
                                 })
                                 .map(t => {
                                     const cid = clusterIdMap.get(t.id) ?? t.id;
+
+                        const signalEntries = buildTopicSignalEntries({
+                            chatId,
+                            topics: signalReadyTopics,
+                            topicMessagesById,
+                            profiles: this.memory?.getProfilesForChat(chatId) ?? [],
+                            stickinessLevel: this.getStickinessLevel(),
+                        });
+                        if (signalEntries.length > 0) {
+                            this.publishTopicSignals?.(signalEntries);
+                            this.emit("topics:signaled", signalEntries);
+                        }
                                     const triage = triageResult.topics.find(tr => tr.topicId === cid);
                                     return { id: t.id, text: `${t.label} ${triage?.summary ?? ""}` };
                                 });
@@ -701,15 +721,20 @@ export class RecordingPipeline extends EventEmitter {
         messages: Message[],
         clustering: TopicClusteringResult,
         triageResult: TopicSummaryTriageResult
-    ): { topics: Topic[]; clusterIdMap: Map<string, string> } {
+    ): {
+        topics: Topic[];
+        signalReadyTopics: Topic[];
+        clusterIdMap: Map<string, string>;
+        topicMessagesById: Map<string, Message[]>;
+    } {
         const updatedTopics: Topic[] = [];
-        // 收集本次 flush 通过 triage 的话题，在循环结束后批量 emit
-        const triagePassedTopics: Array<{ topic: Topic; decision: TriageDecision }> = [];
+        const signalReadyTopics: Topic[] = [];
         // 映射: 真实话题ID → clustering 临时 ID（如 NEW_1），用于 Step 4 查找 triage 结果
         const clusterIdMap = new Map<string, string>();
 
         // 按话题分组消息
         const topicMsgMap = new Map<string, Message[]>();
+        const topicMessagesById = new Map<string, Message[]>();
         for (const assignment of clustering.assignments) {
             const msg = messages.find(m => m.id === assignment.messageId);
             if (!msg) continue;
@@ -752,7 +777,7 @@ export class RecordingPipeline extends EventEmitter {
                 label: topic.label,
                 state: topic.state,
                 triageFound: !!triage,
-                triageShouldIntervene: triage?.should_intervene,
+                triageReason: triage?.reason,
                 msgCount: topicMsgs.length,
             });
             if (triage) {
@@ -773,41 +798,29 @@ export class RecordingPipeline extends EventEmitter {
                         reason,
                     });
                     updatedTopics.push(topic);
+                    topicMessagesById.set(topic.id, topicMsgs);
                     continue;
                 }
 
-                const decision: TriageDecision = {
-                    should_intervene: triage.should_intervene,
+                const decision = {
                     reason: triage.reason,
                 };
                 // 将 decision 持久化到 topic 对象，supply triageReason 给下游 toDigest
                 this.registry.setDecision(topic.id, decision);
-
-                if (triage.should_intervene) {
-                    triagePassedTopics.push({ topic, decision });
-                } else if (topic.state === "ACTIVE") {
-                    // Triage 判定不介入 → 转入 IGNORED 状态
-                    // IGNORED 话题在 cleanup TTL(10min) 后自动转 STALE，不会被反复 triage
-                    this.registry.transition(topic.id, "IGNORED");
-                    topic.ignoreReason = triage.reason;
-                }
             }
 
+            topicMessagesById.set(topic.id, topicMsgs);
+            signalReadyTopics.push(topic);
             updatedTopics.push(topic);
         }
 
-        // 批量 emit triage-passed 事件（一次 flush 只触发一次入队）
         log.info("updateRegistry: 完成", {
             totalTopics: updatedTopics.length,
-            triagePassedCount: triagePassedTopics.length,
-            triagePassedTopicIds: triagePassedTopics.map(tp => tp.topic.id),
-            listenerCount: this.listenerCount("topics:triage-passed"),
+            signalReadyCount: signalReadyTopics.length,
+            signalReadyTopicIds: signalReadyTopics.map((topic) => topic.id),
         });
-        if (triagePassedTopics.length > 0) {
-            this.emit("topics:triage-passed", triagePassedTopics);
-        }
 
-        return { topics: updatedTopics, clusterIdMap };
+        return { topics: updatedTopics, signalReadyTopics, clusterIdMap, topicMessagesById };
     }
 
     /**

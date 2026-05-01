@@ -352,20 +352,18 @@ export class EventBridge {
                 });
             });
 
-            pipeline.on("topics:triage-passed", (passedTopics: Array<{ topic: any; decision: any }>) => {
-                for (const { topic, decision } of passedTopics) {
+            pipeline.on("topics:signaled", (signals: Array<any>) => {
+                for (const signal of signals) {
                     this.broadcast({
-                        type: "recording:triage-passed",
+                        type: "recording:topics-signaled",
                         timestamp: new Date().toISOString(),
                         data: {
                             chatId: sub.chatId,
-                            topicId: topic.id,
-                            topicLabel: topic.label,
-                            decision: {
-                                should_intervene: decision.should_intervene,
-                                reason: decision.reason,
-                                callbackPotential: topic.callbackPotential ?? 0,
-                            },
+                            topicId: signal.topicId,
+                            topicLabel: signal.topicLabel,
+                            reason: signal.reason,
+                            callbackPotential: signal.callbackPotential,
+                            pressure: signal.pressure,
                         },
                     });
                 }
@@ -442,7 +440,6 @@ export class EventBridge {
             mainLoop: {
                 running: mainLoop.isRunning(),
                 tickCount: mainLoop.getTickCount(),
-                conversationHistorySize: mainLoop.getConversationHistorySize(),
             },
             feedbackLoop: {
                 activeWindows: feedbackLoop.getActiveWindows(),
