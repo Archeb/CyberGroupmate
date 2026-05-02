@@ -24,4 +24,34 @@ describe("MetaSandbox session scope", () => {
         assert.equal(after.error, false);
         assert.equal(after.output, "[log] undefined");
     });
+
+    it("does not let session locals shadow api globals", async () => {
+        const sandbox = new MetaSandbox({
+            agents: {
+                listStatus: async () => [{ chatId: "telegram:-1001", chatTitle: "早苗基金会" }],
+            },
+        });
+        sandbox.beginSession("s1");
+
+        const first = await sandbox.execute(`
+const agents = await agents.listStatus();
+console.log(JSON.stringify(agents));
+`);
+        assert.equal(first.error, false);
+        assert.match(first.output, /早苗基金会/);
+
+        const second = await sandbox.execute(`
+const again = await agents.listStatus();
+console.log(JSON.stringify(again));
+`);
+        assert.equal(second.error, false);
+        assert.match(second.output, /早苗基金会/);
+
+        const third = await sandbox.execute(`
+agents = [];
+console.log(typeof agents.listStatus);
+`);
+        assert.equal(third.error, false);
+        assert.equal(third.output, "[log] function");
+    });
 });
