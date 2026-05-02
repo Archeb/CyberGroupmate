@@ -87,7 +87,7 @@ export interface AttentionQueueEntry {
     /** 群组 chatId */
     chatId: string;
     /** 来源标记 (subagent.md §2.2) */
-    source: 'DIGEST_UPDATE' | 'OBSERVER_ALERT' | 'DEFERRED_RE_ENTRY' | 'DIRECT_ADDRESS' | 'SCHEDULED_REVISIT' | 'SCHEDULER_TRIGGER';
+    source: 'DIGEST_UPDATE' | 'OBSERVER_ALERT' | 'DEFERRED_RE_ENTRY' | 'DIRECT_ADDRESS' | 'SCHEDULED_REVISIT' | 'SCHEDULER_TRIGGER' | 'PROACTIVE_IDLE';
     /** 当前优先级分数 (0-100) */
     priority: number;
     /** 基础优先级（不含时间衰减） */
@@ -119,7 +119,14 @@ export interface AttentionQueueEntry {
     /** 快照时间戳 */
     snapshotTimestamp?: string;
     /** Scheduler 触发描述列表（watchdog 注入，source=SCHEDULER_TRIGGER 时存在） */
-    schedulerTriggers?: Array<{ id: string; type: "reminder" | "cron" | "wake_condition"; description: string }>;
+    schedulerTriggers?: Array<{
+        id: string;
+        type: "reminder" | "cron" | "wake_condition";
+        description: string;
+        bindingId?: string;
+        callback?: string;
+        data?: unknown;
+    }>;
     /** 当前队列快照中的最大 callbackPotential */
     callbackPotential?: number;
     /** 是否存在高 callbackPotential 话题 */
@@ -363,8 +370,16 @@ export interface SchedulerEvent {
     type: "reminder" | "cron";
     /** 关联群组 */
     chatId: string;
+    /** 唤醒绑定目标。可以是 composite chatId，也可以是 "meta"。 */
+    bindingId?: string;
+    /** 展示名称 */
+    name?: string;
     /** 描述 / 自然语言任务描述（触发时注入 ATTENTION prompt） */
     description: string;
+    /** 触发时交给 main/meta agent 的回调正文。新调度 API 中必填。 */
+    callback?: string;
+    /** 调度附带的结构化数据。 */
+    data?: unknown;
     /** 触发时间 ISO 8601（reminder） */
     triggerAt?: string;
     /** cron 表达式（cron） */

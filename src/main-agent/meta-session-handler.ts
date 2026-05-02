@@ -29,8 +29,8 @@ const META_HISTORY_SECTION_ALLOWLIST = new Set([
 
 export interface MetaSessionHandlerDeps {
     getPersona: () => { name?: string; description?: string } | undefined;
-    globalState: Pick<GlobalState, "getSessionDigests" | "memoList" | "getMetaSessionHistory" | "appendMetaSessionHistory">;
-    memory: Pick<IMemoryStoreV2, "getGroupModel" | "getProfilesForChat" | "getPersonIdentity" | "getTopicById">;
+    globalState: Pick<GlobalState, "getSessionDigests" | "getMetaSessionHistory" | "appendMetaSessionHistory">;
+    memory: Pick<IMemoryStoreV2, "getGroupModel" | "getProfilesForChat" | "getPersonIdentity" | "getTopicById" | "listGroupModels" | "todoList">;
     sandbox: MetaSandbox;
     getLlmConfigs: () => LLMConfig[];
     llmCaller?: MetaLLMCaller;
@@ -121,7 +121,7 @@ async function buildMetaMessages(
 
     const globalRender = engine.render({
         sessionDigests: deps.globalState.getSessionDigests(),
-        memos: deps.globalState.memoList(),
+        todos: buildGlobalTodos(deps.memory),
         callbacks,
     });
     renderTrees.push(globalRender.tree);
@@ -145,8 +145,14 @@ async function buildMetaMessages(
         }
     }
 
+    const proactiveInstruction = entries.some((entry) => entry.source === "PROACTIVE_IDLE")
+        ? loadPromptFile("meta-agent/proactive-idle.md")
+        : null;
     const instructionRender = engine.render({
-        currentTurnInstruction: "请检查是否需要跨群检索、分派任务、写 memo 或注册 wake condition。若无需动作，请直接结束本轮。",
+        currentTurnInstruction: [
+            "请检查是否需要跨群检索、分派任务、写 todo 或注册 remind/cron。若无需动作，请直接结束本轮。",
+            proactiveInstruction,
+        ].filter(Boolean).join("\n\n"),
     });
     renderTrees.push(instructionRender.tree);
     manifests.push(instructionRender.manifest);
@@ -414,16 +420,19 @@ function buildMetaApiReference(): string {
 \`\`\`ts
 await conversations.query(filters?: {
   chatIds?: string[],    // 限定群组 ID，空则搜索全部
-  keywords?: string[],   // 全文关键词，支持多个（OR 逻辑）
-  userId?: string,       // 限定发言者 ID（如 "telegram:123456"）
+  user?: string,         // 人名/别名/username/userId，会先解析已知身份
+  userId?: string,       // 精确限定发言者 ID（如 "telegram:123456"）
+  keyword?: string,      // 正文关键词；无 user 或 user 未解析时会先匹配 displayName，再匹配正文
   after?: string,        // ISO 时间下限
   before?: string,       // ISO 时间上限
   limit?: number         // 结果数上限（默认 20，最大 100）
 }): Promise<{
-  messages: { messageId, chatId, userId, displayName, content, timestamp }[],
-  topics: { topicId, chatId, label, summary, keywords, participants, startedAt, endedAt, sentiment, callbackPotential }[]
+  messages: { messageId, chatId, chatTitle, chatLabel, userId, displayName, content, timestamp }[],
+  topics: { topicId, chatId, chatTitle, chatLabel, label, summary, keywords, participants, startedAt, endedAt, sentiment, callbackPotential }[],
+  resolvedUsers: { userId, displayName, username?, aliases }[]
 }>
 \`\`\`
+chatLabel 已格式化为 "[群名(compositeId)]"，打印时直接使用它，例如 \`${"${m.chatLabel}"} ${"${m.displayName}"}: ${"${m.content}"}\`。
 
 ## memory — 跨群实体检索
 
@@ -467,26 +476,59 @@ await dispatch.taskToGroup(chatId: string, taskSpec: {
 \`\`\`
 dispatch 会自动将 context 序列化后注入 Subagent 的任务 prompt。你查到的跨群信息、事实、讨论记录都可以放在 context 里。
 
-## memo — 跨会话备忘录
+## todo — 跨会话/跨绑定 Todo
 
 \`\`\`ts
-await memo.set(key: string, value: any, ttlMinutes?: number): Promise<void>
-await memo.get(key: string): Promise<any | null>
-await memo.delete(key: string): Promise<void>
-await memo.list(): Promise<{ key, value, expiresAt? }[]>
+await todo.set({ key, content, bindingId?, dueAt? }): Promise<{ bindingId, key, content, dueAt, createdAt, updatedAt, expired }>
+await todo.get(key: string, bindingId?: string): Promise<{ key, content, dueAt, createdAt, updatedAt, expired } | null>
+await todo.list({ bindingId?, includeExpired? }?): Promise<{ bindingId, key, content, dueAt, createdAt, updatedAt, expired }[]>
+await todo.delete(key: string, bindingId?: string): Promise<void>
 \`\`\`
-memo 用于跨会话状态管理。设置 ttlMinutes 可自动过期。
+bindingId 可以是 composite chatId，也可以是 "meta"；默认 "meta"。
 
-## schedule — 唤醒调度
+## remind — 一次性唤醒
 
 \`\`\`ts
-// 延迟唤醒：ms 毫秒后系统将唤醒你
-await schedule.wakeOnCondition({ type: "delay", ms: number }): Promise<{ conditionId, reminderId }>
+await remind.set({
+  name: string,
+  callback: string,      // 必填：被唤醒后要做什么
+  bindingId?: string,    // composite chatId 或 "meta"，默认 "meta"
+  triggerAt?: string,    // ISO 时间
+  delayMinutes?: number, // 与 triggerAt 二选一
+  data?: any
+}): Promise<{ id, type, bindingId, name, callback, triggerAt, data }>
+await remind.get(id: string): Promise<... | null>
+await remind.list({ bindingId?, includeTriggered? }?): Promise<...[]>
+await remind.delete(id: string): Promise<boolean>
+\`\`\`
 
-// 等待回调：Subagent 完成指定 taskId 后唤醒你
-await schedule.wakeOnCondition({ type: "callback_received", taskId: string }): Promise<{ conditionId }>
+## cron — 周期唤醒
 
-// 取消唤醒条件
-await schedule.cancel(conditionId: string): Promise<{ removedWakeCondition, removedReminderIds }>
+await cron.set({
+  name: string,
+  cronExpr: string,      // 最短间隔 1 小时
+  callback: string,      // 必填：每次触发后要做什么
+  bindingId?: string,    // composite chatId 或 "meta"，默认 "meta"
+  data?: any
+}): Promise<{ id, type, bindingId, name, callback, cronExpr, data }>
+await cron.get(id: string): Promise<... | null>
+await cron.list({ bindingId? }?): Promise<...[]>
+await cron.delete(id: string): Promise<boolean>
 \`\`\``;
+}
+
+function buildGlobalTodos(
+    memory: Pick<IMemoryStoreV2, "listGroupModels" | "todoList">,
+): Array<{ key: string; content: string; bindingId: string; dueAt?: string | null; expired?: boolean }> {
+    const bindingIds = [...new Set(["meta", ...memory.listGroupModels().map((group) => group.chatId)])];
+    return bindingIds.flatMap((bindingId) =>
+        memory.todoList(bindingId, { includeExpired: false })
+            .map((todo) => ({
+                key: todo.key,
+                content: todo.content,
+                bindingId,
+                dueAt: todo.dueAt,
+                expired: todo.expired,
+            }))
+    );
 }

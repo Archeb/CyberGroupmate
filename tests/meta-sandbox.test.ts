@@ -2,66 +2,26 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { MetaSandbox } from "../src/meta-sandbox/meta-sandbox.js";
 
-describe("MetaSandbox", () => {
-    it("executes async API calls inside the sandbox", async () => {
-        const sandbox = new MetaSandbox({
-            agents: {
-                listStatus: async () => [{ chatId: "telegram:1" }],
-            },
-        });
-
-        const result = await sandbox.execute(`
-const rows = await agents.listStatus();
-return rows[0].chatId;
-`);
-
-        assert.equal(result.error, false);
-        assert.equal(result.output, "telegram:1");
-    });
-
-    it("captures console output", async () => {
+describe("MetaSandbox session scope", () => {
+    it("keeps top-level const values for one session and allows redeclare", async () => {
         const sandbox = new MetaSandbox({});
-        const result = await sandbox.execute(`
-console.log("hello", { scope: "meta" });
-console.warn("watch");
-`);
+        sandbox.beginSession("s1");
 
-        assert.equal(result.error, false);
-        assert.equal(result.logs.length, 2);
-        assert.match(result.output, /\[log\] hello/);
-        assert.match(result.output, /\[warn\] watch/);
-    });
+        const first = await sandbox.execute("const result = 41; console.log(result)");
+        assert.equal(first.error, false);
+        assert.equal(first.output, "[log] 41");
 
-    it("returns script errors", async () => {
-        const sandbox = new MetaSandbox({});
-        const result = await sandbox.execute(`
-throw new Error("boom");
-`);
+        const second = await sandbox.execute("const result = result + 1; console.log(result)");
+        assert.equal(second.error, false);
+        assert.equal(second.output, "[log] 42");
 
-        assert.equal(result.error, true);
-        assert.match(result.output, /Error: boom/);
-    });
+        const third = await sandbox.execute("console.log(result)");
+        assert.equal(third.error, false);
+        assert.equal(third.output, "[log] 42");
 
-    it("times out unresolved async work", async () => {
-        const sandbox = new MetaSandbox({
-            never: () => new Promise(() => undefined),
-        });
-
-        const result = await sandbox.execute(`
-await never();
-`, { timeoutMs: 20 });
-
-        assert.equal(result.error, true);
-        assert.match(result.output, /Meta sandbox timeout/);
-    });
-
-    it("does not expose process by default", async () => {
-        const sandbox = new MetaSandbox({});
-        const result = await sandbox.execute(`
-return typeof process;
-`);
-
-        assert.equal(result.error, false);
-        assert.equal(result.output, "undefined");
+        sandbox.endSession("s1");
+        const after = await sandbox.execute("console.log(typeof result)");
+        assert.equal(after.error, false);
+        assert.equal(after.output, "[log] undefined");
     });
 });

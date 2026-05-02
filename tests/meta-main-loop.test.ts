@@ -23,6 +23,8 @@ function createMetaMemoryStub() {
         getProfilesForChat: () => [],
         getPersonIdentity: () => null,
         getTopicById: () => null,
+        listGroupModels: () => [],
+        todoList: () => [],
     };
 }
 
@@ -239,6 +241,62 @@ describe("MainAgentLoop meta session path", () => {
         }]);
         assert.equal(globalState.getWakeConditions().length, 0);
         assert.equal(globalState.getSessionDigests()[0]?.content, "woke from callback");
+
+        globalState.dispose();
+    });
+
+    it("wakes synthetic __meta__ turns for scheduler and proactive idle sources", async () => {
+        const dir = tempDir();
+        const globalState = new GlobalState({
+            filePath: join(dir, "global-state.json"),
+            autoSaveInterval: 0,
+        });
+        const accumulator = new AttentionAccumulator(globalState, { windowMs: 0, topN: 2 });
+        const callbackQueue = new CallbackQueue();
+        const subagentManager = new SubagentManager({ sessionsDir: join(dir, "sessions") });
+        const loop = new MainAgentLoop(accumulator, callbackQueue, subagentManager, {}, globalState);
+
+        accumulator.ingest(1, {
+            chatId: "__meta__",
+            source: "SCHEDULER",
+            payload: {
+                id: "rem-1",
+                type: "reminder",
+                description: "检查 Soha 回复",
+                bindingId: "telegram:g1",
+                callback: "看一下后续回复并决定是否转发",
+                data: { originalTask: "reply-soha" },
+            },
+            enqueuedAt: 1,
+            pressure: 50,
+        });
+
+        let receivedEntries: AttentionQueueEntry[] = [];
+        loop.setMetaSessionHandler(async (entries) => {
+            receivedEntries = entries;
+            return { endReason: "end_turn", sessionDigest: "scheduler handled" };
+        });
+
+        const schedulerResult = await loop.tick();
+        assert.deepEqual(schedulerResult.phase3Attended, ["__meta__"]);
+        assert.equal(receivedEntries[0]?.source, "SCHEDULER_TRIGGER");
+        assert.deepEqual(receivedEntries[0]?.schedulerTriggers, [{
+            id: "rem-1",
+            type: "reminder",
+            description: "检查 Soha 回复",
+            bindingId: "telegram:g1",
+            callback: "看一下后续回复并决定是否转发",
+            data: { originalTask: "reply-soha" },
+        }]);
+
+        receivedEntries = [];
+        (loop as any).lastNonIdleActivityAt = 0;
+        (loop as any).lastProactiveIdleAt = 0;
+
+        const idleResult = await loop.tick();
+        assert.deepEqual(idleResult.phase3Attended, ["__meta__"]);
+        assert.equal(receivedEntries[0]?.source, "PROACTIVE_IDLE");
+        assert.deepEqual(receivedEntries[0]?.schedulerTriggers, []);
 
         globalState.dispose();
     });

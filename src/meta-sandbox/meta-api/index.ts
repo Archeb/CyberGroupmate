@@ -7,15 +7,15 @@ import { createAgentsApi } from "./agents.js";
 import { createConversationsApi } from "./conversations.js";
 import { createDispatchApi, type DispatchApiDeps } from "./dispatch.js";
 import { createMemoryApi } from "./memory.js";
-import { createMemoApi } from "./memo.js";
-import { createScheduleApi } from "./schedule.js";
+import { createCronApi, createReminderApi } from "./scheduler.js";
+import { createTodoApi } from "./todo.js";
 
 export { createAgentsApi } from "./agents.js";
 export { createConversationsApi } from "./conversations.js";
 export { createDispatchApi } from "./dispatch.js";
 export { createMemoryApi } from "./memory.js";
-export { createMemoApi } from "./memo.js";
-export { createScheduleApi } from "./schedule.js";
+export { createCronApi, createReminderApi } from "./scheduler.js";
+export { createTodoApi } from "./todo.js";
 
 export interface BuildMetaApiContextDeps extends Omit<DispatchApiDeps, "subagentManager" | "accumulator" | "memory" | "groundingConfig"> {
     memory: MemoryStoreV2;
@@ -41,7 +41,8 @@ export function buildMetaApiContext(deps: BuildMetaApiContextDeps) {
             initializeExecutor: deps.initializeExecutor,
             taskIdFactory: deps.taskIdFactory,
         }),
-        memo: createMemoApi(deps.globalState),
-        schedule: createScheduleApi(deps.globalState),
+        todo: createTodoApi(deps.memory),
+        remind: createReminderApi(deps.globalState),
+        cron: createCronApi(deps.globalState),
     };
 }

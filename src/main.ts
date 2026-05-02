@@ -1078,10 +1078,26 @@ async function main(): Promise<void> {
                 continue;
             }
 
-            if (reminder.chatId === "__meta__") {
-                log.warn("__meta__ reminder 缺少匹配 wake condition，已跳过", {
-                    reminderId: reminder.id,
-                    description: reminder.description,
+            const reminderCallback = reminder.callback ?? reminder.description;
+            const reminderBindingId = reminder.bindingId ?? (reminder.chatId === "__meta__" ? "meta" : reminder.chatId);
+            if (reminder.chatId === "__meta__" || reminder.callback || reminder.bindingId) {
+                accumulator.ingest(1, {
+                    chatId: "__meta__",
+                    source: "SCHEDULER",
+                    enqueuedAt: Date.now(),
+                    payload: {
+                        id: reminder.id,
+                        type: "reminder",
+                        description: reminderCallback,
+                        callback: reminderCallback,
+                        bindingId: reminderBindingId,
+                        data: reminder.data,
+                    },
+                });
+                log.info("Reminder 到期 → Meta Layer1", {
+                    id: reminder.id,
+                    bindingId: reminderBindingId,
+                    desc: reminderCallback.slice(0, 80),
                 });
                 continue;
             }
@@ -1133,7 +1149,26 @@ async function main(): Promise<void> {
             if (!matchesCron(evt.cronExpr, now)) continue;
 
             globalState.markCronTriggered(evt.id);
-            const taskDesc = evt.taskTemplate ?? evt.description;
+            const taskDesc = evt.callback ?? evt.taskTemplate ?? evt.description;
+            const cronBindingId = evt.bindingId ?? (evt.chatId === "__meta__" ? "meta" : evt.chatId);
+
+            if (evt.chatId === "__meta__" || evt.callback || evt.bindingId) {
+                accumulator.ingest(1, {
+                    chatId: "__meta__",
+                    source: "SCHEDULER",
+                    enqueuedAt: Date.now(),
+                    payload: {
+                        id: evt.id,
+                        type: "cron",
+                        description: taskDesc,
+                        callback: taskDesc,
+                        bindingId: cronBindingId,
+                        data: evt.data,
+                    },
+                });
+                log.info("Cron 触发 → Meta Layer1", { id: evt.id, name: evt.name ?? evt.description, bindingId: cronBindingId });
+                continue;
+            }
 
             const sub = subagentManager.getOrCreate(evt.chatId);
             const entry = sub.buildQueueEntry("SCHEDULER_TRIGGER");

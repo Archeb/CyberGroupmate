@@ -30,6 +30,8 @@ const DEFAULT_LOOP_CONFIG: MainAgentLoopConfig = {
     pollInterval: DEFAULT_SUBAGENT_CONFIG.pollInterval,
 };
 
+const DEFAULT_PROACTIVE_IDLE_INTERVAL_MS = 30 * 60 * 1000;
+
 /**
  * MainAgentLoop — 主 Agent Meta-CodeAct 循环
  */
@@ -46,6 +48,8 @@ export class MainAgentLoop {
     private running = false;
     private tickCount = 0;
     private lastTickAt: number = 0;
+    private lastNonIdleActivityAt: number = Date.now();
+    private lastProactiveIdleAt: number = 0;
     private timer: ReturnType<typeof setTimeout> | null = null;
 
     /** Circuit Breaker — 主 LLM 不可用时暂停 attend */
@@ -157,6 +161,9 @@ export class MainAgentLoop {
 
         // ═══ Phase 1: Drain Callbacks (Q5) ═══
         const callbacks = this.callbackQueue.drain();
+        if (callbacks.length > 0) {
+            this.lastNonIdleActivityAt = Date.now();
+        }
         for (const cb of callbacks) {
             const cbSubagent = this.subagentManager.get(cb.chatId);
             if (cbSubagent) {
@@ -192,6 +199,25 @@ export class MainAgentLoop {
         };
 
         const queueSnapshot = this.accumulator.getSnapshot();
+        if (queueSnapshot.active.length === 0 && callbacks.length === 0) {
+            const now = Date.now();
+            if (
+                now - this.lastNonIdleActivityAt >= DEFAULT_PROACTIVE_IDLE_INTERVAL_MS
+                && now - this.lastProactiveIdleAt >= DEFAULT_PROACTIVE_IDLE_INTERVAL_MS
+            ) {
+                this.lastProactiveIdleAt = now;
+                this.accumulator.ingest(1, {
+                    chatId: "__meta__",
+                    source: "PROACTIVE_IDLE",
+                    enqueuedAt: now,
+                    payload: {
+                        type: "proactive_idle",
+                        id: `idle:${now}`,
+                        description: "系统空闲，执行一次主动巡视",
+                    },
+                });
+            }
+        }
         if (queueSnapshot.active.length > 0 || queueSnapshot.blockedChatIds.length > 0) {
             log.info("tick: 队列快照", {
                 tickCount: this.tickCount,
@@ -221,6 +247,9 @@ export class MainAgentLoop {
             const attendedThisTick = new Set<string>();
 
             for (const item of releasedItems) {
+                if (item.source !== "PROACTIVE_IDLE") {
+                    this.lastNonIdleActivityAt = Date.now();
+                }
                 if (attendedThisTick.has(item.chatId)) {
                     this.accumulator.requeue(item);
                     log.debug("同 tick 重复 chat，放回 accumulator", { chatId: item.chatId, layer: item.layer });
@@ -332,7 +361,7 @@ export class MainAgentLoop {
 
     private buildAttendEntry(item: AttentionItem): AttentionQueueEntry | null {
         const subagent = this.subagentManager.get(item.chatId);
-        if (!subagent && !(item.chatId === "__meta__" && item.source === "WAKE_CONDITION")) {
+        if (!subagent && !(item.chatId === "__meta__" && isSyntheticMetaSource(item.source))) {
             return null;
         }
 
@@ -345,10 +374,11 @@ export class MainAgentLoop {
                 break;
             case "SCHEDULER":
             case "WAKE_CONDITION":
+            case "PROACTIVE_IDLE":
                 entry = subagent
                     ? subagent.buildQueueEntry("SCHEDULER_TRIGGER")
                     : createSyntheticMetaEntry(item);
-                entry.schedulerTriggers = extractSchedulerTriggers(item.payload);
+                entry.schedulerTriggers = item.source === "PROACTIVE_IDLE" ? [] : extractSchedulerTriggers(item.payload);
                 break;
             case "CALLBACK":
                 if (!subagent) return null;
@@ -392,7 +422,11 @@ export interface MetaTurnResult {
     attendResults?: AttendResult[];
 }
 
-function extractSchedulerTriggers(payload: unknown): Array<{ id: string; type: "reminder" | "cron" | "wake_condition"; description: string }> {
+function isSyntheticMetaSource(source: AttentionItem["source"]): boolean {
+    return source === "WAKE_CONDITION" || source === "SCHEDULER" || source === "PROACTIVE_IDLE";
+}
+
+function extractSchedulerTriggers(payload: unknown): NonNullable<AttentionQueueEntry["schedulerTriggers"]> {
     if (!payload || typeof payload !== "object") {
         return [];
     }
@@ -400,7 +434,29 @@ function extractSchedulerTriggers(payload: unknown): Array<{ id: string; type: "
     if ("type" in payload && "id" in payload && "description" in payload) {
         const type = payload.type;
         if ((type === "reminder" || type === "cron" || type === "wake_condition") && typeof payload.id === "string" && typeof payload.description === "string") {
-            return [{ id: payload.id, type, description: payload.description }];
+            const record = payload as {
+                id: string;
+                type: "reminder" | "cron" | "wake_condition";
+                description: string;
+                bindingId?: unknown;
+                callback?: unknown;
+                data?: unknown;
+            };
+            const trigger: NonNullable<AttentionQueueEntry["schedulerTriggers"]>[number] = {
+                id: record.id,
+                type: record.type,
+                description: record.description,
+            };
+            if (typeof record.bindingId === "string") {
+                trigger.bindingId = record.bindingId;
+            }
+            if (typeof record.callback === "string") {
+                trigger.callback = record.callback;
+            }
+            if (record.data !== undefined) {
+                trigger.data = record.data;
+            }
+            return [trigger];
         }
     }
 
@@ -411,13 +467,14 @@ function extractDirectAddressReason(payload: unknown): string | undefined {
     if (!payload || typeof payload !== "object") {
         return undefined;
     }
-    return typeof payload.reason === "string" ? payload.reason : undefined;
+    const record = payload as Record<string, unknown>;
+    return typeof record.reason === "string" ? record.reason : undefined;
 }
 
 function createSyntheticMetaEntry(item: AttentionItem): AttentionQueueEntry {
     return {
         chatId: "__meta__",
-        source: "SCHEDULER_TRIGGER",
+        source: item.source === "PROACTIVE_IDLE" ? "PROACTIVE_IDLE" : "SCHEDULER_TRIGGER",
         priority: Math.max(1, item.pressure ?? 1),
         basePriority: Math.max(1, item.pressure ?? 1),
         enqueuedAt: item.enqueuedAt,

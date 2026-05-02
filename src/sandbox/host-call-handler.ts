@@ -85,13 +85,16 @@ export function createSandboxHostCallHandler(chatId: string, deps: CreateSandbox
         applyHostManagedEnv,
     } = deps;
 
-    const listSchedulerItems = () => globalState.getSchedulerEvents(chatId).map((event) => ({
+    const listSchedulerItems = () => globalState.getSchedulerEvents()
+        .filter((event) => (event.bindingId ?? event.chatId) === chatId)
+        .map((event) => ({
         id: event.id,
         type: event.type,
-        description: event.description,
+        description: event.callback ?? event.taskTemplate ?? event.description,
+        bindingId: event.bindingId ?? event.chatId,
         triggerAt: event.triggerAt,
         cronExpr: event.cronExpr,
-        taskDescription: event.taskTemplate,
+        taskDescription: event.callback ?? event.taskTemplate,
         createdAt: event.createdAt,
         triggered: event.triggered,
     }));
@@ -150,7 +153,8 @@ export function createSandboxHostCallHandler(chatId: string, deps: CreateSandbox
                 throw new Error("cron 最短触发间隔为 1 小时");
             }
             const maxCrons = appConfig.subagent?.scheduler?.maxCrons ?? 10;
-            const existing = globalState.getSchedulerEvents(chatId)
+            const existing = globalState.getSchedulerEvents()
+                .filter((event) => (event.bindingId ?? event.chatId) === chatId)
                 .filter((event) => event.type === "cron");
             if (existing.length >= maxCrons) {
                 throw new Error(`cron 数量上限 ${maxCrons}，请先删除不需要的任务`);
@@ -159,7 +163,11 @@ export function createSandboxHostCallHandler(chatId: string, deps: CreateSandbox
             if (duplicate) {
                 throw new Error(`已存在完全相同的 cron 任务描述: ${duplicate.id}`);
             }
-            const event = globalState.addCron(chatId, name, cronExpr, taskDescription);
+            const event = globalState.addCron("__meta__", name, cronExpr, taskDescription, {
+                bindingId: chatId,
+                name,
+                callback: taskDescription,
+            });
             return { id: event.id, items: listSchedulerItems() };
         }
         if (method === "cron.remove") {
@@ -168,11 +176,12 @@ export function createSandboxHostCallHandler(chatId: string, deps: CreateSandbox
             return;
         }
         if (method === "cron.list") {
-            return globalState.getSchedulerEvents(chatId)
+            return globalState.getSchedulerEvents()
+                .filter((event) => (event.bindingId ?? event.chatId) === chatId)
                 .filter((event) => event.type === "cron")
                 .map((event) => ({
                     id: event.id,
-                    name: event.description,
+                    name: event.name ?? event.description,
                     cronExpr: event.cronExpr,
                 }));
         }
@@ -186,7 +195,8 @@ export function createSandboxHostCallHandler(chatId: string, deps: CreateSandbox
                 throw new Error("remind 最长 365 天（525600 分钟）");
             }
             const maxReminders = appConfig.subagent?.scheduler?.maxReminders ?? 10;
-            const existingReminders = globalState.getSchedulerEvents(chatId)
+            const existingReminders = globalState.getSchedulerEvents()
+                .filter((event) => (event.bindingId ?? event.chatId) === chatId)
                 .filter((event) => event.type === "reminder" && !event.triggered);
             if (existingReminders.length >= maxReminders) {
                 throw new Error(`remind 数量上限 ${maxReminders}，请等待已有提醒触发或手动取消`);
@@ -196,7 +206,11 @@ export function createSandboxHostCallHandler(chatId: string, deps: CreateSandbox
                 throw new Error(`已存在完全相同的提醒描述: ${duplicate.id}`);
             }
             const triggerAt = new Date(Date.now() + delayMinutes * 60000).toISOString();
-            const event = globalState.addReminder(chatId, description, triggerAt);
+            const event = globalState.addReminder("__meta__", description, triggerAt, undefined, {
+                bindingId: chatId,
+                name: description.slice(0, 60),
+                callback: description,
+            });
             log.info("runtime.remind 已设置", { id: event.id, chatId, triggerAt, description: description.slice(0, 80) });
             return { reminderId: event.id, triggerAt, items: listSchedulerItemsForRemind() };
         }

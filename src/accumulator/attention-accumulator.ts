@@ -20,7 +20,8 @@ function isAttentionSource(value: string): value is AttentionSource {
         || value === "CALLBACK"
         || value === "SCHEDULER"
         || value === "WAKE_CONDITION"
-        || value === "TOPIC_SIGNAL";
+        || value === "TOPIC_SIGNAL"
+        || value === "PROACTIVE_IDLE";
 }
 
 function toAttentionItem(item: SignalPoolItem): AttentionItem {

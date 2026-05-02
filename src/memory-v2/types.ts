@@ -316,6 +316,16 @@ export interface MessageSearchResult {
     timestamp: string;
 }
 
+export interface MessageQueryOptions {
+    chatIds?: string[];
+    userIds?: string[];
+    displayNameLike?: string;
+    textLike?: string;
+    after?: string;
+    before?: string;
+    limit?: number;
+}
+
 export interface InteractionSearchResult {
     timestamp: string;
     chatId: string;
@@ -491,6 +501,9 @@ export interface IMemoryStoreV2 {
     /** 获取全局个体身份 */
     getPersonIdentity(userId: string): PersonIdentity | null;
 
+    /** 按 displayName / aliases / username 搜索个体身份 */
+    searchByAlias(query: string, limit?: number): PersonIdentity[];
+
     /** 写入交互记录到 interactions 表 */
     storeInteraction(episode: Omit<InteractionEpisode, "id">): string;
 
@@ -558,11 +571,53 @@ export interface IMemoryStoreV2 {
         limit?: number;
     }): MessageSearchResult[];
 
+    /** 结构化搜索聊天记录，支持跨群、人名与正文组合过滤 */
+    queryMessages(options?: MessageQueryOptions): MessageSearchResult[];
+
     /** 获取用户完整画像检索结果 */
     getUserProfile(userId: string, chatId?: string): UserProfileSearchResult;
 
     /** 获取近期交互日志 */
     getRecentInteractions(chatId: string, userId?: string, limit?: number): InteractionSearchResult[];
+
+    /** 分页列出全部 person identities */
+    listPersonIdentities(limit?: number, offset?: number): { items: PersonIdentity[]; total: number };
+
+    /** 列出全部群组画像 */
+    listGroupModels(): GroupModel[];
+
+    /** 列出指定 binding/chat 的 todo */
+    todoList(chatId: string, options?: { includeExpired?: boolean }): Array<{
+        key: string;
+        content: string;
+        dueAt: string | null;
+        createdAt: string;
+        updatedAt: string;
+        expired: boolean;
+    }>;
+
+    /** 获取指定 binding/chat 的 todo */
+    todoGet(chatId: string, key: string): {
+        key: string;
+        content: string;
+        dueAt: string | null;
+        createdAt: string;
+        updatedAt: string;
+        expired: boolean;
+    } | null;
+
+    /** 新增或更新指定 binding/chat 的 todo */
+    todoUpsert(chatId: string, key: string, content: string, dueAt?: string | null): {
+        key: string;
+        content: string;
+        dueAt: string | null;
+        createdAt: string;
+        updatedAt: string;
+        expired: boolean;
+    };
+
+    /** 删除指定 binding/chat 的 todo */
+    todoRemove(chatId: string, key: string): void;
 
     /** 按 messageId 查询单条消息（用于获取不在上下文窗口中的被回复消息） */
     getMessageById(chatId: string, messageId: string): RecentMessageEntry | null;

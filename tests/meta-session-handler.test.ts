@@ -131,6 +131,8 @@ function createMemoryStub() {
             createdAt: "2026-05-01T14:28:01.000Z",
             updatedAt: "2026-05-01T14:28:01.000Z",
         }),
+        listGroupModels: () => [{ chatId: "telegram:g1" }],
+        todoList: () => [],
     };
 }
 
@@ -142,7 +144,6 @@ describe("createMetaSessionHandler", () => {
             getPersona: () => ({ name: "测试编排者", description: "验证 meta context engine" }),
             globalState: {
                 getSessionDigests: () => [],
-                memoList: () => [],
                 getMetaSessionHistory: () => [],
                 appendMetaSessionHistory: () => undefined,
             },
@@ -221,7 +222,6 @@ describe("createMetaSessionHandler", () => {
                 { createdAt: "2026-05-01T00:00:00.000Z", content: "meta digest 1" },
                 { createdAt: "2026-05-01T01:00:00.000Z", content: "meta digest 2" },
             ]),
-            memoList: () => [],
             getMetaSessionHistory: () => [...persistedHistory],
             appendMetaSessionHistory: (messages: Array<{ role: "assistant" | "user"; content: string }>) => {
                 const timestamp = new Date().toISOString();

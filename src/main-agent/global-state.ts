@@ -78,12 +78,22 @@ export class GlobalState {
     // ─── 调度 (scheduler) ───
 
     /** 添加定时提醒 */
-    addReminder(chatId: string, description: string, triggerAt: string, requestedBy?: string): SchedulerEvent {
+    addReminder(
+        chatId: string,
+        description: string,
+        triggerAt: string,
+        requestedBy?: string,
+        options?: { bindingId?: string; name?: string; callback?: string; data?: unknown },
+    ): SchedulerEvent {
         const event: SchedulerEvent = {
             id: randomUUID(),
             type: "reminder",
             chatId,
+            bindingId: options?.bindingId,
+            name: options?.name,
             description,
+            callback: options?.callback,
+            data: options?.data,
             triggerAt,
             requestedBy,
             createdAt: new Date().toISOString(),
@@ -96,12 +106,22 @@ export class GlobalState {
     }
 
     /** 添加周期 cron 任务（自然语言任务描述） */
-    addCron(chatId: string, description: string, cronExpr: string, taskDescription: string): SchedulerEvent {
+    addCron(
+        chatId: string,
+        description: string,
+        cronExpr: string,
+        taskDescription: string,
+        options?: { bindingId?: string; name?: string; callback?: string; data?: unknown },
+    ): SchedulerEvent {
         const event: SchedulerEvent = {
             id: randomUUID(),
             type: "cron",
             chatId,
+            bindingId: options?.bindingId,
+            name: options?.name,
             description,
+            callback: options?.callback,
+            data: options?.data,
             cronExpr,
             taskTemplate: taskDescription,
             createdAt: new Date().toISOString(),

@@ -37,6 +37,23 @@ describe("createConversationsApi", () => {
             },
         ]);
 
+        memory.upsertPersonIdentity("u1", {
+            displayName: "Alice",
+            aliases: ["爱丽丝"],
+            lastSeenAt: "2026-01-02T10:00:00Z",
+        });
+        memory.upsertPersonIdentity("u2", {
+            displayName: "Bob",
+            aliases: ["Soha"],
+            lastSeenAt: "2026-01-02T11:00:00Z",
+        });
+        memory.upsertGroupModel("g1", {
+            chatTitle: "一号群",
+        });
+        memory.upsertGroupModel("g2", {
+            chatTitle: "二号群",
+        });
+
         memory.upsertTopic("topic_team_g1", {
             chatId: "g1",
             label: "团建安排",
@@ -63,12 +80,24 @@ describe("createConversationsApi", () => {
 
     it("queries messages and topics across chats by keyword", async () => {
         const api = createConversationsApi(memory);
-        const result = await api.query({ keywords: ["团建"], limit: 10 });
+        const result = await api.query({ keyword: "团建", limit: 10 });
 
         assert.equal(result.messages.length, 2);
         assert.equal(result.topics.length, 2);
         assert.deepEqual(result.messages.map((row) => row.chatId), ["g2", "g1"]);
         assert.deepEqual(result.topics.map((row) => row.chatId), ["g2", "g1"]);
+        assert.equal(result.messages[0].chatLabel, "[二号群(g2)]");
+    });
+
+    it("resolves user aliases before searching message bodies", async () => {
+        const api = createConversationsApi(memory);
+        const result = await api.query({ user: "Soha", limit: 10 });
+
+        assert.deepEqual(result.resolvedUsers.map((user) => user.userId), ["u2"]);
+        assert.equal(result.messages.length, 2);
+        assert.deepEqual(result.messages.map((row) => row.messageId), ["g2-1", "g2-2"]);
+        assert.ok(result.messages.every((row) => row.userId === "u2"));
+        assert.equal(result.messages[0].chatLabel, "[二号群(g2)]");
     });
 
     it("falls back to recent lists when no keyword is provided", async () => {

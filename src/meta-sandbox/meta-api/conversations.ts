@@ -1,29 +1,60 @@
+import { getGroupModelKey } from "../../core/chat-id.js";
 import type {
+    GroupModel,
     IMemoryStoreV2,
     MessageSearchResult,
+    PersonIdentity,
     TopicNode,
     TopicSearchResult,
 } from "../../memory-v2/index.js";
 
 export interface ConversationsQueryFilters {
     chatIds?: string[];
-    keywords?: string[];
+    /** 人名、别名、username 或 userId。 */
+    user?: string;
+    /** 精确 userId 过滤。自然语言调用优先用 user。 */
     userId?: string;
+    /** 正文关键词。若 user 未传或未解析到，会先匹配 displayName，再匹配正文。 */
+    keyword?: string;
     after?: string;
     before?: string;
     limit?: number;
 }
 
+export type ConversationMessageResult = MessageSearchResult & {
+    chatTitle: string;
+    /** 形如 "[早苗群(telegram:-100123)]"。 */
+    chatLabel: string;
+};
+
+export type ConversationTopicResult = TopicSearchResult & {
+    chatTitle: string;
+    /** 形如 "[早苗群(telegram:-100123)]"。 */
+    chatLabel: string;
+};
+
+export interface ResolvedConversationUser {
+    userId: string;
+    displayName: string;
+    username?: string;
+    aliases: string[];
+}
+
 export interface ConversationsQueryResult {
-    messages: MessageSearchResult[];
-    topics: TopicSearchResult[];
+    messages: ConversationMessageResult[];
+    topics: ConversationTopicResult[];
+    resolvedUsers: ResolvedConversationUser[];
 }
 
 type ConversationsReader = Pick<IMemoryStoreV2,
-    "searchMessages" |
+    "queryMessages" |
     "searchTopics" |
     "getRecentMessages" |
-    "getRecentTopics"
+    "getRecentTopics" |
+    "getGroupModel" |
+    "searchByAlias" |
+    "getPersonIdentity" |
+    "listGroupModels"
 >;
 
 export function createConversationsApi(memory: ConversationsReader) {
@@ -31,86 +62,130 @@ export function createConversationsApi(memory: ConversationsReader) {
         query: async (filters: ConversationsQueryFilters = {}): Promise<ConversationsQueryResult> => {
             const limit = clampLimit(filters.limit, 20, 100);
             const chatIds = uniqueStrings(filters.chatIds);
-            const keywords = uniqueStrings(filters.keywords);
+            const keyword = filters.keyword?.trim();
+            const resolvedUsers = resolveUsers(memory, filters, limit);
+            const userIds = resolvedUsers.map((user) => user.userId);
+            const fallbackName = filters.user && userIds.length === 0 ? filters.user.trim() : undefined;
 
-            const messages = keywords.length > 0
-                ? searchMessages(memory, keywords, filters, limit, chatIds)
-                : listRecentMessages(memory, filters, limit, chatIds);
-            const topics = keywords.length > 0
-                ? searchTopics(memory, keywords, filters, limit, chatIds)
-                : listRecentTopics(memory, filters, limit, chatIds);
+            const messages = enrichMessages(memory, queryMessages(memory, {
+                filters,
+                limit,
+                chatIds,
+                keyword,
+                userIds,
+                fallbackName,
+            }));
+            const topics = enrichTopics(memory, queryTopics(memory, {
+                filters,
+                limit,
+                chatIds,
+                keyword,
+                userIds,
+            }));
 
-            return { messages, topics };
+            return { messages, topics, resolvedUsers };
         },
     };
 }
 
-function searchMessages(
+function resolveUsers(
     memory: ConversationsReader,
-    keywords: string[],
     filters: ConversationsQueryFilters,
     limit: number,
-    chatIds: string[],
-): MessageSearchResult[] {
-    const scopes = chatIds.length > 0 ? chatIds : [undefined];
-    const merged = new Map<string, MessageSearchResult>();
+): ResolvedConversationUser[] {
+    const resolved = new Map<string, PersonIdentity>();
+    const explicitUserId = filters.userId?.trim();
+    if (explicitUserId) {
+        const identity = memory.getPersonIdentity(explicitUserId);
+        resolved.set(explicitUserId, identity ?? identityFromUserId(explicitUserId));
+    }
 
-    for (const chatId of scopes) {
-        for (const keyword of keywords) {
-            const rows = memory.searchMessages(keyword, {
-                chatId,
-                userId: filters.userId,
-                after: filters.after,
-                before: filters.before,
-                limit,
-            });
-            for (const row of rows) {
-                merged.set(`${row.chatId}:${row.messageId}`, row);
-            }
+    const user = filters.user?.trim();
+    if (user) {
+        const exact = memory.getPersonIdentity(user);
+        if (exact) {
+            resolved.set(exact.userId, exact);
+        }
+        for (const identity of memory.searchByAlias(user, Math.min(limit, 20))) {
+            resolved.set(identity.userId, identity);
         }
     }
 
-    return [...merged.values()]
-        .sort((left, right) => right.timestamp.localeCompare(left.timestamp))
-        .slice(0, limit);
+    return [...resolved.values()]
+        .sort((left, right) => right.lastSeenAt.localeCompare(left.lastSeenAt))
+        .slice(0, Math.min(limit, 20))
+        .map((identity) => ({
+            userId: identity.userId,
+            displayName: identity.displayName,
+            username: identity.username,
+            aliases: identity.aliases,
+        }));
 }
 
-function searchTopics(
-    memory: ConversationsReader,
-    keywords: string[],
-    filters: ConversationsQueryFilters,
-    limit: number,
-    chatIds: string[],
-): TopicSearchResult[] {
-    const scopes = chatIds.length > 0 ? chatIds : [undefined];
-    const query = keywords.join(" ");
-    const merged = new Map<string, TopicSearchResult>();
+function identityFromUserId(userId: string): PersonIdentity {
+    const timestamp = new Date(0).toISOString();
+    return {
+        userId,
+        displayName: userId,
+        aliases: [],
+        totalMessageCount: 0,
+        lastSeenAt: timestamp,
+        firstSeenAt: timestamp,
+        updatedAt: timestamp,
+    };
+}
 
-    for (const chatId of scopes) {
-        const rows = memory.searchTopics(query, {
-            chatId,
+function queryMessages(
+    memory: ConversationsReader,
+    input: {
+        filters: ConversationsQueryFilters;
+        limit: number;
+        chatIds: string[];
+        keyword?: string;
+        userIds: string[];
+        fallbackName?: string;
+    },
+): MessageSearchResult[] {
+    const { filters, limit, chatIds, keyword, userIds, fallbackName } = input;
+
+    if (userIds.length > 0) {
+        const rows = queryMessagesWith(memory, {
+            chatIds,
+            userIds,
+            textLike: keyword,
             after: filters.after,
             before: filters.before,
             limit,
         });
-        for (const row of rows) {
-            if (!filters.userId || row.participants.includes(filters.userId)) {
-                merged.set(row.topicId, row);
-            }
+        if (rows.length > 0 || !keyword) {
+            return rows;
         }
     }
 
-    return [...merged.values()]
-        .sort((left, right) => right.startedAt.localeCompare(left.startedAt))
-        .slice(0, limit);
-}
+    const displayNameNeedle = fallbackName ?? keyword;
+    if (displayNameNeedle) {
+        const nameRows = queryMessagesWith(memory, {
+            chatIds,
+            displayNameLike: displayNameNeedle,
+            after: filters.after,
+            before: filters.before,
+            limit,
+        });
+        if (nameRows.length > 0) {
+            return nameRows;
+        }
+    }
 
-function listRecentMessages(
-    memory: ConversationsReader,
-    filters: ConversationsQueryFilters,
-    limit: number,
-    chatIds: string[],
-): MessageSearchResult[] {
+    if (keyword) {
+        return queryMessagesWith(memory, {
+            chatIds,
+            textLike: keyword,
+            after: filters.after,
+            before: filters.before,
+            limit,
+        });
+    }
+
     if (chatIds.length === 0) {
         return [];
     }
@@ -130,32 +205,122 @@ function listRecentMessages(
         merged.push(...rows);
     }
 
-    return merged
-        .sort((left, right) => right.timestamp.localeCompare(left.timestamp))
-        .slice(0, limit);
+    return sortMessages(merged).slice(0, limit);
 }
 
-function listRecentTopics(
+function queryMessagesWith(
     memory: ConversationsReader,
-    filters: ConversationsQueryFilters,
-    limit: number,
-    chatIds: string[],
+    input: {
+        chatIds: string[];
+        userIds?: string[];
+        displayNameLike?: string;
+        textLike?: string;
+        after?: string;
+        before?: string;
+        limit: number;
+    },
+): MessageSearchResult[] {
+    return sortMessages(memory.queryMessages(input)).slice(0, input.limit);
+}
+
+function queryTopics(
+    memory: ConversationsReader,
+    input: {
+        filters: ConversationsQueryFilters;
+        limit: number;
+        chatIds: string[];
+        keyword?: string;
+        userIds: string[];
+    },
 ): TopicSearchResult[] {
-    if (chatIds.length === 0) {
-        return [];
+    const { filters, limit, chatIds, keyword, userIds } = input;
+    const scopes = chatIds.length > 0 ? chatIds : [undefined];
+    const merged = new Map<string, TopicSearchResult>();
+
+    if (keyword) {
+        for (const chatId of scopes) {
+            const rows = memory.searchTopics(keyword, {
+                chatId,
+                after: filters.after,
+                before: filters.before,
+                limit,
+            });
+            for (const row of rows) {
+                if (userIds.length === 0 || userIds.some((userId) => row.participants.includes(userId))) {
+                    merged.set(row.topicId, row);
+                }
+            }
+        }
+        return sortTopics([...merged.values()]).slice(0, limit);
     }
 
-    const merged: TopicSearchResult[] = [];
-    for (const chatId of chatIds) {
+    const topicChatIds = chatIds.length > 0
+        ? chatIds
+        : userIds.length > 0
+            ? memory.listGroupModels().map((group) => group.chatId)
+            : [];
+
+    for (const chatId of topicChatIds) {
         const rows = memory.getRecentTopics(chatId, limit * 2)
-            .filter((row) => matchesTopicFilters(row, filters))
+            .filter((row) => matchesTopicFilters(row, filters, userIds))
             .map(topicNodeToSearchResult);
-        merged.push(...rows);
+        for (const row of rows) {
+            merged.set(row.topicId, row);
+        }
     }
 
-    return merged
-        .sort((left, right) => right.startedAt.localeCompare(left.startedAt))
-        .slice(0, limit);
+    return sortTopics([...merged.values()]).slice(0, limit);
+}
+
+function enrichMessages(
+    memory: ConversationsReader,
+    rows: MessageSearchResult[],
+): ConversationMessageResult[] {
+    return rows.map((row) => {
+        const chatTitle = resolveChatTitle(memory, row.chatId);
+        return {
+            ...row,
+            chatTitle,
+            chatLabel: formatChatLabel(chatTitle, row.chatId),
+        };
+    });
+}
+
+function enrichTopics(
+    memory: ConversationsReader,
+    rows: TopicSearchResult[],
+): ConversationTopicResult[] {
+    return rows.map((row) => {
+        const chatTitle = resolveChatTitle(memory, row.chatId);
+        return {
+            ...row,
+            chatTitle,
+            chatLabel: formatChatLabel(chatTitle, row.chatId),
+        };
+    });
+}
+
+function resolveChatTitle(memory: ConversationsReader, chatId: string): string {
+    const direct = memory.getGroupModel(chatId);
+    if (direct?.chatTitle) {
+        return direct.chatTitle;
+    }
+
+    try {
+        const groupKey = getGroupModelKey(chatId);
+        const group = groupKey === chatId ? null : memory.getGroupModel(groupKey);
+        if (group?.chatTitle) {
+            return group.chatTitle;
+        }
+    } catch {
+        // Non-composite test ids are allowed.
+    }
+
+    return chatId;
+}
+
+function formatChatLabel(chatTitle: string, chatId: string): string {
+    return `[${chatTitle}(${chatId})]`;
 }
 
 function matchesMessageFilters(
@@ -174,8 +339,9 @@ function matchesMessageFilters(
     return true;
 }
 
-function matchesTopicFilters(topic: TopicNode, filters: ConversationsQueryFilters): boolean {
-    if (filters.userId && !topic.participants.includes(filters.userId)) {
+function matchesTopicFilters(topic: TopicNode, filters: ConversationsQueryFilters, userIds: string[]): boolean {
+    const participantFilters = userIds.length > 0 ? userIds : filters.userId ? [filters.userId] : [];
+    if (participantFilters.length > 0 && !participantFilters.some((userId) => topic.participants.includes(userId))) {
         return false;
     }
     if (filters.after && topic.startedAt < filters.after) {
@@ -201,6 +367,14 @@ function topicNodeToSearchResult(topic: TopicNode): TopicSearchResult {
         callbackPotential: topic.callbackPotential ?? 0,
         associatedMemories: topic.associatedMemories ?? [],
     };
+}
+
+function sortMessages(rows: MessageSearchResult[]): MessageSearchResult[] {
+    return rows.sort((left, right) => right.timestamp.localeCompare(left.timestamp));
+}
+
+function sortTopics(rows: TopicSearchResult[]): TopicSearchResult[] {
+    return rows.sort((left, right) => right.startedAt.localeCompare(left.startedAt));
 }
 
 function clampLimit(value: number | undefined, fallback: number, max: number): number {

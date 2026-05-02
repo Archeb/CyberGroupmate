@@ -143,6 +143,7 @@ export async function runMetaSession(
     const codeTimeout = config.codeTimeout ?? DEFAULT_CODE_TIMEOUT_MS;
     const llmCaller = config.llmCaller ?? callLLMWithFallback;
     metaCancelRequested = false;
+    sandbox.beginSession(sessionId);
     syncMetaCodeActState(sessionId, messages, turns, true);
 
     const finalize = (
@@ -159,6 +160,7 @@ export async function runMetaSession(
         };
 
         syncMetaCodeActState(sessionId, messages, turns, false);
+        sandbox.endSession(sessionId);
         emitMetaProgress(sessionId, {
             turn: turns.at(-1)?.turn ?? 0,
             phase: "end",

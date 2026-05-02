@@ -2021,6 +2021,72 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
         }));
     }
 
+    queryMessages(options: {
+        chatIds?: string[];
+        userIds?: string[];
+        displayNameLike?: string;
+        textLike?: string;
+        after?: string;
+        before?: string;
+        limit?: number;
+    } = {}): MessageSearchResult[] {
+        const limit = Math.min(Math.max(options.limit ?? 20, 1), 100);
+        const conditions: string[] = [];
+        const params: unknown[] = [];
+
+        const chatIds = [...new Set((options.chatIds ?? []).map(String).filter(Boolean))];
+        if (chatIds.length > 0) {
+            conditions.push(`chat_id IN (${chatIds.map(() => "?").join(", ")})`);
+            params.push(...chatIds);
+        }
+
+        const userIds = [...new Set((options.userIds ?? []).map(String).filter(Boolean))];
+        if (userIds.length > 0) {
+            conditions.push(`user_id IN (${userIds.map(() => "?").join(", ")})`);
+            params.push(...userIds);
+        }
+
+        const displayNameLike = options.displayNameLike?.trim();
+        if (displayNameLike) {
+            conditions.push("display_name LIKE ?");
+            params.push(`%${displayNameLike}%`);
+        }
+
+        const textLike = options.textLike?.trim();
+        if (textLike) {
+            conditions.push("text LIKE ?");
+            params.push(`%${textLike}%`);
+        }
+
+        if (options.after) {
+            conditions.push("timestamp >= ?");
+            params.push(options.after);
+        }
+        if (options.before) {
+            conditions.push("timestamp <= ?");
+            params.push(options.before);
+        }
+
+        params.push(limit);
+        const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+        const rows = this.db.prepare(`
+            SELECT message_id, chat_id, user_id, display_name, text, timestamp
+            FROM message_log
+            ${where}
+            ORDER BY timestamp DESC
+            LIMIT ?
+        `).all(...params) as Array<Record<string, unknown>>;
+
+        return rows.map((row) => ({
+            messageId: row.message_id as string,
+            chatId: row.chat_id as string,
+            userId: row.user_id as string,
+            displayName: (row.display_name as string) ?? "",
+            content: (row.text as string) ?? "",
+            timestamp: row.timestamp as string,
+        }));
+    }
+
     getUserProfile(userId: string, chatId?: string): UserProfileSearchResult {
         const identity = this.getPersonIdentity(userId);
         const groupProfile = chatId

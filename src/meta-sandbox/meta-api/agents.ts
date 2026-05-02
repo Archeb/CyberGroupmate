@@ -22,11 +22,11 @@ type SubagentReader = {
     stickiness?: {
         level?: StickinessLevel;
     };
-    codeActExecutor?: ExecutorReader | null;
+    codeActExecutor?: unknown;
 };
 
 type SubagentManagerReader = {
-    getAllSubagents: () => SubagentReader[];
+    getAllSubagents: () => unknown[];
 };
 type MemoryReader = Pick<IMemoryStoreV2, "getGroupModel">;
 
@@ -42,13 +42,21 @@ export function createAgentsApi(subagentManager: SubagentManagerReader, memory: 
 
 function toAgentStatus(subagent: SubagentReader, memory: MemoryReader): AgentStatus {
     const groupModel = memory.getGroupModel(getGroupModelKey(subagent.chatId));
+    const executor = asExecutorReader(subagent.codeActExecutor);
 
     return {
         chatId: subagent.chatId,
         chatTitle: groupModel?.chatTitle || undefined,
-        queueSize: subagent.codeActExecutor?.getQueueSize?.() ?? 0,
-        isProcessing: subagent.codeActExecutor?.isProcessing?.() ?? false,
+        queueSize: executor?.getQueueSize?.() ?? 0,
+        isProcessing: executor?.isProcessing?.() ?? false,
         lastActiveAt: new Date(subagent.lastActivityAt).toISOString(),
         stickinessLevel: subagent.stickiness?.level ?? "STRANGER",
     };
+}
+
+function asExecutorReader(value: unknown): ExecutorReader | null {
+    if (!value || typeof value !== "object") {
+        return null;
+    }
+    return value as ExecutorReader;
 }

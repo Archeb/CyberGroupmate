@@ -20,8 +20,8 @@ interface MetaHistoricalData {
     sessionDigests: Array<{ createdAt: string; content: string }>;
 }
 
-interface MetaMemosData {
-    memos: Array<{ key: string; value: unknown; expiresAt?: string | null }>;
+interface MetaTodosData {
+    todos: Array<{ key: string; content: string; bindingId: string; dueAt?: string | null; expired?: boolean }>;
 }
 
 interface MetaCallbacksData {
@@ -43,7 +43,7 @@ interface MetaAttendMetaData {
     directAddressReason?: string;
     callbackPotential?: number;
     urgentSignals?: string[];
-    schedulerTriggers?: Array<{ id: string; type: "reminder" | "cron" | "wake_condition"; description: string }>;
+    schedulerTriggers?: Array<{ id: string; type: "reminder" | "cron" | "wake_condition"; description: string; bindingId?: string; callback?: string; data?: unknown }>;
 }
 
 interface MetaTopicDigestData {
@@ -231,25 +231,27 @@ export const metaHistoricalProvider: SectionProvider<MetaHistoricalData> = {
     },
 };
 
-export const metaMemosProvider: SectionProvider<MetaMemosData> = {
+export const metaTodosProvider: SectionProvider<MetaTodosData> = {
     schema: {
-        name: "meta.memos",
-        label: "Meta 全局备忘录",
-        source: "globalState.memos",
+        name: "meta.todos",
+        label: "Meta Todo",
+        source: "memory.todo",
         cache: "snapshot",
         history: "persistent",
     },
     resolve(ctx) {
-        const memos = (ctx.memos as MetaMemosData["memos"] | undefined) ?? [];
-        if (memos.length === 0) {
+        const todos = (ctx.todos as MetaTodosData["todos"] | undefined) ?? [];
+        if (todos.length === 0) {
             return null;
         }
-        return { memos };
+        return { todos };
     },
     render(data) {
         return [
-            "# 当前全局备忘录",
-            ...data.memos.map((item) => `- ${item.key}: ${safeJson(item.value)}${item.expiresAt ? ` (expiresAt=${item.expiresAt})` : ""}`),
+            "# 当前 Todo",
+            ...data.todos.map((item) =>
+                `- [${item.bindingId}] ${item.key}: ${item.content}${item.dueAt ? ` (dueAt=${item.dueAt})` : ""}${item.expired ? " (expired)" : ""}`
+            ),
         ].join("\n");
     },
 };
@@ -358,7 +360,11 @@ export const metaAttendMetaProvider: SectionProvider<MetaAttendMetaData> = {
         if (data.schedulerTriggers?.length) {
             lines.push("- schedulerTriggers:");
             for (const trigger of data.schedulerTriggers) {
-                lines.push(`  - ${trigger.type}:${trigger.id} ${trigger.description}`);
+                const binding = trigger.bindingId ? ` bindingId=${trigger.bindingId}` : "";
+                lines.push(`  - ${trigger.type}:${trigger.id}${binding} ${trigger.callback ?? trigger.description}`);
+                if (trigger.data !== undefined) {
+                    lines.push(`    data=${JSON.stringify(trigger.data)}`);
+                }
             }
         }
         return lines.join("\n");
@@ -631,18 +637,10 @@ export const metaDecisionPromptProvider: SectionProvider<string> = {
     },
 };
 
-function safeJson(value: unknown): string {
-    try {
-        return JSON.stringify(value);
-    } catch {
-        return String(value);
-    }
-}
-
 export function getMetaProviders(): SectionProvider[] {
     return [
         metaHistoricalProvider,
-        metaMemosProvider,
+        metaTodosProvider,
         metaCallbacksProvider,
         metaAttendHeaderProvider,
         metaAttendMetaProvider,
