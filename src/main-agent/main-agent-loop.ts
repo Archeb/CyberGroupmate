@@ -65,9 +65,6 @@ export class MainAgentLoop {
     /** attend 完成后的回调（metrics 使用） */
     private onAttendCompleteCallback: ((chatId: string, decisions: AttendResult) => void) | null = null;
 
-    /** 已从 Q5 取出、等待下一次 Meta attention 消费的 callbacks */
-    private pendingCallbacksForMeta: SubagentCallback[] = [];
-
     constructor(
         accumulator: AttentionAccumulator,
         callbackQueue: CallbackQueue,
@@ -170,7 +167,6 @@ export class MainAgentLoop {
         const callbacks = this.callbackQueue.drain();
         if (callbacks.length > 0) {
             this.lastNonIdleActivityAt = Date.now();
-            this.pendingCallbacksForMeta.push(...callbacks);
         }
         for (const cb of callbacks) {
             const cbSubagent = this.subagentManager.get(cb.chatId);
@@ -179,6 +175,12 @@ export class MainAgentLoop {
                 cbSubagent.addCallback(cb);
             }
             this.accumulator.unblock(cb.chatId);
+            this.accumulator.ingest(1, {
+                chatId: cb.chatId,
+                source: "CALLBACK",
+                enqueuedAt: Date.now(),
+                payload: cb,
+            });
 
             if (this.globalState) {
                 const matches = matchCallbackWakeConditions(cb, this.globalState.getWakeConditions());
@@ -253,6 +255,7 @@ export class MainAgentLoop {
 
         if (!cbOpen) {
             const uniqueEntries: AttentionQueueEntry[] = [];
+            const callbacksForMeta: SubagentCallback[] = [];
             const attendedThisTick = new Set<string>();
 
             for (const item of releasedItems) {
@@ -273,6 +276,9 @@ export class MainAgentLoop {
                 attendedThisTick.add(entry.chatId);
                 attended.push(entry.chatId);
                 uniqueEntries.push(entry);
+                if (item.source === "CALLBACK" && isSubagentCallback(item.payload)) {
+                    callbacksForMeta.push(item.payload);
+                }
             }
 
             if (uniqueEntries.length > 0) {
@@ -280,9 +286,7 @@ export class MainAgentLoop {
                     log.warn("metaSessionHandler 未设置，跳过", { groups: uniqueEntries.map((entry) => entry.chatId) });
                 } else {
                     try {
-                        const callbacksForMeta = this.pendingCallbacksForMeta;
                         const result = await this.metaSessionHandler(uniqueEntries, callbacksForMeta);
-                        this.pendingCallbacksForMeta = [];
                         metaEndReason = result?.endReason ?? null;
                         metaHandledEntries = !!result;
                         if (result?.sessionDigest && this.globalState) {
@@ -452,6 +456,16 @@ export interface MetaTurnResult {
 
 function isSyntheticMetaSource(source: AttentionItem["source"]): boolean {
     return source === "WAKE_CONDITION" || source === "SCHEDULER" || source === "PROACTIVE_IDLE";
+}
+
+function isSubagentCallback(value: unknown): value is SubagentCallback {
+    if (!value || typeof value !== "object") {
+        return false;
+    }
+    const record = value as Partial<SubagentCallback>;
+    return typeof record.taskId === "string"
+        && typeof record.chatId === "string"
+        && typeof record.summary === "string";
 }
 
 function extractSchedulerTriggers(payload: unknown): NonNullable<AttentionQueueEntry["schedulerTriggers"]> {

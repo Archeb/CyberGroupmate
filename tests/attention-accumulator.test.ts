@@ -69,7 +69,7 @@ describe("AttentionAccumulator", () => {
         globalState.dispose();
     });
 
-    it("flushes immediately when a layer 0 item preempts", () => {
+    it("waits for the window even when a layer 0 item arrives", () => {
         const { accumulator, globalState } = createAccumulator();
         accumulator.ingest(1, {
             chatId: "telegram:1",
@@ -84,10 +84,49 @@ describe("AttentionAccumulator", () => {
             enqueuedAt: 100,
         });
 
-        const set = accumulator.flush(100);
+        assert.equal(accumulator.flush(100), null);
+        const set = accumulator.flush(1_000);
         assert.ok(set);
-        assert.equal(set?.triggerReason, "preempt");
+        assert.equal(set?.triggerReason, "window");
         assert.equal(set?.items[0]?.layer, 0);
+        globalState.dispose();
+    });
+
+    it("caps each window and only fills remaining slots with layer 2 signals", () => {
+        const { accumulator, globalState } = createAccumulator({ topN: 3 });
+        accumulator.ingest(1, {
+            chatId: "telegram:1",
+            source: "CALLBACK",
+            payload: { taskId: "a" },
+            enqueuedAt: 0,
+        });
+        accumulator.ingest(0, {
+            chatId: "telegram:2",
+            source: "DIRECT_ADDRESS",
+            payload: { reason: "DM" },
+            enqueuedAt: 1,
+        });
+        accumulator.ingest(2, {
+            chatId: "telegram:3",
+            source: "TOPIC_SIGNAL",
+            payload: { label: "A" },
+            enqueuedAt: 2,
+            pressure: 10,
+        });
+        accumulator.ingest(2, {
+            chatId: "telegram:4",
+            source: "TOPIC_SIGNAL",
+            payload: { label: "B" },
+            enqueuedAt: 3,
+            pressure: 30,
+        });
+
+        const set = accumulator.flush(1_000);
+        assert.ok(set);
+        assert.deepEqual(
+            set?.items.map((item) => item.chatId),
+            ["telegram:2", "telegram:1", "telegram:4"],
+        );
         globalState.dispose();
     });
 
@@ -221,7 +260,7 @@ describe("AttentionAccumulator", () => {
             payload: { reason: "DM" },
             enqueuedAt: 20,
         });
-        const set = accumulator.flush(20);
+        const set = accumulator.flush(1_020);
         assert.ok(set);
         assert.equal(set?.items[0]?.chatId, "telegram:1");
         globalState.dispose();

@@ -310,6 +310,10 @@ export class RecordingPipeline extends EventEmitter {
                         });
                     }
 
+                    if (!clusterOnly) {
+                        this.publishSignals(chatId, signalReadyTopics, topicMessagesById);
+                    }
+
                     // M4.5: 生成 topic embedding
                     if (this.embeddingConfig) {
                         try {
@@ -321,18 +325,6 @@ export class RecordingPipeline extends EventEmitter {
                                 })
                                 .map(t => {
                                     const cid = clusterIdMap.get(t.id) ?? t.id;
-
-                        const signalEntries = buildTopicSignalEntries({
-                            chatId,
-                            topics: signalReadyTopics,
-                            topicMessagesById,
-                            profiles: this.memory?.getProfilesForChat(chatId) ?? [],
-                            stickinessLevel: this.getStickinessLevel(),
-                        });
-                        if (signalEntries.length > 0) {
-                            this.publishTopicSignals?.(signalEntries);
-                            this.emit("topics:signaled", signalEntries);
-                        }
                                     const triage = triageResult.topics.find(tr => tr.topicId === cid);
                                     return { id: t.id, text: `${t.label} ${triage?.summary ?? ""}` };
                                 });
@@ -360,6 +352,9 @@ export class RecordingPipeline extends EventEmitter {
                         userCount: seenUsers.size,
                     });
                 } else {
+                    if (!clusterOnly) {
+                        this.publishSignals(chatId, signalReadyTopics, topicMessagesById);
+                    }
                     log.debug("Memory V2 写入（无 memory 实例，跳过）", { topicCount: updatedTopics.length });
                 }
 
@@ -807,10 +802,10 @@ export class RecordingPipeline extends EventEmitter {
                 };
                 // 将 decision 持久化到 topic 对象，supply triageReason 给下游 toDigest
                 this.registry.setDecision(topic.id, decision);
+                signalReadyTopics.push(topic);
             }
 
             topicMessagesById.set(topic.id, topicMsgs);
-            signalReadyTopics.push(topic);
             updatedTopics.push(topic);
         }
 
@@ -834,6 +829,25 @@ export class RecordingPipeline extends EventEmitter {
             groups.set(msg.chatId, group);
         }
         return groups;
+    }
+
+    private publishSignals(
+        chatId: string,
+        signalReadyTopics: Topic[],
+        topicMessagesById: Map<string, Message[]>,
+    ): void {
+        const signalEntries = buildTopicSignalEntries({
+            chatId,
+            topics: signalReadyTopics,
+            topicMessagesById,
+            profiles: this.memory?.getProfilesForChat(chatId) ?? [],
+            stickinessLevel: this.getStickinessLevel(),
+        });
+        if (signalEntries.length === 0) {
+            return;
+        }
+        this.publishTopicSignals?.(signalEntries);
+        this.emit("topics:signaled", signalEntries);
     }
 
     /**

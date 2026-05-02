@@ -76,26 +76,26 @@ function cloneAttentionItem(item: AttentionItem): AttentionItem {
 
 export interface AttentionAccumulatorConfig {
     windowMs?: number;
+    /** Maximum attention items released per flush window. */
     topN?: number;
 }
 
 export class AttentionAccumulator {
     private pending: AttentionItem[] = [];
     private signalPool: AttentionItem[] = [];
-    private preempted = false;
     private windowStartedAt: number | null = null;
     private blockedChatIds = new Set<string>();
     private dequeueHistory: ReleasedAttentionRecord[] = [];
     private readonly maxDequeueHistory = 50;
     private readonly windowMs: number;
-    private readonly topN: number;
+    private readonly maxWindowItems: number;
 
     constructor(
         private readonly globalState: GlobalState,
         config?: AttentionAccumulatorConfig,
     ) {
         this.windowMs = config?.windowMs ?? 5_000;
-        this.topN = config?.topN ?? 3;
+        this.maxWindowItems = config?.topN ?? 3;
     }
 
     restoreSignalPool(): void {
@@ -126,9 +126,6 @@ export class AttentionAccumulator {
         if (this.windowStartedAt === null) {
             this.windowStartedAt = entry.enqueuedAt;
         }
-        if (layer === 0) {
-            this.preempted = true;
-        }
     }
 
     requeue(item: AttentionItem): void {
@@ -142,9 +139,6 @@ export class AttentionAccumulator {
         } else {
             this.windowStartedAt = Math.min(this.windowStartedAt, item.enqueuedAt);
         }
-        if (item.layer === 0) {
-            this.preempted = true;
-        }
     }
 
     block(chatId: string): void {
@@ -156,7 +150,6 @@ export class AttentionAccumulator {
         this.signalPool = this.signalPool.filter((item) => item.chatId !== chatId);
         if (this.pending.length === 0) {
             this.windowStartedAt = null;
-            this.preempted = false;
         }
         if (this.signalPool.length !== signalBefore) {
             this.persistSignalPool();
@@ -184,7 +177,6 @@ export class AttentionAccumulator {
         this.signalPool = this.signalPool.filter((item) => item.chatId !== chatId);
         if (this.pending.length === 0) {
             this.windowStartedAt = null;
-            this.preempted = false;
         }
         if (this.signalPool.length !== signalBefore) {
             this.persistSignalPool();
@@ -198,7 +190,6 @@ export class AttentionAccumulator {
 
         if (
             this.pending.length > 0
-            && !this.preempted
             && this.windowStartedAt !== null
             && now - this.windowStartedAt < this.windowMs
         ) {
@@ -206,16 +197,22 @@ export class AttentionAccumulator {
         }
 
         this.refreshSignalPoolPressures(now);
-        const releasedSignals = [...this.signalPool]
+        const releasedPending = [...this.pending]
             .sort(compareAttentionItemsAt(now))
-            .slice(0, this.topN);
+            .slice(0, this.maxWindowItems);
+        const remainingSlots = Math.max(0, this.maxWindowItems - releasedPending.length);
+        const releasedSignals = remainingSlots > 0
+            ? [...this.signalPool]
+                .sort(compareAttentionItemsAt(now))
+                .slice(0, remainingSlots)
+            : [];
 
         for (const signal of releasedSignals) {
             signal.ignoredCount = (signal.ignoredCount ?? 0) + 1;
             signal.pressure = resolvePressure(signal, now);
         }
 
-        const items = [...this.pending, ...releasedSignals]
+        const items = [...releasedPending, ...releasedSignals]
             .sort(compareAttentionItemsAt(now))
             .map(cloneAttentionItem);
 
@@ -223,15 +220,15 @@ export class AttentionAccumulator {
             this.pushDequeueHistory(item, now);
         }
 
-        this.pending = [];
-        this.preempted = false;
-        this.windowStartedAt = null;
+        const releasedPendingSet = new Set(releasedPending);
+        this.pending = this.pending.filter((item) => !releasedPendingSet.has(item));
+        this.windowStartedAt = this.pending.length > 0 ? now : null;
         this.persistSignalPool();
 
         return {
             timestamp: now,
             items,
-            triggerReason: items.some(item => item.layer === 0) ? "preempt" : "window",
+            triggerReason: "window",
         };
     }
 

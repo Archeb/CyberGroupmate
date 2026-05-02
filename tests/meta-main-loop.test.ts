@@ -245,6 +245,45 @@ describe("MainAgentLoop meta session path", () => {
         globalState.dispose();
     });
 
+    it("routes ordinary callbacks through layer 1 attention", async () => {
+        const dir = tempDir();
+        const globalState = new GlobalState({
+            filePath: join(dir, "global-state.json"),
+            autoSaveInterval: 0,
+        });
+        const accumulator = new AttentionAccumulator(globalState, { windowMs: 0, topN: 2 });
+        const callbackQueue = new CallbackQueue();
+        const subagentManager = new SubagentManager({ sessionsDir: join(dir, "sessions") });
+        const loop = new MainAgentLoop(accumulator, callbackQueue, subagentManager, {}, globalState);
+        subagentManager.getOrCreate("telegram:g1");
+
+        callbackQueue.enqueue({
+            taskId: "task-cb-ordinary",
+            chatId: "telegram:g1",
+            executionType: "CODEACT",
+            status: "COMPLETED",
+            summary: "ordinary callback done",
+            durationMs: 100,
+            createdAt: new Date().toISOString(),
+        });
+
+        let receivedEntries: AttentionQueueEntry[] = [];
+        let receivedCallbacks = 0;
+        loop.setMetaSessionHandler(async (entries, callbacks) => {
+            receivedEntries = entries;
+            receivedCallbacks = callbacks.length;
+            return { endReason: "end_turn", sessionDigest: "ordinary callback handled" };
+        });
+
+        const result = await loop.tick();
+
+        assert.equal(result.phase1Callbacks, 1);
+        assert.deepEqual(result.phase3Attended, ["telegram:g1"]);
+        assert.equal(receivedEntries[0]?.source, "DEFERRED_RE_ENTRY");
+        assert.equal(receivedCallbacks, 1);
+        globalState.dispose();
+    });
+
     it("wakes synthetic __meta__ turns for scheduler and proactive idle sources", async () => {
         const dir = tempDir();
         const globalState = new GlobalState({
