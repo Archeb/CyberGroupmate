@@ -257,12 +257,19 @@ export class MainAgentLoop {
             const uniqueEntries: AttentionQueueEntry[] = [];
             const callbacksForMeta: SubagentCallback[] = [];
             const attendedThisTick = new Set<string>();
+            const entryByChatId = new Map<string, AttentionQueueEntry>();
 
             for (const item of releasedItems) {
                 if (item.source !== "PROACTIVE_IDLE") {
                     this.lastNonIdleActivityAt = Date.now();
                 }
                 if (attendedThisTick.has(item.chatId)) {
+                    const existingEntry = entryByChatId.get(item.chatId);
+                    if (existingEntry && item.source === "TOPIC_SIGNAL") {
+                        mergeTopicSignalPayload(existingEntry, item.payload, item.pressure);
+                        log.debug("同 tick TOPIC_SIGNAL 合并到已有 attention entry", { chatId: item.chatId });
+                        continue;
+                    }
                     this.accumulator.requeue(item);
                     log.debug("同 tick 重复 chat，放回 accumulator", { chatId: item.chatId, layer: item.layer });
                     continue;
@@ -274,6 +281,7 @@ export class MainAgentLoop {
                 }
 
                 attendedThisTick.add(entry.chatId);
+                entryByChatId.set(entry.chatId, entry);
                 attended.push(entry.chatId);
                 uniqueEntries.push(entry);
                 if (item.source === "CALLBACK" && isSubagentCallback(item.payload)) {
@@ -419,7 +427,7 @@ export class MainAgentLoop {
             case "TOPIC_SIGNAL":
                 if (!subagent) return null;
                 entry = subagent.buildQueueEntry("TOPIC_SIGNAL");
-                if (!applyTopicSignalPayload(entry, item.payload)) {
+                if (!applyTopicSignalPayload(entry, item.payload, item.pressure)) {
                     return null;
                 }
                 break;
@@ -474,20 +482,60 @@ function isSubagentCallback(value: unknown): value is SubagentCallback {
         && typeof record.summary === "string";
 }
 
-function applyTopicSignalPayload(entry: AttentionQueueEntry, payload: unknown): boolean {
-    if (!payload || typeof payload !== "object") {
-        return false;
-    }
-    const topicDigest = (payload as { topicDigest?: unknown }).topicDigest;
-    if (!isTopicDigest(topicDigest)) {
+function applyTopicSignalPayload(entry: AttentionQueueEntry, payload: unknown, pressure?: number): boolean {
+    const topicDigest = extractTopicDigest(payload);
+    if (!topicDigest) {
         return false;
     }
 
     entry.topicDigests = [topicDigest];
-    entry.callbackPotential = topicDigest.callbackPotential ?? 0;
-    entry.hasHighCallbackPotential = (topicDigest.callbackPotential ?? 0) > 70;
-    entry.newMessageCount = Math.max(entry.newMessageCount, topicDigest.messageCount);
+    applyTopicSignalMetadata(entry, topicDigest, pressure);
     return true;
+}
+
+function mergeTopicSignalPayload(entry: AttentionQueueEntry, payload: unknown, pressure?: number): boolean {
+    const topicDigest = extractTopicDigest(payload);
+    if (!topicDigest) {
+        return false;
+    }
+
+    entry.topicDigests = [
+        topicDigest,
+        ...entry.topicDigests.filter((digest) => digest.topicId !== topicDigest.topicId),
+    ];
+    applyTopicSignalMetadata(entry, topicDigest, pressure);
+    return true;
+}
+
+function extractTopicDigest(payload: unknown): AttentionQueueEntry["topicDigests"][number] | null {
+    if (!payload || typeof payload !== "object") {
+        return null;
+    }
+    const topicDigest = (payload as { topicDigest?: unknown }).topicDigest;
+    if (!isTopicDigest(topicDigest)) {
+        return null;
+    }
+
+    return topicDigest;
+}
+
+function applyTopicSignalMetadata(
+    entry: AttentionQueueEntry,
+    topicDigest: AttentionQueueEntry["topicDigests"][number],
+    pressure?: number,
+): void {
+    entry.callbackPotential = Math.max(entry.callbackPotential ?? 0, topicDigest.callbackPotential ?? 0);
+    entry.hasHighCallbackPotential = (entry.callbackPotential ?? 0) > 70;
+    entry.newMessageCount = Math.max(entry.newMessageCount, topicDigest.messageCount);
+    if (typeof pressure === "number") {
+        const boundedPressure = Math.max(0, Math.min(100, pressure));
+        entry.priority = Math.max(entry.priority, boundedPressure);
+        entry.basePriority = Math.max(entry.basePriority, boundedPressure);
+    }
+    const signalLabel = `TOPIC_SIGNAL:${topicDigest.label}`;
+    entry.urgentSignals = entry.urgentSignals?.includes(signalLabel)
+        ? entry.urgentSignals
+        : [...(entry.urgentSignals ?? []), signalLabel];
 }
 
 function isTopicDigest(value: unknown): value is AttentionQueueEntry["topicDigests"][number] {

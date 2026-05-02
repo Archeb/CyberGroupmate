@@ -362,6 +362,61 @@ describe("MainAgentLoop meta session path", () => {
         globalState.dispose();
     });
 
+    it("merges same-chat topic signals into a direct-address turn", async () => {
+        const dir = tempDir();
+        const globalState = new GlobalState({
+            filePath: join(dir, "global-state.json"),
+            autoSaveInterval: 0,
+        });
+        const accumulator = new AttentionAccumulator(globalState, { windowMs: 0, topN: 3 });
+        const callbackQueue = new CallbackQueue();
+        const subagentManager = new SubagentManager({ sessionsDir: join(dir, "sessions") });
+        const loop = new MainAgentLoop(accumulator, callbackQueue, subagentManager, {}, globalState);
+        subagentManager.getOrCreate("telegram:g1");
+
+        accumulator.ingest(0, {
+            ...createDirectAddressItem("telegram:g1", { reason: "DM" }, 1),
+            pressure: 20,
+        });
+        accumulator.ingest(2, {
+            chatId: "telegram:g1",
+            source: "TOPIC_SIGNAL",
+            payload: {
+                topicDigest: {
+                    topicId: "topic-love-stickers",
+                    label: "爱心贴纸互动",
+                    summary: "用户请求继续发送爱心或喜欢主题贴纸。",
+                    state: "ACTIVE",
+                    participants: ["telegram:u1"],
+                    keywords: ["爱心", "贴纸"],
+                    messageCount: 1,
+                    lastActivityAt: new Date(2).toISOString(),
+                    triageReason: "用户明确提出亲昵互动请求。",
+                    callbackPotential: 100,
+                },
+            },
+            enqueuedAt: 2,
+            pressure: 90,
+        });
+
+        let receivedEntries: AttentionQueueEntry[] = [];
+        loop.setMetaSessionHandler(async (entries) => {
+            receivedEntries = entries;
+            return { endReason: "end_turn", sessionDigest: "merged" };
+        });
+
+        const result = await loop.tick();
+
+        assert.deepEqual(result.phase3Attended, ["telegram:g1"]);
+        assert.equal(receivedEntries.length, 1);
+        assert.equal(receivedEntries[0]?.source, "DIRECT_ADDRESS");
+        assert.deepEqual(receivedEntries[0]?.topicDigests.map((topic) => topic.topicId), ["topic-love-stickers"]);
+        assert.equal(receivedEntries[0]?.callbackPotential, 100);
+        assert.ok(receivedEntries[0]?.urgentSignals?.includes("TOPIC_SIGNAL:爱心贴纸互动"));
+        assert.equal(accumulator.getSignalPoolSize(), 0);
+        globalState.dispose();
+    });
+
     it("wakes synthetic __meta__ turns for scheduler and proactive idle sources", async () => {
         const dir = tempDir();
         const globalState = new GlobalState({
