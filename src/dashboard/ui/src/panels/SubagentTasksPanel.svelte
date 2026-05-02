@@ -132,7 +132,7 @@
     </div>
   </div>
 
-  <div class="task-detail card bg-base-100">
+  <div class="task-detail card bg-base-100 overflow-y-auto">
     <div class="card-body p-4 min-h-0">
       {#if selectedLoading}
         <h3 class="card-title text-sm">加载中...</h3>
