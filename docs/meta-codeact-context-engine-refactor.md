@@ -77,7 +77,7 @@ engine.registerAll(getMetaProviders());
 ```ts
 const historyContent = assistantMessage.content.replace(
     /```(?:ts|typescript)\n[\s\S]*?\n```/g, 
-    "```ts\n//code\n```"
+    ""
 );
 messages.push({ role: "assistant", content: historyContent, cacheBreakpoint: true }); // 如果有 breakpoint 逻辑
 ```

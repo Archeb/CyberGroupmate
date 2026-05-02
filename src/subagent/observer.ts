@@ -12,6 +12,7 @@
 
 import type { NotificationEvent } from "../event/notification-center.js";
 import type {
+    AttentionRecentMessage,
     SubagentConfig,
 } from "./types.js";
 import { DEFAULT_SUBAGENT_CONFIG } from "./types.js";
@@ -184,13 +185,7 @@ export class Observer {
      *
      * 返回最近 upTo 条 buffer 中的消息事件，供上下文构建使用。
      */
-    getMessageSnapshot(upTo: number = 20): Array<{
-        messageId: string;
-        userId: string;
-        displayName?: string;
-        text: string;
-        timestamp: string;
-    }> {
+    getMessageSnapshot(upTo: number = 20): AttentionRecentMessage[] {
         const slice = this.buffer.slice(-upTo);
         return slice.map(m => ({
             messageId: String(m.event.messageId ?? m.event.id ?? m.event._id ?? `${this.chatId}:${m.timestamp}`),
@@ -202,6 +197,9 @@ export class Observer {
                     : undefined,
             text: String(m.event.text ?? m.event.message ?? ""),
             timestamp: new Date(m.timestamp).toISOString(),
+            replyToMessageId: m.event.replyToMessageId ? String(m.event.replyToMessageId) : undefined,
+            mediaType: (m.event as any).mediaInfo?.type ?? undefined,
+            mediaInfo: (m.event as any).mediaInfo ? JSON.stringify((m.event as any).mediaInfo) : undefined,
         }));
     }
 

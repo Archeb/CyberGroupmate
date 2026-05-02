@@ -163,13 +163,29 @@ function formatProfileLine(profile: ActiveUserProfile): string {
     return `- ${profile.displayName}${mention}${aliases} (${tier}${rapport}${relation})${traits}${style}`;
 }
 
-function toRawMessage(message: AttentionRecentMessage): RawMessage {
+function toRawMessage(message: AttentionRecentMessage, messagesById?: Map<string, AttentionRecentMessage>): RawMessage {
+    const replyToMsgId = message.replyToMsgId ?? message.replyToMessageId;
+    const replyTarget = replyToMsgId ? messagesById?.get(replyToMsgId) : undefined;
     return {
         id: message.messageId,
         sender: message.displayName?.trim() || message.userId || "unknown",
         text: message.text,
         timestamp: message.timestamp,
+        replyTo: message.replyTo ?? (replyToMsgId
+            ? (replyTarget?.displayName?.trim() || replyTarget?.userId || `msg#${replyToMsgId}`)
+            : undefined),
+        replyToMsgId,
+        replyToText: message.replyToText,
+        mediaType: message.mediaType,
+        mediaInfo: message.mediaInfo,
     };
+}
+
+function formatMetaMessages(messages: AttentionRecentMessage[]): string[] {
+    const messagesById = new Map(messages.map((message) => [message.messageId, message]));
+    return messages.map((message) =>
+        formatMessageLine(toRawMessage(message, messagesById), { includeMediaTags: true })
+    );
 }
 
 export const metaHistoricalProvider: SectionProvider<MetaHistoricalData> = {
@@ -514,14 +530,14 @@ export const metaMessagesProvider: SectionProvider<MetaMessagesData> = {
         };
     },
     render(data) {
-        const lines = data.messages.map((message) => formatMessageLine(toRawMessage(message)));
+        const lines = formatMetaMessages(data.messages);
         return `## 新消息 (自上次关注以来, 共 ${data.newMessageCount} 条)\n${lines.join("\n")}`;
     },
     renderDelta(delta) {
         if (delta.messages.length === 0) {
             return "";
         }
-        const lines = delta.messages.map((message) => formatMessageLine(toRawMessage(message)));
+        const lines = formatMetaMessages(delta.messages);
         if (delta.fallbackToRecent) {
             return `## 最近消息上下文\n(无新消息增量；attention 已触发，兜底附上最近 ${delta.messages.length} 条消息)\n${lines.join("\n")}`;
         }

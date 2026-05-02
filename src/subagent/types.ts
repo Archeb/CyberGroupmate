@@ -77,6 +77,12 @@ export interface AttentionRecentMessage {
     displayName?: string;
     text: string;
     timestamp: string;
+    replyToMessageId?: string;
+    replyTo?: string;
+    replyToMsgId?: string;
+    replyToText?: string;
+    mediaType?: string;
+    mediaInfo?: string;
 }
 
 

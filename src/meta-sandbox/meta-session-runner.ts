@@ -12,7 +12,6 @@ const DEFAULT_MAX_TURNS = 10;
 const DEFAULT_CODE_TIMEOUT_MS = 30_000;
 const END_TURN_MARKER = "<end_turn>";
 const CODE_FENCE_LANGS = "typescript|ts|javascript|js";
-const CODE_BLOCK_IN_HISTORY_RE = /```(?:typescript|ts|javascript|js)\s*\n[\s\S]*?\n```/g;
 export const META_CODEACT_CHAT_ID = "__meta__";
 
 export interface MetaCodeActSessionMessage {
@@ -66,6 +65,11 @@ export interface ParsedMetaResponse {
     code?: string;
 }
 
+interface FirstCodeBlockMatch {
+    code: string;
+    start: number;
+}
+
 export type MetaLLMCaller = (
     messages: ChatMessage[],
     configs: LLMConfig[],
@@ -93,18 +97,16 @@ export function requestCancelMetaCodeActSession(): boolean {
 }
 
 export function parseMetaResponse(response: string): ParsedMetaResponse {
-    const codeBlockRegex = new RegExp("```(" + CODE_FENCE_LANGS + ")\\s*\\n([\\s\\S]*?)```", "g");
-    const firstMatch = codeBlockRegex.exec(response);
-    const code = firstMatch?.[2]?.trim();
-
-    const thinking = response
-        .replace(codeBlockRegex, "")
-        .replace(new RegExp(END_TURN_MARKER, "g"), "")
-        .trim();
+    const firstCodeBlock = findFirstCodeBlock(response);
+    if (firstCodeBlock) {
+        return {
+            thinking: stripEndTurnMarker(response.slice(0, firstCodeBlock.start)).trim(),
+            code: firstCodeBlock.code.trim(),
+        };
+    }
 
     return {
-        thinking,
-        code,
+        thinking: stripEndTurnMarker(response).trim(),
     };
 }
 
@@ -205,7 +207,15 @@ export async function runMetaSession(
             });
             const assistantMessage = response.content.trim();
             const parsed = parseMetaResponse(assistantMessage);
-            const hasEndTurn = assistantMessage.includes(END_TURN_MARKER);
+            const hasCode = Boolean(parsed.code);
+            let hasEndTurn = assistantMessage.includes(END_TURN_MARKER);
+            if (hasCode && hasEndTurn) {
+                log.info("Meta session code block included end_turn; ignoring end_turn until after observation", {
+                    sessionId,
+                    turn,
+                });
+                hasEndTurn = false;
+            }
 
             const turnRecord: MetaSessionTurn = {
                 turn,
@@ -216,7 +226,10 @@ export async function runMetaSession(
             };
 
             turns.push(turnRecord);
-            messages.push({ role: "assistant", content: stripCodeBlocksForHistory(assistantMessage) });
+            const assistantHistoryContent = buildAssistantHistoryContent(assistantMessage);
+            if (assistantHistoryContent) {
+                messages.push({ role: "assistant", content: assistantHistoryContent });
+            }
             syncMetaCodeActState(sessionId, messages, turns, true);
             emitMetaProgress(sessionId, {
                 turn,
@@ -296,10 +309,28 @@ function formatObservation(output: string): string {
     return `[MetaSandbox observation]\n${output}`;
 }
 
-function stripCodeBlocksForHistory(content: string): string {
-    return content
-        .replace(CODE_BLOCK_IN_HISTORY_RE, "[执行代码已剥离]")
-        .trim();
+function buildAssistantHistoryContent(content: string): string {
+    const firstCodeBlock = findFirstCodeBlock(content);
+    if (!firstCodeBlock) {
+        return content.trim();
+    }
+    return stripEndTurnMarker(content.slice(0, firstCodeBlock.start)).trim();
+}
+
+function findFirstCodeBlock(content: string): FirstCodeBlockMatch | null {
+    const codeBlockRegex = new RegExp("```(" + CODE_FENCE_LANGS + ")\\s*\\n([\\s\\S]*?)```");
+    const match = codeBlockRegex.exec(content);
+    if (!match) {
+        return null;
+    }
+    return {
+        code: match[2] ?? "",
+        start: match.index,
+    };
+}
+
+function stripEndTurnMarker(content: string): string {
+    return content.replace(new RegExp(END_TURN_MARKER, "g"), "");
 }
 
 function createEmptyMetaCodeActState(): MetaCodeActState {

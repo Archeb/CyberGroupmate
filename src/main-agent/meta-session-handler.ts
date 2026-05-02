@@ -352,14 +352,14 @@ async function buildMetaResolveContext(
 }
 
 function buildRecentMessageContext(
-    memory: Pick<IMemoryStoreV2, "getRecentMessages">,
+    memory: Pick<IMemoryStoreV2, "getRecentMessages"> & Partial<Pick<IMemoryStoreV2, "getMessageById">>,
     entry: AttentionQueueEntry,
     isSyntheticMeta: boolean,
 ): { messages?: AttentionRecentMessage[]; fallbackToRecent: boolean } {
     const shouldFallback = !isSyntheticMeta && entry.newMessageCount <= 0;
     if (!shouldFallback) {
         return entry.recentMessages
-            ? { messages: entry.recentMessages, fallbackToRecent: false }
+            ? { messages: enrichAttentionRecentMessages(memory, entry.chatId, entry.recentMessages), fallbackToRecent: false }
             : { fallbackToRecent: false };
     }
 
@@ -367,13 +367,16 @@ function buildRecentMessageContext(
         const recent = memory.getRecentMessages(entry.chatId, 20);
         if (recent.length > 0) {
             return {
-                messages: [...recent].reverse().map((message) => ({
+                messages: enrichAttentionRecentMessages(memory, entry.chatId, [...recent].reverse().map((message) => ({
                     messageId: message.messageId,
                     userId: message.userId,
                     displayName: message.displayName,
                     text: message.text,
                     timestamp: message.timestamp,
-                })),
+                    replyToMessageId: message.replyToMessageId,
+                    mediaType: message.mediaType,
+                    mediaInfo: message.mediaInfo,
+                }))),
                 fallbackToRecent: true,
             };
         }
@@ -382,8 +385,62 @@ function buildRecentMessageContext(
     }
 
     return entry.recentMessages
-        ? { messages: entry.recentMessages, fallbackToRecent: entry.recentMessages.length > 0 }
+        ? { messages: enrichAttentionRecentMessages(memory, entry.chatId, entry.recentMessages), fallbackToRecent: entry.recentMessages.length > 0 }
         : { fallbackToRecent: false };
+}
+
+function enrichAttentionRecentMessages(
+    memory: Pick<IMemoryStoreV2, "getRecentMessages"> & Partial<Pick<IMemoryStoreV2, "getMessageById">>,
+    chatId: string,
+    messages: AttentionRecentMessage[],
+): AttentionRecentMessage[] {
+    const byId = new Map(messages.map((message) => [message.messageId, message]));
+
+    return messages.map((message) => {
+        const replyToMsgId = message.replyToMsgId ?? message.replyToMessageId;
+        if (!replyToMsgId) {
+            return { ...message };
+        }
+
+        const inWindow = byId.get(replyToMsgId);
+        let replyTo = message.replyTo ?? inWindow?.displayName ?? inWindow?.userId;
+        let replyToText = message.replyToText;
+
+        if ((!replyTo || !replyToText) && memory.getMessageById) {
+            try {
+                const original = memory.getMessageById(chatId, replyToMsgId);
+                if (original) {
+                    replyTo = replyTo ?? original.displayName ?? original.userId;
+                    if (!inWindow && !replyToText) {
+                        replyToText = original.text || mediaPlaceholder(original.mediaType, original.mediaInfo);
+                    }
+                }
+            } catch (error) {
+                log.debug("解析 Meta recent reply 目标失败", { chatId, replyToMsgId, error: String(error) });
+            }
+        }
+
+        return {
+            ...message,
+            replyToMessageId: replyToMsgId,
+            replyToMsgId,
+            replyTo: replyTo ?? `msg#${replyToMsgId}`,
+            replyToText,
+        };
+    });
+}
+
+function mediaPlaceholder(mediaType?: string, mediaInfo?: string): string | undefined {
+    if (!mediaType) return undefined;
+    if (mediaType === "sticker") {
+        try {
+            const info = mediaInfo ? JSON.parse(mediaInfo) as { emoji?: string } : {};
+            return info.emoji ? `[贴纸: ${info.emoji}]` : "[贴纸]";
+        } catch {
+            return "[贴纸]";
+        }
+    }
+    return `[${mediaType}]`;
 }
 
 function enrichTopicDigests(

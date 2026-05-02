@@ -342,6 +342,12 @@ describe("createMetaSessionHandler", () => {
             },
             {
                 content: [
+                    "[SESSION_DIGEST]stored history after observation[/SESSION_DIGEST]",
+                    "<end_turn>",
+                ].join("\n"),
+            },
+            {
+                content: [
                     "[SESSION_DIGEST]reused prior history[/SESSION_DIGEST]",
                     "<end_turn>",
                 ].join("\n"),
@@ -405,18 +411,25 @@ describe("createMetaSessionHandler", () => {
         assert.ok(llmCalls[0]?.options?.contextManifest);
         assert.ok((llmCalls[0]?.options?.contextManifest?.sections?.length ?? 0) > 0);
 
-        const secondCallMessages = llmCalls[1]?.messages ?? [];
+        const secondCallMessages = llmCalls[2]?.messages ?? [];
         const priorPrompt = secondCallMessages.find((message) =>
             message.role === "user" && message.content.includes("# 注意力切换:")
         );
         assert.ok(priorPrompt);
         assert.match(priorPrompt.content, /# 历史 Session Digests/);
         assert.doesNotMatch(priorPrompt.content, /## 当前注意力元数据/);
-        const priorAssistant = secondCallMessages.find((message) => message.role === "assistant");
-        assert.ok(priorAssistant);
-        assert.match(priorAssistant.content, /先做一次查询/);
-        assert.doesNotMatch(priorAssistant.content, /console\.log/);
-        assert.match(priorAssistant.content, /<end_turn>/);
+        const priorQueryAssistant = secondCallMessages.find((message) =>
+            message.role === "assistant" && message.content.includes("先做一次查询")
+        );
+        assert.ok(priorQueryAssistant);
+        assert.doesNotMatch(priorQueryAssistant.content, /console\.log/);
+        assert.doesNotMatch(priorQueryAssistant.content, /<end_turn>/);
+
+        const priorFinalAssistant = secondCallMessages.find((message) =>
+            message.role === "assistant" && message.content.includes("stored history after observation")
+        );
+        assert.ok(priorFinalAssistant);
+        assert.match(priorFinalAssistant.content, /<end_turn>/);
 
         const priorObservation = secondCallMessages.find((message) =>
             message.role === "user" && /MetaSandbox observation/.test(message.content)

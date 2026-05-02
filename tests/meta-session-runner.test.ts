@@ -39,7 +39,7 @@ describe("parseMetaResponse", () => {
 
         assert.equal(parsed.code, "const value = 1;");
         assert.match(parsed.thinking, /Plan first/);
-        assert.match(parsed.thinking, /SESSION_DIGEST/);
+        assert.doesNotMatch(parsed.thinking, /SESSION_DIGEST/);
         assert.doesNotMatch(parsed.thinking, /end_turn/);
     });
 });
@@ -201,6 +201,75 @@ describe("runMetaSession", () => {
         assert.match(llmCalls[1][llmCalls[1].length - 1].content, /42/);
         assert.doesNotMatch(llmCalls[1][llmCalls[1].length - 2].content, /const value = 1/);
         assert.doesNotMatch(llmCalls[1][llmCalls[1].length - 2].content, /<end_turn>/);
+    });
+
+    it("ignores fabricated observations and extra code after the first code block", async () => {
+        const sandbox = new MetaSandbox({
+            tools: {
+                answer: async () => 42,
+            },
+        });
+        const llmCalls: ChatMessage[][] = [];
+        const responses: LLMResponse[] = [
+            {
+                content: [
+                    "Need one real lookup.",
+                    "",
+                    "```ts",
+                    "const value = await tools.answer();",
+                    "console.log(\"real\", value);",
+                    "return value;",
+                    "```",
+                    "",
+                    "[MetaSandbox observation]",
+                    "real 42",
+                    "",
+                    "Now I will dispatch based on the fake observation.",
+                    "",
+                    "```ts",
+                    "throw new Error(\"second block must not run\");",
+                    "```",
+                    "",
+                    "[SESSION_DIGEST]fake completed[/SESSION_DIGEST]",
+                    "<end_turn>",
+                ].join("\n"),
+            },
+            {
+                content: "Done.\n[SESSION_DIGEST]real observation handled[/SESSION_DIGEST]\n<end_turn>",
+            },
+        ];
+
+        const result = await runMetaSession(
+            [
+                { role: "system", content: "system" },
+                { role: "user", content: "user" },
+            ],
+            sandbox,
+            [TEST_LLM_CONFIG],
+            {
+                llmCaller: async (messages) => {
+                    llmCalls.push(messages.map((message) => ({ ...message })));
+                    const next = responses.shift();
+                    assert.ok(next);
+                    return next;
+                },
+            },
+        );
+
+        assert.equal(result.endReason, "end_turn");
+        assert.equal(result.turns[0]?.code, [
+            "const value = await tools.answer();",
+            "console.log(\"real\", value);",
+            "return value;",
+        ].join("\n"));
+        assert.match(result.turns[0]?.observation ?? "", /42/);
+        assert.equal(result.sessionDigest, "real observation handled");
+
+        const secondCallText = llmCalls[1]?.map((message) => message.content).join("\n\n") ?? "";
+        assert.match(secondCallText, /Need one real lookup/);
+        assert.doesNotMatch(secondCallText, /second block must not run/);
+        assert.doesNotMatch(secondCallText, /fake completed/);
+        assert.doesNotMatch(secondCallText, /Now I will dispatch/);
     });
 
     it("keeps requesting an explicit end_turn when the model emits no runnable code", async () => {
