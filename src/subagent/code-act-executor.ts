@@ -35,6 +35,7 @@ import type { MediaDownloader } from "../core/media-downloader.js";
 import type { ChatMessage } from "../core/llm.js";
 import { createLogger } from "../core/logger.js";
 import { getRawId, ensureCompositeId, getPlatform } from "../core/chat-id.js";
+import type { GlobalState } from "../main-agent/global-state.js";
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -234,6 +235,8 @@ export class CodeActExecutor {
 
     /** Memory 引用（层 1 用于刷新目标消息） */
     private memory: MemoryStoreV2 | null = null;
+    /** GlobalState 引用（用于同步 Meta Session Digest） */
+    private globalState: Pick<GlobalState, "getSessionDigests"> | null = null;
 
     constructor(chatId: string, config?: Partial<CodeActExecutorConfig>) {
         this.chatId = chatId;
@@ -292,6 +295,7 @@ export class CodeActExecutor {
         visionLlmConfig?: LLMConfig,
         mediaDownloader?: MediaDownloader,
         formatMention?: (rawUserId: string, username?: string) => string | undefined,
+        globalState?: Pick<GlobalState, "getSessionDigests">,
     ): void {
         this.sandboxPool = sandboxPool;
         this.nc = nc;
@@ -307,7 +311,8 @@ export class CodeActExecutor {
         this.sendTypingFn = sendTyping;
         this.mediaDownloader = mediaDownloader;
         this.formatMentionFn = formatMention;
-        log.info("setDependencies", { chatId: this.chatId, hasSandboxPool: true, hasVision: !!visionConfig, hasVisionLlm: !!visionLlmConfig, hasDownload: !!downloadFn, hasTyping: !!sendTyping, hasMediaDownloader: !!mediaDownloader, hasMention: !!formatMention });
+        this.globalState = globalState ?? this.globalState;
+        log.info("setDependencies", { chatId: this.chatId, hasSandboxPool: true, hasVision: !!visionConfig, hasVisionLlm: !!visionLlmConfig, hasDownload: !!downloadFn, hasTyping: !!sendTyping, hasMediaDownloader: !!mediaDownloader, hasMention: !!formatMention, hasGlobalState: !!this.globalState });
     }
 
     /**
@@ -537,6 +542,7 @@ export class CodeActExecutor {
             targetMessages,
             availableStickers: ctx.availableStickers,
             groundingContext: ctx.groundingContext,
+            sessionDigests: this.globalState?.getSessionDigests(),
         };
         // 重新计算 toneGuidance（避免上面的 ternary 混乱）
         resolveCtx.toneGuidance = toneGuidance || undefined;

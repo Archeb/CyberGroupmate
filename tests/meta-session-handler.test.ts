@@ -268,6 +268,9 @@ describe("createMetaSessionHandler", () => {
 
         const firstSystemPrompt = String(llmCalls[0]?.messages[0]?.content ?? "");
         assert.match(firstSystemPrompt, /可分配技能模块/);
+        assert.match(firstSystemPrompt, /tracking/);
+        assert.match(firstSystemPrompt, /remindAfterMinutes/);
+        assert.match(firstSystemPrompt, /dispatch\.taskToGroup/);
         assert.ok(llmCalls[0]?.options?.contextManifest);
         assert.ok((llmCalls[0]?.options?.contextManifest?.sections?.length ?? 0) > 0);
 

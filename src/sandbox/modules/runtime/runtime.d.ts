@@ -103,6 +103,27 @@ declare const runtime: {
     }>;
 
     /**
+     * 将当前任务升级给 Meta Agent 处理，并立即入队一次跨群 callback attention。
+     *
+     * 用于当前 subagent 视角无法完成的跨群/跨人/全局编排任务：例如需要查别的群、协调多个群、让 Meta 重新分派给其他群、或当前群写权限不足。
+     * request 必须写成详细自然语言，说明当前群、已经查到什么、卡在哪里、希望 Meta 做什么。
+     *
+     * @param request - 给 Meta Agent 的明确任务说明
+     * @param options - urgency=high 会提高本次唤醒优先级；data 可附带结构化上下文
+     * @returns { ok, id, enqueuedAt }
+     *
+     * @example
+     * await runtime.elevate("当前群有人问 D 群上周 API 网关结论。请 Meta 查 D 群历史，把结论派回本群。", {
+     *   urgency: "high",
+     *   data: { sourceTask: ctx.taskId, targetTopic: "API 网关" }
+     * });
+     */
+    elevate(request: string, options?: {
+        urgency?: "normal" | "high";
+        data?: unknown;
+    }): Promise<{ ok: true; id: string; enqueuedAt: string }>;
+
+    /**
      * 增加当前 CodeAct session 的可用轮次。
      *
      * 仅对当前 session（本轮任务）生效，不会持久化到下次任务。

@@ -57,6 +57,7 @@
 | **MCP** | `mcp.connect` / `call` / `list` / `disconnect`。连接信息持久化，重启自动重连 |
 | **一次性提醒** | `runtime.remind("自然语言描述", 分钟)`。1 min–365 天，到期唤醒新 session |
 | **周期任务** | `cron.add("名称", "cron表达式", "描述")` / `remove` / `list`。最短 1h，每群 ≤ 10 |
+| **升级给 Meta** | `runtime.elevate("自然语言请求", { urgency, data })`。当前群视角完成不了、需要跨群/全局编排时使用 |
 | **延长轮次** | `runtime.extendSteps(n)`。仅当前 session，下轮生效 |
 | **调整超时** | `runtime.modifyTimeout(ms)`。仅当前 session，下段代码生效 |
 | **终端并行** | `shell.detach("tabId")` 主终端移入后台 → 新主终端可继续 → `shell.read("tabId")` 查看后台输出 |
@@ -100,6 +101,14 @@ console.log(await runtime.remind("检查 ctx.pendingFile 是否已生成且大�
 **大文件发送前压缩** — 图片 > 5 MB 先压缩再发（`convert` / `ffmpeg` / PIL），避免上传超时。
 
 **看图分析** — 收到图片文件需理解内容时，用 `vision.see("path")` 获取描述再决策。
+
+**跨群升级** — 如果任务需要查别的群、协调多个群、调用只有 Meta 才能安全使用的全局视角，或你发现当前群上下文不足以完成，不要猜。用 `runtime.elevate()` 把球交回 Meta，并在 request 里写清：当前群发生了什么、你已经确认的信息、缺少什么、希望 Meta 做什么。升级后如果当前群需要知道进展，可以发一条克制的说明；不需要时直接总结 `<end_task>`。
+```javascript
+await runtime.elevate("当前群有人问 D 群上周 API 网关选型结论。请 Meta 查询 D 群历史，把可靠结论和来源派回当前群。", {
+  urgency: "high",
+  data: { sourceChatId: ctx.chatId, topic: "API 网关选型" }
+});
+```
 
 # 交互示例
 

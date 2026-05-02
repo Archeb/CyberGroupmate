@@ -125,50 +125,13 @@
     "typeDefs": "interface TodoItem {\n    key: string;\n    content: string;\n    dueAt: string | null;\n    createdAt: string;\n    updatedAt: string;\n    expired: boolean;\n}"
   },
   {
-    "name": "memory",
-    "description": "modules/memory.d.ts — 记忆检索模块类型定义。用于搜索核心事实、历史话题、聊天原文与互动记录。",
-    "methods": [
-      {
-        "name": "searchFacts",
-        "brief": "搜索核心事实。",
-        "fullDoc": "```typescript\nsearchFacts(query: string, options?: {\n        subject?: string;\n        categories?: string[];\n        limit?: number;\n    }): Promise<Array<{\n        factId: string;\n        subject: string;\n        category: string;\n        content: string;\n        confidence: number;\n        updatedAt: string;\n    }>>\n```\n\n\n搜索核心事实。适合回忆某个人的偏好、趣闻、关系或其他长期事实。"
-      },
-      {
-        "name": "searchTopics",
-        "brief": "搜索历史话题。",
-        "fullDoc": "```typescript\nsearchTopics(query: string, options?: {\n        chatId?: string;\n        after?: string;\n        before?: string;\n        limit?: number;\n    }): Promise<Array<{\n        topicId: string;\n        label: string;\n        summary: string;\n        callbackPotential: number;\n    }>>\n```\n\n\n搜索历史话题，返回话题标签、摘要和 callbackPotential。"
-      },
-      {
-        "name": "searchMessages",
-        "brief": "搜索聊天记录原文。",
-        "fullDoc": "```typescript\nsearchMessages(query: string, options?: {\n        chatId?: string;\n        userId?: string;\n        after?: string;\n        before?: string;\n        limit?: number;\n    }): Promise<Array<{\n        messageId: string;\n        displayName: string;\n        content: string;\n        timestamp: string;\n    }>>\n```\n\n\n搜索聊天记录原文。仅在需要引用原话或精确核对说法时使用。"
-      },
-      {
-        "name": "getUserProfile",
-        "brief": "获取用户画像。",
-        "fullDoc": "```typescript\ngetUserProfile(userId: string, chatId?: string): Promise<{\n        identity: unknown;\n        groupProfile: unknown;\n        recentFacts: unknown[];\n    }>\n```\n\n\n获取某个用户的身份、群内画像和近期相关事实。"
-      },
-      {
-        "name": "getRecentInteractions",
-        "brief": "获取近期互动记录。",
-        "fullDoc": "```typescript\ngetRecentInteractions(chatId?: string, userId?: string, limit?: number): Promise<Array<{\n        timestamp: string;\n        summary: string;\n        sentiment: string;\n    }>>\n```\n\n\n获取近期互动记录，适合判断最近聊过什么、气氛如何。"
-      },
-      {
-        "name": "semanticSearch",
-        "brief": "做模糊语义召回。",
-        "fullDoc": "```typescript\nsemanticSearch(query: string, options?: {\n        scope?: \"facts\" | \"topics\" | \"all\";\n        limit?: number;\n    }): Promise<Array<{\n        type: \"fact\" | \"topic\";\n        content: string;\n        score: number;\n    }>>\n```\n\n\n做模糊语义召回，适合只记得大概意思时使用。"
-      }
-    ],
-    "typeDefs": "interface MemoryModule {\n    searchFacts(query: string, options?: { subject?: string; categories?: string[]; limit?: number }): Promise<Array<{ factId: string; subject: string; category: string; content: string; confidence: number; updatedAt: string }>>;\n    searchTopics(query: string, options?: { chatId?: string; after?: string; before?: string; limit?: number }): Promise<Array<{ topicId: string; label: string; summary: string; callbackPotential: number }>>;\n    searchMessages(query: string, options?: { chatId?: string; userId?: string; after?: string; before?: string; limit?: number }): Promise<Array<{ messageId: string; displayName: string; content: string; timestamp: string }>>;\n    getUserProfile(userId: string, chatId?: string): Promise<{ identity: unknown; groupProfile: unknown; recentFacts: unknown[] }>;\n    getRecentInteractions(chatId?: string, userId?: string, limit?: number): Promise<Array<{ timestamp: string; summary: string; sentiment: string }>>;\n    semanticSearch(query: string, options?: { scope?: \"facts\" | \"topics\" | \"all\"; limit?: number }): Promise<Array<{ type: \"fact\" | \"topic\"; content: string; score: number }>>;\n}"
-  },
-  {
     "name": "mcp",
-    "description": "mcp-bridge.d.ts — MCP Server 连接器类型定义 连接外部 MCP (Model Context Protocol) Server，自动发现并代理其工具。 支持 stdio 和 Streamable HTTP 两种传输，连接由宿主进程全局持久化。",
+    "description": "mcp-bridge.d.ts — MCP Server 连接器类型定义 连接外部 MCP (Model Context Protocol) Server，自动发现并代理其工具。 支持 stdio 和 Streamable HTTP 两种传输。",
     "methods": [
       {
         "name": "connect",
-        "brief": "安装并连接一个全局 MCP Server。根据配置使用 stdio 或 Streamable HTTP 建立连接，自动发现所有 tools。",
-        "fullDoc": "```typescript\nconnect(config: {\n        /** 显示名称，也用作 tool 命名空间 */\n        name: string;\n        /** 传输方式。省略时：有 url 则视为 streamable-http，否则视为 stdio */\n        transport?: \"stdio\" | \"streamable-http\";\n        /** stdio 启动命令 */\n        command?: string;\n        /** stdio 命令参数 */\n        args?: string[];\n        /** stdio 环境变量（如 API keys） */\n        env?: Record<string, string>;\n        /** Streamable HTTP endpoint */\n        url?: string;\n        /** Streamable HTTP 附加请求头（如 Authorization） */\n        headers?: Record<string, string>;\n    }): Promise<{\n        name: string;\n        tools: Array<{ name: string; description: string }>;\n        /** 调用指定 tool */\n        call(toolName: string, args?: Record<string, unknown>): Promise<unknown>;\n    }>\n```\n\n\n安装并连接一个全局 MCP Server。\n根据配置使用 stdio 或 Streamable HTTP 建立连接，自动发现所有 tools。\n连接信息由宿主进程全局持久化，所有 sandbox / subagent 共享，直到显式断开。\n\n**参数：**\n- `config`: Server 配置\n- **返回值**: 包含 tools 列表和 call 方法的代理对象\n\n**示例：**\n```typescript\n// 连接 GitHub MCP Server\nconst github = await mcp.connect({\n  name: \"github\",\n  transport: \"streamable-http\",\n  url: \"https://example.com/mcp\",\n  headers: { Authorization: \"Bearer xxx\" }\n});\nconsole.log(\"可用工具:\", github.tools);\n\n// 调用 tool\nconst repos = await github.call(\"search_repositories\", { query: \"mcp typescript\" });\nconsole.log(repos);\n```"
+        "brief": "安装并连接一个 MCP Server。 根据配置使用 stdio 或 Streamable HTTP 建立连接，自动发现所有 tools。 连接信息会在宿主进程中全局持久化，所有 sandbox / subagent 共享， 直到显式调用 disconnect()。",
+        "fullDoc": "```typescript\nconnect(config: {\n        /** 显示名称，也用作 tool 命名空间 */\n        name: string;\n        /** 服务器用途描述，会展示给主 Agent 的模块名册 */\n        description?: string;\n        /** 传输方式。省略时：有 url 则视为 streamable-http，否则视为 stdio */\n        transport?: \"stdio\" | \"streamable-http\";\n        /** stdio 启动命令 */\n        command?: string;\n        /** stdio 命令参数 */\n        args?: string[];\n        /** stdio 环境变量（如 API keys） */\n        env?: Record<string, string>;\n        /** Streamable HTTP endpoint */\n        url?: string;\n        /** Streamable HTTP 附加请求头（如 Authorization） */\n        headers?: Record<string, string>;\n    }): Promise<{\n        name: string;\n        tools: Array<{ name: string; description: string }>;\n        /** 调用指定 tool */\n        call(toolName: string, args?: Record<string, unknown>): Promise<unknown>;\n    }>\n```\n\n\n安装并连接一个 MCP Server。\n根据配置使用 stdio 或 Streamable HTTP 建立连接，自动发现所有 tools。\n连接信息会在宿主进程中全局持久化，所有 sandbox / subagent 共享，\n直到显式调用 disconnect()。\n\n**参数：**\n- `config`: Server 配置\n- **返回值**: 包含 tools 列表和 call 方法的代理对象\n\n**示例：**\n```typescript\n// 连接 GitHub MCP Server\nconst github = await mcp.connect({\n  name: \"github\",\n  transport: \"streamable-http\",\n  url: \"https://example.com/mcp\",\n  headers: { Authorization: \"Bearer xxx\" }\n});\nconsole.log(\"可用工具:\", github.tools);\n\n// 调用 tool\nconst repos = await github.call(\"search_repositories\", { query: \"mcp typescript\" });\nconsole.log(repos);\n```"
       },
       {
         "name": "disconnect",
@@ -178,7 +141,7 @@
       {
         "name": "list",
         "brief": "列出所有全局已连接的 MCP Servers 及其工具",
-        "fullDoc": "```typescript\nlist(): Array<{\n        name: string;\n        transport: \"stdio\" | \"streamable-http\";\n        url?: string;\n        tools: string[];\n        running: boolean;\n    }>\n```\n\n\n列出所有全局已连接的 MCP Servers 及其工具\n\n**示例：**\n```typescript\nconst servers = mcp.list();\nfor (const s of servers) {\n  console.log(`${s.name}: ${s.tools.join(\", \")} (running: ${s.running})`);\n}\n```"
+        "fullDoc": "```typescript\nlist(): Array<{\n        name: string;\n        description?: string;\n        transport: \"stdio\" | \"streamable-http\";\n        url?: string;\n        tools: string[];\n        running: boolean;\n    }>\n```\n\n\n列出所有全局已连接的 MCP Servers 及其工具\n\n**示例：**\n```typescript\nconst servers = mcp.list();\nfor (const s of servers) {\n  console.log(`${s.name}: ${s.tools.join(\", \")} (running: ${s.running})`);\n}\n```"
       },
       {
         "name": "call",
@@ -186,6 +149,43 @@
         "fullDoc": "```typescript\ncall(serverName: string, toolName: string, args?: Record<string, unknown>): Promise<unknown>\n```\n\n\n直接调用指定 server 的 tool（无需先调用 connect 返回的代理对象）\n\n**参数：**\n- `serverName`: MCP Server 名称\n- `toolName`: 工具名称\n- `args`: 工具参数"
       }
     ]
+  },
+  {
+    "name": "memory",
+    "description": "modules/memory.d.ts — 记忆检索模块类型定义",
+    "methods": [
+      {
+        "name": "searchFacts",
+        "brief": "searchFacts(query, options?)",
+        "fullDoc": "```typescript\nsearchFacts(query: string, options?: {\n        subject?: string;\n        categories?: string[];\n        limit?: number;\n    }): Promise<Array<{\n        factId: string;\n        subject: string;\n        category: string;\n        content: string;\n        confidence: number;\n        updatedAt: string;\n    }>>\n```"
+      },
+      {
+        "name": "searchTopics",
+        "brief": "searchTopics(query, options?)",
+        "fullDoc": "```typescript\nsearchTopics(query: string, options?: {\n        chatId?: string;\n        after?: string;\n        before?: string;\n        limit?: number;\n    }): Promise<Array<{\n        topicId: string;\n        chatId: string;\n        label: string;\n        summary: string;\n        keywords: string[];\n        participants: string[];\n        startedAt: string;\n        endedAt: string | null;\n        callbackPotential: number;\n    }>>\n```"
+      },
+      {
+        "name": "searchMessages",
+        "brief": "searchMessages(query, options?)",
+        "fullDoc": "```typescript\nsearchMessages(query: string, options?: {\n        chatId?: string;\n        userId?: string;\n        after?: string;\n        before?: string;\n        limit?: number;\n    }): Promise<Array<{\n        messageId: string;\n        chatId: string;\n        userId: string;\n        displayName: string;\n        content: string;\n        timestamp: string;\n    }>>\n```"
+      },
+      {
+        "name": "getUserProfile",
+        "brief": "getUserProfile(userId, chatId?)",
+        "fullDoc": "```typescript\ngetUserProfile(userId: string, chatId?: string): Promise<{\n        identity: {\n            userId: string;\n            displayName: string;\n            username?: string;\n            aliases: string[];\n        } | null;\n        groupProfile: {\n            dunbarTier: number;\n            affinityScore: number;\n            traits: string[];\n            communicationStyle: string;\n            relationToAgent: string;\n        } | null;\n        recentFacts: Array<{\n            factId: string;\n            category: string;\n            content: string;\n        }>;\n    }>\n```"
+      },
+      {
+        "name": "getRecentInteractions",
+        "brief": "getRecentInteractions(chatId?, userId?, limit?)",
+        "fullDoc": "```typescript\ngetRecentInteractions(chatId?: string, userId?: string, limit?: number): Promise<Array<{\n        timestamp: string;\n        chatId: string;\n        userId: string;\n        type: string;\n        summary: string;\n        sentiment: string;\n        significance: number;\n    }>>\n```"
+      },
+      {
+        "name": "semanticSearch",
+        "brief": "semanticSearch(query, options?)",
+        "fullDoc": "```typescript\nsemanticSearch(query: string, options?: {\n        scope?: \"facts\" | \"topics\" | \"all\";\n        limit?: number;\n    }): Promise<Array<{\n        type: \"fact\" | \"topic\";\n        content: string;\n        score: number;\n    }>>\n```"
+      }
+    ],
+    "typeDefs": "interface MemoryModule {\n    searchFacts(query: string, options?: {\n        subject?: string;\n        categories?: string[];\n        limit?: number;\n    }): Promise<Array<{\n        factId: string;\n        subject: string;\n        category: string;\n        content: string;\n        confidence: number;\n        updatedAt: string;\n    }>>;\n\n    searchTopics(query: string, options?: {\n        chatId?: string;\n        after?: string;\n        before?: string;\n        limit?: number;\n    }): Promise<Array<{\n        topicId: string;\n        chatId: string;\n        label: string;\n        summary: string;\n        keywords: string[];\n        participants: string[];\n        startedAt: string;\n        endedAt: string | null;\n        callbackPotential: number;\n    }>>;\n\n    searchMessages(query: string, options?: {\n        chatId?: string;\n        userId?: string;\n        after?: string;\n        before?: string;\n        limit?: number;\n    }): Promise<Array<{\n        messageId: string;\n        chatId: string;\n        userId: string;\n        displayName: string;\n        content: string;\n        timestamp: string;\n    }>>;\n\n    getUserProfile(userId: string, chatId?: string): Promise<{\n        identity: {\n            userId: string;\n            displayName: string;\n            username?: string;\n            aliases: string[];\n        } | null;\n        groupProfile: {\n            dunbarTier: number;\n            affinityScore: number;\n            traits: string[];\n            communicationStyle: string;\n            relationToAgent: string;\n        } | null;\n        recentFacts: Array<{\n            factId: string;\n            category: string;\n            content: string;\n        }>;\n    }>;\n\n    getRecentInteractions(chatId?: string, userId?: string, limit?: number): Promise<Array<{\n        timestamp: string;\n        chatId: string;\n        userId: string;\n        type: string;\n        summary: string;\n        sentiment: string;\n        significance: number;\n    }>>;\n\n    semanticSearch(query: string, options?: {\n        scope?: \"facts\" | \"topics\" | \"all\";\n        limit?: number;\n    }): Promise<Array<{\n        type: \"fact\" | \"topic\";\n        content: string;\n        score: number;\n    }>>;\n}"
   },
   {
     "name": "onebot",
@@ -198,8 +198,8 @@
       },
       {
         "name": "sendMedia",
-        "brief": "发送媒体消息。支持本地文件路径或 URL。",
-        "fullDoc": "```typescript\nsendMedia(chatId: string | number, media: string | OneBotMediaPayload, opts?: { replyTo?: string | number; caption?: string }): Promise<OneBotMessageAck | null>\n```\n\n\n发送媒体消息。支持本地文件路径或 URL。\n\n**示例：**\n```typescript\nawait onebot.sendMedia(chatId, { type: \"image\", file: \"Downloads/a.png\", caption: \"图\" });\n```"
+        "brief": "发送媒体消息。支持本地文件路径或 URL。 当 `type` 为 `audio` / `voice` 时，QQ/NapCat 不支持 `replyTo`，该参数会被忽略。",
+        "fullDoc": "```typescript\nsendMedia(chatId: string | number, media: string | OneBotMediaPayload, opts?: { replyTo?: string | number; caption?: string }): Promise<OneBotMessageAck | null>\n```\n\n\n发送媒体消息。支持本地文件路径或 URL。\n当 `type` 为 `audio` / `voice` 时，QQ/NapCat 不支持 `replyTo`，该参数会被忽略。\n\n**示例：**\n```typescript\nawait onebot.sendMedia(chatId, { type: \"image\", file: \"Downloads/a.png\", caption: \"图\" });\n```"
       },
       {
         "name": "sendFile",
@@ -307,6 +307,11 @@
         "name": "remind",
         "brief": "设置一次性定时提醒（自然语言）。到期后 agent 将被唤醒并收到 description 作为新任务。重复定时提醒请用 cron ⚠️ description 必须是详细的自然语言描述，不是代码。 写清楚：要做什么、给谁发、发什么内容、如何获取信息等。 限制：最短 1 分钟，最长 365 天，每个群最多 10 个活跃提醒。",
         "fullDoc": "```typescript\nremind(description: string, delayMinutes: number): Promise<{\n        reminderId: string;\n        triggerAt: string;\n        items: Array<{\n            id: string;\n            type: \"reminder\" | \"cron\";\n            description: string;\n            triggerAt?: string;\n            cronExpr?: string;\n            taskDescription?: string;\n            createdAt: string;\n            triggered?: boolean;\n        }>;\n    }>\n```\n\n\n设置一次性定时提醒（自然语言）。到期后 agent 将被唤醒并收到 description 作为新任务。重复定时提醒请用 cron\n\n⚠️ description 必须是详细的自然语言描述，不是代码。\n写清楚：要做什么、给谁发、发什么内容、如何获取信息等。\n\n限制：最短 1 分钟，最长 365 天，每个群最多 10 个活跃提醒。\n\n**参数：**\n- `description`: 详细的自然语言任务描述\n- `delayMinutes`: 延迟分钟数（1 ~ 525600，即 365 天）\n- **返回值**: { reminderId, triggerAt }\n\n**示例：**\n```typescript\n// 3 分钟后提醒\nawait runtime.remind(\"提醒群友该起床了，用活泼的语气叫他\", 3);\n```\n\n```typescript\n// 1 小时后提醒\nawait runtime.remind(\"用 tavily 搜索刚才讨论的那个开源项目的最新版本，然后把结果发到群里\", 60);\n```"
+      },
+      {
+        "name": "elevate",
+        "brief": "将当前任务升级给 Meta Agent 处理，并立即入队一次跨群 callback attention。 用于当前 subagent 视角无法完成的跨群/跨人/全局编排任务：例如需要查别的群、协调多个群、让 Meta 重新分派给其他群、或当前群写权限不足。 request 必须写成详细自然语言，说明当前群、已经查到什么、卡在哪里、希望 Meta 做什么。",
+        "fullDoc": "```typescript\nelevate(request: string, options?: {\n        urgency?: \"normal\" | \"high\";\n        data?: unknown;\n    }): Promise<{ ok: true; id: string; enqueuedAt: string }>\n```\n\n\n将当前任务升级给 Meta Agent 处理，并立即入队一次跨群 callback attention。\n\n用于当前 subagent 视角无法完成的跨群/跨人/全局编排任务：例如需要查别的群、协调多个群、让 Meta 重新分派给其他群、或当前群写权限不足。\nrequest 必须写成详细自然语言，说明当前群、已经查到什么、卡在哪里、希望 Meta 做什么。\n\n**参数：**\n- `request`: 给 Meta Agent 的明确任务说明\n- `options`: urgency=high 会提高本次唤醒优先级；data 可附带结构化上下文\n- **返回值**: { ok, id, enqueuedAt }\n\n**示例：**\n```typescript\nawait runtime.elevate(\"当前群有人问 D 群上周 API 网关结论。请 Meta 查 D 群历史，把结论派回本群。\", {\n  urgency: \"high\",\n  data: { sourceTask: ctx.taskId, targetTopic: \"API 网关\" }\n});\n```"
       },
       {
         "name": "extendSteps",

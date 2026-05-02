@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { relative, resolve } from "node:path";
+import { randomUUID } from "node:crypto";
 import { ensureCompositeId, getPlatform } from "../core/chat-id.js";
 import {
     loadConfig,
@@ -15,6 +16,7 @@ import { describeImage, ensureSupportedFormat } from "../core/vision-processor.j
 import { MemoryStoreV2 } from "../memory-v2/index.js";
 import { embed } from "../memory-v2/embedding.js";
 import { GlobalState } from "../main-agent/global-state.js";
+import type { AttentionAccumulator } from "../accumulator/attention-accumulator.js";
 import type { PlatformAdapter } from "../adapter/platform-adapter.js";
 import { SandboxPool } from "./sandbox-pool.js";
 import { type Sandbox } from "./sandbox.js";
@@ -37,6 +39,7 @@ interface McpBridgeLike {
 interface CreateSandboxHostCallHandlerDeps {
     appConfig: AppConfig;
     globalState: GlobalState;
+    accumulator: AttentionAccumulator;
     memory: MemoryStoreV2;
     adapters: PlatformAdapter[];
     sandbox: Sandbox;
@@ -74,6 +77,7 @@ export function createSandboxHostCallHandler(chatId: string, deps: CreateSandbox
     const {
         appConfig,
         globalState,
+        accumulator,
         memory,
         adapters,
         sandbox,
@@ -213,6 +217,39 @@ export function createSandboxHostCallHandler(chatId: string, deps: CreateSandbox
             });
             log.info("runtime.remind 已设置", { id: event.id, chatId, triggerAt, description: description.slice(0, 80) });
             return { reminderId: event.id, triggerAt, items: listSchedulerItemsForRemind() };
+        }
+
+        if (method === "runtime.elevate") {
+            const [request, options] = args as [string, { urgency?: string; data?: unknown } | undefined];
+            const description = String(request ?? "").trim();
+            if (!description) {
+                throw new Error("runtime.elevate request 不能为空");
+            }
+            const urgency = options?.urgency === "high" ? "high" : "normal";
+            const now = Date.now();
+            const id = `elevate:${randomUUID()}`;
+            accumulator.ingest(0, {
+                chatId: "__meta__",
+                source: "WAKE_CONDITION",
+                enqueuedAt: now,
+                pressure: urgency === "high" ? 100 : 80,
+                payload: {
+                    id,
+                    type: "wake_condition",
+                    description,
+                    bindingId: chatId,
+                    callback: description,
+                    data: {
+                        type: "subagent_elevation",
+                        sourceChatId: chatId,
+                        urgency,
+                        data: options?.data ?? null,
+                    },
+                },
+            });
+            const enqueuedAt = new Date(now).toISOString();
+            log.info("runtime.elevate 已入队 Meta attention", { id, chatId, urgency, description: description.slice(0, 120) });
+            return { ok: true, id, enqueuedAt };
         }
 
         if (method === "runtime.env.list") {

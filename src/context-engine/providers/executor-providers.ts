@@ -37,6 +37,8 @@ export interface ExecutorResolveContext extends ResolveContext {
     targetMessages?: string;
     availableStickers?: Array<{ description: string; uniqueFileId: string }>;
     groundingContext?: string;
+    sessionDigests?: Array<{ createdAt: string; content: string }>;
+    sessionDigestLimit?: number;
     imageParts?: unknown[];
 }
 
@@ -193,6 +195,35 @@ function parseTargetMessages(text: string): ExecutorTargetMessagesData {
 function renderTargetMessagesBody(data: ExecutorTargetMessagesData): string {
     return data.entries.map(entry => entry.content).join("\n");
 }
+
+function clampSessionDigestLimit(value: unknown): number {
+    if (typeof value !== "number" || !Number.isFinite(value)) return 10;
+    return Math.max(1, Math.min(30, Math.floor(value)));
+}
+
+// ═══ 0. Meta Session Digests ═══
+
+/** Meta 历史 Session Digests — persistent（给 subagent 同步总编排者最近状态） */
+export const executorSessionDigestsProvider: SectionProvider<Array<{ createdAt: string; content: string }>> = {
+    schema: {
+        name: "executor.session_digests",
+        label: "Meta 历史 Session Digests",
+        source: "globalState.sessionDigests",
+        cache: "volatile",
+        history: "persistent",
+    },
+    resolve(ctx: ExecutorResolveContext) {
+        if (!ctx.sessionDigests?.length) return null;
+        const limit = clampSessionDigestLimit(ctx.sessionDigestLimit);
+        return ctx.sessionDigests.slice(-limit);
+    },
+    render(data) {
+        return [
+            "# 历史 Session Digests",
+            ...data.map((item) => `- [${item.createdAt}] ${item.content}`),
+        ].join("\n");
+    },
+};
 
 // ═══ 1. Task Header ═══
 
@@ -497,6 +528,7 @@ export const executorFooterProvider: SectionProvider<true> = {
 /** 获取 executor task prompt 的全部 providers（有序） */
 export function getExecutorTaskProviders(): SectionProvider[] {
     return [
+        executorSessionDigestsProvider,
         executorHeaderProvider,
         executorTopicSummaryProvider,
         executorPersonContextProvider,

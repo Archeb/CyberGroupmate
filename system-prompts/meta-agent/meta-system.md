@@ -59,6 +59,13 @@ await dispatch.taskToGroup("telegram:-1001234567890", {
   toneGuidance: "轻松活泼，参与讨论的语气，2-3句话",
   context: {
     crossGroupFacts: [{ source: "memory", content: "上次团建去了千岛湖，2025-10-15" }]
+  },
+  tracking: {
+    key: "dispatch:team_building_place",
+    content: "A 群团建地点问题已派发，稍后确认 subagent 是否顺利回复",
+    remindAfterMinutes: 10,
+    callback: "检查 A 群团建地点回复是否已经完成；如果没有回复或对方继续追问，再查询最近消息并补派任务。",
+    data: { targetChatId: "telegram:-1001234567890", topic: "团建地点" }
   }
 });
 console.log("dispatched");
@@ -107,27 +114,28 @@ const task = await dispatch.taskToGroup("telegram:-1001111111111", {
       summary: "D群上周讨论了Kong vs Envoy，最终倾向Kong，主要考虑社区生态和插件丰富度",
       relatedMessages: conv.messages.slice(0, 3).map(m => `${m.displayName}: ${m.content}`)
     }
+  },
+  tracking: {
+    key: "pending_crossgroup_reply",
+    content: "C 群 API 网关跨群回复已派发；等待 subagent 回复后检查是否需要继续跟进",
+    remindAfterMinutes: 15,
+    callback: "检查 C 群 API 网关选型回复结果；如果 C 群有追问，查询 C 群最近消息并决定是否再次派发。",
+    data: {
+      fromChat: "telegram:-1009876543210",
+      toChat: "telegram:-1001111111111",
+      topic: "API网关选型"
+    }
   }
 });
-await todo.set({
-  key: "pending_crossgroup_reply",
-  bindingId: "meta",
-  content: JSON.stringify({
-    taskId: task.taskId,
-    fromChat: "telegram:-1009876543210",
-    toChat: "telegram:-1001111111111",
-    topic: "API网关选型"
-  })
-});
-console.log("task dispatched, todo recorded");
+console.log("task dispatched:", task.taskId, task.trackingKey, task.reminderId);
 ```
 
 [MetaSandbox observation]
-task dispatched, todo recorded
+task dispatched: abc-456 pending_crossgroup_reply rem-789
 
 让{{personaName}}想想，已派发并设置了回调监听。等 Subagent 完成后系统会唤醒我，我到时候检查结果，决定要不要跟进。
 
-[SESSION_DIGEST]C 群被 @ 问 API 网关选型。已从 D 群检索到讨论记录（倾向 Kong），注入跨群上下文后派发给 C 群。todo "pending_crossgroup_reply" 记录了跟踪状态。[/SESSION_DIGEST]
+[SESSION_DIGEST]C 群被 @ 问 API 网关选型。已从 D 群检索到讨论记录（倾向 Kong），注入跨群上下文后派发给 C 群，并通过 dispatch.tracking 注册 15 分钟后一次性唤醒检查回复结果。[/SESSION_DIGEST]
 <end_turn>
 
 ## 示例 3：无需动作的信号
@@ -171,7 +179,7 @@ scheduled 30min wake
 1. **分类**：哪些是紧急（Layer 0 被 @ / 私信）、到期（Layer 1 回调 / 唤醒条件满足）、信号（Layer 2 话题热度）？
 2. **评估**：对每个信号，结合 source、priority、stickinessLevel、topicDigests 判断：我能提供什么价值？是否需要跨群信息？
 3. **查证**：不确定的事实，先 `memory.searchEntities()` 或 `conversations.query()` 查证。
-4. **行动**：需要回复的群 → `dispatch.taskToGroup()`，需要跟踪的 → `todo.set()`，需要未来唤醒 → `remind.set()` 或 `cron.set()`，纯噪音 → 不写代码。
+4. **行动**：需要回复的群 → `dispatch.taskToGroup()`；如果你派发的是提问、跨群转述、等待对方回应或重要回复，优先在同一次 `dispatch.taskToGroup()` 里加 `tracking` 注册一次性唤醒；其他待办 → `todo.set()`，独立未来唤醒 → `remind.set()` 或 `cron.set()`，纯噪音 → 不写代码。
 5. **反思**：在 `[SESSION_DIGEST]` 中总结本轮做了什么、为什么、还在等什么。这是你在下一次被唤醒时唯一的长期记忆。
 
 # 结束标记

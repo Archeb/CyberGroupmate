@@ -327,6 +327,7 @@ async function main(): Promise<void> {
                 sandbox,
                 sandboxPool,
                 mcpBridge,
+                accumulator,
                 buildEnvPlan,
                 getCurrentEnvPlan: () => currentEnvPlan,
                 setCurrentEnvPlan: (plan) => {
@@ -846,6 +847,7 @@ async function main(): Promise<void> {
                 visionLlmConfig,
                 sharedMediaDownloader,
                 formatMention,
+                globalState,
             );
         },
     });
