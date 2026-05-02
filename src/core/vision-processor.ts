@@ -60,8 +60,8 @@ export interface ProcessedMedia {
 
 /** Sticker 描述缓存接口 */
 export interface StickerCache {
-    getStickerDescription(uniqueFileId: string): { description: string; emoji?: string } | null;
-    setStickerDescription(uniqueFileId: string, description: string, emoji?: string, enabled?: boolean): void;
+    getStickerDescription(uniqueFileId: string): { description: string; emoji?: string; emojis?: string[] } | null;
+    setStickerDescription(uniqueFileId: string, description: string, emoji?: string | string[], enabled?: boolean): void;
 }
 
 /** 下载函数类型 */
@@ -521,10 +521,10 @@ async function processSingleSticker(
         const cached = stickerCache.getStickerDescription(sticker.uniqueFileId);
         if (cached) {
             log.debug("Sticker 缓存命中", { uniqueFileId: sticker.uniqueFileId });
-            const emojiTag = cached.emoji ?? sticker.emoji ?? "";
+            const emojiTag = formatEmojiTag(cached.emojis ?? cached.emoji ?? sticker.emoji);
             return {
                 index: sticker.messageIndex,
-                description: `[🎭 贴纸${emojiTag ? " " + emojiTag : ""}: ${cached.description}]`,
+                description: `[🎭 贴纸${emojiTag}: ${cached.description}]`,
             };
         }
     }
@@ -550,13 +550,13 @@ async function processSingleSticker(
         // 写入缓存 (vision_cache mode)
         if (mode === "vision_cache" && stickerCache) {
             const newDefault = config?.newStickerDefault !== "disabled";
-            stickerCache.setStickerDescription(sticker.uniqueFileId, result.description, result.emoji, newDefault);
+            stickerCache.setStickerDescription(sticker.uniqueFileId, result.description, result.emojis, newDefault);
         }
 
-        const emojiTag = result.emoji ?? sticker.emoji ?? "";
+        const emojiTag = formatEmojiTag(result.emojis.length > 0 ? result.emojis : (result.emoji ?? sticker.emoji));
         return {
             index: sticker.messageIndex,
-            description: `[🎭 贴纸${emojiTag ? " " + emojiTag : ""}: ${result.description}]`,
+            description: `[🎭 贴纸${emojiTag}: ${result.description}]`,
         };
     } catch (err) {
         log.warn("Sticker 识别失败，降级为 emoji", { uniqueFileId: sticker.uniqueFileId, error: String(err) });
@@ -593,14 +593,14 @@ export async function describeImage(
 }
 
 /**
- * 调用 Vision LLM 描述 Sticker，返回描述 + emoji
+ * 调用 Vision LLM 描述 Sticker，返回描述 + 多个 emoji 候选
  */
 async function describeSticker(
     stickerBuffer: Buffer,
     mimeType: string,
     visionConfigs: LLMConfig[],
     emoji?: string,
-): Promise<{ description: string; emoji?: string }> {
+): Promise<{ description: string; emoji?: string; emojis: string[] }> {
     const b64 = stickerBuffer.toString("base64");
     const dataUri = `data:${mimeType};base64,${b64}`;
 
@@ -612,10 +612,10 @@ async function describeSticker(
 
 请你：
 1. 用几个词简短描述贴纸表情/动作/含义。如果贴纸中有文字，结合图片内容理解并描述文字的完整内容。
-2. 选择一个最能代表这个贴纸含义的 emoji。
+2. 生成多个可用于匹配这个贴纸含义的 emoji 候选，输出为数组。候选数量无上限，但至少 2 个；包含主要情绪、近义情绪、动作/语气相关 emoji。若原始 emoji 合理，也应放入数组。
 
 请用以下 JSON 格式回复（仅返回 JSON，不要包含其他内容）：
-{"description": "描述内容", "emoji": "单个emoji"}`,
+{"description": "描述内容", "emojis": ["emoji1", "emoji2", "..."]}`,
             imageParts: [{ url: dataUri }],
         },
     ];
@@ -627,14 +627,44 @@ async function describeSticker(
     try {
         const jsonStr = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
         const parsed = JSON.parse(jsonStr);
+        const emojis = normalizeEmojiCandidates(parsed.emojis ?? parsed.emoji, emoji);
         return {
             description: normalizeVisionDescription(String(parsed.description ?? raw)),
-            emoji: typeof parsed.emoji === "string" ? parsed.emoji : undefined,
+            emoji: emojis[0] ?? (typeof parsed.emoji === "string" ? parsed.emoji : undefined),
+            emojis,
         };
     } catch {
         log.debug("describeSticker: JSON 解析失败，使用原始文本", { raw: raw.slice(0, 100) });
-        return { description: normalizeVisionDescription(raw) };
+        return {
+            description: normalizeVisionDescription(raw),
+            emoji,
+            emojis: normalizeEmojiCandidates(undefined, emoji),
+        };
     }
+}
+
+function normalizeEmojiCandidates(value: unknown, fallback?: string): string[] {
+    const candidates: string[] = [];
+    const add = (item: unknown) => {
+        if (typeof item !== "string") return;
+        const trimmed = item.trim();
+        if (!trimmed || candidates.includes(trimmed)) return;
+        candidates.push(trimmed);
+    };
+
+    if (Array.isArray(value)) {
+        for (const item of value) add(item);
+    } else {
+        add(value);
+    }
+    add(fallback);
+
+    return candidates;
+}
+
+function formatEmojiTag(value?: string | string[]): string {
+    const emojis = normalizeEmojiCandidates(value);
+    return emojis.length > 0 ? ` ${emojis.join(" ")}` : "";
 }
 
 /**

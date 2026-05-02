@@ -87,7 +87,7 @@ export interface AttentionQueueEntry {
     /** 群组 chatId */
     chatId: string;
     /** 来源标记 (subagent.md §2.2) */
-    source: 'DIGEST_UPDATE' | 'OBSERVER_ALERT' | 'DEFERRED_RE_ENTRY' | 'DIRECT_ADDRESS' | 'SCHEDULED_REVISIT' | 'SCHEDULER_TRIGGER' | 'PROACTIVE_IDLE';
+    source: 'DIGEST_UPDATE' | 'OBSERVER_ALERT' | 'DEFERRED_RE_ENTRY' | 'DIRECT_ADDRESS' | 'SCHEDULED_REVISIT' | 'SCHEDULER_TRIGGER' | 'PROACTIVE_IDLE' | 'TOPIC_SIGNAL';
     /** 当前优先级分数 (0-100) */
     priority: number;
     /** 基础优先级（不含时间衰减） */
@@ -340,8 +340,8 @@ export interface GroupContextPackage {
     toneGuidance?: string;
     /** 回复方向 */
     contentDirection?: string;
-    /** 可用贴纸目录（emoji + 描述 + 本地文件路径） */
-    availableStickers?: Array<{ emoji: string; description: string; uniqueFileId: string }>;
+    /** 可用贴纸目录（emoji 候选 + 描述 + 本地文件路径） */
+    availableStickers?: Array<{ emoji?: string; emojis?: string[]; description: string; uniqueFileId: string }>;
     /** 并行 Grounding 查证结果（联网搜索得到的事实信息） */
     groundingContext?: string;
 }

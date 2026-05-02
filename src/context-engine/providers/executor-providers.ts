@@ -35,7 +35,7 @@ export interface ExecutorResolveContext extends ResolveContext {
     personContext?: string;
     memoryContext?: string;
     targetMessages?: string;
-    availableStickers?: Array<{ description: string; uniqueFileId: string }>;
+    availableStickers?: Array<{ emoji?: string; emojis?: string[]; description: string; uniqueFileId: string }>;
     groundingContext?: string;
     sessionDigests?: Array<{ createdAt: string; content: string }>;
     sessionDigestLimit?: number;
@@ -470,7 +470,11 @@ export const executorStickersProvider: SectionProvider<string> = {
     resolve(ctx: ExecutorResolveContext) {
         if (!ctx.availableStickers?.length) return null;
         return ctx.availableStickers
-            .map(s => `- ${s.description} (uniqueFileId: ${s.uniqueFileId})`)
+            .map(s => {
+                const emojis = s.emojis?.length ? s.emojis : (s.emoji ? [s.emoji] : []);
+                const emojiText = emojis.length ? `${emojis.join(" ")} ` : "";
+                return `- ${emojiText}${s.description} (uniqueFileId: ${s.uniqueFileId})`;
+            })
             .join("\n");
     },
     render(data) {

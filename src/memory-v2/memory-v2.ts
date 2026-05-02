@@ -69,6 +69,31 @@ function fromJSON<T>(raw: string | null | undefined, fallback: T): T {
     }
 }
 
+function normalizeEmojiCandidates(value: unknown): string[] {
+    const candidates: string[] = [];
+    const add = (item: unknown) => {
+        if (typeof item !== "string") return;
+        const trimmed = item.trim();
+        if (!trimmed || candidates.includes(trimmed)) return;
+        candidates.push(trimmed);
+    };
+
+    if (Array.isArray(value)) {
+        for (const item of value) add(item);
+    } else {
+        add(value);
+    }
+
+    return candidates;
+}
+
+function normalizeStoredEmojis(rawEmojis: string | null | undefined, legacyEmoji?: string | null): string[] {
+    return normalizeEmojiCandidates([
+        ...fromJSON<unknown[]>(rawEmojis, []),
+        ...(legacyEmoji ? [legacyEmoji] : []),
+    ]);
+}
+
 function now(): string {
     return new Date().toISOString();
 }
@@ -414,6 +439,8 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
         `);
         // 新增 emoji 列（兼容旧数据库）
         try { this.db.exec(`ALTER TABLE sticker_descriptions ADD COLUMN emoji TEXT`); } catch { /* 列已存在 */ }
+        // 新增 emojis 列：JSON 数组，保留 emoji 列作为旧结构主 emoji
+        try { this.db.exec(`ALTER TABLE sticker_descriptions ADD COLUMN emojis TEXT`); } catch { /* 列已存在 */ }
         // 新增 enabled 列（默认启用，兼容旧数据库）
         try { this.db.exec(`ALTER TABLE sticker_descriptions ADD COLUMN enabled INTEGER DEFAULT 1`); } catch { /* 列已存在 */ }
 
@@ -2278,35 +2305,46 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
 
     // ── Sticker 描述缓存 ──
 
-    getStickerDescription(uniqueFileId: string): { description: string; emoji?: string } | null {
+    getStickerDescription(uniqueFileId: string): { description: string; emoji?: string; emojis?: string[] } | null {
         const row = this.db.prepare(
-            "SELECT description, emoji FROM sticker_descriptions WHERE unique_file_id = ?"
-        ).get(uniqueFileId) as { description: string; emoji?: string } | undefined;
+            "SELECT description, emoji, emojis FROM sticker_descriptions WHERE unique_file_id = ?"
+        ).get(uniqueFileId) as { description: string; emoji?: string; emojis?: string } | undefined;
         if (!row) return null;
-        return { description: row.description, emoji: row.emoji ?? undefined };
+        const emojis = normalizeStoredEmojis(row.emojis, row.emoji);
+        return {
+            description: row.description,
+            emoji: emojis[0] ?? row.emoji ?? undefined,
+            emojis,
+        };
     }
 
-    setStickerDescription(uniqueFileId: string, description: string, emoji?: string, enabled?: boolean): void {
+    setStickerDescription(uniqueFileId: string, description: string, emoji?: string | string[], enabled?: boolean): void {
         const ts = now();
         const enabledValue = enabled === false ? 0 : 1;
+        const emojis = normalizeEmojiCandidates(emoji);
+        const primaryEmoji = emojis[0] ?? (typeof emoji === "string" ? emoji : undefined);
         this.db.prepare(`
-            INSERT OR REPLACE INTO sticker_descriptions (unique_file_id, description, emoji, enabled, created_at)
-            VALUES (?, ?, ?, ?, ?)
-        `).run(uniqueFileId, description, emoji ?? null, enabledValue, ts);
-        log.debug("setStickerDescription", { uniqueFileId, emoji, enabled: enabledValue, descPreview: description.slice(0, 50) });
+            INSERT OR REPLACE INTO sticker_descriptions (unique_file_id, description, emoji, emojis, enabled, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+        `).run(uniqueFileId, description, primaryEmoji ?? null, emojis.length > 0 ? toJSON(emojis) : null, enabledValue, ts);
+        log.debug("setStickerDescription", { uniqueFileId, emoji: primaryEmoji, emojis, enabled: enabledValue, descPreview: description.slice(0, 50) });
     }
 
-    getAllStickerDescriptions(): Array<{ uniqueFileId: string; description: string; emoji?: string; enabled: boolean; createdAt: string }> {
+    getAllStickerDescriptions(): Array<{ uniqueFileId: string; description: string; emoji?: string; emojis?: string[]; enabled: boolean; createdAt: string }> {
         const rows = this.db.prepare(
-            "SELECT unique_file_id, description, emoji, enabled, created_at FROM sticker_descriptions ORDER BY created_at DESC"
-        ).all() as Array<{ unique_file_id: string; description: string; emoji?: string; enabled: number; created_at: string }>;
-        return rows.map(r => ({
-            uniqueFileId: r.unique_file_id,
-            description: r.description,
-            emoji: r.emoji ?? undefined,
-            enabled: r.enabled !== 0,
-            createdAt: r.created_at,
-        }));
+            "SELECT unique_file_id, description, emoji, emojis, enabled, created_at FROM sticker_descriptions ORDER BY created_at DESC"
+        ).all() as Array<{ unique_file_id: string; description: string; emoji?: string; emojis?: string; enabled: number; created_at: string }>;
+        return rows.map(r => {
+            const emojis = normalizeStoredEmojis(r.emojis, r.emoji);
+            return {
+                uniqueFileId: r.unique_file_id,
+                description: r.description,
+                emoji: emojis[0] ?? r.emoji ?? undefined,
+                emojis,
+                enabled: r.enabled !== 0,
+                createdAt: r.created_at,
+            };
+        });
     }
 
     deleteStickerDescription(uniqueFileId: string): boolean {
@@ -2316,17 +2354,19 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
         return result.changes > 0;
     }
 
-    updateStickerDescription(uniqueFileId: string, description: string, emoji?: string, enabled?: boolean): boolean {
+    updateStickerDescription(uniqueFileId: string, description: string, emoji?: string | string[], enabled?: boolean): boolean {
         const ts = now();
+        const emojis = normalizeEmojiCandidates(emoji);
+        const primaryEmoji = emojis[0] ?? (typeof emoji === "string" ? emoji : undefined);
         if (enabled !== undefined) {
             const result = this.db.prepare(
-                "UPDATE sticker_descriptions SET description = ?, emoji = ?, enabled = ?, created_at = ? WHERE unique_file_id = ?"
-            ).run(description, emoji ?? null, enabled ? 1 : 0, ts, uniqueFileId);
+                "UPDATE sticker_descriptions SET description = ?, emoji = ?, emojis = ?, enabled = ?, created_at = ? WHERE unique_file_id = ?"
+            ).run(description, primaryEmoji ?? null, emojis.length > 0 ? toJSON(emojis) : null, enabled ? 1 : 0, ts, uniqueFileId);
             return result.changes > 0;
         }
         const result = this.db.prepare(
-            "UPDATE sticker_descriptions SET description = ?, emoji = ?, created_at = ? WHERE unique_file_id = ?"
-        ).run(description, emoji ?? null, ts, uniqueFileId);
+            "UPDATE sticker_descriptions SET description = ?, emoji = ?, emojis = ?, created_at = ? WHERE unique_file_id = ?"
+        ).run(description, primaryEmoji ?? null, emojis.length > 0 ? toJSON(emojis) : null, ts, uniqueFileId);
         return result.changes > 0;
     }
 
@@ -2340,17 +2380,26 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
 
     /** 根据 emoji 列表批量查找匹配的已知贴纸（用于贴纸发送功能） */
     searchStickersByEmoji(emojis: string[], limit = 10): Array<{ uniqueFileId: string; description: string; emoji: string; enabled: boolean }> {
-        if (emojis.length === 0) return [];
-        const placeholders = emojis.map(() => "?").join(", ");
+        const queryEmojis = normalizeEmojiCandidates(emojis);
+        if (queryEmojis.length === 0) return [];
+        const wanted = new Set(queryEmojis);
         const rows = this.db.prepare(
-            `SELECT unique_file_id, description, emoji, enabled FROM sticker_descriptions WHERE emoji IN (${placeholders}) LIMIT ?`
-        ).all(...emojis, limit) as Array<{ unique_file_id: string; description: string; emoji: string; enabled: number }>;
-        return rows.map(r => ({
-            uniqueFileId: r.unique_file_id,
-            description: r.description,
-            emoji: r.emoji,
-            enabled: r.enabled !== 0,
-        }));
+            "SELECT unique_file_id, description, emoji, emojis, enabled FROM sticker_descriptions ORDER BY created_at DESC"
+        ).all() as Array<{ unique_file_id: string; description: string; emoji: string | null; emojis: string | null; enabled: number }>;
+        const result: Array<{ uniqueFileId: string; description: string; emoji: string; enabled: boolean }> = [];
+        for (const r of rows) {
+            const storedEmojis = normalizeStoredEmojis(r.emojis, r.emoji ?? undefined);
+            const matchedEmoji = storedEmojis.find(item => wanted.has(item));
+            if (!matchedEmoji) continue;
+            result.push({
+                uniqueFileId: r.unique_file_id,
+                description: r.description,
+                emoji: matchedEmoji,
+                enabled: r.enabled !== 0,
+            });
+            if (result.length >= limit) break;
+        }
+        return result;
     }
 
     // ── Dashboard CRUD 方法 ──

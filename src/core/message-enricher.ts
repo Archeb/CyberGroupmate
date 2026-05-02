@@ -274,7 +274,8 @@ export async function resolveReplyText(
     if (origMsg.mediaType === "sticker" && deps?.stickerCache && info.uniqueFileId) {
         const cached = deps.stickerCache.getStickerDescription(info.uniqueFileId as string);
         if (cached) {
-            const emoji = (info.emoji as string) ? `${info.emoji} ` : "";
+            const emojiCandidates = cached.emojis?.length ? cached.emojis : [info.emoji as string | undefined].filter(Boolean) as string[];
+            const emoji = emojiCandidates.length ? `${emojiCandidates.join(" ")} ` : "";
             return `[🎭 贴纸: ${emoji}${cached.description}]`;
         }
     }

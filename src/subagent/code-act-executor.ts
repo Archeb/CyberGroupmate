@@ -512,6 +512,9 @@ export class CodeActExecutor {
 
         // 3. 渲染系统 prompt (subagent.md §12.2 ➎ — 稳定部分，保持 Mustache 模板)
         const currentConfig = loadConfig();
+        const availableStickers = ctx.availableStickers?.length
+            ? ctx.availableStickers
+            : this.buildAvailableStickers(task);
         const baseSkills = currentConfig.subagent?.baseSkills ?? [
             "runtime", "fs", "skills", "mcp", "cron", "todo", "memory", "vision", "shell",
         ];
@@ -549,7 +552,7 @@ export class CodeActExecutor {
             personContext,
             memoryContext: memoryContextText || undefined,
             targetMessages,
-            availableStickers: ctx.availableStickers,
+            availableStickers,
             groundingContext: ctx.groundingContext,
             sessionDigests: this.globalState?.getSessionDigests(),
         };
@@ -761,6 +764,34 @@ export class CodeActExecutor {
         });
 
         return callback;
+    }
+
+    private buildAvailableStickers(task: CodeActReplyTask): Array<{ emoji?: string; emojis?: string[]; description: string; uniqueFileId: string }> | undefined {
+        if (!this.memory) return undefined;
+
+        const suggestedEmojis = task.decisions.flatMap(decision => decision.suggestedEmojis ?? []);
+        if (suggestedEmojis.length === 0) return undefined;
+
+        const matches = this.memory.searchStickersByEmoji(suggestedEmojis, 12);
+        const seen = new Set<string>();
+        const stickers: Array<{ emoji?: string; emojis?: string[]; description: string; uniqueFileId: string }> = [];
+
+        for (const match of matches) {
+            if (!match.enabled || seen.has(match.uniqueFileId)) continue;
+            const filePath = this.mediaDownloader?.getExistingPath(match.uniqueFileId);
+            if (filePath && filePath.toLowerCase().endsWith(".webm")) continue;
+
+            const cached = this.memory.getStickerDescription(match.uniqueFileId);
+            stickers.push({
+                uniqueFileId: match.uniqueFileId,
+                description: match.description,
+                emoji: match.emoji,
+                emojis: cached?.emojis?.length ? cached.emojis : [match.emoji],
+            });
+            seen.add(match.uniqueFileId);
+        }
+
+        return stickers.length > 0 ? stickers : undefined;
     }
 
     /**
