@@ -119,8 +119,10 @@ async function buildMetaMessages(
     const ephemeralParts: string[] = [];
     const renderTrees: SectionNode[][] = [];
 
+    const isProactiveIdle = entries.some((entry) => entry.source === "PROACTIVE_IDLE");
     const globalRender = engine.render({
         sessionDigests: deps.globalState.getSessionDigests(),
+        sessionDigestLimit: isProactiveIdle ? 30 : undefined,
         todos: buildGlobalTodos(deps.memory),
         callbacks,
     });
@@ -145,7 +147,7 @@ async function buildMetaMessages(
         }
     }
 
-    const proactiveInstruction = entries.some((entry) => entry.source === "PROACTIVE_IDLE")
+    const proactiveInstruction = isProactiveIdle
         ? loadPromptFile("meta-agent/proactive-idle.md")
         : null;
     const instructionRender = engine.render({
@@ -446,6 +448,7 @@ await memory.searchEntities(query: string, options?: {
 }): Promise<{
   identities: { identity: { userId, aliases, displayName }, profile: { recentFacts, dunbarTier } }[],
   recentSessions: { topicId, chatId, label, summary, keywords, participants }[],
+  sessionDigests: { createdAt, content }[],
   coreFacts: { factId, subject, content, category, updatedAt }[],
   topicKeywords: string[]
 }>
@@ -471,10 +474,17 @@ await dispatch.taskToGroup(chatId: string, taskSpec: {
   contentDirection: string,  // 必填：行动方向，告诉 Subagent 往哪个方向回复
   toneGuidance?: string,     // 语气指导（轻松 / 正式 / 简短等）
   context?: any,             // 跨群上下文，直接注入给 Subagent 的 prompt
-  useSkills?: string[]       // 需要额外加载的 Skill 模块名
-}): Promise<{ taskId: string }>
+  useSkills?: string[],      // 需要额外加载的 Skill 模块名
+  tracking?: {               // 可选：派发后自动记录待跟进 todo / remind
+    key?: string,            // 默认 dispatch:<taskId>
+    content: string,         // 待跟进内容
+    remindAfterMinutes?: number,
+    callback?: string,       // reminder 唤醒后给 meta 的明确动作
+    data?: any               // 附带结构化数据
+  }
+}): Promise<{ taskId: string, trackingKey?: string, reminderId?: string }>
 \`\`\`
-dispatch 会自动将 context 序列化后注入 Subagent 的任务 prompt。你查到的跨群信息、事实、讨论记录都可以放在 context 里。
+dispatch 会自动将 context 序列化后注入 Subagent 的任务 prompt。你查到的跨群信息、事实、讨论记录都可以放在 context 里。tracking 会把待跟进项写入 todo，bindingId 为目标 chatId；如果设置 remindAfterMinutes，还会注册一次性唤醒。
 
 ## todo — 跨会话/跨绑定 Todo
 

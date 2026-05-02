@@ -290,4 +290,41 @@ describe("createMetaSessionHandler", () => {
         );
         assert.ok(priorObservation);
     });
+
+    it("renders 30 recent session digests for proactive idle", async () => {
+        const sandbox = new MetaSandbox({});
+        const llmCalls: ChatMessage[][] = [];
+        const digests = Array.from({ length: 35 }, (_, index) => ({
+            createdAt: `2026-05-01T${String(index).padStart(2, "0")}:00:00.000Z`,
+            content: `digest ${index + 1}`,
+        }));
+        const handler = createMetaSessionHandler({
+            getPersona: () => ({ name: "测试编排者", description: "验证 proactive digest limit" }),
+            globalState: {
+                getSessionDigests: () => digests,
+                getMetaSessionHistory: () => [],
+                appendMetaSessionHistory: () => undefined,
+            },
+            memory: createMemoryStub() as any,
+            sandbox,
+            getLlmConfigs: () => [TEST_LLM_CONFIG],
+            llmCaller: async (messages): Promise<LLMResponse> => {
+                llmCalls.push(messages.map((message) => ({ ...message })));
+                return {
+                    content: "[SESSION_DIGEST]proactive noop[/SESSION_DIGEST]\n<end_turn>",
+                };
+            },
+        });
+
+        await handler([{ ...createEntry(), source: "PROACTIVE_IDLE" }], []);
+
+        const prompt = llmCalls[0]
+            ?.filter((message) => message.role === "user")
+            .map((message) => message.content)
+            .join("\n\n") ?? "";
+        assert.match(prompt, /digest 6/);
+        assert.match(prompt, /digest 35/);
+        assert.doesNotMatch(prompt, /digest 5/);
+        assert.match(prompt, /主动巡视/);
+    });
 });

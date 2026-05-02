@@ -7,13 +7,11 @@
  * - accumulator.getActiveCount()             — 注意力队列长度
  * - q5.peek().length                         — 回调队列积压
  * - mainLoop.isRunning() / getTickCount()    — 主循环状态
- * - feedbackLoop.getActiveWindows().length   — 追问窗口数
  */
 
 import type { SandboxPool } from "../../sandbox/sandbox-pool.js";
 import type { CallbackQueue } from "../../subagent/callback-queue.js";
 import type { MainAgentLoop } from "../../main-agent/main-agent-loop.js";
-import type { FeedbackLoop } from "../../pipeline/feedback-loop.js";
 import type { AttentionAccumulator } from "../../accumulator/attention-accumulator.js";
 
 import {
@@ -23,7 +21,6 @@ import {
     sandboxPoolIdle,
     accumulatorQueueSize,
     q5CallbackPending,
-    feedbackLoopWindowsActive,
     processUptimeSeconds,
     processHeapUsedBytes,
     processHeapTotalBytes,
@@ -38,7 +35,6 @@ export interface SystemCollectorDeps {
     accumulator: AttentionAccumulator;
     q5: CallbackQueue;
     mainLoop: MainAgentLoop;
-    feedbackLoop: FeedbackLoop;
 }
 
 export class SystemCollector {
@@ -53,7 +49,7 @@ export class SystemCollector {
      * Prometheus scrape 时调用，更新所有系统 Gauge 指标。
      */
     collect(): void {
-        const { sandboxPool, accumulator, q5, mainLoop, feedbackLoop } = this.deps;
+        const { sandboxPool, accumulator, q5, mainLoop } = this.deps;
 
         processUptimeSeconds.set({}, process.uptime());
         const mem = process.memoryUsage();
@@ -88,10 +84,5 @@ export class SystemCollector {
             log.warn("SystemCollector: mainLoop stats 失败", { error: String(err) });
         }
 
-        try {
-            feedbackLoopWindowsActive.set({}, feedbackLoop.getActiveWindows().length);
-        } catch (err) {
-            log.warn("SystemCollector: feedbackLoop.getActiveWindows() 失败", { error: String(err) });
-        }
     }
 }

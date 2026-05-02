@@ -119,4 +119,66 @@ describe("createDispatchApi", () => {
         ]);
         assert.equal(createdExecutors.length, 1);
     });
+
+    it("records dispatch tracking into todo and optional reminder", async () => {
+        const enqueued: any[] = [];
+        const todos: any[] = [];
+        const reminders: any[] = [];
+        const subagent = {
+            chatId: "telegram:3",
+            codeActExecutor: {
+                enqueue: (task: unknown) => enqueued.push(task),
+                getSessionFilePath: () => "workspace/sessions/telegram/3.json",
+            },
+        };
+
+        const api = createDispatchApi({
+            memory: {
+                todoUpsert: (bindingId: string, key: string, content: string, dueAt: string | null) => {
+                    todos.push({ bindingId, key, content: JSON.parse(content), dueAt });
+                    return { key, content, dueAt, createdAt: "now", updatedAt: "now", expired: false };
+                },
+            } as any,
+            globalState: {
+                addReminder: (chatId: string, description: string, triggerAt: string, requestedBy: string, options: any) => {
+                    const reminder = { id: "reminder-1", chatId, description, triggerAt, requestedBy, ...options };
+                    reminders.push(reminder);
+                    return reminder;
+                },
+            } as any,
+            subagentManager: {
+                getOrCreate: () => subagent as any,
+                getSessionFilePath: () => "workspace/sessions/telegram/3.json",
+            },
+            accumulator: {
+                markActioned: () => undefined,
+            } as any,
+            taskIdFactory: () => "task-meta-3",
+        });
+
+        const result = await api.taskToGroup("telegram:3", {
+            contentDirection: "ask for clarification",
+            tracking: {
+                content: "等对方回复后确认细节",
+                remindAfterMinutes: 15,
+                callback: "检查 telegram:3 是否有回复，并决定是否继续跟进",
+                data: { topicId: "topic-3" },
+            },
+        });
+
+        assert.deepEqual(result, {
+            taskId: "task-meta-3",
+            trackingKey: "dispatch:task-meta-3",
+            reminderId: "reminder-1",
+        });
+        assert.equal(enqueued.length, 1);
+        assert.equal(todos[0].bindingId, "telegram:3");
+        assert.equal(todos[0].key, "dispatch:task-meta-3");
+        assert.equal(todos[0].content.taskId, "task-meta-3");
+        assert.equal(todos[0].content.bindingId, "telegram:3");
+        assert.deepEqual(todos[0].content.data, { topicId: "topic-3" });
+        assert.equal(reminders[0].bindingId, "telegram:3");
+        assert.equal(reminders[0].callback, "检查 telegram:3 是否有回复，并决定是否继续跟进");
+        assert.equal(reminders[0].data.trackingKey, "dispatch:task-meta-3");
+    });
 });

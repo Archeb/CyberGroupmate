@@ -23,11 +23,7 @@ import {
     type EnvironmentVariable,
 } from "./core/config.js";
 import { describeImage, ensureSupportedFormat } from "./core/vision-processor.js";
-import {
-    TopicRegistry,
-    FeedbackLoop,
-    type AgentMessageSentEvent,
-} from "./pipeline/index.js";
+import { TopicRegistry } from "./pipeline/index.js";
 import {
     existsSync,
     mkdirSync,
@@ -477,26 +473,6 @@ async function main(): Promise<void> {
         restoredSignalPoolSize: accumulator.getSignalPoolSize(),
     });
 
-    // FeedbackLoop 创建（需要在 subagentManager 之后，以支持 per-group registryLookup）
-    const feedbackLoop = new FeedbackLoop(
-        memory,
-        nc,
-        (chatId: string) => subagentManager.get(chatId)?.topicRegistry ?? null,
-        3 * 60 * 1000,  // evaluationDelayMs
-        (chatId: string, triggerText: string) => {
-            const sub = subagentManager.get(chatId);
-            if (!sub) return;
-            // 重置 lastAgentReplyAt 使 triage 允许介入（绕过防重复守卫）
-            sub.updateLastAgentReplyAt(0);
-            accumulator.ingest(0, createDirectAddressItem(chatId, {
-                reason: "feedback-loop",
-                triggerText,
-                queueEntry: sub.buildQueueEntry(),
-            }));
-            log.info("追问检测 → Accumulator", { chatId, triggerText: triggerText.slice(0, 50) });
-        },
-    );
-
     // ─── NC.onPush: 消息实时处理管线 ───
     // mentionKeywords 现在在每次消息到达时动态从 loadConfig() 读取（支持热重载）
 
@@ -507,8 +483,8 @@ async function main(): Promise<void> {
         if (!chatId) return;
 
         // ─── Agent 发出消息的即时落盘（Fix: 修复 agent 消息不可见导致重复回复） ───
-        // system.agent_message_sent 事件之前只被 FeedbackLoop 消费，
-        // 不写入 message_log，导致 getRecentMessages() 缺少 agent 消息。
+        // system.agent_message_sent 事件不属于普通 adapter 入站消息；
+        // 这里即时写入 message_log，确保 getRecentMessages() 能看到 agent 消息。
         const eventType = String(event.type ?? "");
         if (eventType === "system.agent_message_sent") {
             // Fix: sandbox 发出的 agent_message_sent 事件中 chatId 是 raw ID（因为
@@ -638,7 +614,6 @@ async function main(): Promise<void> {
             });
 
             // 记录入方向交互（用户 → agent，此刻已发生）
-            // 配合 feedback-loop.ts 的 agent_replied 出方向记录，构成完整双向交互链
             try {
                 const rawUserId = String(event.userId ?? event.senderId ?? "");
                 const userId = rawUserId ? ensureCompositeId(getPlatform(chatId), rawUserId) : "";
@@ -677,37 +652,6 @@ async function main(): Promise<void> {
             });
         }
 
-    });
-
-    // Hook 3: FeedbackLoop 消息追踪
-    nc.onPush(event => {
-        if (shuttingDown) return;
-        if ((event as any).type === "system.agent_message_sent" && feedbackLoop) {
-            const sentEvent = event as Record<string, unknown>;
-            const fbPlatform = String(sentEvent.scene ?? "") as import("./core/chat-id.js").PlatformName;
-            const fbCompositeChatId = ensureCompositeId(fbPlatform, String(sentEvent.chatId ?? ""));
-            feedbackLoop.recordAgentMessage({
-                scene: String(sentEvent.scene ?? ""),
-                chatId: fbCompositeChatId,
-                messageId: sentEvent.messageId ? String(sentEvent.messageId) : undefined,
-                text: String(sentEvent.text ?? ""),
-                timestamp: String(sentEvent.timestamp ?? new Date().toISOString()),
-                replyToMessageId: sentEvent.replyToMessageId ? String(sentEvent.replyToMessageId) : undefined,
-            } satisfies AgentMessageSentEvent);
-        }
-    });
-
-    // Hook 4: 追问实时检测
-    // 在 FeedbackLoop 的追问窗口内检测同群用户消息并触发 accumulator 注入
-    nc.onPush(event => {
-        if (shuttingDown) return;
-        const chatId = String(event.chatId ?? "");
-        if (!chatId) return;
-        const eventType = String(event.type ?? "");
-        if (eventType !== "nc.message") return;
-        const userId = String(event.userId ?? event.user_id ?? event.senderId ?? "");
-        const text = String(event.text ?? event.message ?? "");
-        feedbackLoop.checkFollowUp(chatId, userId, text);
     });
 
     // Per-group TopicRegistry 定时清理（遍历所有 subagent 的 topicRegistry）
@@ -986,7 +930,6 @@ async function main(): Promise<void> {
                 globalState,
                 sandboxPool,
                 memory,
-                feedbackLoop,
                 tokenStats,
                 mediaDownloader: sharedMediaDownloader,
                 imageCatalog,
@@ -1022,7 +965,7 @@ async function main(): Promise<void> {
     if (metricsEnabled) {
         const { startMetrics } = await import("./metrics/index.js");
         metricsInstance = await startMetrics(
-            { subagentManager, sandboxPool, accumulator, q5, mainLoop, feedbackLoop },
+            { subagentManager, sandboxPool, accumulator, q5, mainLoop },
             appConfig.metrics,
         );
 
@@ -1245,9 +1188,6 @@ async function main(): Promise<void> {
         clearInterval(topicCleanupInterval);
         clearInterval(reflectionInterval);
         clearInterval(schedulerWatchdogInterval);
-
-        // 停止反馈检测定时器
-        feedbackLoop.dispose();
 
         // 先停止平台输入，避免新消息继续进入系统
         await Promise.allSettled(adapters.map((adapter) =>

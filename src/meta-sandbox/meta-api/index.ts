@@ -28,10 +28,11 @@ export interface BuildMetaApiContextDeps extends Omit<DispatchApiDeps, "subagent
 export function buildMetaApiContext(deps: BuildMetaApiContextDeps) {
     return {
         conversations: createConversationsApi(deps.memory),
-        memory: createMemoryApi(deps.memory),
+        memory: createMemoryApi(deps.memory, deps.globalState),
         agents: createAgentsApi(deps.subagentManager, deps.memory),
         dispatch: createDispatchApi({
             memory: deps.memory,
+            globalState: deps.globalState,
             subagentManager: deps.subagentManager,
             accumulator: deps.accumulator,
             onTaskDispatched: deps.onTaskDispatched,

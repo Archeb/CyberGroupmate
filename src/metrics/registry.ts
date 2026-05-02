@@ -363,12 +363,6 @@ export const q5CallbackPending = registry.register(
     new Gauge(),
 );
 
-export const feedbackLoopWindowsActive = registry.register(
-    "cybergroupmate_feedback_loop_windows_active",
-    "FeedbackLoop 当前活跃追问窗口数",
-    new Gauge(),
-);
-
 // ─── 进程级 ───
 
 export const processUptimeSeconds = registry.register(

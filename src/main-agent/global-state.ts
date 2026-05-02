@@ -44,7 +44,7 @@ const DEFAULT_CONFIG: GlobalStateConfig = {
     autoSaveInterval: 30000,
 };
 
-const MAX_SESSION_DIGESTS = 10;
+const MAX_SESSION_DIGESTS = 30;
 
 /**
  * GlobalState — 主 Agent 全局状态管理器

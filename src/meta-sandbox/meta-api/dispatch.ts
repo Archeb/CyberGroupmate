@@ -5,17 +5,29 @@ import type { AttentionAccumulator } from "../../accumulator/attention-accumulat
 import { CodeActExecutor } from "../../subagent/code-act-executor.js";
 import type { GroupContextPackage, CodeActReplyTask } from "../../subagent/types.js";
 import type { MemoryStoreV2 } from "../../memory-v2/index.js";
+import type { GlobalState } from "../../main-agent/global-state.js";
 import type { SubagentManager } from "../../subagent/subagent-manager.js";
+
+export interface DispatchTrackingSpec {
+    key?: string;
+    content: string;
+    remindAfterMinutes?: number;
+    callback?: string;
+    data?: unknown;
+}
 
 export interface DispatchTaskSpec {
     contentDirection: string;
     toneGuidance?: string;
     context?: unknown;
     useSkills?: string[];
+    tracking?: DispatchTrackingSpec;
 }
 
 export interface DispatchTaskResult {
     taskId: string;
+    trackingKey?: string;
+    reminderId?: string;
 }
 
 type ExecutorLike = Pick<CodeActExecutor,
@@ -35,6 +47,7 @@ type SubagentManagerReader = Pick<SubagentManager, "getOrCreate" | "getSessionFi
 export interface DispatchApiDeps {
     subagentManager: SubagentManagerReader;
     memory: MemoryStoreV2;
+    globalState?: Pick<GlobalState, "addReminder">;
     accumulator: AttentionAccumulator;
     onTaskDispatched?: (task: CodeActReplyTask) => void | Promise<void>;
     groundingConfig?: GroundingConfig;
@@ -76,7 +89,9 @@ export function createDispatchApi(deps: DispatchApiDeps) {
             deps.accumulator.markActioned(chatId);
             await deps.onTaskDispatched?.(task);
 
-            return { taskId };
+            const tracking = recordDispatchTracking(deps, chatId, taskId, taskSpec.tracking);
+
+            return { taskId, ...tracking };
         },
     };
 }
@@ -130,4 +145,68 @@ function buildDispatchContext(
         contentDirection: taskSpec.contentDirection,
         groundingContext,
     };
+}
+
+function recordDispatchTracking(
+    deps: DispatchApiDeps,
+    chatId: string,
+    taskId: string,
+    tracking: DispatchTrackingSpec | undefined,
+): { trackingKey?: string; reminderId?: string } {
+    if (!tracking) {
+        return {};
+    }
+
+    const content = tracking.content.trim();
+    if (!content) {
+        throw new Error("dispatch tracking.content 不能为空");
+    }
+
+    const trackingKey = tracking.key?.trim() || `dispatch:${taskId}`;
+    const now = new Date();
+    const delayMinutes = tracking.remindAfterMinutes;
+    const triggerAt = typeof delayMinutes === "number" && Number.isFinite(delayMinutes) && delayMinutes > 0
+        ? new Date(now.getTime() + delayMinutes * 60_000).toISOString()
+        : null;
+    const todoContent = JSON.stringify({
+        type: "dispatch_tracking",
+        taskId,
+        bindingId: chatId,
+        content,
+        data: tracking.data ?? null,
+        createdAt: now.toISOString(),
+    });
+
+    deps.memory.todoUpsert(chatId, trackingKey, todoContent, triggerAt);
+
+    let reminderId: string | undefined;
+    if (triggerAt) {
+        if (!deps.globalState) {
+            throw new Error("dispatch tracking.remindAfterMinutes 需要 globalState.addReminder");
+        }
+        const callback = tracking.callback?.trim()
+            || `检查 dispatch tracking ${trackingKey}：${content}`;
+        const reminder = deps.globalState.addReminder(
+            "__meta__",
+            callback,
+            triggerAt,
+            "dispatch-tracking",
+            {
+                bindingId: chatId,
+                name: `dispatch tracking ${trackingKey}`,
+                callback,
+                data: {
+                    type: "dispatch_tracking",
+                    taskId,
+                    trackingKey,
+                    bindingId: chatId,
+                    content,
+                    data: tracking.data ?? null,
+                },
+            },
+        );
+        reminderId = reminder.id;
+    }
+
+    return { trackingKey, reminderId };
 }

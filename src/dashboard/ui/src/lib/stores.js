@@ -33,7 +33,6 @@ export const appState = writable({
   globalState: {},
   sandboxPool: {},
   mainLoop: {},
-  feedbackLoop: {},
 });
 
 // ─── Messages ───

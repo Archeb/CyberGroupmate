@@ -75,4 +75,18 @@ describe("createMemoryApi", () => {
         assert.ok(result.coreFacts.some((row) => row.content.includes("Rust")));
         assert.ok(result.identities.some((row) => row.identity.userId === "u2"));
     });
+
+    it("searches session digests from global state", async () => {
+        const api = createMemoryApi(memory, {
+            getSessionDigests: () => [
+                { createdAt: "2026-01-01T00:00:00.000Z", content: "普通巡检无事项" },
+                { createdAt: "2026-01-02T00:00:00.000Z", content: "需要跟进 Soha 的 Chiikawa Park 话题" },
+            ],
+        } as any);
+        const result = await api.searchEntities("soha", { limit: 10 });
+
+        assert.deepEqual(result.sessionDigests, [
+            { createdAt: "2026-01-02T00:00:00.000Z", content: "需要跟进 Soha 的 Chiikawa Park 话题" },
+        ]);
+    });
 });

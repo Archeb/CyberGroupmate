@@ -408,7 +408,7 @@ export class EventBridge {
     }
 
     buildSnapshot(): Record<string, unknown> {
-        const { subagentManager, accumulator, q5, mainLoop, globalState, sandboxPool, feedbackLoop } = this.deps;
+        const { subagentManager, accumulator, q5, mainLoop, globalState, sandboxPool } = this.deps;
 
         // 群组概览
         const groups: Record<string, unknown>[] = [];
@@ -453,9 +453,6 @@ export class EventBridge {
             mainLoop: {
                 running: mainLoop.isRunning(),
                 tickCount: mainLoop.getTickCount(),
-            },
-            feedbackLoop: {
-                activeWindows: feedbackLoop.getActiveWindows(),
             },
             tokenPricing: this.deps.tokenStats.getPricing() ?? {},
         };

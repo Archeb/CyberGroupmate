@@ -767,9 +767,9 @@ export function createApiRouter(deps: DashboardDeps, bridge: EventBridge): Route
         }
     });
 
-    // ─── FeedbackLoop ───
-    router.get("/feedbackloop", (_req, res) => {
-        res.json({ activeWindows: deps.feedbackLoop.getActiveWindows() });
+    // ─── Dispatch tracking summary (details live in todo/remind) ───
+    router.get("/dispatch-tracking", (_req, res) => {
+        res.json({ activeWindows: [] });
     });
 
     // ─── Callbacks (Q5) ───

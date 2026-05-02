@@ -23,7 +23,6 @@ import type { SubagentManager } from "../subagent/subagent-manager.js";
 import type { SandboxPool } from "../sandbox/sandbox-pool.js";
 import type { CallbackQueue } from "../subagent/callback-queue.js";
 import type { MainAgentLoop } from "../main-agent/main-agent-loop.js";
-import type { FeedbackLoop } from "../pipeline/feedback-loop.js";
 import type { MetricsConfig } from "../core/config.js";
 import type { AttentionAccumulator } from "../accumulator/attention-accumulator.js";
 
@@ -34,7 +33,6 @@ export interface MetricsDeps {
     accumulator: AttentionAccumulator;
     q5: CallbackQueue;
     mainLoop: MainAgentLoop;
-    feedbackLoop: FeedbackLoop;
 }
 
 /** 完整 Metrics 实例（供 main.ts 保存引用用于 push 事件） */
@@ -64,7 +62,6 @@ export async function startMetrics(deps: MetricsDeps, config?: MetricsConfig): P
         accumulator: deps.accumulator,
         q5: deps.q5,
         mainLoop: deps.mainLoop,
-        feedbackLoop: deps.feedbackLoop,
     });
 
     const exporter = new MetricsExporter(groupCollector, systemCollector, {

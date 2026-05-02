@@ -184,7 +184,10 @@ export const metaHistoricalProvider: SectionProvider<MetaHistoricalData> = {
         if (sessionDigests.length === 0) {
             return null;
         }
-        return { sessionDigests: sessionDigests.slice(-10) };
+        const limit = typeof ctx.sessionDigestLimit === "number"
+            ? Math.min(Math.max(Math.floor(ctx.sessionDigestLimit), 1), 30)
+            : 10;
+        return { sessionDigests: sessionDigests.slice(-limit) };
     },
     diff(current, committed): DiffResult<MetaHistoricalData> {
         if (!committed) {

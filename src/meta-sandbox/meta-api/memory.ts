@@ -6,6 +6,7 @@ import type {
     UserProfileSearchResult,
     MemoryStoreV2,
 } from "../../memory-v2/index.js";
+import type { GlobalState } from "../../main-agent/global-state.js";
 
 export interface MemorySearchEntitiesOptions {
     chatId?: string;
@@ -23,6 +24,7 @@ export interface MemoryIdentityMatch {
 export interface MemorySearchEntitiesResult {
     identities: MemoryIdentityMatch[];
     recentSessions: TopicSearchResult[];
+    sessionDigests: Array<{ createdAt: string; content: string }>;
     coreFacts: FactSearchResult[];
     topicKeywords: string[];
 }
@@ -35,7 +37,9 @@ type MemoryEntityReader = Pick<MemoryStoreV2,
     "getUserProfile"
 >;
 
-export function createMemoryApi(memory: MemoryEntityReader) {
+type SessionDigestReader = Pick<GlobalState, "getSessionDigests">;
+
+export function createMemoryApi(memory: MemoryEntityReader, globalState?: SessionDigestReader) {
     return {
         searchEntities: async (
             query: string,
@@ -48,6 +52,7 @@ export function createMemoryApi(memory: MemoryEntityReader) {
                 return {
                     identities: [],
                     recentSessions: [],
+                    sessionDigests: [],
                     coreFacts: [],
                     topicKeywords: [],
                 };
@@ -105,10 +110,12 @@ export function createMemoryApi(memory: MemoryEntityReader) {
                 .slice(0, limit);
             const topicKeywords = [...new Set(recentSessions.flatMap((session) => session.keywords))]
                 .slice(0, limit * 5);
+            const sessionDigests = searchSessionDigests(globalState, normalizedQuery, limit);
 
             return {
                 identities,
                 recentSessions: recentSessions.slice(0, limit),
+                sessionDigests,
                 coreFacts,
                 topicKeywords,
             };
@@ -126,4 +133,22 @@ function dedupeFacts(facts: FactSearchResult[]): FactSearchResult[] {
 
 function clampLimit(value: number | undefined, fallback: number, max: number): number {
     return Math.min(Math.max(value ?? fallback, 1), max);
+}
+
+function searchSessionDigests(
+    globalState: SessionDigestReader | undefined,
+    query: string,
+    limit: number,
+): Array<{ createdAt: string; content: string }> {
+    if (!globalState) {
+        return [];
+    }
+    const lowered = query.toLocaleLowerCase();
+    return globalState.getSessionDigests()
+        .filter((digest) =>
+            digest.content.toLocaleLowerCase().includes(lowered)
+            || digest.createdAt.toLocaleLowerCase().includes(lowered)
+        )
+        .slice(-limit)
+        .reverse();
 }
