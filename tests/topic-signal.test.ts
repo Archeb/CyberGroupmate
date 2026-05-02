@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import { calculatePressure } from "../src/accumulator/pressure.js";
+import { RecordingPipeline } from "../src/pipeline/recording-pipeline.js";
 import { buildTopicSignalEntries } from "../src/pipeline/topic-signal.js";
+import { TopicRegistry } from "../src/pipeline/topic-registry.js";
 import type { Topic, Message } from "../src/pipeline/types.js";
 
 describe("topic signal builder", () => {
@@ -95,5 +97,54 @@ describe("topic signal builder", () => {
                 ignoredCount: 0,
             }),
         );
+    });
+
+    it("only promotes triaged topics with shouldSignal into signal-ready output", () => {
+        const registry = new TopicRegistry();
+        const pipeline = new RecordingPipeline(registry);
+        const messages: Message[] = [
+            {
+                id: "m1",
+                chatId: "telegram:1",
+                senderId: "42",
+                senderName: "Alice",
+                text: "Miu 可以帮我看看这个问题吗",
+                timestamp: 1,
+            },
+            {
+                id: "m2",
+                chatId: "telegram:1",
+                senderId: "99",
+                senderName: "Bob",
+                text: "图片已经收到了，谢谢",
+                timestamp: 2,
+            },
+        ];
+
+        const result = (pipeline as any).updateRegistry("telegram:1", messages, {
+            assignments: [
+                { messageId: "m1", topicId: "NEW_1", topicLabel: "悬空求助", keywords: ["求助"] },
+                { messageId: "m2", topicId: "NEW_2", topicLabel: "图片已收到", keywords: ["图片"] },
+            ],
+            evolutions: [],
+        }, {
+            topics: [
+                {
+                    topicId: "NEW_1",
+                    summary: "Alice 有一个问题希望 Miu 帮忙看看。",
+                    shouldSignal: true,
+                    reason: "存在悬空求助，值得进入 L2 让 Meta 后续判断。",
+                },
+                {
+                    topicId: "NEW_2",
+                    summary: "Bob 已经收到图片并表示感谢。",
+                    shouldSignal: false,
+                    reason: "问题已解决，只需自然结束。",
+                },
+            ],
+        });
+
+        assert.equal(result.signalReadyTopics.length, 1);
+        assert.equal(result.signalReadyTopics[0]?.label, "悬空求助");
     });
 });

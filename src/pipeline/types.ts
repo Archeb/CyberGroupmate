@@ -324,6 +324,8 @@ export interface TopicSummaryTriageResult {
     topics: Array<{
         topicId: string;
         summary: string;
+        /** 是否进入 Layer 2 TOPIC_SIGNAL 信号池 */
+        shouldSignal: boolean;
         /** Triage 元数据 */
         reason: string;
     }>;

@@ -802,7 +802,9 @@ export class RecordingPipeline extends EventEmitter {
                 };
                 // 将 decision 持久化到 topic 对象，supply triageReason 给下游 toDigest
                 this.registry.setDecision(topic.id, decision);
-                signalReadyTopics.push(topic);
+                if (triage.shouldSignal === true) {
+                    signalReadyTopics.push(topic);
+                }
             }
 
             topicMessagesById.set(topic.id, topicMsgs);
