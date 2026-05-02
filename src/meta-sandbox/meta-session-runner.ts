@@ -130,6 +130,15 @@ export function compactThinking(thinking: string, maxChars: number = 500): strin
     return trimmed.slice(-maxChars).trim();
 }
 
+function buildMissingEndTurnObservation(): string {
+    return [
+        "[Meta runner notice]",
+        `你这轮没有输出代码块，也没有输出 ${END_TURN_MARKER}。`,
+        `如果本轮已经结束，请用纯文本补充 ${END_TURN_MARKER}；如果还需要行动，请输出一个 JS 代码块。`,
+        "不要输出历史占位符或伪造执行结果。",
+    ].join("\n");
+}
+
 export async function runMetaSession(
     initialMessages: ChatMessage[],
     sandbox: MetaSandbox,
@@ -218,7 +227,21 @@ export async function runMetaSession(
             });
 
             if (!parsed.code) {
-                return finalize(hasEndTurn ? "end_turn" : "no_code");
+                if (hasEndTurn) {
+                    return finalize("end_turn");
+                }
+
+                const observation = buildMissingEndTurnObservation();
+                turnRecord.observation = observation;
+                messages.push({ role: "user", content: observation });
+                syncMetaCodeActState(sessionId, messages, turns, true);
+                emitMetaProgress(sessionId, {
+                    turn,
+                    phase: "observation",
+                    executionOutput: observation,
+                    isProcessing: true,
+                });
+                continue;
             }
 
             if (metaCancelRequested) {
@@ -275,7 +298,7 @@ function formatObservation(output: string): string {
 
 function stripCodeBlocksForHistory(content: string): string {
     return content
-        .replace(CODE_BLOCK_IN_HISTORY_RE, "[执行代码已剥离]")
+        .replace(CODE_BLOCK_IN_HISTORY_RE, "[代码块已执行，内容已从持久历史中省略]")
         .replace(new RegExp(END_TURN_MARKER, "g"), "")
         .trim();
 }

@@ -63,6 +63,9 @@ export class MainAgentLoop {
     /** attend 完成后的回调（metrics 使用） */
     private onAttendCompleteCallback: ((chatId: string, decisions: AttendResult) => void) | null = null;
 
+    /** 已从 Q5 取出、等待下一次 Meta attention 消费的 callbacks */
+    private pendingCallbacksForMeta: SubagentCallback[] = [];
+
     constructor(
         accumulator: AttentionAccumulator,
         callbackQueue: CallbackQueue,
@@ -163,6 +166,7 @@ export class MainAgentLoop {
         const callbacks = this.callbackQueue.drain();
         if (callbacks.length > 0) {
             this.lastNonIdleActivityAt = Date.now();
+            this.pendingCallbacksForMeta.push(...callbacks);
         }
         for (const cb of callbacks) {
             const cbSubagent = this.subagentManager.get(cb.chatId);
@@ -271,7 +275,9 @@ export class MainAgentLoop {
                     log.warn("metaSessionHandler 未设置，跳过", { groups: uniqueEntries.map((entry) => entry.chatId) });
                 } else {
                     try {
-                        const result = await this.metaSessionHandler(uniqueEntries, callbacks);
+                        const callbacksForMeta = this.pendingCallbacksForMeta;
+                        const result = await this.metaSessionHandler(uniqueEntries, callbacksForMeta);
+                        this.pendingCallbacksForMeta = [];
                         metaEndReason = result?.endReason ?? null;
                         if (result?.sessionDigest && this.globalState) {
                             this.globalState.addSessionDigest(result.sessionDigest);
