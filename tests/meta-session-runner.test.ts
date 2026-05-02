@@ -205,6 +205,48 @@ describe("runMetaSession", () => {
         assert.doesNotMatch(llmCalls[1][llmCalls[1].length - 2].content, /<end_turn>/);
     });
 
+    it("ends after successful code execution when code is followed only by digest and end_turn", async () => {
+        const sandbox = new MetaSandbox({
+            tools: {
+                dispatch: async () => ({ taskId: "task-1", status: "PENDING" }),
+            },
+        });
+        const llmCalls: ChatMessage[][] = [];
+
+        const result = await runMetaSession(
+            [
+                { role: "system", content: "system" },
+                { role: "user", content: "user" },
+            ],
+            sandbox,
+            [TEST_LLM_CONFIG],
+            {
+                llmCaller: async (messages) => {
+                    llmCalls.push(messages.map((message) => ({ ...message })));
+                    return {
+                        content: [
+                            "Need to dispatch once.",
+                            "",
+                            "```ts",
+                            "return await tools.dispatch();",
+                            "```",
+                            "",
+                            "[SESSION_DIGEST]dispatched greeting task[/SESSION_DIGEST]",
+                            "<end_turn>",
+                        ].join("\n"),
+                    };
+                },
+            },
+        );
+
+        assert.equal(result.endReason, "end_turn");
+        assert.equal(result.turns.length, 1);
+        assert.equal(llmCalls.length, 1);
+        assert.equal(result.sessionDigest, "dispatched greeting task");
+        assert.match(result.turns[0]?.observation ?? "", /task-1/);
+        assert.doesNotMatch(result.messages.map((message) => message.content).join("\n\n"), /dispatched greeting task/);
+    });
+
     it("ignores fabricated observations and extra code after the first code block", async () => {
         const sandbox = new MetaSandbox({
             tools: {

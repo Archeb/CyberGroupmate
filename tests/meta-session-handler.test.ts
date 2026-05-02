@@ -346,12 +346,6 @@ describe("createMetaSessionHandler", () => {
             },
             {
                 content: [
-                    "[SESSION_DIGEST]stored history after observation[/SESSION_DIGEST]",
-                    "<end_turn>",
-                ].join("\n"),
-            },
-            {
-                content: [
                     "[SESSION_DIGEST]reused prior history[/SESSION_DIGEST]",
                     "<end_turn>",
                 ].join("\n"),
@@ -415,7 +409,7 @@ describe("createMetaSessionHandler", () => {
         assert.ok(llmCalls[0]?.options?.contextManifest);
         assert.ok((llmCalls[0]?.options?.contextManifest?.sections?.length ?? 0) > 0);
 
-        const secondCallMessages = llmCalls[2]?.messages ?? [];
+        const secondCallMessages = llmCalls[1]?.messages ?? [];
         const priorPrompt = secondCallMessages.find((message) =>
             message.role === "user" && message.content.includes("# 注意力切换:")
         );
@@ -429,11 +423,10 @@ describe("createMetaSessionHandler", () => {
         assert.doesNotMatch(priorQueryAssistant.content, /console\.log/);
         assert.doesNotMatch(priorQueryAssistant.content, /<end_turn>/);
 
-        const priorFinalAssistant = secondCallMessages.find((message) =>
-            message.role === "assistant" && message.content.includes("stored history after observation")
+        assert.equal(
+            secondCallMessages.some((message) => message.content.includes("stored history after observation")),
+            false,
         );
-        assert.ok(priorFinalAssistant);
-        assert.match(priorFinalAssistant.content, /<end_turn>/);
 
         const priorObservation = secondCallMessages.find((message) =>
             message.role === "user" && /MetaSandbox observation/.test(message.content)
