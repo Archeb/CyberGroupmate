@@ -164,13 +164,6 @@
           </section>
         {/if}
 
-        {#if selectedTask.sessionDigest}
-          <section>
-            <h4>SESSION_DIGEST</h4>
-            <pre>{selectedTask.sessionDigest}</pre>
-          </section>
-        {/if}
-
         {#if selectedTask.sentMessages?.length}
           <section>
             <h4>已发送消息</h4>

@@ -281,8 +281,12 @@ export const metaCallbacksProvider: SectionProvider<MetaCallbacksData> = {
             ...data.callbacks.map((cb) => [
                 `- ${cb.chatId}: status=${cb.status}, taskId=${cb.taskId}`,
                 cb.contentDirection ? `  contentDirection=${cb.contentDirection}` : "",
-                cb.sessionSummary ? `  SESSION_DIGEST=${cb.sessionSummary}` : "",
-                `  summary=${cb.summary}`,
+                cb.sentMessages?.length
+                    ? `  sentMessages=${cb.sentMessages.map((msg) => `"${msg.text}"`).join(" / ")}`
+                    : "",
+                cb.error ? `  error=${cb.error}` : "",
+                typeof cb.durationMs === "number" ? `  durationMs=${cb.durationMs}` : "",
+                cb.summary ? `  thinkingTranscript=${cb.summary}` : "",
             ].filter(Boolean).join("\n")),
         ].join("\n");
     },

@@ -222,8 +222,6 @@ export interface SubagentCallback {
     createdAt: string;
 
     // ─── subagent.md §2.2 C1/C2 补齐字段 ───
-    /** Session 摘要（CodeAct session 的结构化摘要） */
-    sessionSummary?: string;
     /** 原始任务方向（Meta 派发时的 contentDirection） */
     contentDirection?: string;
 }
@@ -242,7 +240,6 @@ export interface DispatchedSubagentTaskRecord {
     updatedAt: string;
     completedAt?: string;
     sessionId?: string;
-    sessionDigest?: string;
     summary?: string;
     sentMessages?: Array<{
         messageId?: string;

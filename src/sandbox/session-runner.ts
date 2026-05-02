@@ -181,8 +181,6 @@ export interface SessionResult {
     endReason: "end_turn" | "max_turns" | "error" | "interrupted";
     /** 如果因为 error 结束，错误信息 */
     error?: string;
-    /** 任务结束前输出的 SESSION_DIGEST 内容 */
-    sessionDigest?: string;
 }
 
 // ─── 代码块解析 ───
@@ -259,23 +257,12 @@ export function parseResponse(response: string): {
     return { thinking, codeBlocks };
 }
 
-export function extractSessionDigest(thinking?: string, maxChars: number = 500): string | undefined {
+function hasSessionDigest(thinking?: string): boolean {
     const trimmed = thinking?.trim();
-    if (!trimmed) return undefined;
+    if (!trimmed) return false;
 
     const match = trimmed.match(/\[SESSION_DIGEST\]([\s\S]*?)(?:\[\/SESSION_DIGEST\]|$)/);
-    if (match?.[1]?.trim()) {
-        return match[1].trim();
-    }
-
-    return undefined;
-}
-
-function compactThinking(thinking: string | undefined, maxChars: number = 500): string | undefined {
-    const trimmed = thinking?.trim();
-    if (!trimmed) return undefined;
-    if (trimmed.length <= maxChars) return trimmed;
-    return trimmed.slice(-maxChars).trim();
+    return Boolean(match?.[1]?.trim());
 }
 
 function buildMissingDigestObservation(): string {
@@ -422,7 +409,6 @@ export async function runCodeActSession(
                 messages,
                 endReason: "error",
                 error: `LLM call failed: ${errorMsg}`,
-                sessionDigest: extractSessionDigest(turns.at(-1)?.thinking) ?? compactThinking(turns.at(-1)?.thinking),
             };
         }
 
@@ -480,8 +466,7 @@ export async function runCodeActSession(
 
         // ─── <end_task> 且无代码块 → 直接结束 session ───
         if (hasEndTurn && codeBlocks.length === 0) {
-            const sessionDigest = extractSessionDigest(thinking);
-            if (!sessionDigest) {
+            if (!hasSessionDigest(thinking)) {
                 log.info(`Turn ${turnNum}: <end_task> 缺少 SESSION_DIGEST，要求补充摘要`);
                 turns.push(turn);
                 const observation = buildMissingDigestObservation();
@@ -502,7 +487,6 @@ export async function runCodeActSession(
                 turns,
                 messages,
                 endReason: "end_turn",
-                sessionDigest,
             };
         }
 
@@ -633,8 +617,7 @@ ${fullDocs}
 
                             // 如果 Pass 2 有 <end_task> 且无代码块，结束 session
                             if (pass2HasEndTurn && pass2Parsed.codeBlocks.length === 0) {
-                                const sessionDigest = extractSessionDigest(pass2Parsed.thinking);
-                                if (!sessionDigest) {
+                                if (!hasSessionDigest(pass2Parsed.thinking)) {
                                     log.info(`Turn ${turnNum}: Pass 2 <end_task> 缺少 SESSION_DIGEST，要求补充摘要`);
                                     turns.push(turn);
                                     const observation = buildMissingDigestObservation();
@@ -650,7 +633,7 @@ ${fullDocs}
                                 log.debug(`Turn ${turnNum}: Pass 2 检测到 <end_task>，session 结束`);
                                 turns.push(turn);
                                 emitProgress({ turn: turnNum, phase: "end", thinking: pass2Parsed.thinking, isProcessing: false, endReason: "end_turn" });
-                                return { sessionId, turns, messages, endReason: "end_turn", sessionDigest };
+                                return { sessionId, turns, messages, endReason: "end_turn" };
                             }
 
                             log.info(`Turn ${turnNum}: Pass 2 完成`, {
@@ -742,7 +725,6 @@ ${fullDocs}
                         messages,
                         endReason: "error",
                         error: `Sandbox worker died: ${errorMsg}`,
-                        sessionDigest: extractSessionDigest(turn.thinking) ?? compactThinking(turn.thinking),
                     };
                 }
             }
@@ -818,7 +800,18 @@ ${fullDocs}
         // 注意：正常情况下 hasEndTurn 在有代码块时已被强制设为 false，
         // 此处仅作为最终防线保留。
         if (hasEndTurn) {
-            const sessionDigest = extractSessionDigest(turn.thinking) ?? compactThinking(turn.thinking);
+            if (!hasSessionDigest(turn.thinking)) {
+                log.info(`Turn ${turnNum}: 代码执行后 <end_task> 缺少 SESSION_DIGEST，要求补充摘要`);
+                const observation = buildMissingDigestObservation();
+                emitProgress({
+                    turn: turnNum,
+                    phase: "observation",
+                    executionOutput: observation,
+                    isProcessing: true,
+                });
+                messages.push({ role: "user", content: observation });
+                continue;
+            }
             log.debug(`Turn ${turnNum}: 代码已执行，检测到 <end_task>，session 结束`);
             emitProgress({ turn: turnNum, phase: "end", isProcessing: false, endReason: "end_turn" });
             return {
@@ -826,7 +819,6 @@ ${fullDocs}
                 turns,
                 messages,
                 endReason: "end_turn",
-                sessionDigest,
             };
         }
 
@@ -840,7 +832,6 @@ ${fullDocs}
         turns,
         messages,
         endReason: "max_turns",
-        sessionDigest: extractSessionDigest(turns.at(-1)?.thinking) ?? compactThinking(turns.at(-1)?.thinking),
     };
 }
 
@@ -854,4 +845,3 @@ function truncateOutput(output: string): string {
         `\n...[truncated, ${output.length - MAX_OUTPUT_CHARS} chars omitted]`
     );
 }
-

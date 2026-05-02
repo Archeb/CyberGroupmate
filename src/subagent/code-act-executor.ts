@@ -153,11 +153,11 @@ function formatThinkingTranscript(result: SessionResult): string {
         .filter((part): part is string => !!part);
 
     const transcript = parts.join("\n\n");
-    return `本次思考过程：\n\n\`\`\`text\n${transcript || "（无纯文本思考）"}\n\`\`\``;
+    return `本次思考过程：\n\`\`\`text\n${transcript || ""}\n\`\`\``;
 }
 
 function formatThinkingPlaceholder(reason: string): string {
-    return `本次思考过程：\n\n\`\`\`text\n${reason}\n\`\`\``;
+    return `本次思考过程：\n\`\`\`text\n${reason}\n\`\`\``;
 }
 export interface CodeActExecutorConfig {
     /** 单次执行最大超时 (ms)。默认 60000 */
@@ -702,13 +702,6 @@ export class CodeActExecutor {
             .slice(0, 500);
 
         const thinkingTranscript = formatThinkingTranscript(sessionResult);
-        const sessionDigest = sessionResult.sessionDigest;
-        const resultSummary = [
-            `Task ${task.taskId}`,
-            `contentDirection: ${contentDirection || "（未提供）"}`,
-            sessionDigest ? `SESSION_DIGEST: ${sessionDigest}` : "SESSION_DIGEST: （未输出，已使用思考记录兜底）",
-            `CodeAct session ${sessionResult.sessionId}: ${sessionResult.endReason}, ${sessionResult.turns.length} turns, ${sentCollector.allSent.length} messages sent`,
-        ].join("\n");
 
         this.executionRecords.push({
             taskId: task.taskId,
@@ -728,7 +721,7 @@ export class CodeActExecutor {
             isDirectMessage: ctx.isDirectMessage,
             executionType: "CODEACT",
             status: isError ? "ERROR" : "COMPLETED",
-            summary: `${resultSummary}\n\n${thinkingTranscript}`,
+            summary: thinkingTranscript,
             replyContent: sessionResult.turns
                 .filter((t: any) => t.role === "assistant" && t.content)
                 .map((t: any) => t.content)
@@ -740,14 +733,12 @@ export class CodeActExecutor {
             error: sessionResult.error,
             durationMs,
             createdAt: new Date().toISOString(),
-            sessionSummary: sessionDigest,
             contentDirection,
         };
 
         this.globalState?.updateDispatchedSubagentTask(task.taskId, {
             status: callback.status,
             sessionId: sessionResult.sessionId,
-            sessionDigest,
             summary: callback.summary,
             sentMessages: callback.sentMessages,
             error: callback.error,
