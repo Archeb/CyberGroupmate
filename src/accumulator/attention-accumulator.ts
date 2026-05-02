@@ -221,7 +221,9 @@ export class AttentionAccumulator {
         }
 
         const releasedPendingSet = new Set(releasedPending);
+        const releasedSignalSet = new Set(releasedSignals);
         this.pending = this.pending.filter((item) => !releasedPendingSet.has(item));
+        this.signalPool = this.signalPool.filter((item) => !releasedSignalSet.has(item));
         this.windowStartedAt = this.pending.length > 0 ? now : null;
         this.persistSignalPool();
 

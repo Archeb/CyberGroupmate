@@ -72,14 +72,40 @@ describe("MainAgentLoop meta session path", () => {
         accumulator.ingest(2, {
             chatId: "telegram:g1",
             source: "TOPIC_SIGNAL",
-            payload: null,
+            payload: {
+                topicDigest: {
+                    topicId: "topic-signal-1",
+                    label: "群内求助",
+                    summary: "有人提出了一个仍未解决的问题。",
+                    state: "ACTIVE",
+                    participants: ["telegram:u1"],
+                    keywords: ["求助"],
+                    messageCount: 2,
+                    lastActivityAt: new Date(1).toISOString(),
+                    triageReason: "悬空求助，值得让 Meta 判断。",
+                    callbackPotential: 20,
+                },
+            },
             enqueuedAt: 1,
             pressure: 80,
         });
         accumulator.ingest(2, {
             chatId: "telegram:g2",
             source: "TOPIC_SIGNAL",
-            payload: null,
+            payload: {
+                topicDigest: {
+                    topicId: "topic-signal-2",
+                    label: "后续讨论",
+                    summary: "另一个群也出现了值得观察的话题。",
+                    state: "ACTIVE",
+                    participants: ["telegram:u2"],
+                    keywords: ["讨论"],
+                    messageCount: 1,
+                    lastActivityAt: new Date(2).toISOString(),
+                    triageReason: "可以让 Meta 判断是否需要跟进。",
+                    callbackPotential: 10,
+                },
+            },
             enqueuedAt: 2,
             pressure: 70,
         });
@@ -99,6 +125,11 @@ describe("MainAgentLoop meta session path", () => {
 
         assert.equal(callCount, 1);
         assert.deepEqual(receivedEntries.map((entry) => entry.chatId).sort(), ["telegram:g1", "telegram:g2"]);
+        assert.equal(receivedEntries.find((entry) => entry.chatId === "telegram:g1")?.source, "TOPIC_SIGNAL");
+        assert.deepEqual(
+            receivedEntries.find((entry) => entry.chatId === "telegram:g1")?.topicDigests.map((topic) => topic.topicId),
+            ["topic-signal-1"],
+        );
         assert.deepEqual(result.phase3Attended.sort(), ["telegram:g1", "telegram:g2"]);
         assert.equal(result.phase4MetaEndReason, "end_turn");
 
@@ -176,7 +207,20 @@ describe("MainAgentLoop meta session path", () => {
         accumulator.ingest(2, {
             chatId: "telegram:g1",
             source: "TOPIC_SIGNAL",
-            payload: null,
+            payload: {
+                topicDigest: {
+                    topicId: "topic-meta-dispatch",
+                    label: "Meta 派发测试",
+                    summary: "这个话题需要 Meta 下发一个回复任务。",
+                    state: "ACTIVE",
+                    participants: ["telegram:u1"],
+                    keywords: ["dispatch"],
+                    messageCount: 1,
+                    lastActivityAt: new Date(1).toISOString(),
+                    triageReason: "测试 dispatch path。",
+                    callbackPotential: 80,
+                },
+            },
             enqueuedAt: 1,
             pressure: 80,
         });
@@ -281,6 +325,40 @@ describe("MainAgentLoop meta session path", () => {
         assert.deepEqual(result.phase3Attended, ["telegram:g1"]);
         assert.equal(receivedEntries[0]?.source, "DEFERRED_RE_ENTRY");
         assert.equal(receivedCallbacks, 1);
+        globalState.dispose();
+    });
+
+    it("drops stale topic signals that do not carry a topic digest", async () => {
+        const dir = tempDir();
+        const globalState = new GlobalState({
+            filePath: join(dir, "global-state.json"),
+            autoSaveInterval: 0,
+        });
+        const accumulator = new AttentionAccumulator(globalState, { windowMs: 0, topN: 2 });
+        const callbackQueue = new CallbackQueue();
+        const subagentManager = new SubagentManager({ sessionsDir: join(dir, "sessions") });
+        const loop = new MainAgentLoop(accumulator, callbackQueue, subagentManager, {}, globalState);
+        subagentManager.getOrCreate("telegram:g1");
+
+        accumulator.ingest(2, {
+            chatId: "telegram:g1",
+            source: "TOPIC_SIGNAL",
+            payload: null,
+            enqueuedAt: 1,
+            pressure: 80,
+        });
+
+        let callCount = 0;
+        loop.setMetaSessionHandler(async () => {
+            callCount += 1;
+            return { endReason: "end_turn" };
+        });
+
+        const result = await loop.tick();
+
+        assert.equal(callCount, 0);
+        assert.deepEqual(result.phase3Attended, []);
+        assert.equal(accumulator.getSignalPoolSize(), 0);
         globalState.dispose();
     });
 

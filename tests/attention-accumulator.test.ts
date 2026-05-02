@@ -130,7 +130,7 @@ describe("AttentionAccumulator", () => {
         globalState.dispose();
     });
 
-    it("releases only top N signals and persists ignored counts", () => {
+    it("releases only top N signals and removes them from the persisted pool", () => {
         const { accumulator, globalState } = createAccumulator();
         accumulator.ingest(2, {
             chatId: "telegram:1",
@@ -165,8 +165,6 @@ describe("AttentionAccumulator", () => {
             globalState.getSignalPool().map((item) => ({ chatId: item.chatId, ignoredCount: item.ignoredCount })),
             [
                 { chatId: "telegram:1", ignoredCount: 0 },
-                { chatId: "telegram:2", ignoredCount: 1 },
-                { chatId: "telegram:3", ignoredCount: 1 },
             ],
         );
         globalState.dispose();
@@ -207,7 +205,7 @@ describe("AttentionAccumulator", () => {
         globalState.dispose();
     });
 
-    it("restores persisted signal pool and resets ignored count on markActioned", () => {
+    it("does not restore released signals from the persisted signal pool", () => {
         const dir = tempDir();
         const path = join(dir, "state.json");
         const gs1 = new GlobalState({ filePath: path, autoSaveInterval: 0 });
@@ -226,15 +224,12 @@ describe("AttentionAccumulator", () => {
         const gs2 = new GlobalState({ filePath: path, autoSaveInterval: 0 });
         const acc2 = new AttentionAccumulator(gs2, { windowMs: 1_000, topN: 2 });
         acc2.restoreSignalPool();
-        assert.equal(acc2.getSignalPoolSize(), 1);
-        assert.equal(gs2.getSignalPool()[0]?.ignoredCount, 1);
-        acc2.markActioned("telegram:1");
-        assert.equal(gs2.getSignalPool()[0]?.ignoredCount, 0);
+        assert.equal(acc2.getSignalPoolSize(), 0);
         gs2.dispose();
     });
 
     it("blocks chats, drops queued items, and ignores ingress until unblocked", () => {
-        const { accumulator, globalState } = createAccumulator();
+        const { accumulator, globalState } = createAccumulator({ topN: 1 });
         accumulator.ingest(2, {
             chatId: "telegram:1",
             source: "TOPIC_SIGNAL",
@@ -286,7 +281,7 @@ describe("AttentionAccumulator", () => {
     });
 
     it("exposes active, dequeued, and blocked state snapshots", () => {
-        const { accumulator, globalState } = createAccumulator();
+        const { accumulator, globalState } = createAccumulator({ topN: 1 });
         accumulator.ingest(1, {
             chatId: "telegram:1",
             source: "CALLBACK",
@@ -307,7 +302,7 @@ describe("AttentionAccumulator", () => {
         assert.deepEqual(snapshot.blockedChatIds, ["telegram:3"]);
         assert.equal(snapshot.active.length, 1);
         assert.equal(snapshot.active[0]?.kind, "signal");
-        assert.equal(snapshot.dequeued.length, 2);
+        assert.equal(snapshot.dequeued.length, 1);
         globalState.dispose();
     });
 });

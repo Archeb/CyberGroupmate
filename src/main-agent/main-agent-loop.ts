@@ -417,6 +417,12 @@ export class MainAgentLoop {
                 entry = subagent.buildQueueEntry("DEFERRED_RE_ENTRY");
                 break;
             case "TOPIC_SIGNAL":
+                if (!subagent) return null;
+                entry = subagent.buildQueueEntry("TOPIC_SIGNAL");
+                if (!applyTopicSignalPayload(entry, item.payload)) {
+                    return null;
+                }
+                break;
             default:
                 if (!subagent) return null;
                 entry = subagent.buildQueueEntry();
@@ -466,6 +472,33 @@ function isSubagentCallback(value: unknown): value is SubagentCallback {
     return typeof record.taskId === "string"
         && typeof record.chatId === "string"
         && typeof record.summary === "string";
+}
+
+function applyTopicSignalPayload(entry: AttentionQueueEntry, payload: unknown): boolean {
+    if (!payload || typeof payload !== "object") {
+        return false;
+    }
+    const topicDigest = (payload as { topicDigest?: unknown }).topicDigest;
+    if (!isTopicDigest(topicDigest)) {
+        return false;
+    }
+
+    entry.topicDigests = [topicDigest];
+    entry.callbackPotential = topicDigest.callbackPotential ?? 0;
+    entry.hasHighCallbackPotential = (topicDigest.callbackPotential ?? 0) > 70;
+    entry.newMessageCount = Math.max(entry.newMessageCount, topicDigest.messageCount);
+    return true;
+}
+
+function isTopicDigest(value: unknown): value is AttentionQueueEntry["topicDigests"][number] {
+    if (!value || typeof value !== "object") {
+        return false;
+    }
+    const record = value as Partial<AttentionQueueEntry["topicDigests"][number]>;
+    return typeof record.topicId === "string"
+        && typeof record.label === "string"
+        && Array.isArray(record.participants)
+        && Array.isArray(record.keywords);
 }
 
 function extractSchedulerTriggers(payload: unknown): NonNullable<AttentionQueueEntry["schedulerTriggers"]> {
