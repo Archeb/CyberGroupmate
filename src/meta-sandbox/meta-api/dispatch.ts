@@ -19,6 +19,7 @@ export interface DispatchTrackingSpec {
 export interface DispatchTaskSpec {
     contentDirection: string;
     toneGuidance?: string;
+    suggestedEmojis?: string[];
     context?: unknown;
     useSkills?: string[];
     tracking?: DispatchTrackingSpec;
@@ -81,6 +82,7 @@ export function createDispatchApi(deps: DispatchApiDeps) {
                     action: "REPLY",
                     contentDirection: taskSpec.contentDirection,
                     toneGuidance: taskSpec.toneGuidance,
+                    suggestedEmojis: taskSpec.suggestedEmojis,
                     confidence: 1.0,
                     reason: "Meta-CodeAct dispatch",
                 }],
@@ -96,6 +98,7 @@ export function createDispatchApi(deps: DispatchApiDeps) {
                 contentDirection: taskSpec.contentDirection,
                 toneGuidance: taskSpec.toneGuidance,
                 context: taskSpec.context,
+                suggestedEmojis: taskSpec.suggestedEmojis,
                 useSkills: taskSpec.useSkills,
                 tracking: taskSpec.tracking,
                 createdAt: task.createdAt,

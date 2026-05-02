@@ -232,6 +232,7 @@ export interface DispatchedSubagentTaskRecord {
     chatId: string;
     contentDirection: string;
     toneGuidance?: string;
+    suggestedEmojis?: string[];
     context?: unknown;
     useSkills?: string[];
     tracking?: unknown;

@@ -498,6 +498,7 @@ await agents.listStatus(): Promise<{
 await dispatch.taskToGroup(chatId: string, taskSpec: {
   contentDirection: string,  // 必填：行动方向，告诉 Subagent 往哪个方向回复
   toneGuidance?: string,     // 语气指导（轻松 / 正式 / 简短等）
+  suggestedEmojis?: string[], // 建议用于召回可发送贴纸的 emoji 候选，如 ["😂","🤣","😅"]；适合贴纸时填写
   context?: any,             // 跨群上下文，直接注入给 Subagent 的 prompt
   useSkills?: string[],      // 需要额外加载的 Skill 模块名
   tracking?: {               // 可选：派发后自动记录待跟进 todo / remind
@@ -525,6 +526,7 @@ await dispatch.getTask(taskId: string): Promise<{
 await dispatch.listTasks(options?: { chatId?: string, status?: string, limit?: number, offset?: number }): Promise<{ tasks, total, hasMore }>
 \`\`\`
 dispatch 会自动将 context 序列化后注入 Subagent 的任务 prompt。你查到的跨群信息、事实、讨论记录都可以放在 context 里。tracking 会把待跟进项写入 todo，bindingId 为目标 chatId；如果设置 remindAfterMinutes，还会注册一次性唤醒。
+当回复适合用贴纸表达情绪或活跃气氛时，在 taskSpec.suggestedEmojis 填 2-6 个相关 emoji；系统会用这些 emoji 搜索可用贴纸并交给 Subagent 最终决定是否发送。
 当你派发的是提问、跨群转述、等待群友回应或重要回复时，优先在同一次 dispatch.taskToGroup() 里填写 tracking；这样系统会自动保留 taskId、trackingKey、目标 chatId 和 callback，避免另写 todo/remind 时漏掉上下文。
 后续如果只拿到 callback 的 taskId，需要回看原始任务方向、上下文或 subagent 的 thinkingTranscript summary，使用 dispatch.getTask(taskId)。
 
