@@ -39,7 +39,7 @@ export interface Message {
     mentionsAgent?: boolean;
     /** 内部标记：是否歧义归属 */
     _ambiguous?: boolean;
-    /** 媒体类型: "photo" | "sticker" | "video" | "document" | "animation" | "other" */
+    /** 媒体类型: "photo" | "sticker" | "video" | "document" | "animation" | "audio" | "other" */
     mediaType?: string;
     /** 媒体元数据 JSON（含 fileId, uniqueFileId, emoji 等） */
     mediaInfo?: string;

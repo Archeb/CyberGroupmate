@@ -787,8 +787,8 @@ async function main(): Promise<void> {
         if (!adapter) {
             return undefined;
         }
-        return async (fileId: string): Promise<Buffer> => {
-            const result = await adapter.handleCall(`${adapter.platform}.downloadMedia`, [fileId]);
+        return async (fileId: string, mediaChatId?: string, messageId?: string, uniqueFileId?: string): Promise<Buffer> => {
+            const result = await adapter.handleCall(`${adapter.platform}.downloadMedia`, [fileId, mediaChatId ?? chatId, messageId, uniqueFileId]);
             if (Buffer.isBuffer(result)) {
                 return result;
             }

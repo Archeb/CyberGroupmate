@@ -424,7 +424,7 @@ export interface MessageLogEntry {
     replyToMessageId?: string;
     /** 消息时间 (ISO 8601) */
     timestamp: string;
-    /** 媒体类型: "photo" | "sticker" | "video" | "document" | "animation" | "other" */
+    /** 媒体类型: "photo" | "sticker" | "video" | "document" | "animation" | "audio" | "other" */
     mediaType?: string;
     /** 媒体元数据 JSON（含 fileId, uniqueFileId, emoji 等） */
     mediaInfo?: string;

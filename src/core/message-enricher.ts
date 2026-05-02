@@ -79,7 +79,7 @@ export interface EnrichOptions {
     /** 图片目录（可选，启用后追踪图片频率用于表情包检测） */
     imageCatalog?: ImageCatalog;
     /** 仅处理指定类型的媒体（如 ["sticker"]），未指定时处理所有类型 */
-    mediaTypes?: Array<"photo" | "sticker" | "video" | "document" | "animation" | "other">;
+    mediaTypes?: Array<"photo" | "sticker" | "video" | "document" | "animation" | "audio" | "other">;
     /** 是否启用 URL OpenGraph 预览（默认 true） */
     enableOgPreview?: boolean;
     /** 强制走文本描述路径，不内联图片到主 LLM（attend describe 模式使用） */
@@ -182,7 +182,9 @@ function mediaTagFromType(mediaType?: string, mediaInfo?: string): string {
         case "sticker": return emoji ? `[🎭 贴纸: ${emoji}]` : "[🎭 贴纸]";
         case "video": return "[📹 视频]";
         case "animation": return "[🎬 GIF]";
+        case "audio": return "[🎙 语音/音频]";
         case "document": return "[📎 文件]";
+        case "other": return "[📎 媒体]";
         default: return `[📎 ${mediaType}]`;
     }
 }
@@ -340,9 +342,11 @@ function parseMediaAttachments(messages: RawMessage[], fallbackChatId?: string):
                 emoji: info.emoji,
                 mimeType: info.mimeType,
                 fileName: info.fileName,
+                filePath: info.filePath,
                 width: info.width,
                 height: info.height,
                 fileSize: info.fileSize,
+                downloadStatus: info.downloadStatus,
                 messageIndex: i,
                 // file reference refetch 所需的上下文
                 chatId: m.chatId ?? fallbackChatId,
@@ -393,7 +397,7 @@ export function formatMessages(
         if (m.processedMedia && m.processedMedia.length > 0) {
             // 移除 adapter 层写入的媒体占位标签（如 [📷 图片]、[🎭 贴纸: 💛]、[🎬 视频] 等），
             // 避免和 vision/download 产生的更丰富描述重复
-            textPart = textPart.replace(/\[(?:📷 图片|🎭 贴纸[^\]]*|📹 视频|🎬 (?:视频|GIF)|🎞 GIF|📎 (?:文件|媒体))\]\s*/g, "").trim();
+            textPart = textPart.replace(/\[(?:📷 图片|🎭 贴纸[^\]]*|📹 视频|🎙 语音\/音频|🎬 (?:视频|GIF)|🎞 GIF|📎 (?:文件|媒体))\]\s*/g, "").trim();
 
             for (const pm of m.processedMedia) {
                 if (pm.base64Data && pm.mimeType) {
@@ -405,7 +409,9 @@ export function formatMessages(
                     textPart = textPart ? `${textPart} [📷 图片${imageParts.length}]${fileHint}` : `[📷 图片${imageParts.length}]${fileHint}`;
                 } else if (pm.filePath && pm.description) {
                     // 有文件路径 + 描述（video/document/animation 或 vision 描述的图片）
-                    const mediaText = `[📷 图片描述: ${pm.description}] 文件: ${pm.filePath}`;
+                    const mediaText = pm.description.startsWith("[")
+                        ? `${pm.description} 文件: ${pm.filePath}`
+                        : `[📷 图片描述: ${pm.description}] 文件: ${pm.filePath}`;
                     textPart = textPart ? `${textPart} ${mediaText}` : mediaText;
                 } else if (pm.filePath) {
                     // 仅有文件路径

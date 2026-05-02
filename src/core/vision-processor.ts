@@ -25,16 +25,18 @@ const log = createLogger("vision-processor");
 
 /** 待处理的媒体附件（从 message_log.media_info 解析） */
 export interface MediaAttachment {
-    type: "photo" | "sticker" | "video" | "document" | "animation" | "other";
+    type: "photo" | "sticker" | "video" | "document" | "animation" | "audio" | "other";
     fileId: string;
     uniqueFileId: string;
     url?: string;
     emoji?: string;       // sticker only
     mimeType?: string;
     fileName?: string;
+    filePath?: string;
     width?: number;
     height?: number;
     fileSize?: number;
+    downloadStatus?: string;
     /** 对应消息在上下文中的序号 */
     messageIndex: number;
     /** 所属群组 ID（用于 file reference refetch） */
@@ -144,7 +146,7 @@ export async function processMediaBatch(
     // 分类
     const photos: MediaAttachment[] = [];
     const stickers: MediaAttachment[] = [];
-    const downloadOnly: MediaAttachment[] = []; // video / document / animation — 只下载不识别
+    const downloadOnly: MediaAttachment[] = []; // video / document / animation / audio / other — 只下载不识别
 
     for (const att of attachments) {
         if (att.type === "photo" || (att.type === "document" && att.mimeType?.startsWith("image/"))) {
@@ -156,10 +158,9 @@ export async function processMediaBatch(
                 continue;
             }
             stickers.push(att);
-        } else if (att.type === "video" || att.type === "document" || att.type === "animation") {
+        } else if (att.type === "video" || att.type === "document" || att.type === "animation" || att.type === "audio" || att.type === "other") {
             downloadOnly.push(att);
         }
-        // other → 跳过（保留占位文本）
     }
 
     // 确定处理路径
@@ -374,12 +375,21 @@ export async function processMediaBatch(
     // ─── 处理 download-only 媒体 (video / document / animation) ───
     if (downloadFn && mediaDownloader) {
         for (const att of downloadOnly) {
+            if (att.filePath) {
+                results.push({
+                    index: att.messageIndex,
+                    filePath: att.filePath,
+                    description: typeLabel(att.type),
+                });
+                continue;
+            }
+
             // 大小检查
             if (!mediaDownloader.isWithinSizeLimit(att.fileSize)) {
                 const sizeMB = att.fileSize ? (att.fileSize / 1024 / 1024).toFixed(1) : "?";
                 results.push({
                     index: att.messageIndex,
-                    description: `[📎 ${att.type} (${sizeMB}MB, 超出下载限制)]`,
+                    description: `[📎 ${typeLabelText(att.type)} ${sizeMB}MB，超过 ${formatSizeLimit(mediaDownloader.getMaxFileSize())} 自动下载限制，请手动调用 downloadMedia 下载]`,
                 });
                 continue;
             }
@@ -409,7 +419,9 @@ export async function processMediaBatch(
                 results.push({
                     index: att.messageIndex,
                     filePath: saved?.path,
-                    description: typeLabel(att.type),
+                    description: saved
+                        ? typeLabel(att.type)
+                        : `[📎 ${typeLabelText(att.type)} ${(buffer.length / 1024 / 1024).toFixed(1)}MB，超过 ${formatSizeLimit(mediaDownloader.getMaxFileSize())} 自动下载限制，请手动调用 downloadMedia 下载]`,
                 });
             } catch (err) {
                 log.warn("download-only 媒体下载失败", { fileId: att.fileId, type: att.type, error: String(err) });
@@ -422,6 +434,22 @@ export async function processMediaBatch(
     } else {
         // 无 downloader — 返回纯标签
         for (const att of downloadOnly) {
+            if (att.filePath) {
+                results.push({
+                    index: att.messageIndex,
+                    filePath: att.filePath,
+                    description: typeLabel(att.type),
+                });
+                continue;
+            }
+            if (att.downloadStatus === "too_large") {
+                const sizeMB = att.fileSize ? (att.fileSize / 1024 / 1024).toFixed(1) : "?";
+                results.push({
+                    index: att.messageIndex,
+                    description: `[📎 ${typeLabelText(att.type)} ${sizeMB}MB，超过 20MB 自动下载限制，请手动调用 downloadMedia 下载]`,
+                });
+                continue;
+            }
             results.push({
                 index: att.messageIndex,
                 description: typeLabel(att.type),
@@ -437,9 +465,28 @@ function typeLabel(type: string): string {
     switch (type) {
         case "video": return "[📹 视频]";
         case "animation": return "[🎬 GIF]";
+        case "audio": return "[🎙 语音/音频]";
         case "document": return "[📎 文件]";
+        case "other": return "[📎 媒体]";
         default: return `[📎 ${type}]`;
     }
+}
+
+function typeLabelText(type: string): string {
+    switch (type) {
+        case "video": return "视频";
+        case "animation": return "GIF";
+        case "audio": return "语音/音频";
+        case "document": return "文件";
+        case "other": return "媒体";
+        default: return type;
+    }
+}
+
+function formatSizeLimit(bytes: number): string {
+    if (bytes >= 1024 * 1024) return `${Math.round(bytes / 1024 / 1024)}MB`;
+    if (bytes >= 1024) return `${Math.round(bytes / 1024)}KB`;
+    return `${bytes}B`;
 }
 
 // ─── 内部函数 ───
