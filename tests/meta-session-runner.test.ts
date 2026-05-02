@@ -194,31 +194,33 @@ describe("runMetaSession", () => {
         assert.equal(result.endReason, "end_turn");
         assert.equal(result.turns.length, 2);
         assert.equal(result.sessionDigest, "resolved answer and logged it");
+        assert.match(result.messages.at(-1)?.content ?? "", /<end_turn>/);
         assert.match(result.turns[0].observation ?? "", /42/);
         assert.equal(llmOptions[0]?.contextManifest, contextManifest);
         assert.match(llmCalls[1][llmCalls[1].length - 1].content, /MetaSandbox observation/);
         assert.match(llmCalls[1][llmCalls[1].length - 1].content, /42/);
-        assert.match(llmCalls[1][llmCalls[1].length - 2].content, /\[执行代码已剥离\]/);
         assert.doesNotMatch(llmCalls[1][llmCalls[1].length - 2].content, /const value = 1/);
         assert.doesNotMatch(llmCalls[1][llmCalls[1].length - 2].content, /<end_turn>/);
     });
 
-    it("returns no_code when the model emits no runnable code", async () => {
+    it("keeps requesting an explicit end_turn when the model emits no runnable code", async () => {
         const sandbox = new MetaSandbox({});
         const result = await runMetaSession(
             [{ role: "system", content: "system" }],
             sandbox,
             [TEST_LLM_CONFIG],
             {
+                maxTurns: 2,
                 llmCaller: async () => ({
                     content: "Need more context before acting.",
                 }),
             },
         );
 
-        assert.equal(result.endReason, "no_code");
+        assert.equal(result.endReason, "max_turns");
         assert.equal(result.sessionDigest, "Need more context before acting.");
-        assert.equal(result.turns.length, 1);
+        assert.equal(result.turns.length, 2);
+        assert.match(result.messages.at(-1)?.content ?? "", /Meta runner notice/);
     });
 
     it("feeds sandbox errors back to the model and allows a repair turn", async () => {

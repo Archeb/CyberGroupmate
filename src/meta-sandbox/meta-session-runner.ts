@@ -298,8 +298,7 @@ function formatObservation(output: string): string {
 
 function stripCodeBlocksForHistory(content: string): string {
     return content
-        .replace(CODE_BLOCK_IN_HISTORY_RE, "")
-        .replace(new RegExp(END_TURN_MARKER, "g"), "")
+        .replace(CODE_BLOCK_IN_HISTORY_RE, "[执行代码已剥离]")
         .trim();
 }
 

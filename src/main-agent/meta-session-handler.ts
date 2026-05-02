@@ -19,6 +19,8 @@ import { trimMetaSessionHistoryWindow } from "./meta-history-retention.js";
 
 const log = createLogger("meta-session-handler");
 const DEFAULT_BASE_SKILLS = ["runtime", "fs", "skills", "mcp", "cron", "todo", "memory", "vision", "shell"];
+const META_END_TURN_MARKER = "<end_turn>";
+const META_RUNNER_NOTICE_PREFIX = "[Meta runner notice]";
 type MetaHistoryMessage = Pick<MetaSessionHistoryEntry, "role" | "content">;
 const META_HISTORY_SECTION_ALLOWLIST = new Set([
     "meta.session_digests",
@@ -42,10 +44,13 @@ export interface MetaSessionHandlerDeps {
 export function createMetaSessionHandler(deps: MetaSessionHandlerDeps) {
     const engine = new ContextEngine("meta-agent");
     engine.registerAll(getMetaProviders());
-    const sessionHistory: ChatMessage[] = deps.globalState.getMetaSessionHistory().map((message) => ({
-        role: message.role,
-        content: message.content,
-    }));
+    const sessionHistory: ChatMessage[] = deps.globalState.getMetaSessionHistory().flatMap((message) => {
+        const content = normalizeMetaSessionHistoryContent(message);
+        if (!content) {
+            return [];
+        }
+        return [{ role: message.role, content }];
+    });
 
     return async (
         entries: AttentionQueueEntry[],
@@ -258,8 +263,31 @@ function collectMetaSessionHistory(messages: ChatMessage[]): MetaHistoryMessage[
         if ((message.role !== "assistant" && message.role !== "user") || !message.content.trim()) {
             return [];
         }
-        return [{ role: message.role, content: message.content.trim() }];
+        const content = normalizeMetaSessionHistoryContent(message);
+        if (!content) {
+            return [];
+        }
+        return [{ role: message.role, content }];
     });
+}
+
+function normalizeMetaSessionHistoryContent(message: Pick<ChatMessage, "role" | "content">): string {
+    const content = String(message.content ?? "").trim();
+    if (!content || isMetaRunnerNotice(content)) {
+        return "";
+    }
+    if (
+        message.role === "assistant"
+        && content.includes("[SESSION_DIGEST]")
+        && !content.includes(META_END_TURN_MARKER)
+    ) {
+        return `${content}\n${META_END_TURN_MARKER}`;
+    }
+    return content;
+}
+
+function isMetaRunnerNotice(content: string): boolean {
+    return content.trimStart().startsWith(META_RUNNER_NOTICE_PREFIX);
 }
 
 function buildHistorySeedMessage(contextManifest: ContextManifest): MetaHistoryMessage | null {

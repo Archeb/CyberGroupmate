@@ -415,14 +415,64 @@ describe("createMetaSessionHandler", () => {
         const priorAssistant = secondCallMessages.find((message) => message.role === "assistant");
         assert.ok(priorAssistant);
         assert.match(priorAssistant.content, /先做一次查询/);
-        assert.match(priorAssistant.content, /\[执行代码已剥离\]/);
         assert.doesNotMatch(priorAssistant.content, /console\.log/);
-        assert.doesNotMatch(priorAssistant.content, /<end_turn>/);
+        assert.match(priorAssistant.content, /<end_turn>/);
 
         const priorObservation = secondCallMessages.find((message) =>
             message.role === "user" && /MetaSandbox observation/.test(message.content)
         );
         assert.ok(priorObservation);
+    });
+
+    it("repairs old meta history by preserving end_turn and dropping runner notices", async () => {
+        const sandbox = new MetaSandbox({});
+        const llmCalls: ChatMessage[][] = [];
+        const persistedHistory: Array<{ role: "assistant" | "user"; content: string; timestamp: string }> = [
+            {
+                role: "assistant",
+                content: "[SESSION_DIGEST]旧历史里结束标记被剥掉了[/SESSION_DIGEST]",
+                timestamp: "2026-05-01T00:00:00.000Z",
+            },
+            {
+                role: "user",
+                content: [
+                    "[Meta runner notice]",
+                    "你这轮没有输出代码块，也没有输出 <end_turn>。",
+                ].join("\n"),
+                timestamp: "2026-05-01T00:00:01.000Z",
+            },
+        ];
+
+        const handler = createMetaSessionHandler({
+            getPersona: () => ({ name: "测试编排者", description: "验证旧 meta history 修复" }),
+            globalState: {
+                getSessionDigests: () => [],
+                getMetaSessionHistory: () => [...persistedHistory],
+                appendMetaSessionHistory: () => undefined,
+            },
+            memory: createMemoryStub() as any,
+            sandbox,
+            getLlmConfigs: () => [TEST_LLM_CONFIG],
+            llmCaller: async (messages): Promise<LLMResponse> => {
+                llmCalls.push(messages.map((message) => ({ ...message })));
+                return {
+                    content: "[SESSION_DIGEST]noop[/SESSION_DIGEST]\n<end_turn>",
+                };
+            },
+        });
+
+        await handler([createEntry()], []);
+
+        const replayedMessages = llmCalls[0] ?? [];
+        const priorAssistant = replayedMessages.find((message) =>
+            message.role === "assistant" && message.content.includes("旧历史里结束标记被剥掉了")
+        );
+        assert.ok(priorAssistant);
+        assert.match(priorAssistant.content, /<end_turn>/);
+        assert.equal(
+            replayedMessages.some((message) => message.content.includes("[Meta runner notice]")),
+            false,
+        );
     });
 
     it("renders 30 recent session digests for proactive idle", async () => {
