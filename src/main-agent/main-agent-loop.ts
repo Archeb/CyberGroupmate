@@ -18,6 +18,7 @@ import { AttentionAccumulator } from "../accumulator/attention-accumulator.js";
 import { createLogger } from "../core/logger.js";
 import { buildWakeConditionPayload, matchCallbackWakeConditions } from "./wake-conditions.js";
 import type { PlatformAdapter } from "../adapter/platform-adapter.js";
+import type { MetaSessionHandler } from "./meta-session-handler.js";
 
 const log = createLogger("main-agent-loop");
 
@@ -60,7 +61,7 @@ export class MainAgentLoop {
     private static readonly CB_MAX_BACKOFF = 10 * 60_000; // 最大 10min
 
     /** 外部 Meta session handler */
-    private metaSessionHandler: ((entries: AttentionQueueEntry[], callbacks: SubagentCallback[]) => Promise<MetaTurnResult | null>) | null = null;
+    private metaSessionHandler: MetaSessionHandler | null = null;
 
     /** attend 完成后的回调（metrics 使用） */
     private onAttendCompleteCallback: ((chatId: string, decisions: AttendResult) => void) | null = null;
@@ -84,8 +85,16 @@ export class MainAgentLoop {
     /**
      * 设置 Meta session handler
      */
-    setMetaSessionHandler(handler: (entries: AttentionQueueEntry[], callbacks: SubagentCallback[]) => Promise<MetaTurnResult | null>): void {
+    setMetaSessionHandler(handler: MetaSessionHandler): void {
         this.metaSessionHandler = handler;
+    }
+
+    resetMetaSessionContext(): boolean {
+        if (!this.metaSessionHandler?.resetMetaSessionContext) {
+            return false;
+        }
+        this.metaSessionHandler.resetMetaSessionContext();
+        return true;
     }
 
 

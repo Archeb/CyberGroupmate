@@ -13,7 +13,7 @@ import type { MetaSandbox } from "../meta-sandbox/meta-sandbox.js";
 import { runMetaSession, type MetaLLMCaller, type MetaSessionResult } from "../meta-sandbox/meta-session-runner.js";
 import { loadConfig } from "../core/config.js";
 import { generateModuleRoster } from "../sandbox/modules/module-registry.js";
-import type { ActiveUserProfile, AttentionQueueEntry, AttentionRecentMessage, MetaSessionHistoryEntry, SubagentCallback, TopicDigest } from "../subagent/types.js";
+import type { ActiveUserProfile, AttendResult, AttentionQueueEntry, AttentionRecentMessage, MetaSessionHistoryEntry, SubagentCallback, TopicDigest } from "../subagent/types.js";
 import type { GlobalState } from "./global-state.js";
 import { trimMetaSessionHistoryWindow } from "./meta-history-retention.js";
 
@@ -22,6 +22,10 @@ const DEFAULT_BASE_SKILLS = ["runtime", "fs", "skills", "mcp", "cron", "todo", "
 const META_END_TURN_MARKER = "<end_turn>";
 const META_RUNNER_NOTICE_PREFIX = "[Meta runner notice]";
 type MetaHistoryMessage = Pick<MetaSessionHistoryEntry, "role" | "content">;
+export interface MetaSessionHandler {
+    (entries: AttentionQueueEntry[], callbacks: SubagentCallback[]): Promise<(MetaSessionResult & { attendResults?: AttendResult[] }) | null>;
+    resetMetaSessionContext?: () => void;
+}
 const META_HISTORY_SECTION_ALLOWLIST = new Set([
     "meta.session_digests",
     "meta.attend_header",
@@ -41,18 +45,11 @@ export interface MetaSessionHandlerDeps {
     llmTimeoutMs?: number;
 }
 
-export function createMetaSessionHandler(deps: MetaSessionHandlerDeps) {
+export function createMetaSessionHandler(deps: MetaSessionHandlerDeps): MetaSessionHandler {
     const engine = new ContextEngine("meta-agent");
     engine.registerAll(getMetaProviders());
-    const sessionHistory: ChatMessage[] = deps.globalState.getMetaSessionHistory().flatMap((message) => {
-        const content = normalizeMetaSessionHistoryContent(message);
-        if (!content) {
-            return [];
-        }
-        return [{ role: message.role, content }];
-    });
 
-    return async (
+    const handler: MetaSessionHandler = async (
         entries: AttentionQueueEntry[],
         callbacks: SubagentCallback[],
     ): Promise<MetaSessionResult | null> => {
@@ -65,6 +62,7 @@ export function createMetaSessionHandler(deps: MetaSessionHandlerDeps) {
             throw new Error("Meta session requires at least one LLM profile");
         }
 
+        const sessionHistory = loadMetaSessionHistory(deps);
         const { messages, renderTrees, contextManifest, historySeedMessage } = await buildMetaMessages(deps, engine, sessionHistory, entries, callbacks);
         const initialMessageCount = messages.length;
         log.info("运行 Meta session", {
@@ -85,7 +83,6 @@ export function createMetaSessionHandler(deps: MetaSessionHandlerDeps) {
                 ...(historySeedMessage ? [historySeedMessage] : []),
                 ...result.messages.slice(initialMessageCount),
             ]);
-            appendMetaSessionHistory(sessionHistory, historyMessages);
             deps.globalState.appendMetaSessionHistory(historyMessages);
         }
 
@@ -97,6 +94,25 @@ export function createMetaSessionHandler(deps: MetaSessionHandlerDeps) {
 
         return result;
     };
+
+    handler.resetMetaSessionContext = () => {
+        engine.ledger.reset();
+        log.info("Meta session handler context 已重置");
+    };
+
+    return handler;
+}
+
+function loadMetaSessionHistory(deps: MetaSessionHandlerDeps): ChatMessage[] {
+    const sessionHistory: ChatMessage[] = deps.globalState.getMetaSessionHistory().flatMap((message) => {
+        const content = normalizeMetaSessionHistoryContent(message);
+        if (!content) {
+            return [];
+        }
+        return [{ role: message.role, content }];
+    });
+    trimMetaSessionHistoryWindow(sessionHistory);
+    return sessionHistory;
 }
 
 async function buildMetaMessages(
@@ -245,17 +261,6 @@ function mergeContextManifests(manifests: ContextManifest[]): ContextManifest {
             estimatedTokens: activeSections.reduce((sum, section) => sum + section.estimatedTokens, 0),
         },
     };
-}
-
-function appendMetaSessionHistory(history: ChatMessage[], messages: MetaHistoryMessage[]): void {
-    for (const message of messages) {
-        if (!message.content.trim()) {
-            continue;
-        }
-        history.push({ role: message.role, content: message.content.trim() });
-    }
-
-    trimMetaSessionHistoryWindow(history);
 }
 
 function collectMetaSessionHistory(messages: ChatMessage[]): MetaHistoryMessage[] {

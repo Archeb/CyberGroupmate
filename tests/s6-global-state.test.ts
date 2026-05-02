@@ -66,14 +66,14 @@ describe("S6: Global State", () => {
         gs.dispose();
     });
 
-    it("#4 addSessionDigest cap at 10", () => {
+    it("#4 addSessionDigest cap at 30", () => {
         const dir = tempDir();
         const gs = new GlobalState({ filePath: join(dir, "s.json"), autoSaveInterval: 0 });
-        for (let i = 0; i < 12; i++) gs.addSessionDigest(`digest-${i}`);
+        for (let i = 0; i < 32; i++) gs.addSessionDigest(`digest-${i}`);
         const digests = gs.getSessionDigests();
-        assert.equal(digests.length, 10);
+        assert.equal(digests.length, 30);
         assert.equal(digests[0].content, "digest-2");
-        assert.equal(digests.at(-1)?.content, "digest-11");
+        assert.equal(digests.at(-1)?.content, "digest-31");
         gs.dispose();
     });
 
@@ -96,6 +96,24 @@ describe("S6: Global State", () => {
         assert.equal(nextHistory.length, 9);
         assert.equal(nextHistory[0]?.content.startsWith("m4-"), true);
         assert.equal(nextHistory.at(-1)?.content.startsWith("tail-"), true);
+        gs.dispose();
+    });
+
+    it("#4c clears meta session context stores", () => {
+        const dir = tempDir();
+        const gs = new GlobalState({ filePath: join(dir, "s.json"), autoSaveInterval: 0 });
+        gs.addSessionDigest("bad digest");
+        gs.appendMetaSessionHistory([
+            { role: "assistant", content: "[SESSION_DIGEST]bad[/SESSION_DIGEST]\n<end_turn>" },
+            { role: "user", content: "old context" },
+        ]);
+
+        assert.equal(gs.clearSessionDigests(), 1);
+        assert.equal(gs.clearMetaSessionHistory(), 2);
+        assert.deepEqual(gs.getSessionDigests(), []);
+        assert.deepEqual(gs.getMetaSessionHistory(), []);
+        assert.equal(gs.clearSessionDigests(), 0);
+        assert.equal(gs.clearMetaSessionHistory(), 0);
         gs.dispose();
     });
 

@@ -212,6 +212,16 @@ export class GlobalState {
         return [...this.state.sessionDigests];
     }
 
+    clearSessionDigests(): number {
+        const removed = this.state.sessionDigests.length;
+        if (removed === 0) {
+            return 0;
+        }
+        this.state.sessionDigests = [];
+        this.markDirty();
+        return removed;
+    }
+
     appendMetaSessionHistory(
         messages: Array<Pick<MetaSessionHistoryEntry, "role" | "content"> & Partial<Pick<MetaSessionHistoryEntry, "timestamp">>>,
     ): void {
@@ -244,6 +254,16 @@ export class GlobalState {
 
     getMetaSessionHistory(): MetaSessionHistoryEntry[] {
         return [...this.state.metaSessionHistory];
+    }
+
+    clearMetaSessionHistory(): number {
+        const removed = this.state.metaSessionHistory.length;
+        if (removed === 0) {
+            return 0;
+        }
+        this.state.metaSessionHistory = [];
+        this.markDirty();
+        return removed;
     }
 
     getSignalPool(): SignalPoolItem[] {

@@ -11,6 +11,7 @@ const log = createLogger("meta-session");
 const DEFAULT_MAX_TURNS = 10;
 const DEFAULT_CODE_TIMEOUT_MS = 30_000;
 const END_TURN_MARKER = "<end_turn>";
+const META_SANDBOX_OBSERVATION_MARKER = "[MetaSandbox observation]";
 const CODE_FENCE_LANGS = "typescript|ts|javascript|js";
 export const META_CODEACT_CHAT_ID = "__meta__";
 
@@ -124,12 +125,30 @@ export function extractSessionDigest(thinking?: string, maxChars: number = 500):
     return compactThinking(trimmed, maxChars);
 }
 
+function hasSessionDigest(thinking?: string): boolean {
+    const trimmed = thinking?.trim();
+    if (!trimmed) {
+        return false;
+    }
+    const match = trimmed.match(/\[SESSION_DIGEST\]([\s\S]*?)(?:\[\/SESSION_DIGEST\]|$)/);
+    return Boolean(match?.[1]?.trim());
+}
+
 export function compactThinking(thinking: string, maxChars: number = 500): string {
     const trimmed = thinking.trim();
     if (trimmed.length <= maxChars) {
         return trimmed;
     }
     return trimmed.slice(-maxChars).trim();
+}
+
+function buildMissingDigestObservation(): string {
+    return [
+        "[Meta runner notice]",
+        "你已经输出 <end_turn>，但没有输出 [SESSION_DIGEST]...[/SESSION_DIGEST]。",
+        "请用纯文本补充本轮摘要，格式必须包含 [SESSION_DIGEST]做了什么、为什么、还在等什么[/SESSION_DIGEST]，然后再输出 <end_turn>。",
+        "不要输出历史占位符或伪造执行结果。",
+    ].join("\n");
 }
 
 function buildMissingEndTurnObservation(): string {
@@ -202,6 +221,7 @@ export async function runMetaSession(
         try {
             const response = await llmCaller(messages, llmConfigs, {
                 caller: "meta-session",
+                stop: [META_SANDBOX_OBSERVATION_MARKER],
                 timeoutMs: config.llmTimeoutMs,
                 ...(config.contextManifest ? { contextManifest: config.contextManifest } : {}),
             });
@@ -241,6 +261,19 @@ export async function runMetaSession(
 
             if (!parsed.code) {
                 if (hasEndTurn) {
+                    if (!hasSessionDigest(parsed.thinking)) {
+                        const observation = buildMissingDigestObservation();
+                        turnRecord.observation = observation;
+                        messages.push({ role: "user", content: observation });
+                        syncMetaCodeActState(sessionId, messages, turns, true);
+                        emitMetaProgress(sessionId, {
+                            turn,
+                            phase: "observation",
+                            executionOutput: observation,
+                            isProcessing: true,
+                        });
+                        continue;
+                    }
                     return finalize("end_turn");
                 }
 

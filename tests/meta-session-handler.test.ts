@@ -148,12 +148,16 @@ describe("createMetaSessionHandler", () => {
     it("uses ContextEngine sections and only replays deltas for messages/topics/profiles", async () => {
         const sandbox = new MetaSandbox({});
         const llmCalls: ChatMessage[][] = [];
+        const persistedHistory: Array<{ role: "assistant" | "user"; content: string; timestamp: string }> = [];
         const handler = createMetaSessionHandler({
             getPersona: () => ({ name: "测试编排者", description: "验证 meta context engine" }),
             globalState: {
                 getSessionDigests: () => [],
-                getMetaSessionHistory: () => [],
-                appendMetaSessionHistory: () => undefined,
+                getMetaSessionHistory: () => [...persistedHistory],
+                appendMetaSessionHistory: (messages: Array<{ role: "assistant" | "user"; content: string }>) => {
+                    const timestamp = new Date().toISOString();
+                    persistedHistory.push(...messages.map((message) => ({ ...message, timestamp })));
+                },
             },
             memory: createMemoryStub() as any,
             sandbox,
@@ -486,6 +490,54 @@ describe("createMetaSessionHandler", () => {
             replayedMessages.some((message) => message.content.includes("[Meta runner notice]")),
             false,
         );
+    });
+
+    it("reloads persisted meta history each run and can reset the context ledger", async () => {
+        const sandbox = new MetaSandbox({});
+        const llmCalls: ChatMessage[][] = [];
+        let persistedHistory: Array<{ role: "assistant" | "user"; content: string; timestamp: string }> = [
+            {
+                role: "assistant",
+                content: "[SESSION_DIGEST]old bad context[/SESSION_DIGEST]\n<end_turn>",
+                timestamp: "2026-05-01T00:00:00.000Z",
+            },
+        ];
+
+        const handler = createMetaSessionHandler({
+            getPersona: () => ({ name: "测试编排者", description: "验证 reset 后不重放旧上下文" }),
+            globalState: {
+                getSessionDigests: () => [],
+                getMetaSessionHistory: () => [...persistedHistory],
+                appendMetaSessionHistory: (messages: Array<{ role: "assistant" | "user"; content: string }>) => {
+                    const timestamp = new Date().toISOString();
+                    persistedHistory.push(...messages.map((message) => ({ ...message, timestamp })));
+                },
+            },
+            memory: createMemoryStub() as any,
+            sandbox,
+            getLlmConfigs: () => [TEST_LLM_CONFIG],
+            llmCaller: async (messages): Promise<LLMResponse> => {
+                llmCalls.push(messages.map((message) => ({ ...message })));
+                return {
+                    content: "[SESSION_DIGEST]noop[/SESSION_DIGEST]\n<end_turn>",
+                };
+            },
+        });
+
+        await handler([createEntry()], []);
+        assert.match(
+            llmCalls[0]?.map((message) => message.content).join("\n\n") ?? "",
+            /old bad context/,
+        );
+
+        persistedHistory = [];
+        handler.resetMetaSessionContext?.();
+        await handler([createEntry()], []);
+
+        const secondPrompt = llmCalls[1]?.map((message) => message.content).join("\n\n") ?? "";
+        assert.doesNotMatch(secondPrompt, /old bad context/);
+        assert.match(secondPrompt, /## 新消息/);
+        assert.match(secondPrompt, /## 话题注册表增量/);
     });
 
     it("renders 30 recent session digests for proactive idle", async () => {

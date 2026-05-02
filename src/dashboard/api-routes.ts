@@ -723,8 +723,18 @@ export function createApiRouter(deps: DashboardDeps, bridge: EventBridge): Route
             }
 
             resetMetaCodeActState();
-            log.info("Meta CodeAct session 已重置");
-            res.json({ ok: true, message: "Meta session cleared" });
+            const clearedHistory = deps.globalState.clearMetaSessionHistory();
+            const clearedDigests = deps.globalState.clearSessionDigests();
+            const resetContext = deps.mainLoop.resetMetaSessionContext();
+            deps.globalState.save();
+            log.info("Meta CodeAct session 已重置", { clearedHistory, clearedDigests, resetContext });
+            res.json({
+                ok: true,
+                message: "Meta session cleared",
+                clearedHistory,
+                clearedDigests,
+                resetContext,
+            });
             return;
         }
 

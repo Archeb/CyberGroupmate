@@ -197,6 +197,8 @@ describe("runMetaSession", () => {
         assert.match(result.messages.at(-1)?.content ?? "", /<end_turn>/);
         assert.match(result.turns[0].observation ?? "", /42/);
         assert.equal(llmOptions[0]?.contextManifest, contextManifest);
+        assert.deepEqual(llmOptions[0]?.stop, ["[MetaSandbox observation]"]);
+        assert.deepEqual(llmOptions[1]?.stop, ["[MetaSandbox observation]"]);
         assert.match(llmCalls[1][llmCalls[1].length - 1].content, /MetaSandbox observation/);
         assert.match(llmCalls[1][llmCalls[1].length - 1].content, /42/);
         assert.doesNotMatch(llmCalls[1][llmCalls[1].length - 2].content, /const value = 1/);
@@ -290,6 +292,31 @@ describe("runMetaSession", () => {
         assert.equal(result.sessionDigest, "Need more context before acting.");
         assert.equal(result.turns.length, 2);
         assert.match(result.messages.at(-1)?.content ?? "", /Meta runner notice/);
+    });
+
+    it("requires SESSION_DIGEST before accepting a pure-text end_turn", async () => {
+        const sandbox = new MetaSandbox({});
+        const responses: LLMResponse[] = [
+            { content: "Done.\n<end_turn>" },
+            { content: "[SESSION_DIGEST]finished after digest reminder[/SESSION_DIGEST]\n<end_turn>" },
+        ];
+
+        const result = await runMetaSession(
+            [{ role: "system", content: "system" }],
+            sandbox,
+            [TEST_LLM_CONFIG],
+            {
+                llmCaller: async () => {
+                    const next = responses.shift();
+                    assert.ok(next);
+                    return next;
+                },
+            },
+        );
+
+        assert.equal(result.endReason, "end_turn");
+        assert.equal(result.sessionDigest, "finished after digest reminder");
+        assert.match(result.messages[2]?.content ?? "", /没有输出 \[SESSION_DIGEST\]/);
     });
 
     it("feeds sandbox errors back to the model and allows a repair turn", async () => {
