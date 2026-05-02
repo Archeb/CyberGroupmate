@@ -330,4 +330,57 @@ describe("createMetaSessionHandler", () => {
         assert.doesNotMatch(prompt, /digest 5/);
         assert.match(prompt, /主动巡视/);
     });
+
+    it("renders only meta-owned todos in Meta global context", async () => {
+        const sandbox = new MetaSandbox({});
+        const llmCalls: ChatMessage[][] = [];
+        const memoryStub = {
+            ...createMemoryStub(),
+            todoList: (bindingId: string) => bindingId === "meta"
+                ? [{
+                    key: "pending_meta_followup",
+                    content: "检查跨群回复",
+                    dueAt: null,
+                    createdAt: "2026-05-01T00:00:00.000Z",
+                    updatedAt: "2026-05-01T00:00:00.000Z",
+                    expired: false,
+                }]
+                : [{
+                    key: "群内规则",
+                    content: "这是某个群自己的规则，不应出现在 Meta Todo",
+                    dueAt: null,
+                    createdAt: "2026-05-01T00:00:00.000Z",
+                    updatedAt: "2026-05-01T00:00:00.000Z",
+                    expired: false,
+                }],
+        };
+        const handler = createMetaSessionHandler({
+            getPersona: () => ({ name: "测试编排者", description: "验证 meta todo scope" }),
+            globalState: {
+                getSessionDigests: () => [],
+                getMetaSessionHistory: () => [],
+                appendMetaSessionHistory: () => undefined,
+            },
+            memory: memoryStub as any,
+            sandbox,
+            getLlmConfigs: () => [TEST_LLM_CONFIG],
+            llmCaller: async (messages): Promise<LLMResponse> => {
+                llmCalls.push(messages.map((message) => ({ ...message })));
+                return {
+                    content: "[SESSION_DIGEST]todo scoped[/SESSION_DIGEST]\n<end_turn>",
+                };
+            },
+        });
+
+        await handler([createEntry()], []);
+
+        const prompt = llmCalls[0]
+            ?.filter((message) => message.role === "user")
+            .map((message) => message.content)
+            .join("\n\n") ?? "";
+        assert.match(prompt, /# 当前 Todo/);
+        assert.match(prompt, /\[meta\] pending_meta_followup: 检查跨群回复/);
+        assert.doesNotMatch(prompt, /群内规则/);
+        assert.doesNotMatch(prompt, /某个群自己的规则/);
+    });
 });

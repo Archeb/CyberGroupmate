@@ -30,7 +30,7 @@ const META_HISTORY_SECTION_ALLOWLIST = new Set([
 export interface MetaSessionHandlerDeps {
     getPersona: () => { name?: string; description?: string } | undefined;
     globalState: Pick<GlobalState, "getSessionDigests" | "getMetaSessionHistory" | "appendMetaSessionHistory">;
-    memory: Pick<IMemoryStoreV2, "getGroupModel" | "getProfilesForChat" | "getPersonIdentity" | "getTopicById" | "listGroupModels" | "todoList">;
+    memory: Pick<IMemoryStoreV2, "getGroupModel" | "getProfilesForChat" | "getPersonIdentity" | "getTopicById" | "todoList">;
     sandbox: MetaSandbox;
     getLlmConfigs: () => LLMConfig[];
     llmCaller?: MetaLLMCaller;
@@ -529,17 +529,14 @@ await cron.delete(id: string): Promise<boolean>
 }
 
 function buildGlobalTodos(
-    memory: Pick<IMemoryStoreV2, "listGroupModels" | "todoList">,
+    memory: Pick<IMemoryStoreV2, "todoList">,
 ): Array<{ key: string; content: string; bindingId: string; dueAt?: string | null; expired?: boolean }> {
-    const bindingIds = [...new Set(["meta", ...memory.listGroupModels().map((group) => group.chatId)])];
-    return bindingIds.flatMap((bindingId) =>
-        memory.todoList(bindingId, { includeExpired: false })
-            .map((todo) => ({
-                key: todo.key,
-                content: todo.content,
-                bindingId,
-                dueAt: todo.dueAt,
-                expired: todo.expired,
-            }))
-    );
+    return memory.todoList("meta", { includeExpired: false })
+        .map((todo) => ({
+            key: todo.key,
+            content: todo.content,
+            bindingId: "meta",
+            dueAt: todo.dueAt,
+            expired: todo.expired,
+        }));
 }
