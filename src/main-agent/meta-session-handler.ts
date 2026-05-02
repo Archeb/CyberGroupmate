@@ -13,7 +13,7 @@ import type { MetaSandbox } from "../meta-sandbox/meta-sandbox.js";
 import { runMetaSession, type MetaLLMCaller, type MetaSessionResult } from "../meta-sandbox/meta-session-runner.js";
 import { loadConfig } from "../core/config.js";
 import { generateModuleRoster } from "../sandbox/modules/module-registry.js";
-import type { ActiveUserProfile, AttentionQueueEntry, MetaSessionHistoryEntry, SubagentCallback, TopicDigest } from "../subagent/types.js";
+import type { ActiveUserProfile, AttentionQueueEntry, AttentionRecentMessage, MetaSessionHistoryEntry, SubagentCallback, TopicDigest } from "../subagent/types.js";
 import type { GlobalState } from "./global-state.js";
 import { trimMetaSessionHistoryWindow } from "./meta-history-retention.js";
 
@@ -30,7 +30,7 @@ const META_HISTORY_SECTION_ALLOWLIST = new Set([
 export interface MetaSessionHandlerDeps {
     getPersona: () => { name?: string; description?: string } | undefined;
     globalState: Pick<GlobalState, "getSessionDigests" | "getMetaSessionHistory" | "appendMetaSessionHistory">;
-    memory: Pick<IMemoryStoreV2, "getGroupModel" | "getProfilesForChat" | "getPersonIdentity" | "getTopicById" | "todoList">;
+    memory: Pick<IMemoryStoreV2, "getGroupModel" | "getProfilesForChat" | "getPersonIdentity" | "getTopicById" | "todoList" | "getRecentMessages">;
     sandbox: MetaSandbox;
     getLlmConfigs: () => LLMConfig[];
     llmCaller?: MetaLLMCaller;
@@ -115,8 +115,7 @@ async function buildMetaMessages(
         messages.push(...sessionHistory.map((message) => ({ ...message })));
     }
 
-    const historicalParts: string[] = [];
-    const ephemeralParts: string[] = [];
+    const currentParts: string[] = [];
     const renderTrees: SectionNode[][] = [];
 
     const isProactiveIdle = entries.some((entry) => entry.source === "PROACTIVE_IDLE");
@@ -128,23 +127,13 @@ async function buildMetaMessages(
     });
     renderTrees.push(globalRender.tree);
     manifests.push(globalRender.manifest);
-    if (globalRender.historicalContent) {
-        historicalParts.push(globalRender.historicalContent);
-    }
-    if (globalRender.ephemeralContent) {
-        ephemeralParts.push(globalRender.ephemeralContent);
-    }
+    pushCurrentRenderPart(currentParts, globalRender.tree);
 
     for (const entry of entries) {
         const renderResult = engine.render(await buildMetaResolveContext(deps, entry));
         renderTrees.push(renderResult.tree);
         manifests.push(renderResult.manifest);
-        if (renderResult.historicalContent) {
-            historicalParts.push(renderResult.historicalContent);
-        }
-        if (renderResult.ephemeralContent) {
-            ephemeralParts.push(renderResult.ephemeralContent);
-        }
+        pushCurrentRenderPart(currentParts, renderResult.tree);
     }
 
     const proactiveInstruction = isProactiveIdle
@@ -158,21 +147,12 @@ async function buildMetaMessages(
     });
     renderTrees.push(instructionRender.tree);
     manifests.push(instructionRender.manifest);
-    if (instructionRender.ephemeralContent) {
-        ephemeralParts.push(instructionRender.ephemeralContent);
-    }
+    pushCurrentRenderPart(currentParts, instructionRender.tree);
 
-    if (historicalParts.length > 0) {
+    if (currentParts.length > 0) {
         messages.push({
             role: "user",
-            content: historicalParts.join("\n\n"),
-        });
-    }
-
-    if (ephemeralParts.length > 0) {
-        messages.push({
-            role: "user",
-            content: ephemeralParts.join("\n\n"),
+            content: currentParts.join("\n\n"),
         });
     }
 
@@ -182,6 +162,21 @@ async function buildMetaMessages(
         contextManifest: mergeContextManifests(manifests),
         historySeedMessage: buildHistorySeedMessage(mergeContextManifests(manifests)),
     };
+}
+
+function pushCurrentRenderPart(parts: string[], tree: SectionNode[]): void {
+    const rendered = tree.flatMap((node) => {
+        if (node.skipped || !node.fullRendered) {
+            return [];
+        }
+        if (node.schema.history === "ephemeral") {
+            return [node.fullRendered];
+        }
+        return node.historicalRendered ? [node.historicalRendered] : [];
+    });
+    if (rendered.length > 0) {
+        parts.push(rendered.join("\n\n"));
+    }
 }
 
 async function buildMetaSystemPrompt(persona: { name?: string; description?: string }): Promise<string> {
@@ -214,25 +209,18 @@ async function buildAssignableSkillsRoster(): Promise<string> {
 
 function mergeContextManifests(manifests: ContextManifest[]): ContextManifest {
     const sections = manifests.flatMap((manifest) => manifest.sections.map((section) => ({ ...section })));
-    const historicalSections = sections.filter((section) =>
-        section.sentPhase === "historical"
-        && typeof section.sentContent === "string"
+    const sentSections = sections.filter((section) =>
+        typeof section.sentContent === "string"
         && section.sentContent.length > 0
     );
-    const ephemeralSections = sections.filter((section) =>
-        section.sentPhase === "ephemeral"
-        && typeof section.sentContent === "string"
-        && section.sentContent.length > 0
-    );
+    const historicalSections = sentSections.filter((section) => section.sentPhase === "historical");
+    const ephemeralSections = sentSections.filter((section) => section.sentPhase === "ephemeral");
     const chatIds = [...new Set(manifests
         .map((manifest) => manifest.chatId)
         .filter((chatId): chatId is string => typeof chatId === "string" && chatId.length > 0))];
 
-    historicalSections.forEach((section, index) => {
+    sentSections.forEach((section, index) => {
         section.sentOrder = index;
-    });
-    ephemeralSections.forEach((section, index) => {
-        section.sentOrder = historicalSections.length + index;
     });
 
     const activeSections = sections.filter((section) => !section.skipped);
@@ -310,6 +298,7 @@ async function buildMetaResolveContext(
     const activeUserProfiles = isSyntheticMeta ? [] : buildActiveUserProfiles(entry, deps.memory);
     const isDirectMessage = groupModel?.isDirectMessage ?? entry.directAddressReason === "DM";
     const chatType = isSyntheticMeta ? "系统" : deriveChatType(isDirectMessage);
+    const recentMessageContext = buildRecentMessageContext(deps.memory, entry, isSyntheticMeta);
 
     return {
         chatId: entry.chatId,
@@ -326,11 +315,47 @@ async function buildMetaResolveContext(
         urgentSignals: entry.urgentSignals,
         schedulerTriggers: entry.schedulerTriggers,
         topicDigests,
-        recentMessages: entry.recentMessages,
+        recentMessages: recentMessageContext.messages,
+        fallbackToRecentMessages: recentMessageContext.fallbackToRecent,
         groupModel: groupModel ?? undefined,
         tonePreset: tonePresetFor(entry.stickinessLevel),
         activeUserProfiles: activeUserProfiles.length > 0 ? activeUserProfiles : undefined,
     };
+}
+
+function buildRecentMessageContext(
+    memory: Pick<IMemoryStoreV2, "getRecentMessages">,
+    entry: AttentionQueueEntry,
+    isSyntheticMeta: boolean,
+): { messages?: AttentionRecentMessage[]; fallbackToRecent: boolean } {
+    const shouldFallback = !isSyntheticMeta && entry.newMessageCount <= 0;
+    if (!shouldFallback) {
+        return entry.recentMessages
+            ? { messages: entry.recentMessages, fallbackToRecent: false }
+            : { fallbackToRecent: false };
+    }
+
+    try {
+        const recent = memory.getRecentMessages(entry.chatId, 20);
+        if (recent.length > 0) {
+            return {
+                messages: [...recent].reverse().map((message) => ({
+                    messageId: message.messageId,
+                    userId: message.userId,
+                    displayName: message.displayName,
+                    text: message.text,
+                    timestamp: message.timestamp,
+                })),
+                fallbackToRecent: true,
+            };
+        }
+    } catch (error) {
+        log.debug("读取 attention 兜底消息失败", { chatId: entry.chatId, error: String(error) });
+    }
+
+    return entry.recentMessages
+        ? { messages: entry.recentMessages, fallbackToRecent: entry.recentMessages.length > 0 }
+        : { fallbackToRecent: false };
 }
 
 function enrichTopicDigests(

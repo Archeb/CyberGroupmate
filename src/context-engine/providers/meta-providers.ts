@@ -53,6 +53,7 @@ interface MetaTopicDigestData {
 interface MetaMessagesData {
     messages: AttentionRecentMessage[];
     newMessageCount: number;
+    fallbackToRecent?: boolean;
 }
 
 interface MetaGroupModelData {
@@ -477,6 +478,7 @@ export const metaMessagesProvider: SectionProvider<MetaMessagesData> = {
         return {
             messages: messages.slice(-30),
             newMessageCount: Number(ctx.newMessageCount ?? messages.length),
+            fallbackToRecent: ctx.fallbackToRecentMessages === true,
         };
     },
     diff(current, committed): DiffResult<MetaMessagesData> {
@@ -490,16 +492,20 @@ export const metaMessagesProvider: SectionProvider<MetaMessagesData> = {
 
         const committedIds = new Set(committed.messages.map((message) => message.messageId));
         const deltaMessages = current.messages.filter((message) => !committedIds.has(message.messageId));
+        const fallbackMessages = current.fallbackToRecent && deltaMessages.length === 0
+            ? current.messages.slice(-20)
+            : [];
         return {
             full: current,
             delta: {
-                messages: deltaMessages,
+                messages: fallbackMessages.length > 0 ? fallbackMessages : deltaMessages,
                 newMessageCount: deltaMessages.length,
+                fallbackToRecent: fallbackMessages.length > 0,
             },
             stats: {
                 total: current.messages.length,
-                added: deltaMessages.length,
-                unchanged: current.messages.length - deltaMessages.length,
+                added: fallbackMessages.length > 0 ? fallbackMessages.length : deltaMessages.length,
+                unchanged: fallbackMessages.length > 0 ? 0 : current.messages.length - deltaMessages.length,
             },
         };
     },
@@ -512,6 +518,9 @@ export const metaMessagesProvider: SectionProvider<MetaMessagesData> = {
             return "";
         }
         const lines = delta.messages.map((message) => formatMessageLine(toRawMessage(message)));
+        if (delta.fallbackToRecent) {
+            return `## 最近消息上下文\n(无新消息增量；attention 已触发，兜底附上最近 ${delta.messages.length} 条消息)\n${lines.join("\n")}`;
+        }
         return `## 新消息增量\n(增量: ${delta.messages.length} 条新消息)\n${lines.join("\n")}`;
     },
 };

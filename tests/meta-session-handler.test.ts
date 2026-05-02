@@ -131,6 +131,14 @@ function createMemoryStub() {
             createdAt: "2026-05-01T14:28:01.000Z",
             updatedAt: "2026-05-01T14:28:01.000Z",
         }),
+        getRecentMessages: () => ([{
+            messageId: "7305",
+            chatId: "telegram:g1",
+            userId: "telegram:u1",
+            displayName: "阿喵",
+            text: "在吗在吗",
+            timestamp: "2026-05-01T14:28:01.000Z",
+        }]),
         listGroupModels: () => [{ chatId: "telegram:g1" }],
         todoList: () => [],
     };
@@ -172,8 +180,7 @@ describe("createMetaSessionHandler", () => {
             .map((message) => message.content) ?? [];
         const secondPrompt = secondUserMessages.join("\n\n");
         const replayedHistoricalPrompt = secondUserMessages[0] ?? "";
-        const currentHistoricalPrompt = secondUserMessages.at(-2) ?? "";
-        const currentEphemeralPrompt = secondUserMessages.at(-1) ?? "";
+        const currentPrompt = secondUserMessages.at(-1) ?? "";
 
         assert.match(firstPrompt, /## 新消息/);
         assert.match(firstPrompt, /在吗在吗/);
@@ -184,12 +191,136 @@ describe("createMetaSessionHandler", () => {
 
         assert.match(replayedHistoricalPrompt, /## 新消息/);
         assert.match(replayedHistoricalPrompt, /## 话题注册表增量/);
-        assert.doesNotMatch(currentHistoricalPrompt, /## 新消息/);
-        assert.doesNotMatch(currentHistoricalPrompt, /## 话题注册表增量/);
-        assert.doesNotMatch(currentHistoricalPrompt, /## 活跃参与者 \(更新\)/);
-        assert.match(currentHistoricalPrompt, /# 注意力切换:/);
-        assert.match(currentEphemeralPrompt, /## 聊天画像/);
-        assert.match(currentEphemeralPrompt, /## 当前注意力元数据/);
+        assert.doesNotMatch(currentPrompt, /## 新消息/);
+        assert.doesNotMatch(currentPrompt, /## 话题注册表增量/);
+        assert.doesNotMatch(currentPrompt, /## 活跃参与者 \(更新\)/);
+        assert.match(currentPrompt, /# 注意力切换:/);
+        assert.match(currentPrompt, /## 聊天画像/);
+        assert.match(currentPrompt, /## 当前注意力元数据/);
+    });
+
+    it("keeps current attention metadata and group model under the matching chat header", async () => {
+        const sandbox = new MetaSandbox({});
+        const llmCalls: ChatMessage[][] = [];
+        const baseMemory = createMemoryStub();
+        const memoryStub = {
+            ...baseMemory,
+            getGroupModel: (key: string) => ({
+                ...baseMemory.getGroupModel(),
+                chatId: key,
+                chatTitle: key.includes("g2") ? "第二现场" : "第一现场",
+                isDirectMessage: false,
+            }),
+            getRecentMessages: () => [],
+        };
+        const handler = createMetaSessionHandler({
+            getPersona: () => ({ name: "测试编排者", description: "验证 attention section 顺序" }),
+            globalState: {
+                getSessionDigests: () => [],
+                getMetaSessionHistory: () => [],
+                appendMetaSessionHistory: () => undefined,
+            },
+            memory: memoryStub as any,
+            sandbox,
+            getLlmConfigs: () => [TEST_LLM_CONFIG],
+            llmCaller: async (messages): Promise<LLMResponse> => {
+                llmCalls.push(messages.map((message) => ({ ...message })));
+                return {
+                    content: "[SESSION_DIGEST]ordered[/SESSION_DIGEST]\n<end_turn>",
+                };
+            },
+        });
+
+        const first = { ...createEntry(), chatId: "telegram:g1" };
+        const second: AttentionQueueEntry = {
+            ...createEntry(),
+            chatId: "telegram:g2",
+            recentMessages: [{
+                messageId: "8305",
+                userId: "telegram:u2",
+                displayName: "小夏",
+                text: "第二条现场消息",
+                timestamp: "2026-05-01T14:29:01.000Z",
+            }],
+        };
+
+        await handler([first, second], []);
+
+        const currentPrompt = llmCalls[0]
+            ?.filter((message) => message.role === "user")
+            .at(-1)?.content ?? "";
+        const firstHeader = currentPrompt.indexOf("# 注意力切换: 第一现场");
+        const firstMeta = currentPrompt.indexOf("## 当前注意力元数据", firstHeader);
+        const firstModel = currentPrompt.indexOf("## 聊天画像", firstHeader);
+        const secondHeader = currentPrompt.indexOf("# 注意力切换: 第二现场");
+        const secondMeta = currentPrompt.indexOf("## 当前注意力元数据", secondHeader);
+        const secondModel = currentPrompt.indexOf("## 聊天画像", secondHeader);
+
+        assert.ok(firstHeader >= 0);
+        assert.ok(firstHeader < firstMeta);
+        assert.ok(firstMeta < firstModel);
+        assert.ok(firstModel < secondHeader);
+        assert.ok(secondHeader < secondMeta);
+        assert.ok(secondMeta < secondModel);
+    });
+
+    it("falls back to 20 recent messages when attention has no new message delta", async () => {
+        const sandbox = new MetaSandbox({});
+        const llmCalls: ChatMessage[][] = [];
+        let requestedLimit = 0;
+        const fallbackRows = Array.from({ length: 20 }, (_, index) => {
+            const n = index + 1;
+            return {
+                messageId: `hist-${n}`,
+                chatId: "telegram:g1",
+                userId: "telegram:u1",
+                displayName: "阿喵",
+                text: `历史现场 ${n}`,
+                timestamp: `2026-05-01T14:${String(n).padStart(2, "0")}:00.000Z`,
+            };
+        });
+        const memoryStub = {
+            ...createMemoryStub(),
+            getRecentMessages: (_chatId: string, limit = 5) => {
+                requestedLimit = limit;
+                return [...fallbackRows].reverse().slice(0, limit);
+            },
+        };
+        const handler = createMetaSessionHandler({
+            getPersona: () => ({ name: "测试编排者", description: "验证 no-delta fallback" }),
+            globalState: {
+                getSessionDigests: () => [],
+                getMetaSessionHistory: () => [],
+                appendMetaSessionHistory: () => undefined,
+            },
+            memory: memoryStub as any,
+            sandbox,
+            getLlmConfigs: () => [TEST_LLM_CONFIG],
+            llmCaller: async (messages): Promise<LLMResponse> => {
+                llmCalls.push(messages.map((message) => ({ ...message })));
+                return {
+                    content: "[SESSION_DIGEST]fallback[/SESSION_DIGEST]\n<end_turn>",
+                };
+            },
+        });
+        const entry: AttentionQueueEntry = {
+            ...createEntry(),
+            newMessageCount: 0,
+            recentMessages: [],
+        };
+
+        await handler([entry], []);
+        await handler([entry], []);
+
+        const secondCurrentPrompt = llmCalls[1]
+            ?.filter((message) => message.role === "user")
+            .at(-1)?.content ?? "";
+        assert.equal(requestedLimit, 20);
+        assert.match(secondCurrentPrompt, /## 最近消息上下文/);
+        assert.match(secondCurrentPrompt, /兜底附上最近 20 条消息/);
+        assert.match(secondCurrentPrompt, /历史现场 1/);
+        assert.match(secondCurrentPrompt, /历史现场 20/);
+        assert.doesNotMatch(secondCurrentPrompt, /## 新消息增量/);
     });
 
     it("replays prior meta assistant history, exposes assignable skills, and forwards merged manifests", async () => {
