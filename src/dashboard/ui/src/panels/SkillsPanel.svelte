@@ -16,8 +16,9 @@
   let dtsContent = '';
   let skillMdContent = '';
   let notice = null;
+  let skillsLoaded = false;
 
-  $: if ($activeTab === 'skills' && !loading && skills.length === 0) {
+  $: if ($activeTab === 'skills' && !loading && !skillsLoaded) {
     loadSkills();
   }
 
@@ -34,15 +35,19 @@
     try {
       const res = await api('/skills');
       skills = res.skills || [];
+      skillsLoaded = true;
       if (!selectedSkillId && skills.length > 0) {
         await selectSkill(skills[0].id);
       } else if (selectedSkillId && skills.some((skill) => skill.id === selectedSkillId)) {
         await selectSkill(selectedSkillId);
+      } else if (selectedSkillId) {
+        selectedSkillId = null;
       }
     } catch (err) {
       showNotice('加载 Skills 失败: ' + err, 'error');
+    } finally {
+      loading = false;
     }
-    loading = false;
   }
 
   async function selectSkill(skillId) {
