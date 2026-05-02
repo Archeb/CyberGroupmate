@@ -235,8 +235,8 @@ export class CodeActExecutor {
 
     /** Memory 引用（层 1 用于刷新目标消息） */
     private memory: MemoryStoreV2 | null = null;
-    /** GlobalState 引用（用于同步 Meta Session Digest） */
-    private globalState: Pick<GlobalState, "getSessionDigests"> | null = null;
+    /** GlobalState 引用（用于同步 Meta Session Digest 与任务历史） */
+    private globalState: Pick<GlobalState, "getSessionDigests" | "updateDispatchedSubagentTask"> | null = null;
 
     constructor(chatId: string, config?: Partial<CodeActExecutorConfig>) {
         this.chatId = chatId;
@@ -295,7 +295,7 @@ export class CodeActExecutor {
         visionLlmConfig?: LLMConfig,
         mediaDownloader?: MediaDownloader,
         formatMention?: (rawUserId: string, username?: string) => string | undefined,
-        globalState?: Pick<GlobalState, "getSessionDigests">,
+        globalState?: Pick<GlobalState, "getSessionDigests" | "updateDispatchedSubagentTask">,
     ): void {
         this.sandboxPool = sandboxPool;
         this.nc = nc;
@@ -395,7 +395,16 @@ export class CodeActExecutor {
                 error: cancelledByUser ? undefined : String(err),
                 durationMs,
                 createdAt: new Date().toISOString(),
+                contentDirection: (task.contextSnapshot.contentDirection ?? task.decisions.map(d => d.contentDirection ?? "").filter(Boolean).join("; ")) || undefined,
             };
+
+            this.globalState?.updateDispatchedSubagentTask(task.taskId, {
+                status: callback.status,
+                summary: callback.summary,
+                error: callback.error,
+                durationMs,
+                completedAt: callback.createdAt,
+            });
 
             if (cancelledByUser) {
                 log.info("execute: 已取消", { chatId: this.chatId, taskId: task.taskId, error: String(err) });
@@ -622,6 +631,10 @@ export class CodeActExecutor {
             historyMessages: this.session.length,
         });
 
+        this.globalState?.updateDispatchedSubagentTask(task.taskId, {
+            status: "RUNNING",
+        });
+
         let sessionResult: SessionResult;
         try {
             sessionResult = await runCodeActSession(
@@ -689,6 +702,13 @@ export class CodeActExecutor {
             .slice(0, 500);
 
         const thinkingTranscript = formatThinkingTranscript(sessionResult);
+        const sessionDigest = sessionResult.sessionDigest;
+        const resultSummary = [
+            `Task ${task.taskId}`,
+            `contentDirection: ${contentDirection || "（未提供）"}`,
+            sessionDigest ? `SESSION_DIGEST: ${sessionDigest}` : "SESSION_DIGEST: （未输出，已使用思考记录兜底）",
+            `CodeAct session ${sessionResult.sessionId}: ${sessionResult.endReason}, ${sessionResult.turns.length} turns, ${sentCollector.allSent.length} messages sent`,
+        ].join("\n");
 
         this.executionRecords.push({
             taskId: task.taskId,
@@ -708,8 +728,7 @@ export class CodeActExecutor {
             isDirectMessage: ctx.isDirectMessage,
             executionType: "CODEACT",
             status: isError ? "ERROR" : "COMPLETED",
-            summary: `CodeAct session ${sessionResult.sessionId}: ${sessionResult.endReason}, ` +
-                `${sessionResult.turns.length} turns, ${sentCollector.allSent.length} messages sent\n\n${thinkingTranscript}`,
+            summary: `${resultSummary}\n\n${thinkingTranscript}`,
             replyContent: sessionResult.turns
                 .filter((t: any) => t.role === "assistant" && t.content)
                 .map((t: any) => t.content)
@@ -721,7 +740,20 @@ export class CodeActExecutor {
             error: sessionResult.error,
             durationMs,
             createdAt: new Date().toISOString(),
+            sessionSummary: sessionDigest,
+            contentDirection,
         };
+
+        this.globalState?.updateDispatchedSubagentTask(task.taskId, {
+            status: callback.status,
+            sessionId: sessionResult.sessionId,
+            sessionDigest,
+            summary: callback.summary,
+            sentMessages: callback.sentMessages,
+            error: callback.error,
+            durationMs,
+            completedAt: callback.createdAt,
+        });
 
         log.info("executeWithSandbox: 完成", {
             chatId: this.chatId,
@@ -767,7 +799,15 @@ export class CodeActExecutor {
             tokensUsed: 0,
             durationMs,
             createdAt: new Date().toISOString(),
+            contentDirection: (task.contextSnapshot.contentDirection ?? task.decisions.map(d => d.contentDirection ?? "").filter(Boolean).join("; ")) || undefined,
         };
+
+        this.globalState?.updateDispatchedSubagentTask(task.taskId, {
+            status: callback.status,
+            summary: callback.summary,
+            durationMs,
+            completedAt: callback.createdAt,
+        });
 
         log.info("execute: 完成 (skeleton)", { chatId: this.chatId, taskId: task.taskId, durationMs });
         return callback;

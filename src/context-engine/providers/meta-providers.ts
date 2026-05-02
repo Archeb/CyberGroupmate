@@ -277,7 +277,12 @@ export const metaCallbacksProvider: SectionProvider<MetaCallbacksData> = {
     render(data) {
         return [
             "# 新到达的 Subagent Callbacks",
-            ...data.callbacks.map((cb) => `- ${cb.chatId}: status=${cb.status}, taskId=${cb.taskId}, summary=${cb.summary}`),
+            ...data.callbacks.map((cb) => [
+                `- ${cb.chatId}: status=${cb.status}, taskId=${cb.taskId}`,
+                cb.contentDirection ? `  contentDirection=${cb.contentDirection}` : "",
+                cb.sessionSummary ? `  SESSION_DIGEST=${cb.sessionSummary}` : "",
+                `  summary=${cb.summary}`,
+            ].filter(Boolean).join("\n")),
         ].join("\n");
     },
 };

@@ -224,6 +224,33 @@ export interface SubagentCallback {
     // ─── subagent.md §2.2 C1/C2 补齐字段 ───
     /** Session 摘要（CodeAct session 的结构化摘要） */
     sessionSummary?: string;
+    /** 原始任务方向（Meta 派发时的 contentDirection） */
+    contentDirection?: string;
+}
+
+/** Meta 派发给 Subagent 的任务持久化记录 */
+export interface DispatchedSubagentTaskRecord {
+    taskId: string;
+    chatId: string;
+    contentDirection: string;
+    toneGuidance?: string;
+    context?: unknown;
+    useSkills?: string[];
+    tracking?: unknown;
+    status: "PENDING" | "RUNNING" | "COMPLETED" | "ERROR" | "SKIPPED" | "TIMEOUT";
+    createdAt: string;
+    updatedAt: string;
+    completedAt?: string;
+    sessionId?: string;
+    sessionDigest?: string;
+    summary?: string;
+    sentMessages?: Array<{
+        messageId?: string;
+        text: string;
+        timestamp: string;
+    }>;
+    error?: string;
+    durationMs?: number;
 }
 
 // ─── GroupStickiness ───
@@ -449,6 +476,8 @@ export interface MainAgentGlobalState {
     signalPool: SignalPoolItem[];
     /** Meta-CodeAct 唤醒条件 */
     wakeConditions: WakeConditionRecord[];
+    /** Meta 派发给 Subagent 的任务历史 */
+    dispatchedSubagentTasks: DispatchedSubagentTaskRecord[];
 }
 
 // ─── 配置 ───

@@ -24,6 +24,7 @@ import type {
     SignalPoolItem,
     WakeCondition,
     WakeConditionRecord,
+    DispatchedSubagentTaskRecord,
 } from "../subagent/types.js";
 import { createLogger } from "../core/logger.js";
 import { randomUUID } from "node:crypto";
@@ -45,6 +46,7 @@ const DEFAULT_CONFIG: GlobalStateConfig = {
 };
 
 const MAX_SESSION_DIGESTS = 30;
+const MAX_DISPATCHED_SUBAGENT_TASKS = 500;
 
 /**
  * GlobalState — 主 Agent 全局状态管理器
@@ -276,6 +278,77 @@ export class GlobalState {
         return [...this.state.wakeConditions];
     }
 
+    recordDispatchedSubagentTask(
+        task: Omit<DispatchedSubagentTaskRecord, "status" | "updatedAt"> & Partial<Pick<DispatchedSubagentTaskRecord, "status" | "updatedAt">>,
+    ): void {
+        const now = new Date().toISOString();
+        const record: DispatchedSubagentTaskRecord = {
+            ...task,
+            status: task.status ?? "PENDING",
+            updatedAt: task.updatedAt ?? now,
+        };
+        const existingIndex = this.state.dispatchedSubagentTasks.findIndex((item) => item.taskId === record.taskId);
+        if (existingIndex >= 0) {
+            this.state.dispatchedSubagentTasks.splice(existingIndex, 1, {
+                ...this.state.dispatchedSubagentTasks[existingIndex],
+                ...record,
+                updatedAt: now,
+            });
+        } else {
+            this.state.dispatchedSubagentTasks.push(record);
+        }
+        while (this.state.dispatchedSubagentTasks.length > MAX_DISPATCHED_SUBAGENT_TASKS) {
+            this.state.dispatchedSubagentTasks.shift();
+        }
+        this.markDirty();
+    }
+
+    updateDispatchedSubagentTask(
+        taskId: string,
+        patch: Partial<Omit<DispatchedSubagentTaskRecord, "taskId" | "createdAt">>,
+    ): DispatchedSubagentTaskRecord | null {
+        const index = this.state.dispatchedSubagentTasks.findIndex((item) => item.taskId === taskId);
+        if (index === -1) {
+            return null;
+        }
+        const updated: DispatchedSubagentTaskRecord = {
+            ...this.state.dispatchedSubagentTasks[index],
+            ...patch,
+            updatedAt: new Date().toISOString(),
+        };
+        this.state.dispatchedSubagentTasks.splice(index, 1, updated);
+        this.markDirty();
+        return { ...updated };
+    }
+
+    getDispatchedSubagentTask(taskId: string): DispatchedSubagentTaskRecord | null {
+        const record = this.state.dispatchedSubagentTasks.find((item) => item.taskId === taskId);
+        return record ? { ...record } : null;
+    }
+
+    listDispatchedSubagentTasks(options?: { chatId?: string; status?: string; limit?: number; offset?: number }): {
+        tasks: DispatchedSubagentTaskRecord[];
+        total: number;
+        hasMore: boolean;
+    } {
+        const limit = Math.max(1, Math.min(options?.limit ?? 50, 200));
+        const offset = Math.max(options?.offset ?? 0, 0);
+        let tasks = [...this.state.dispatchedSubagentTasks];
+        if (options?.chatId) {
+            tasks = tasks.filter((task) => task.chatId === options.chatId);
+        }
+        if (options?.status) {
+            tasks = tasks.filter((task) => task.status === options.status);
+        }
+        tasks.sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+        const total = tasks.length;
+        return {
+            tasks: tasks.slice(offset, offset + limit).map((task) => ({ ...task })),
+            total,
+            hasMore: offset + limit < total,
+        };
+    }
+
     /** 获取已到期的提醒（未触发的，triggerAt <= now） */
     getDueReminders(): SchedulerEvent[] {
         const now = new Date().toISOString();
@@ -361,6 +434,7 @@ export class GlobalState {
             metaSessionHistory: Array.isArray(obj.metaSessionHistory) ? obj.metaSessionHistory as MetaSessionHistoryEntry[] : def.metaSessionHistory,
             signalPool: Array.isArray(obj.signalPool) ? obj.signalPool as SignalPoolItem[] : def.signalPool,
             wakeConditions: Array.isArray(obj.wakeConditions) ? obj.wakeConditions as WakeConditionRecord[] : def.wakeConditions,
+            dispatchedSubagentTasks: Array.isArray(obj.dispatchedSubagentTasks) ? obj.dispatchedSubagentTasks as DispatchedSubagentTaskRecord[] : def.dispatchedSubagentTasks,
         };
     }
 
@@ -372,6 +446,7 @@ export class GlobalState {
             metaSessionHistory: [],
             signalPool: [],
             wakeConditions: [],
+            dispatchedSubagentTasks: [],
         };
     }
 }

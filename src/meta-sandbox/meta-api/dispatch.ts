@@ -47,7 +47,12 @@ type SubagentManagerReader = Pick<SubagentManager, "getOrCreate" | "getSessionFi
 export interface DispatchApiDeps {
     subagentManager: SubagentManagerReader;
     memory: MemoryStoreV2;
-    globalState?: Pick<GlobalState, "addReminder">;
+    globalState?: Pick<GlobalState,
+        "addReminder" |
+        "recordDispatchedSubagentTask" |
+        "getDispatchedSubagentTask" |
+        "listDispatchedSubagentTasks"
+    >;
     accumulator: AttentionAccumulator;
     onTaskDispatched?: (task: CodeActReplyTask) => void | Promise<void>;
     groundingConfig?: GroundingConfig;
@@ -85,6 +90,17 @@ export function createDispatchApi(deps: DispatchApiDeps) {
                 createdAt: new Date().toISOString(),
             };
 
+            deps.globalState?.recordDispatchedSubagentTask({
+                taskId,
+                chatId,
+                contentDirection: taskSpec.contentDirection,
+                toneGuidance: taskSpec.toneGuidance,
+                context: taskSpec.context,
+                useSkills: taskSpec.useSkills,
+                tracking: taskSpec.tracking,
+                createdAt: task.createdAt,
+            });
+
             executor.enqueue(task);
             deps.accumulator.markActioned(chatId);
             await deps.onTaskDispatched?.(task);
@@ -92,6 +108,16 @@ export function createDispatchApi(deps: DispatchApiDeps) {
             const tracking = recordDispatchTracking(deps, chatId, taskId, taskSpec.tracking);
 
             return { taskId, ...tracking };
+        },
+        getTask: async (taskId: string) => {
+            const task = deps.globalState?.getDispatchedSubagentTask(taskId);
+            if (!task) {
+                return null;
+            }
+            return task;
+        },
+        listTasks: async (options?: { chatId?: string; status?: string; limit?: number; offset?: number }) => {
+            return deps.globalState?.listDispatchedSubagentTasks(options) ?? { tasks: [], total: 0, hasMore: false };
         },
     };
 }

@@ -110,6 +110,24 @@ export function createApiRouter(deps: DashboardDeps, bridge: EventBridge): Route
         res.json(bridge.buildSnapshot());
     });
 
+    // ─── Subagent Task History ───
+    router.get("/subagent-tasks", (req, res) => {
+        const limit = Math.min(parseInt(qs(req.query.limit)) || 50, 200);
+        const offset = Math.max(parseInt(qs(req.query.offset)) || 0, 0);
+        const chatId = qs(req.query.chatId) || undefined;
+        const status = qs(req.query.status) || undefined;
+        res.json(deps.globalState.listDispatchedSubagentTasks({ chatId, status, limit, offset }));
+    });
+
+    router.get("/subagent-tasks/:taskId", (req, res) => {
+        const task = deps.globalState.getDispatchedSubagentTask(req.params.taskId);
+        if (!task) {
+            res.status(404).json({ error: "task not found" });
+            return;
+        }
+        res.json(task);
+    });
+
     // ─── Skills ───
     router.get("/skills", (_req, res) => {
         try {

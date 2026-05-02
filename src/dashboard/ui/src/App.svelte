@@ -11,6 +11,7 @@
   import QueuePanel from './panels/QueuePanel.svelte';
   import DecisionsPanel from './panels/DecisionsPanel.svelte';
   import CodeActPanel from './panels/CodeActPanel.svelte';
+  import SubagentTasksPanel from './panels/SubagentTasksPanel.svelte';
   import McpPanel from './panels/McpPanel.svelte';
   import RecordingPanel from './panels/RecordingPanel.svelte';
   import LLMLogPanel from './panels/LLMLogPanel.svelte';
@@ -62,6 +63,7 @@
     <div class:hidden={$activeTab !== 'queue'}><QueuePanel /></div>
     <div class:hidden={$activeTab !== 'decisions'}><DecisionsPanel /></div>
     <div class:hidden={$activeTab !== 'codeact'}><CodeActPanel /></div>
+    <div class:hidden={$activeTab !== 'subagent-tasks'}><SubagentTasksPanel /></div>
     <div class:hidden={$activeTab !== 'mcp'}><McpPanel /></div>
     <div class:hidden={$activeTab !== 'recording'}><RecordingPanel /></div>
     <div class:hidden={$activeTab !== 'llm-log'}><LLMLogPanel /></div>
