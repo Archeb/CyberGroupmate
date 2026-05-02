@@ -17,6 +17,7 @@ import type { AttentionItem } from "../accumulator/types.js";
 import { AttentionAccumulator } from "../accumulator/attention-accumulator.js";
 import { createLogger } from "../core/logger.js";
 import { buildWakeConditionPayload, matchCallbackWakeConditions } from "./wake-conditions.js";
+import type { PlatformAdapter } from "../adapter/platform-adapter.js";
 
 const log = createLogger("main-agent-loop");
 
@@ -43,6 +44,7 @@ export class MainAgentLoop {
     private callbackQueue: CallbackQueue;
     private subagentManager: SubagentManager;
     private globalState: GlobalState | null;
+    private adapters: PlatformAdapter[];
 
     /** 循环状态 */
     private running = false;
@@ -72,11 +74,13 @@ export class MainAgentLoop {
         subagentManager: SubagentManager,
         config?: Partial<MainAgentLoopConfig>,
         globalState?: GlobalState | null,
+        adapters?: PlatformAdapter[],
     ) {
         this.accumulator = accumulator;
         this.callbackQueue = callbackQueue;
         this.subagentManager = subagentManager;
         this.globalState = globalState ?? null;
+        this.adapters = adapters ?? [];
         this.config = { ...DEFAULT_LOOP_CONFIG, ...config };
     }
 
@@ -234,6 +238,7 @@ export class MainAgentLoop {
         const attended: string[] = [];
         const decisions: AttendResult[] = [];
         let metaEndReason: string | null = null;
+        let metaHandledEntries = false;
 
         const cbOpen = Date.now() < this.circuitBreakerOpenUntil;
         if (cbOpen) {
@@ -279,6 +284,7 @@ export class MainAgentLoop {
                         const result = await this.metaSessionHandler(uniqueEntries, callbacksForMeta);
                         this.pendingCallbacksForMeta = [];
                         metaEndReason = result?.endReason ?? null;
+                        metaHandledEntries = !!result;
                         if (result?.sessionDigest && this.globalState) {
                             this.globalState.addSessionDigest(result.sessionDigest);
                         }
@@ -309,6 +315,9 @@ export class MainAgentLoop {
                     continue;
                 }
                 subagent.markAttended();
+                if (metaHandledEntries) {
+                    this.markAsRead(entry.chatId);
+                }
                 if (subagent.recordingPipeline) {
                     subagent.recordingPipeline.flush({ clusterOnly: true }).catch((error) => {
                         log.warn("Meta turn 后 pipeline flush 失败", {
@@ -341,6 +350,19 @@ export class MainAgentLoop {
             phase4MetaEndReason: metaEndReason,
             phase5Decisions: decisions,
         };
+    }
+
+    private markAsRead(chatId: string): void {
+        const adapter = this.adapters.find((item) => chatId.startsWith(`${item.platform}:`));
+        if (!adapter?.markAsRead) {
+            return;
+        }
+        adapter.markAsRead(chatId).catch((error) => {
+            log.debug("markAsRead failed after Meta attend", {
+                chatId,
+                error: String(error).slice(0, 100),
+            });
+        });
     }
 
     /**

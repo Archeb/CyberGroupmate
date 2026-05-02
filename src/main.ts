@@ -769,7 +769,7 @@ async function main(): Promise<void> {
     // ─── MainAgentLoop 配置 ───
     const mainLoop = new MainAgentLoop(accumulator, q5, subagentManager, {
         pollInterval: appConfig.subagent?.pollInterval ?? 5000,
-    }, globalState);
+    }, globalState, adapters);
 
 
 
