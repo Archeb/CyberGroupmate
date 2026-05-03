@@ -25,10 +25,12 @@ function makeManager(options?: {
     q5?: CallbackQueue;
     enqueued?: CodeActReplyTask[];
     unblocks?: string[];
+    blocks?: string[];
 }) {
     const q5 = options?.q5 ?? new CallbackQueue();
     const enqueued = options?.enqueued ?? [];
     const unblocks = options?.unblocks ?? [];
+    const blocks = options?.blocks ?? [];
     const executor = {
         enqueue: (task: CodeActReplyTask) => enqueued.push(task),
         isProcessing: () => false,
@@ -43,21 +45,23 @@ function makeManager(options?: {
         windowMs: options?.windowMs ?? 20,
         callbackQueue: q5,
         accumulator: {
+            block: (chatId: string) => blocks.push(chatId),
             unblock: (chatId: string) => unblocks.push(chatId),
         },
         subagentManager: {
             get: () => subagent,
         } as any,
     });
-    return { manager, q5, enqueued, unblocks };
+    return { manager, q5, enqueued, unblocks, blocks };
 }
 
 describe("PostTaskWindowManager", () => {
     it("delays callbacks with sent messages and attaches reaction messages", async () => {
-        const { manager, q5, unblocks } = makeManager({ windowMs: 20 });
+        const { manager, q5, unblocks, blocks } = makeManager({ windowMs: 20 });
 
         manager.handleCallback(makeCallback());
         assert.equal(q5.size, 0);
+        assert.deepEqual(blocks, ["telegram:1"]);
 
         manager.recordMessage("telegram:1", {
             _id: "evt-1",
@@ -78,6 +82,65 @@ describe("PostTaskWindowManager", () => {
         assert.equal(callback.postTaskMessages?.[0]?.text, "看到了");
         assert.equal(callback.postTaskWindow?.messageCount, 1);
         assert.deepEqual(unblocks, ["telegram:1"]);
+        manager.dispose();
+    });
+
+    it("does not block callbacks without sent messages", () => {
+        const { manager, q5, blocks, unblocks } = makeManager({ windowMs: 20 });
+
+        manager.handleCallback(makeCallback({ sentMessages: undefined }));
+
+        assert.equal(q5.size, 1);
+        assert.deepEqual(blocks, []);
+        assert.deepEqual(unblocks, ["telegram:1"]);
+        manager.dispose();
+    });
+
+    it("opens from agent sent events before callback arrives", async () => {
+        const { manager, q5, enqueued, blocks, unblocks } = makeManager({ windowMs: 20 });
+        const chatId = "discord:guild-1:channel-1";
+
+        manager.handleSentMessage(chatId, {
+            _id: "sent-event-1",
+            _ts: "2026-05-03T12:00:00.000Z",
+            type: "system.agent_message_sent",
+            scene: "discord",
+            chatId: "guild-1:channel-1",
+            messageId: "sent-discord-1",
+            text: "hello discord",
+        });
+
+        assert.equal(manager.hasActiveWindow(chatId), true);
+        assert.deepEqual(blocks, [chatId]);
+        assert.equal(q5.size, 0);
+
+        const event = {
+            _id: "evt-discord-1",
+            _ts: "2026-05-03T12:00:01.000Z",
+            type: "nc.message",
+            chatId,
+            messageId: "msg-discord-2",
+            displayName: "Dana",
+            text: "刚才那句我回一下",
+            replyToMessageId: "sent-discord-1",
+        };
+        assert.equal(manager.isReplyToWindowSentMessage(chatId, event), true);
+        manager.recordMessage(chatId, event, { isDirectAttention: true, directReason: "reply-to-agent" });
+        assert.equal(manager.tryForwardDirectMessage(chatId, event, "reply-to-agent"), true);
+        assert.equal(enqueued.length, 1);
+
+        manager.handleCallback(makeCallback({
+            chatId,
+            sentMessages: [{ messageId: "sent-discord-1", text: "hello discord", timestamp: new Date().toISOString() }],
+        }));
+
+        await sleep(60);
+
+        assert.equal(q5.size, 1);
+        const [callback] = q5.drain();
+        assert.equal(callback.chatId, chatId);
+        assert.equal(callback.postTaskWindow?.directMessageCount, 1);
+        assert.deepEqual(unblocks, [chatId]);
         manager.dispose();
     });
 

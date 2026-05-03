@@ -44,7 +44,7 @@ interface ActivePostTaskWindow {
 export interface PostTaskWindowManagerOptions {
     windowMs?: number;
     callbackQueue: CallbackQueue;
-    accumulator: Pick<AttentionAccumulator, "unblock">;
+    accumulator: Pick<AttentionAccumulator, "block" | "unblock">;
     subagentManager: Pick<SubagentManager, "get">;
     onDirectTaskEnqueued?: (task: CodeActReplyTask) => void;
 }
@@ -52,7 +52,7 @@ export interface PostTaskWindowManagerOptions {
 export class PostTaskWindowManager {
     private readonly windowMs: number;
     private readonly callbackQueue: CallbackQueue;
-    private readonly accumulator: Pick<AttentionAccumulator, "unblock">;
+    private readonly accumulator: Pick<AttentionAccumulator, "block" | "unblock">;
     private readonly subagentManager: Pick<SubagentManager, "get">;
     private readonly onDirectTaskEnqueued?: (task: CodeActReplyTask) => void;
     private readonly windows = new Map<string, ActivePostTaskWindow>();
@@ -63,6 +63,39 @@ export class PostTaskWindowManager {
         this.accumulator = options.accumulator;
         this.subagentManager = options.subagentManager;
         this.onDirectTaskEnqueued = options.onDirectTaskEnqueued;
+    }
+
+    handleSentMessage(chatId: string, event: NotificationEvent): void {
+        if (this.windowMs <= 0) return;
+
+        const existing = this.windows.get(chatId);
+        if (existing) {
+            rememberEventMessageId(existing.sentMessageIds, event);
+            existing.flushAtMs = Date.now() + this.windowMs;
+            this.scheduleFlush(existing, this.windowMs);
+            return;
+        }
+
+        const startedAtMs = Date.now();
+        const window: ActivePostTaskWindow = {
+            chatId,
+            startedAtMs,
+            flushAtMs: startedAtMs + this.windowMs,
+            callbacks: [],
+            messages: [],
+            sentMessageIds: new Set<string>(),
+            timer: null,
+        };
+        rememberEventMessageId(window.sentMessageIds, event);
+        this.accumulator.block(chatId);
+        this.windows.set(chatId, window);
+        this.scheduleFlush(window, this.windowMs);
+
+        log.info("post-task window opened from sent message", {
+            chatId,
+            windowMs: this.windowMs,
+            messageId: event.messageId ?? event.id,
+        });
     }
 
     handleCallback(callback: SubagentCallback): void {
@@ -84,7 +117,14 @@ export class PostTaskWindowManager {
             return;
         }
 
+        if (this.windowMs <= 0) {
+            this.callbackQueue.enqueue(callback);
+            this.accumulator.unblock(callback.chatId);
+            return;
+        }
+
         const startedAtMs = Date.now();
+        this.accumulator.block(callback.chatId);
         const window: ActivePostTaskWindow = {
             chatId: callback.chatId,
             startedAtMs,
@@ -224,6 +264,10 @@ export class PostTaskWindowManager {
             this.scheduleFlush(window, IDLE_RECHECK_MS);
             return;
         }
+        if (window.callbacks.length === 0) {
+            this.scheduleFlush(window, IDLE_RECHECK_MS);
+            return;
+        }
 
         this.windows.delete(chatId);
         if (window.timer) clearTimeout(window.timer);
@@ -255,6 +299,13 @@ export class PostTaskWindowManager {
                 followUpCallbackCount: followUps.length,
             },
         };
+    }
+}
+
+function rememberEventMessageId(sentMessageIds: Set<string>, event: NotificationEvent): void {
+    const messageId = event.messageId ?? event.id;
+    if (messageId != null) {
+        sentMessageIds.add(String(messageId));
     }
 }
 

@@ -546,7 +546,7 @@ async function main(): Promise<void> {
                 };
                 agentSub.recordingPipeline.onMessage(agentMsg);
             }
-            postTaskWindows.recordMessage(compositeChatId, event);
+            postTaskWindows.handleSentMessage(compositeChatId, event);
 
             return; // agent 消息不走后续 Observer/Accumulator 逻辑
         }
