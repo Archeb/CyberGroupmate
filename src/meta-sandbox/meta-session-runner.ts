@@ -135,13 +135,6 @@ function hasSessionDigest(thinking?: string): boolean {
     return Boolean(match?.[1]?.trim());
 }
 
-function appendSessionDigestBlock(thinking: string | undefined, digest: string): string {
-    return [
-        thinking?.trim() ?? "",
-        `[SESSION_DIGEST]${digest}[/SESSION_DIGEST]`,
-    ].filter(Boolean).join("\n");
-}
-
 export function compactThinking(thinking: string, maxChars: number = 500): string {
     const trimmed = thinking.trim();
     if (trimmed.length <= maxChars) {
@@ -237,12 +230,8 @@ export async function runMetaSession(
             const parsed = parseMetaResponse(assistantMessage);
             const hasCode = Boolean(parsed.code);
             const hasEndTurn = assistantMessage.includes(END_TURN_MARKER);
-            const postCodeEndRequest = hasCode
-                ? getCleanPostCodeEndRequest(assistantMessage, parsed.thinking)
-                : null;
-            const shouldEndAfterCode = Boolean(postCodeEndRequest);
-            if (hasCode && hasEndTurn && !postCodeEndRequest) {
-                log.info("Meta session code block included non-clean end_turn tail; ignoring tail until after observation", {
+            if (hasCode && hasEndTurn) {
+                log.info("Meta session response included code and end_turn; end_turn is ignored until a later pure-text turn", {
                     sessionId,
                     turn,
                 });
@@ -336,23 +325,6 @@ export async function runMetaSession(
                 return finalize("interrupted", "Meta session cancelled by user");
             }
 
-            if (shouldEndAfterCode) {
-                if (!postCodeEndRequest?.digest) {
-                    const observation = buildMissingDigestObservation();
-                    turnRecord.observation = [turnRecord.observation, observation].filter(Boolean).join("\n\n");
-                    messages.push({ role: "user", content: observation });
-                    syncMetaCodeActState(sessionId, messages, turns, true);
-                    emitMetaProgress(sessionId, {
-                        turn,
-                        phase: "observation",
-                        executionOutput: observation,
-                        isProcessing: true,
-                    });
-                    continue;
-                }
-                turnRecord.thinking = appendSessionDigestBlock(turnRecord.thinking, postCodeEndRequest.digest);
-                return finalize("end_turn");
-            }
         } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
             log.warn("Meta session failed", { sessionId, turn, error: message });
@@ -373,30 +345,6 @@ function buildAssistantHistoryContent(content: string): string {
         return content.trim();
     }
     return stripEndTurnMarker(content.slice(0, firstCodeBlock.start)).trim();
-}
-
-function getCleanPostCodeEndRequest(content: string, preCodeThinking: string): { digest?: string } | null {
-    const firstCodeBlock = findFirstCodeBlock(content);
-    if (!firstCodeBlock) {
-        return null;
-    }
-
-    const tail = content.slice(firstCodeBlock.end).trim();
-    if (!tail.includes(END_TURN_MARKER)) {
-        return null;
-    }
-
-    const digest = extractSessionDigest(tail) ?? extractSessionDigest(preCodeThinking);
-    const residue = tail
-        .replace(/\[SESSION_DIGEST\][\s\S]*?(?:\[\/SESSION_DIGEST\]|$)/g, "")
-        .replace(new RegExp(END_TURN_MARKER, "g"), "")
-        .trim();
-
-    if (residue.length > 0) {
-        return null;
-    }
-
-    return { digest };
 }
 
 function findFirstCodeBlock(content: string): FirstCodeBlockMatch | null {
