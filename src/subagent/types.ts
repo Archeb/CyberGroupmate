@@ -182,6 +182,10 @@ export interface CodeActReplyTask {
     useSkills?: string[];
     /** 主 Agent / dispatch 阶段检索到的额外记忆上下文 */
     memoryContext?: AdditionalMemoryContext | null;
+    /** 轻量续接 prompt：用于 post-task window/L2 前送类消息，不渲染完整任务包 */
+    continuationPrompt?: string;
+    /** 跳过执行前刷新最近消息，避免轻量续接被扩展成完整目标消息包 */
+    skipRefreshTaskMessages?: boolean;
 }
 
 /** 回复策略 (subagent.md §2.2 B1) */

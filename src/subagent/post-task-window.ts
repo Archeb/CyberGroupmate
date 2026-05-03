@@ -139,9 +139,7 @@ export class PostTaskWindowManager {
 
         const message = toReactionMessage(event, { isDirectAttention: true, directReason });
         const contentDirection = [
-            "Post-task window 内有人直接叫住你、回复你或提及你。",
-            "请结合刚才你已经发出的消息和当前群聊上下文，判断是否需要自然补一轮。",
-            "如果需要，就简短回应；如果不需要发送消息，保持克制，不要硬接。",
+            "Post-task window 内有人直接叫住你、回复你或提及你。请自然判断是否需要补一轮。",
         ].join("");
         const contextSnapshot: GroupContextPackage = {
             depth: 2,
@@ -152,24 +150,8 @@ export class PostTaskWindowManager {
             chatTitle: String(event.chatTitle ?? window.callbacks[0]?.chatTitle ?? ""),
             isDirectMessage: Boolean(event.isDirectMessage ?? window.callbacks[0]?.isDirectMessage),
             lastCallbacks: window.callbacks.slice(-3),
-            recentMessages: [{
-                id: message.messageId,
-                sender: message.sender,
-                text: message.text,
-                timestamp: message.timestamp,
-                replyTo: message.replyToMessageId,
-                mediaType: message.mediaType,
-                mediaInfo: message.mediaInfo,
-            }],
             toneGuidance: "自然、简短，优先像刚被人叫住时那样接一句。",
             contentDirection,
-            personContext: JSON.stringify({
-                postTaskWindow: {
-                    originalTaskId: window.callbacks[0]?.taskId,
-                    directReason,
-                    message,
-                },
-            }),
         };
         const task: CodeActReplyTask = {
             type: "CODEACT_REPLY",
@@ -188,6 +170,8 @@ export class PostTaskWindowManager {
             createdAt: new Date().toISOString(),
             targetMessageIds: [message.messageId],
             replyStrategy: "DIRECT_REPLY",
+            continuationPrompt: formatPostTaskContinuationPrompt(message, directReason),
+            skipRefreshTaskMessages: true,
         };
 
         executor.enqueue(task);
@@ -304,6 +288,20 @@ function toReactionMessage(
             : undefined,
         mediaInfo: event.mediaInfo != null ? JSON.stringify(event.mediaInfo) : undefined,
     };
+}
+
+function formatPostTaskContinuationPrompt(message: PostTaskReactionMessage, directReason: string): string {
+    const mediaSuffix = message.mediaType
+        ? ` [${message.mediaType}${message.mediaInfo ? ` ${message.mediaInfo}` : ""}]`
+        : "";
+    const replySuffix = message.replyToMessageId ? ` (replyTo=${message.replyToMessageId})` : "";
+    const text = message.text || "[non-text message]";
+    return [
+        "[📩 新消息到达]",
+        `[${message.timestamp}] [msgId:${message.messageId}] ${message.sender}${replySuffix}: ${text}${mediaSuffix}`,
+        "",
+        `[post-task direct attention: ${directReason}] 这条消息发生在你刚完成上一轮任务后的发酵窗口内。请基于上一轮会话和刚才发出的内容判断是否需要简短回应；需要时调用 sendMessage/sendSticker，不需要则直接结束，不要硬接。`,
+    ].join("\n");
 }
 
 export function buildDispatchedRecordForPostTaskDirect(task: CodeActReplyTask): DispatchedSubagentTaskRecord {

@@ -105,6 +105,11 @@ describe("PostTaskWindowManager", () => {
         assert.equal(enqueued[0].chatId, "telegram:1");
         assert.deepEqual(enqueued[0].targetMessageIds, ["msg-2"]);
         assert.equal(enqueued[0].replyStrategy, "DIRECT_REPLY");
+        assert.equal(enqueued[0].skipRefreshTaskMessages, true);
+        assert.match(enqueued[0].continuationPrompt ?? "", /\[📩 新消息到达\]/);
+        assert.match(enqueued[0].continuationPrompt ?? "", /你刚才说的是这个意思吗？/);
+        assert.equal(enqueued[0].contextSnapshot.recentMessages, undefined);
+        assert.equal(enqueued[0].contextSnapshot.personContext, undefined);
         manager.dispose();
     });
 

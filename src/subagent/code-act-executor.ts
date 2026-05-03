@@ -431,106 +431,26 @@ export class CodeActExecutor {
     ): Promise<SubagentCallback> {
         // 1. 提取 contextSnapshot 中的执行上下文字段（dispatch-handler 类型安全注入）
         const ctx = task.contextSnapshot;
-        const topicSummary = ctx.topicSummary ?? "";
-        const toneGuidance = ctx.toneGuidance ?? "";
         const contentDirection = ctx.contentDirection ?? task.decisions.map(d => d.contentDirection ?? "").filter(Boolean).join("; ");
-        const memoryContext = task.memoryContext;
-        const memoryContextText = memoryContext
-            ? [
-                memoryContext.facts.length
-                    ? `## 相关事实\n${memoryContext.facts.map((fact) => `- [${fact.displayName ?? fact.subject} · ${fact.category}] ${fact.content}`).join("\n")}`
-                    : "",
-                memoryContext.topics.length
-                    ? `## 相关历史话题\n${memoryContext.topics.map((topic) => `- [${topic.startedAt}] ${topic.label} — ${topic.summary} (topicId: ${topic.topicId})`).join("\n")}`
-                    : "",
-                memoryContext.interactions.length
-                    ? `## 近期互动\n${memoryContext.interactions.map((item) => `- [${item.timestamp}] ${(item as any).displayName ?? item.userId}: ${item.summary} (${item.sentiment})`).join("\n")}`
-                    : "",
-            ].filter(Boolean).join("\n\n")
-            : "";
+        const isContinuation = !!task.continuationPrompt;
 
-        // personContext: dispatch-handler 留空，此处从 recentMessages 发言者查询 memory
-        let personContext = ctx.personContext ?? "";
-        if (!personContext && ctx.activeUserProfiles?.length) {
-            personContext = JSON.stringify(ctx.activeUserProfiles);
-        }
-        if (!personContext && this.memory && ctx.recentMessages && ctx.recentMessages.length > 0) {
-            try {
-                const senderNames = ctx.recentMessages.map(m => m.sender);
-                const uniqueSenders = [...new Set(senderNames)].slice(0, 10);
-                // 通过 getProfilesForChat 获取群内画像，按 displayName 匹配发言者
-                const allProfiles = this.memory.getProfilesForChat(this.chatId);
-                const relevantProfiles: any[] = [];
-                for (const name of uniqueSenders) {
-                    // 先找 identity（按 displayName 匹配）
-                    const profile = allProfiles.find((p: any) =>
-                        p.userId && this.memory!.getPersonIdentity(p.userId)?.displayName === name
-                    );
-                    if (profile) {
-                        const identity = this.memory.getPersonIdentity(profile.userId);
-                        const rawId = getRawId(profile.userId);
-                        const username = identity?.username ?? undefined;
-                        const mention = this.formatMentionFn?.(rawId, username);
-                        relevantProfiles.push({
-                            displayName: identity?.displayName ?? name,
-                            aliases: identity?.aliases ?? [],
-                            userId: rawId,
-                            ...(mention ? { mention } : {}),
-                            dunbarTier: profile.dunbarTier,
-                            traits: profile.traits,
-                            interests: profile.interests,
-                            communicationStyle: profile.communicationStyle,
-                            relationToAgent: profile.relationToAgent,
-                        });
-                    }
-                }
-                if (relevantProfiles.length > 0) {
-                    personContext = JSON.stringify(relevantProfiles);
-                }
-            } catch (err) {
-                log.debug("personContext 查询失败", { chatId: this.chatId, error: String(err) });
-            }
-        }
-
-        // 2. 消息富化：媒体处理 + 格式化（委托 message-enricher）
-        const recentMessages = ctx.recentMessages ?? [];
-        const { formattedText: targetMessages, imageParts } = await enrichMessages(
-            [...recentMessages].reverse().map(m => ({
-                ...m,
-                chatId: this.chatId,
-            })),
-            {
-                visionConfig: this.visionConfig,
-                llmConfig: resolveComponentProfiles("session")[0],
-                visionLlmConfig: this.visionLlmConfig,
-                downloadFn: this.downloadFn,
-                stickerCache: this.memory ?? undefined,
-                chatId: this.chatId,
-                mediaDownloader: this.mediaDownloader,
-            },
-        );
-
-        // 3. 渲染系统 prompt (subagent.md §12.2 ➎ — 稳定部分，保持 Mustache 模板)
+        // 2. 渲染系统 prompt (subagent.md §12.2 ➎ — 稳定部分，保持 Mustache 模板)
         const currentConfig = loadConfig();
-        const availableStickers = ctx.availableStickers?.length
-            ? ctx.availableStickers
-            : this.buildAvailableStickers(task);
         const baseSkills = currentConfig.subagent?.baseSkills ?? [
             "runtime", "fs", "skills", "mcp", "cron", "todo", "memory", "vision", "shell",
         ];
+        const platform = getPlatform(this.chatId);
         const allowedSkills = new Set<string>([
             ...baseSkills,
-            getPlatform(this.chatId),
+            platform,
             ...(task.useSkills ?? []),
         ]);
-        const platform = getPlatform(this.chatId);
-        const platformModule = platform;
         const todoItems = this.memory ? this.memory.todoList(this.chatId) : [];
         const systemVars = {
             personaName: this.personaName,
             personaDescription: this.personaDescription,
             apiTypeDefs: loadApiTypeDefs(platform, allowedSkills),
-            platformModule,
+            platformModule: platform,
             hasTodos: todoItems.length > 0,
             todosText: todoItems.map((item) =>
                 item.dueAt
@@ -540,33 +460,123 @@ export class CodeActExecutor {
         };
         const systemPrompt = renderPrompt("EXECUTION", systemVars);
 
-        // 4. 渲染任务 prompt — 通过 ContextEngine 声明式组装
-        const resolveCtx: ExecutorResolveContext = {
-            chatId: this.chatId,
-            isDirectMessage: ctx.isDirectMessage,
-            chatTitle: ctx.chatTitle ?? ctx.groupModel?.chatTitle ?? getRawId(this.chatId),
-            taskId: task.taskId,
-            decisions: task.decisions,
-            toneGuidance: ctx.toneGuidance ?? task.decisions.map(d => d.contentDirection ?? "").filter(Boolean).join("; ") ? undefined : undefined,
-            topicSummary,
-            personContext,
-            memoryContext: memoryContextText || undefined,
-            targetMessages,
-            availableStickers,
-            groundingContext: ctx.groundingContext,
-            sessionDigests: this.globalState?.getSessionDigests(),
-        };
-        // 重新计算 toneGuidance（避免上面的 ternary 混乱）
-        resolveCtx.toneGuidance = toneGuidance || undefined;
+        let taskPrompt = task.continuationPrompt ?? "";
+        let imageParts: ChatMessage["imageParts"] = [];
+        let renderResult: ReturnType<ContextEngine["render"]> | null = null;
 
-        const renderResult = this.contextEngine.render(resolveCtx);
+        if (!isContinuation) {
+            const topicSummary = ctx.topicSummary ?? "";
+            const toneGuidance = ctx.toneGuidance ?? "";
+            const memoryContext = task.memoryContext;
+            const memoryContextText = memoryContext
+                ? [
+                    memoryContext.facts.length
+                        ? `## 相关事实\n${memoryContext.facts.map((fact) => `- [${fact.displayName ?? fact.subject} · ${fact.category}] ${fact.content}`).join("\n")}`
+                        : "",
+                    memoryContext.topics.length
+                        ? `## 相关历史话题\n${memoryContext.topics.map((topic) => `- [${topic.startedAt}] ${topic.label} — ${topic.summary} (topicId: ${topic.topicId})`).join("\n")}`
+                        : "",
+                    memoryContext.interactions.length
+                        ? `## 近期互动\n${memoryContext.interactions.map((item) => `- [${item.timestamp}] ${(item as any).displayName ?? item.userId}: ${item.summary} (${item.sentiment})`).join("\n")}`
+                        : "",
+                ].filter(Boolean).join("\n\n")
+                : "";
 
-        // 组装最终 task prompt：persistent/delta-only sections 在 historicalContent，
-        // ephemeral sections 在 ephemeralContent（topicSummary/memoryContext/stickers/grounding）
-        const taskPromptParts: string[] = [];
-        if (renderResult.historicalContent) taskPromptParts.push(renderResult.historicalContent);
-        if (renderResult.ephemeralContent) taskPromptParts.push(renderResult.ephemeralContent);
-        const taskPrompt = taskPromptParts.join("\n\n");
+            // personContext: dispatch-handler 留空，此处从 recentMessages 发言者查询 memory
+            let personContext = ctx.personContext ?? "";
+            if (!personContext && ctx.activeUserProfiles?.length) {
+                personContext = JSON.stringify(ctx.activeUserProfiles);
+            }
+            if (!personContext && this.memory && ctx.recentMessages && ctx.recentMessages.length > 0) {
+                try {
+                    const senderNames = ctx.recentMessages.map(m => m.sender);
+                    const uniqueSenders = [...new Set(senderNames)].slice(0, 10);
+                    // 通过 getProfilesForChat 获取群内画像，按 displayName 匹配发言者
+                    const allProfiles = this.memory.getProfilesForChat(this.chatId);
+                    const relevantProfiles: any[] = [];
+                    for (const name of uniqueSenders) {
+                        // 先找 identity（按 displayName 匹配）
+                        const profile = allProfiles.find((p: any) =>
+                            p.userId && this.memory!.getPersonIdentity(p.userId)?.displayName === name
+                        );
+                        if (profile) {
+                            const identity = this.memory.getPersonIdentity(profile.userId);
+                            const rawId = getRawId(profile.userId);
+                            const username = identity?.username ?? undefined;
+                            const mention = this.formatMentionFn?.(rawId, username);
+                            relevantProfiles.push({
+                                displayName: identity?.displayName ?? name,
+                                aliases: identity?.aliases ?? [],
+                                userId: rawId,
+                                ...(mention ? { mention } : {}),
+                                dunbarTier: profile.dunbarTier,
+                                traits: profile.traits,
+                                interests: profile.interests,
+                                communicationStyle: profile.communicationStyle,
+                                relationToAgent: profile.relationToAgent,
+                            });
+                        }
+                    }
+                    if (relevantProfiles.length > 0) {
+                        personContext = JSON.stringify(relevantProfiles);
+                    }
+                } catch (err) {
+                    log.debug("personContext 查询失败", { chatId: this.chatId, error: String(err) });
+                }
+            }
+
+            // 3. 消息富化：媒体处理 + 格式化（委托 message-enricher）
+            const recentMessages = ctx.recentMessages ?? [];
+            const enriched = await enrichMessages(
+                [...recentMessages].reverse().map(m => ({
+                    ...m,
+                    chatId: this.chatId,
+                })),
+                {
+                    visionConfig: this.visionConfig,
+                    llmConfig: resolveComponentProfiles("session")[0],
+                    visionLlmConfig: this.visionLlmConfig,
+                    downloadFn: this.downloadFn,
+                    stickerCache: this.memory ?? undefined,
+                    chatId: this.chatId,
+                    mediaDownloader: this.mediaDownloader,
+                },
+            );
+            const targetMessages = enriched.formattedText;
+            imageParts = enriched.imageParts;
+
+            const availableStickers = ctx.availableStickers?.length
+                ? ctx.availableStickers
+                : this.buildAvailableStickers(task);
+
+            // 4. 渲染任务 prompt — 通过 ContextEngine 声明式组装
+            const resolveCtx: ExecutorResolveContext = {
+                chatId: this.chatId,
+                isDirectMessage: ctx.isDirectMessage,
+                chatTitle: ctx.chatTitle ?? ctx.groupModel?.chatTitle ?? getRawId(this.chatId),
+                taskId: task.taskId,
+                decisions: task.decisions,
+                toneGuidance: ctx.toneGuidance ?? task.decisions.map(d => d.contentDirection ?? "").filter(Boolean).join("; ") ? undefined : undefined,
+                topicSummary,
+                personContext,
+                memoryContext: memoryContextText || undefined,
+                targetMessages,
+                availableStickers,
+                groundingContext: ctx.groundingContext,
+                sessionDigests: this.globalState?.getSessionDigests(),
+            };
+            // 重新计算 toneGuidance（避免上面的 ternary 混乱）
+            resolveCtx.toneGuidance = toneGuidance || undefined;
+
+            renderResult = this.contextEngine.render(resolveCtx);
+
+            // 组装最终 task prompt：persistent/delta-only sections 在 historicalContent，
+            // ephemeral sections 在 ephemeralContent（topicSummary/memoryContext/stickers/grounding）
+            const taskPromptParts: string[] = [];
+            if (renderResult.historicalContent) taskPromptParts.push(renderResult.historicalContent);
+            if (renderResult.ephemeralContent) taskPromptParts.push(renderResult.ephemeralContent);
+            taskPrompt = taskPromptParts.join("\n\n");
+        }
 
         // ═══ Fix 2: 构建 messages 时注入历史 session 上下文 ═══
         const messages: ChatMessage[] = [
@@ -662,7 +672,7 @@ export class CodeActExecutor {
                             lookupFullDocs(getModuleRegistryCache(), calledMethods),
                     };
                 })(),
-                renderResult.manifest,
+                renderResult?.manifest,
             );
         } finally {
             // 停止 typing 指示
@@ -684,7 +694,7 @@ export class CodeActExecutor {
             let content = msg.content;
             // 首条 user message = task prompt：用 ContextEngine 的 historicalRendered 替代
             // historicalRendered 自动按 history 策略处理（ephemeral sections 不保留，omit sections 用占位符）
-            if (mi === 0 && msg.role === "user" && renderResult.historicalContent) {
+            if (mi === 0 && msg.role === "user" && renderResult?.historicalContent) {
                 content = renderResult.historicalContent;
             }
             this.session.push({
@@ -695,7 +705,9 @@ export class CodeActExecutor {
         }
 
         // 提交 ContextEngine 状态（标记当前数据已被 LLM 看过）
-        this.contextEngine.commit(renderResult.tree);
+        if (renderResult) {
+            this.contextEngine.commit(renderResult.tree);
+        }
 
         // 记录 execution record（用于 compact）
         const thinkingSummary = sessionResult.turns
@@ -802,6 +814,14 @@ export class CodeActExecutor {
         startTime: number,
     ): SubagentCallback {
         const durationMs = Date.now() - startTime;
+
+        if (task.continuationPrompt) {
+            this.session.push({
+                role: "user",
+                content: task.continuationPrompt,
+                timestamp: new Date().toISOString(),
+            });
+        }
 
         this.session.push({
             role: "assistant",
@@ -1011,8 +1031,10 @@ export class CodeActExecutor {
 
                 const task = this.taskQueue.shift()!;
 
-                // 层 1: 执行前刷新目标消息
-                await this.refreshTaskMessages(task);
+                // 层 1: 执行前刷新目标消息。轻量续接任务只追加一条 continuation prompt。
+                if (!task.skipRefreshTaskMessages && !task.continuationPrompt) {
+                    await this.refreshTaskMessages(task);
+                }
 
                 const callback = await this.execute(task);
 
