@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
-import { getAgentSkillScriptDirs, parseAllSkillDocs } from "../src/sandbox/skill-loader.js";
-import { loadApiTypeDefs } from "../src/subagent/code-act-executor.js";
+import { discoverSkills, getAgentSkillScriptDirs, loadAllSkills, parseAllSkillDocs } from "../src/sandbox/skill-loader.js";
+import { loadApiTypeDefs, refreshModuleRegistryCache } from "../src/subagent/code-act-executor.js";
 import { buildEnhancedShellPath } from "../src/sandbox/sandbox.js";
 
 const createdPaths = new Set<string>();
@@ -82,6 +82,7 @@ describe("Agent Skills native support", () => {
         assert.ok(enhancedPath.includes(resolve(scriptsDir)));
         assert.ok(enhancedPath.includes("/usr/bin"));
 
+        refreshModuleRegistryCache();
         const api = loadApiTypeDefs("telegram");
         assert.ok(api.includes("## kube_deploy"));
         assert.ok(api.includes("Deploy to Kubernetes."));
@@ -107,9 +108,53 @@ describe("Agent Skills native support", () => {
         ].join("\n"));
         writeFile(join(scriptsDir, "search.py"), "print('ok')\n");
 
+        refreshModuleRegistryCache();
         const api = loadApiTypeDefs("telegram");
         assert.ok(api.includes("## x_search"));
         assert.ok(api.includes("Search X (Twitter) posts using the xAI API."));
         assert.ok(api.includes("await x_search.use()"));
+    });
+
+    it("uses SKILL.md as roster fallback for code-backed skills without d.ts", async () => {
+        const skillDir = join(process.cwd(), "workspace", "skills", "gptImage2");
+        const skillMdPath = join(skillDir, "SKILL.md");
+        const indexPath = join(skillDir, "index.ts");
+
+        ensureDir(skillDir);
+        writeFile(skillMdPath, [
+            "---",
+            "name: gptImage2",
+            "description: Generate images with GPT Image.",
+            "---",
+            "",
+            "# GPT Image 2",
+            "",
+            "Call the exported image helpers after reading this guide.",
+            "",
+        ].join("\n"));
+        writeFile(indexPath, [
+            "export default {",
+            "  generate: async () => 'ok'",
+            "};",
+            "",
+        ].join("\n"));
+
+        assert.ok(discoverSkills().some(skill => skill.name === "gptImage2" && skill.skillMdPath));
+
+        const modules = parseAllSkillDocs();
+        const item = modules.find(mod => mod.name === "gptImage2");
+        assert.ok(item, "应使用 SKILL.md fallback 暴露代码型 Skill");
+        assert.equal(item?.description, "Generate images with GPT Image.");
+        assert.ok(item?.methods[0].brief.includes("await gptImage2.use()"));
+
+        refreshModuleRegistryCache();
+        const api = loadApiTypeDefs("telegram", new Set(["gptImage2"]));
+        assert.ok(api.includes("## gptImage2"));
+        assert.ok(api.includes("Generate images with GPT Image."));
+
+        const loaded = await loadAllSkills();
+        const runtimeSkill = loaded.find(skill => skill.name === "gptImage2");
+        assert.equal(typeof runtimeSkill?.exports.use, "function");
+        assert.equal(await (runtimeSkill?.exports.generate as () => Promise<string>)(), "ok");
     });
 });
