@@ -484,6 +484,87 @@ describe("MainAgentLoop meta session path", () => {
         globalState.dispose();
     });
 
+    it("runs proactive idle 15 minutes after meta activity, then repeats every 30 minutes", async () => {
+        const dir = tempDir();
+        const globalState = new GlobalState({
+            filePath: join(dir, "global-state.json"),
+            autoSaveInterval: 0,
+        });
+        const accumulator = new AttentionAccumulator(globalState, { windowMs: 0, topN: 2 });
+        const callbackQueue = new CallbackQueue();
+        const subagentManager = new SubagentManager({ sessionsDir: join(dir, "sessions") });
+        const loop = new MainAgentLoop(accumulator, callbackQueue, subagentManager, {}, globalState);
+        const originalNow = Date.now;
+        const fifteenMinutes = 15 * 60 * 1000;
+        const thirtyMinutes = 30 * 60 * 1000;
+        let now = 1_800_000_000_000;
+        let receivedEntries: AttentionQueueEntry[] = [];
+
+        loop.setMetaSessionHandler(async (entries) => {
+            receivedEntries = entries;
+            return { endReason: "end_turn", sessionDigest: "idle handled" };
+        });
+
+        Date.now = () => now;
+        try {
+            (loop as any).lastNonIdleActivityAt = now;
+            (loop as any).lastProactiveIdleAt = 0;
+
+            now += fifteenMinutes - 1;
+            let result = await loop.tick();
+            assert.deepEqual(result.phase3Attended, []);
+            assert.equal(receivedEntries.length, 0);
+
+            now += 1;
+            result = await loop.tick();
+            assert.deepEqual(result.phase3Attended, ["__meta__"]);
+            assert.equal(receivedEntries[0]?.source, "PROACTIVE_IDLE");
+
+            const firstIdleAt = now;
+            receivedEntries = [];
+            now = firstIdleAt + thirtyMinutes - 1;
+            result = await loop.tick();
+            assert.deepEqual(result.phase3Attended, []);
+            assert.equal(receivedEntries.length, 0);
+
+            now += 1;
+            result = await loop.tick();
+            assert.deepEqual(result.phase3Attended, ["__meta__"]);
+            assert.equal(receivedEntries[0]?.source, "PROACTIVE_IDLE");
+
+            const secondIdleAt = now;
+            receivedEntries = [];
+            now = secondIdleAt + 5 * 60 * 1000;
+            accumulator.ingest(1, {
+                chatId: "__meta__",
+                source: "SCHEDULER",
+                payload: {
+                    id: "rem-reset",
+                    type: "reminder",
+                    description: "reset proactive idle baseline",
+                },
+                enqueuedAt: now,
+            });
+            result = await loop.tick();
+            assert.deepEqual(result.phase3Attended, ["__meta__"]);
+            assert.equal(receivedEntries[0]?.source, "SCHEDULER_TRIGGER");
+
+            receivedEntries = [];
+            now += fifteenMinutes - 1;
+            result = await loop.tick();
+            assert.deepEqual(result.phase3Attended, []);
+            assert.equal(receivedEntries.length, 0);
+
+            now += 1;
+            result = await loop.tick();
+            assert.deepEqual(result.phase3Attended, ["__meta__"]);
+            assert.equal(receivedEntries[0]?.source, "PROACTIVE_IDLE");
+        } finally {
+            Date.now = originalNow;
+            globalState.dispose();
+        }
+    });
+
     it("includes recent direct-address messages in the meta prompt", async () => {
         const dir = tempDir();
         const globalState = new GlobalState({
