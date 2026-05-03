@@ -16,6 +16,7 @@ import { MetaSandbox } from "../src/meta-sandbox/meta-sandbox.js";
 import { CallbackQueue } from "../src/subagent/callback-queue.js";
 import { SubagentManager } from "../src/subagent/subagent-manager.js";
 import type { AttentionQueueEntry } from "../src/subagent/types.js";
+import type { LLMResponse } from "../src/core/llm.js";
 
 function createMetaMemoryStub() {
     return {
@@ -181,13 +182,8 @@ describe("MainAgentLoop meta session path", () => {
         });
         const sandbox = new MetaSandbox(metaApiContext);
 
-        loop.setMetaSessionHandler(createMetaSessionHandler({
-            getPersona: () => ({ name: "测试编排者", description: "验证真实 meta session dispatch" }),
-            globalState,
-            memory: createMetaMemoryStub() as any,
-            sandbox,
-            getLlmConfigs: () => [TEST_LLM_CONFIG],
-            llmCaller: async () => ({
+        const responses: LLMResponse[] = [
+            {
                 content: [
                     "准备下发任务。",
                     "```ts",
@@ -201,7 +197,22 @@ describe("MainAgentLoop meta session path", () => {
                     "[SESSION_DIGEST]dispatched task to telegram:g1[/SESSION_DIGEST]",
                     "<end_turn>",
                 ].join("\n"),
-            }),
+            },
+            {
+                content: "Done.\n[SESSION_DIGEST]dispatched task to telegram:g1[/SESSION_DIGEST]\n<end_turn>",
+            },
+        ];
+        loop.setMetaSessionHandler(createMetaSessionHandler({
+            getPersona: () => ({ name: "测试编排者", description: "验证真实 meta session dispatch" }),
+            globalState,
+            memory: createMetaMemoryStub() as any,
+            sandbox,
+            getLlmConfigs: () => [TEST_LLM_CONFIG],
+            llmCaller: async () => {
+                const next = responses.shift();
+                assert.ok(next);
+                return next;
+            },
         }));
 
         accumulator.ingest(2, {
