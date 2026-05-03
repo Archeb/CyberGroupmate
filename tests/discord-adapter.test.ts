@@ -24,23 +24,25 @@ describe("DiscordAdapter", () => {
         const nc = makeNC();
         const adapter = new DiscordAdapter({ botToken: "token" }, nc);
         const image = makeImageFile();
-        const sendCalls: Array<Record<string, any>> = [];
+        const fetchCalls: Array<{ input: RequestInfo | URL; init?: RequestInit }> = [];
         const channelFetches: string[] = [];
         const userFetches: string[] = [];
+        const originalFetch = globalThis.fetch;
 
         const dmChannel = {
             id: "dm-channel-1",
             isTextBased: () => true,
-            async send(opts: Record<string, any>) {
-                sendCalls.push(opts);
-                return {
-                    id: "msg-1",
-                    content: opts.content ?? "",
-                    channel: { id: "dm-channel-1" },
-                    createdAt: new Date("2026-05-04T00:00:00.000Z"),
-                };
-            },
         };
+
+        globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+            fetchCalls.push({ input, init });
+            return new Response(JSON.stringify({
+                id: "msg-1",
+                content: "hello image",
+                channel_id: "dm-channel-1",
+                timestamp: "2026-05-04T00:00:00.000Z",
+            }), { status: 200, headers: { "content-type": "application/json" } });
+        }) as typeof fetch;
 
         (adapter as any).client = {
             channels: {
@@ -66,13 +68,21 @@ describe("DiscordAdapter", () => {
             assert.equal((sent as Record<string, unknown>).id, "msg-1");
             assert.deepEqual(channelFetches, ["517557024935116800"]);
             assert.deepEqual(userFetches, ["517557024935116800"]);
-            assert.equal(sendCalls.length, 1);
-            assert.equal(sendCalls[0].content, "hello image");
-            assert.equal(sendCalls[0].files.length, 1);
-            assert.ok(Buffer.isBuffer(sendCalls[0].files[0].attachment));
-            assert.deepEqual(sendCalls[0].files[0].attachment, image.bytes);
-            assert.equal(sendCalls[0].files[0].name, "image.jpg");
+            assert.equal(fetchCalls.length, 1);
+            assert.equal(String(fetchCalls[0].input), "https://discord.com/api/v10/channels/dm-channel-1/messages");
+            assert.equal(fetchCalls[0].init?.method, "POST");
+            assert.equal((fetchCalls[0].init?.headers as Record<string, string>).Authorization, "Bot token");
+            assert.ok(fetchCalls[0].init?.signal instanceof AbortSignal);
+
+            const form = fetchCalls[0].init?.body as FormData;
+            const payload = JSON.parse(String(form.get("payload_json")));
+            assert.equal(payload.content, "hello image");
+            assert.deepEqual(payload.attachments, [{ id: "0", filename: "image.jpg" }]);
+            const uploadedFile = form.get("files[0]") as unknown as { name: string; arrayBuffer: () => Promise<ArrayBuffer> };
+            assert.equal(uploadedFile.name, "image.jpg");
+            assert.deepEqual(Buffer.from(await uploadedFile.arrayBuffer()), image.bytes);
         } finally {
+            globalThis.fetch = originalFetch;
             rmSync(image.dir, { recursive: true, force: true });
             nc.dispose();
         }
@@ -82,21 +92,23 @@ describe("DiscordAdapter", () => {
         const nc = makeNC();
         const adapter = new DiscordAdapter({ botToken: "token" }, nc);
         const image = makeImageFile();
-        const sendCalls: Array<Record<string, any>> = [];
+        const fetchCalls: Array<{ input: RequestInfo | URL; init?: RequestInit }> = [];
+        const originalFetch = globalThis.fetch;
 
         const channel = {
             id: "channel-1",
             isTextBased: () => true,
-            async send(opts: Record<string, any>) {
-                sendCalls.push(opts);
-                return {
-                    id: "msg-2",
-                    content: opts.content ?? "",
-                    channel: { id: "channel-1" },
-                    createdAt: new Date("2026-05-04T00:00:00.000Z"),
-                };
-            },
         };
+
+        globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+            fetchCalls.push({ input, init });
+            return new Response(JSON.stringify({
+                id: "msg-2",
+                content: "caption from opts",
+                channel_id: "channel-1",
+                timestamp: "2026-05-04T00:00:00.000Z",
+            }), { status: 200, headers: { "content-type": "application/json" } });
+        }) as typeof fetch;
 
         (adapter as any).client = {
             channels: {
@@ -115,11 +127,17 @@ describe("DiscordAdapter", () => {
                 { caption: "caption from opts" },
             ]);
 
-            assert.equal(sendCalls.length, 1);
-            assert.equal(sendCalls[0].content, "caption from opts");
-            assert.deepEqual(sendCalls[0].files[0].attachment, image.bytes);
-            assert.equal(sendCalls[0].files[0].name, "image.jpg");
+            assert.equal(fetchCalls.length, 1);
+            assert.equal(String(fetchCalls[0].input), "https://discord.com/api/v10/channels/channel-1/messages");
+            const form = fetchCalls[0].init?.body as FormData;
+            const payload = JSON.parse(String(form.get("payload_json")));
+            assert.equal(payload.content, "caption from opts");
+            assert.deepEqual(payload.attachments, [{ id: "0", filename: "image.jpg" }]);
+            const uploadedFile = form.get("files[0]") as unknown as { name: string; arrayBuffer: () => Promise<ArrayBuffer> };
+            assert.equal(uploadedFile.name, "image.jpg");
+            assert.deepEqual(Buffer.from(await uploadedFile.arrayBuffer()), image.bytes);
         } finally {
+            globalThis.fetch = originalFetch;
             rmSync(image.dir, { recursive: true, force: true });
             nc.dispose();
         }

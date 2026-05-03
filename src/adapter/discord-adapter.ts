@@ -18,6 +18,8 @@ import { fileURLToPath } from "node:url";
 const log = createLogger("discord-adapter");
 
 const MEDIA_DOWNLOAD_TIMEOUT_MS = 15_000;
+const MEDIA_SEND_TIMEOUT_MS = 25_000;
+const DISCORD_API_BASE = "https://discord.com/api/v10";
 
 type ParsedDiscordTarget = {
     raw: string;
@@ -30,6 +32,13 @@ type NormalizedDiscordMedia = {
     file?: unknown;
     url?: unknown;
     fileName?: string;
+};
+
+type PreparedDiscordAttachment = {
+    data: Buffer;
+    name: string;
+    contentType?: string;
+    sizeBytes: number;
 };
 
 /** 结构化媒体元数据 */
@@ -267,7 +276,7 @@ export class DiscordAdapter implements PlatformAdapter {
                 }
 
                 // Attach file
-                const files: Array<Record<string, unknown>> = [];
+                const files: PreparedDiscordAttachment[] = [];
                 const source = media.file ?? media.url;
                 if (source != null) {
                     files.push(await this.buildAttachment(source, media.fileName, requestId, channelId));
@@ -280,7 +289,7 @@ export class DiscordAdapter implements PlatformAdapter {
                 }
 
                 const sendStart = Date.now();
-                const sent = await channel.send(sendOpts);
+                const sent = await this.sendDiscordMediaMessage(channelId, sendOpts, files, requestId);
                 log.info("discord.sendMedia:success", {
                     requestId,
                     channelId,
@@ -345,14 +354,17 @@ export class DiscordAdapter implements PlatformAdapter {
         return Buffer.from(arrayBuffer);
     }
 
-    private async downloadMediaWithTimeout(url: string, timeoutMs: number): Promise<Buffer> {
+    private async downloadMediaWithTimeout(url: string, timeoutMs: number): Promise<{ buffer: Buffer; contentType?: string }> {
         const signal = AbortSignal.timeout(timeoutMs);
         const response = await fetch(url, { signal });
         if (!response.ok) {
             throw new Error(`sendMedia download failed: HTTP ${response.status} for ${url}`);
         }
         const arrayBuffer = await response.arrayBuffer();
-        return Buffer.from(arrayBuffer);
+        return {
+            buffer: Buffer.from(arrayBuffer),
+            contentType: response.headers.get("content-type") ?? undefined,
+        };
     }
 
     // ─── Internal ───
@@ -371,7 +383,10 @@ export class DiscordAdapter implements PlatformAdapter {
 
         let rest = raw;
         if (rest.startsWith("discord:")) rest = rest.slice("discord:".length);
-        if (rest.startsWith("user:")) rest = rest.slice("user:".length);
+        const directTargetMatch = rest.match(/^(?:dm|private|user):(.+)$/);
+        if (directTargetMatch) {
+            return { raw, channelId: directTargetMatch[1], canFallbackToUser: true };
+        }
 
         // Three-part: guildId:channelId → channelId
         const colonIdx = rest.indexOf(":");
@@ -453,7 +468,7 @@ export class DiscordAdapter implements PlatformAdapter {
         return {};
     }
 
-    private async buildAttachment(source: unknown, fileName: string | undefined, requestId: string, channelId: string): Promise<Record<string, unknown>> {
+    private async buildAttachment(source: unknown, fileName: string | undefined, requestId: string, channelId: string): Promise<PreparedDiscordAttachment> {
         if (Buffer.isBuffer(source) || source instanceof Uint8Array) {
             const buffer = Buffer.from(source as Buffer | Uint8Array);
             log.info("discord.sendMedia:usingBuffer", {
@@ -462,8 +477,9 @@ export class DiscordAdapter implements PlatformAdapter {
                 sizeBytes: buffer.byteLength,
             });
             return {
-                attachment: buffer,
-                ...(fileName ? { name: fileName } : {}),
+                data: buffer,
+                name: fileName ?? "attachment.bin",
+                sizeBytes: buffer.byteLength,
             };
         }
 
@@ -479,12 +495,14 @@ export class DiscordAdapter implements PlatformAdapter {
                 channelId,
                 url: source,
                 durationMs: Date.now() - downloadStart,
-                sizeBytes: downloaded.byteLength,
+                sizeBytes: downloaded.buffer.byteLength,
             });
             const inferredName = this.fileNameFromUrl(source);
             return {
-                attachment: downloaded,
-                ...(fileName ? { name: fileName } : inferredName ? { name: inferredName } : {}),
+                data: downloaded.buffer,
+                name: fileName ?? inferredName ?? "attachment.bin",
+                contentType: downloaded.contentType,
+                sizeBytes: downloaded.buffer.byteLength,
             };
         }
 
@@ -497,8 +515,10 @@ export class DiscordAdapter implements PlatformAdapter {
                 sizeBytes: parsed.buffer.byteLength,
             });
             return {
-                attachment: parsed.buffer,
+                data: parsed.buffer,
                 name: fileName ?? this.defaultFileNameForMimeType(parsed.mimeType),
+                contentType: parsed.mimeType,
+                sizeBytes: parsed.buffer.byteLength,
             };
         }
 
@@ -518,9 +538,170 @@ export class DiscordAdapter implements PlatformAdapter {
             sizeBytes: buffer.byteLength,
         });
         return {
-            attachment: buffer,
+            data: buffer,
             name: fileName ?? basename(resolved),
+            sizeBytes: buffer.byteLength,
         };
+    }
+
+    private async sendDiscordMediaMessage(
+        channelId: string,
+        sendOpts: Record<string, unknown>,
+        files: PreparedDiscordAttachment[],
+        requestId: string,
+    ): Promise<Record<string, unknown>> {
+        const payload: Record<string, unknown> = {};
+        if (typeof sendOpts.content === "string" && sendOpts.content.length > 0) {
+            payload.content = sendOpts.content;
+        }
+
+        const reply = sendOpts.reply as { messageReference?: unknown } | undefined;
+        if (reply?.messageReference) {
+            payload.message_reference = {
+                message_id: String(reply.messageReference),
+                fail_if_not_exists: false,
+            };
+        }
+
+        if (files.length > 0) {
+            payload.attachments = files.map((file, index) => ({
+                id: String(index),
+                filename: file.name,
+            }));
+        }
+
+        log.info("discord.sendMedia:uploadStart", {
+            requestId,
+            channelId,
+            fileCount: files.length,
+            totalSizeBytes: files.reduce((sum, file) => sum + file.sizeBytes, 0),
+            timeoutMs: MEDIA_SEND_TIMEOUT_MS,
+        });
+
+        const sent = await this.postDiscordMessage(channelId, payload, files, requestId);
+        log.info("discord.sendMedia:uploadResponse", {
+            requestId,
+            channelId,
+            messageId: sent.id,
+        });
+        return sent;
+    }
+
+    private async postDiscordMessage(
+        channelId: string,
+        payload: Record<string, unknown>,
+        files: PreparedDiscordAttachment[],
+        requestId: string,
+    ): Promise<Record<string, unknown>> {
+        const url = `${DISCORD_API_BASE}/channels/${encodeURIComponent(channelId)}/messages`;
+        const maxAttempts = 2;
+
+        for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+            const signal = AbortSignal.timeout(MEDIA_SEND_TIMEOUT_MS);
+            const startedAt = Date.now();
+            let response: Response;
+            try {
+                response = await fetch(url, {
+                    method: "POST",
+                    headers: this.buildDiscordRequestHeaders(files.length === 0),
+                    body: files.length > 0 ? this.buildDiscordMultipartBody(payload, files) : JSON.stringify(payload),
+                    signal,
+                });
+            } catch (err) {
+                if (this.isAbortLikeError(err)) {
+                    throw new Error(`sendMedia upload timeout after ${MEDIA_SEND_TIMEOUT_MS}ms`);
+                }
+                throw err;
+            }
+
+            const bodyText = await response.text();
+            if (response.status === 429 && attempt < maxAttempts) {
+                const retryAfterMs = this.parseRetryAfterMs(response, bodyText);
+                if (retryAfterMs > 0 && retryAfterMs < MEDIA_SEND_TIMEOUT_MS) {
+                    log.warn("discord.sendMedia:rateLimited", {
+                        requestId,
+                        channelId,
+                        attempt,
+                        retryAfterMs,
+                    });
+                    await this.sleep(retryAfterMs);
+                    continue;
+                }
+            }
+
+            if (!response.ok) {
+                throw new Error(`sendMedia upload failed: HTTP ${response.status} ${this.describeDiscordErrorBody(bodyText)}`);
+            }
+
+            log.debug("discord.sendMedia:uploadHttpOk", {
+                requestId,
+                channelId,
+                attempt,
+                durationMs: Date.now() - startedAt,
+                status: response.status,
+            });
+            return bodyText ? JSON.parse(bodyText) as Record<string, unknown> : {};
+        }
+
+        throw new Error("sendMedia upload failed after retry");
+    }
+
+    private buildDiscordRequestHeaders(isJson: boolean): HeadersInit {
+        return {
+            Authorization: `Bot ${this.config.botToken}`,
+            "User-Agent": "CyberGroupmate DiscordAdapter",
+            ...(isJson ? { "Content-Type": "application/json" } : {}),
+        };
+    }
+
+    private buildDiscordMultipartBody(payload: Record<string, unknown>, files: PreparedDiscordAttachment[]): FormData {
+        const body = new FormData();
+        for (const [index, file] of files.entries()) {
+            const bytes = Uint8Array.from(file.data);
+            body.append(
+                `files[${index}]`,
+                new Blob([bytes], { type: file.contentType ?? "application/octet-stream" }),
+                file.name,
+            );
+        }
+        body.append("payload_json", JSON.stringify(payload));
+        return body;
+    }
+
+    private parseRetryAfterMs(response: Response, bodyText: string): number {
+        const headerValue = response.headers.get("retry-after");
+        if (headerValue) {
+            const seconds = Number(headerValue);
+            if (Number.isFinite(seconds) && seconds > 0) return Math.ceil(seconds * 1000);
+        }
+
+        try {
+            const parsed = JSON.parse(bodyText) as { retry_after?: unknown };
+            const seconds = Number(parsed.retry_after);
+            if (Number.isFinite(seconds) && seconds > 0) return Math.ceil(seconds * 1000);
+        } catch {
+            // Ignore malformed rate-limit bodies; the caller will surface the HTTP error.
+        }
+        return 0;
+    }
+
+    private describeDiscordErrorBody(bodyText: string): string {
+        if (!bodyText) return "(empty response body)";
+        try {
+            const parsed = JSON.parse(bodyText) as { message?: unknown; code?: unknown };
+            const message = typeof parsed.message === "string" ? parsed.message : bodyText;
+            return parsed.code != null ? `${message} (code ${String(parsed.code)})` : message;
+        } catch {
+            return bodyText.slice(0, 500);
+        }
+    }
+
+    private isAbortLikeError(err: unknown): boolean {
+        return err instanceof Error && (err.name === "AbortError" || err.name === "TimeoutError");
+    }
+
+    private async sleep(ms: number): Promise<void> {
+        await new Promise<void>(resolve => setTimeout(resolve, ms));
     }
 
     private resolveLocalFilePath(file: string): string | null {
@@ -710,9 +891,9 @@ export class DiscordAdapter implements PlatformAdapter {
         return {
             id: message.id,
             text: message.content ?? "",
-            channelId: message.channel?.id,
-            guildId: message.guild?.id,
-            timestamp: message.createdAt?.toISOString?.() ?? new Date().toISOString(),
+            channelId: message.channel?.id ?? message.channel_id,
+            guildId: message.guild?.id ?? message.guild_id,
+            timestamp: message.createdAt?.toISOString?.() ?? message.timestamp ?? new Date().toISOString(),
         };
     }
 }
