@@ -27,7 +27,7 @@ export class MetaSandbox {
     private activeSessionId: string | null = null;
 
     constructor(apiContext: Record<string, unknown>) {
-        const metaApi = Object.freeze({ ...apiContext });
+        const metaApi = Object.freeze(this.decorateApiContext({ ...apiContext }));
         this.apiGlobalNames = new Set(Object.keys(metaApi));
         this.scopeUnscopables = Object.create(null) as Record<string, true>;
         for (const key of Object.keys(metaApi)) {
@@ -69,6 +69,36 @@ export class MetaSandbox {
         }
 
         this.context = createContext(contextGlobals);
+    }
+
+    private decorateApiContext(apiContext: Record<string, unknown>): Record<string, unknown> {
+        const seen = new WeakMap<object, unknown>();
+        const wrap = (value: unknown, path: string): unknown => {
+            if (!value || typeof value !== "object") {
+                return value;
+            }
+            if (seen.has(value as object)) {
+                return seen.get(value as object);
+            }
+
+            const wrapped: Record<string, unknown> = Array.isArray(value) ? [] : {};
+            seen.set(value as object, wrapped);
+            for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+                const childPath = path ? `${path}.${key}` : key;
+                if (typeof child === "function") {
+                    wrapped[key] = async (...args: unknown[]) => {
+                        const result = await (child as (...params: unknown[]) => unknown).apply(value, args);
+                        this.pushConsoleEntry("log", [`[meta-api] ${childPath} ->`, result]);
+                        return result;
+                    };
+                } else {
+                    wrapped[key] = wrap(child, childPath);
+                }
+            }
+            return wrapped;
+        };
+
+        return wrap(apiContext, "") as Record<string, unknown>;
     }
 
     beginSession(sessionId: string): void {
