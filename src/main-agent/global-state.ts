@@ -2,10 +2,11 @@
  * global-state.ts — 主 Agent 全局状态管理
  *
  * 持久化存储主 Agent 的全局状态：
- * - 任务列表 (TaskList)
- * - 最近决策记录
- * - 跨群待办事项
- * - 注意力概要
+ * - scheduler 事件
+ * - Meta-CodeAct 全局备忘录
+ * - Session digests
+ * - Accumulator 信号池
+ * - 唤醒条件
  *
  * 使用 JSON 文件持久化，支持损坏恢复。
  *
@@ -14,9 +15,20 @@
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import type { MainAgentGlobalState, AgentTask, AgentNote, SchedulerEvent } from "../subagent/types.js";
+import type {
+    MainAgentGlobalState,
+    SchedulerEvent,
+    MemoEntry,
+    MetaSessionHistoryEntry,
+    SessionDigestEntry,
+    SignalPoolItem,
+    WakeCondition,
+    WakeConditionRecord,
+    DispatchedSubagentTaskRecord,
+} from "../subagent/types.js";
 import { createLogger } from "../core/logger.js";
 import { randomUUID } from "node:crypto";
+import { trimMetaSessionHistoryWindow } from "./meta-history-retention.js";
 
 const log = createLogger("global-state");
 
@@ -24,17 +36,17 @@ const log = createLogger("global-state");
 export interface GlobalStateConfig {
     /** 持久化文件路径。默认 workspace/global-state.json */
     filePath: string;
-    /** 最大最近决策数。默认 50 */
-    maxRecentDecisions: number;
     /** 自动保存间隔 (ms)。0 = 不自动保存。默认 30000 */
     autoSaveInterval: number;
 }
 
 const DEFAULT_CONFIG: GlobalStateConfig = {
     filePath: "workspace/global-state.json",
-    maxRecentDecisions: 50,
     autoSaveInterval: 30000,
 };
+
+const MAX_SESSION_DIGESTS = 30;
+const MAX_DISPATCHED_SUBAGENT_TASKS = 500;
 
 /**
  * GlobalState — 主 Agent 全局状态管理器
@@ -65,162 +77,25 @@ export class GlobalState {
         return { ...this.state };
     }
 
-    /** 获取任务列表 */
-    getTaskList(): AgentTask[] {
-        return [...this.state.taskList];
-    }
-
-    /** 获取最近决策 */
-    getRecentDecisions(): ReadonlyArray<{ chatId: string; decision: string; timestamp: string }> {
-        return this.state.recentDecisions;
-    }
-
-    /** 获取注意力概要 */
-    getAttentionSummary(): string {
-        return this.state.attentionSummary;
-    }
-
-    /** 获取跨群待办列表 (subagent.md 场景 5) */
-    getPendingFollowups(): ReadonlyArray<MainAgentGlobalState["pendingFollowups"][number]> {
-        return this.state.pendingFollowups;
-    }
-
-    // ─── 写入 ───
-
-    /** 添加任务 */
-    addTask(description: string, chatId?: string, priority: "LOW" | "MEDIUM" | "HIGH" = "MEDIUM"): AgentTask {
-        const task: AgentTask = {
-            id: randomUUID(),
-            description,
-            status: "PENDING",
-            chatId,
-            priority,
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-        };
-        this.state.taskList.push(task);
-        this.markDirty();
-        log.debug("addTask", { taskId: task.id, description });
-        return task;
-    }
-
-    /** 更新任务状态 */
-    updateTaskStatus(taskId: string, status: AgentTask["status"]): boolean {
-        const task = this.state.taskList.find(t => t.id === taskId);
-        if (!task) return false;
-
-        task.status = status;
-        task.updatedAt = new Date().toISOString();
-        if (status === "DONE" || status === "CANCELLED") {
-            task.completedAt = new Date().toISOString();
-        }
-        this.markDirty();
-        return true;
-    }
-
-    /** 记录决策 */
-    recordDecision(chatId: string, decision: string): void {
-        this.state.recentDecisions.push({
-            chatId,
-            decision,
-            timestamp: new Date().toISOString(),
-        });
-
-        // 保持最大数量
-        while (this.state.recentDecisions.length > this.config.maxRecentDecisions) {
-            this.state.recentDecisions.shift();
-        }
-
-        this.state.lastActiveAt = new Date().toISOString();
-        this.markDirty();
-    }
-
-    /** 更新注意力概要 */
-    updateAttentionSummary(summary: string): void {
-        this.state.attentionSummary = summary;
-        this.markDirty();
-    }
-
-    /** 添加跨群待办 */
-    addFollowup(sourceChatId: string, targetChatId: string, description: string): string {
-        const id = randomUUID();
-        this.state.pendingFollowups.push({
-            id,
-            sourceChatId,
-            targetChatId,
-            description,
-            status: "PENDING",
-            createdAt: new Date().toISOString(),
-        });
-        this.markDirty();
-        return id;
-    }
-
-    /** 完成跨群待办 */
-    completeFollowup(followupId: string): boolean {
-        const fu = this.state.pendingFollowups.find(f => f.id === followupId);
-        if (!fu) return false;
-
-        fu.status = "DONE";
-        fu.completedAt = new Date().toISOString();
-        this.markDirty();
-        return true;
-    }
-
-    // ─── 笔记 ───
-
-    /** 添加工作笔记 */
-    addNote(content: string, tags: string[] = [], relatedChatId?: string, expiresAt?: string): AgentNote {
-        const note: AgentNote = {
-            id: randomUUID(),
-            content,
-            tags,
-            relatedChatId,
-            expiresAt,
-            createdAt: new Date().toISOString(),
-        };
-        this.state.notes.push(note);
-        this.markDirty();
-        log.debug("addNote", { noteId: note.id, content: content.slice(0, 50) });
-        return note;
-    }
-
-    /** 删除工作笔记 */
-    removeNote(noteId: string): boolean {
-        const idx = this.state.notes.findIndex(n => n.id === noteId);
-        if (idx === -1) return false;
-        this.state.notes.splice(idx, 1);
-        this.markDirty();
-        return true;
-    }
-
-    /** 获取笔记（可按 chatId 过滤） */
-    getNotes(chatId?: string): AgentNote[] {
-        if (chatId) {
-            return this.state.notes.filter(n => !n.relatedChatId || n.relatedChatId === chatId);
-        }
-        return [...this.state.notes];
-    }
-
-    /** 清理过期笔记，返回清理数量 */
-    cleanExpiredNotes(): number {
-        const now = new Date().toISOString();
-        const before = this.state.notes.length;
-        this.state.notes = this.state.notes.filter(n => !n.expiresAt || n.expiresAt > now);
-        const removed = before - this.state.notes.length;
-        if (removed > 0) this.markDirty();
-        return removed;
-    }
-
     // ─── 调度 (scheduler) ───
 
     /** 添加定时提醒 */
-    addReminder(chatId: string, description: string, triggerAt: string, requestedBy?: string): SchedulerEvent {
+    addReminder(
+        chatId: string,
+        description: string,
+        triggerAt: string,
+        requestedBy?: string,
+        options?: { bindingId?: string; name?: string; callback?: string; data?: unknown },
+    ): SchedulerEvent {
         const event: SchedulerEvent = {
             id: randomUUID(),
             type: "reminder",
             chatId,
+            bindingId: options?.bindingId,
+            name: options?.name,
             description,
+            callback: options?.callback,
+            data: options?.data,
             triggerAt,
             requestedBy,
             createdAt: new Date().toISOString(),
@@ -233,12 +108,22 @@ export class GlobalState {
     }
 
     /** 添加周期 cron 任务（自然语言任务描述） */
-    addCron(chatId: string, description: string, cronExpr: string, taskDescription: string): SchedulerEvent {
+    addCron(
+        chatId: string,
+        description: string,
+        cronExpr: string,
+        taskDescription: string,
+        options?: { bindingId?: string; name?: string; callback?: string; data?: unknown },
+    ): SchedulerEvent {
         const event: SchedulerEvent = {
             id: randomUUID(),
             type: "cron",
             chatId,
+            bindingId: options?.bindingId,
+            name: options?.name,
             description,
+            callback: options?.callback,
+            data: options?.data,
             cronExpr,
             taskTemplate: taskDescription,
             createdAt: new Date().toISOString(),
@@ -265,6 +150,223 @@ export class GlobalState {
             return this.state.schedulerEvents.filter(e => e.chatId === chatId);
         }
         return [...this.state.schedulerEvents];
+    }
+
+    // ─── Meta-CodeAct 状态 ───
+
+    memoSet(key: string, value: unknown, ttlMinutes?: number): void {
+        const createdAt = new Date().toISOString();
+        const expiresAt = typeof ttlMinutes === "number" && ttlMinutes > 0
+            ? new Date(Date.now() + ttlMinutes * 60_000).toISOString()
+            : undefined;
+        const memo: MemoEntry = { key, value, createdAt, expiresAt };
+        const existingIndex = this.state.memos.findIndex(item => item.key === key);
+        if (existingIndex >= 0) {
+            this.state.memos.splice(existingIndex, 1, memo);
+        } else {
+            this.state.memos.push(memo);
+        }
+        this.markDirty();
+    }
+
+    memoGet(key: string): unknown | null {
+        this.cleanExpiredMemos();
+        const memo = this.state.memos.find(item => item.key === key);
+        return memo ? memo.value : null;
+    }
+
+    memoDelete(key: string): void {
+        const index = this.state.memos.findIndex(item => item.key === key);
+        if (index === -1) return;
+        this.state.memos.splice(index, 1);
+        this.markDirty();
+    }
+
+    memoList(): Array<{ key: string; value: unknown; expiresAt?: string }> {
+        this.cleanExpiredMemos();
+        return this.state.memos.map(({ key, value, expiresAt }) => ({ key, value, expiresAt }));
+    }
+
+    cleanExpiredMemos(): number {
+        const now = new Date().toISOString();
+        const before = this.state.memos.length;
+        this.state.memos = this.state.memos.filter(item => !item.expiresAt || item.expiresAt > now);
+        const removed = before - this.state.memos.length;
+        if (removed > 0) this.markDirty();
+        return removed;
+    }
+
+    addSessionDigest(content: string): void {
+        const entry: SessionDigestEntry = {
+            content,
+            createdAt: new Date().toISOString(),
+        };
+        this.state.sessionDigests.push(entry);
+        while (this.state.sessionDigests.length > MAX_SESSION_DIGESTS) {
+            this.state.sessionDigests.shift();
+        }
+        this.markDirty();
+    }
+
+    getSessionDigests(): SessionDigestEntry[] {
+        return [...this.state.sessionDigests];
+    }
+
+    clearSessionDigests(): number {
+        const removed = this.state.sessionDigests.length;
+        if (removed === 0) {
+            return 0;
+        }
+        this.state.sessionDigests = [];
+        this.markDirty();
+        return removed;
+    }
+
+    appendMetaSessionHistory(
+        messages: Array<Pick<MetaSessionHistoryEntry, "role" | "content"> & Partial<Pick<MetaSessionHistoryEntry, "timestamp">>>,
+    ): void {
+        let appended = 0;
+
+        for (const message of messages) {
+            if (!message || (message.role !== "assistant" && message.role !== "user")) {
+                continue;
+            }
+
+            const content = String(message.content ?? "").trim();
+            if (!content) {
+                continue;
+            }
+
+            this.state.metaSessionHistory.push({
+                role: message.role,
+                content,
+                timestamp: message.timestamp ?? new Date().toISOString(),
+            });
+            appended += 1;
+        }
+
+        trimMetaSessionHistoryWindow(this.state.metaSessionHistory);
+
+        if (appended > 0) {
+            this.markDirty();
+        }
+    }
+
+    getMetaSessionHistory(): MetaSessionHistoryEntry[] {
+        return [...this.state.metaSessionHistory];
+    }
+
+    clearMetaSessionHistory(): number {
+        const removed = this.state.metaSessionHistory.length;
+        if (removed === 0) {
+            return 0;
+        }
+        this.state.metaSessionHistory = [];
+        this.markDirty();
+        return removed;
+    }
+
+    getSignalPool(): SignalPoolItem[] {
+        return [...this.state.signalPool];
+    }
+
+    setSignalPool(items: SignalPoolItem[]): void {
+        this.state.signalPool = [...items];
+        this.markDirty();
+    }
+
+    addWakeCondition(condition: WakeCondition): string {
+        const wakeCondition: WakeConditionRecord = {
+            id: randomUUID(),
+            condition,
+            registeredAt: new Date().toISOString(),
+        };
+        this.state.wakeConditions.push(wakeCondition);
+        this.markDirty();
+        return wakeCondition.id;
+    }
+
+    removeWakeCondition(id: string): boolean {
+        const index = this.state.wakeConditions.findIndex(item => item.id === id);
+        if (index === -1) return false;
+        this.state.wakeConditions.splice(index, 1);
+        this.markDirty();
+        return true;
+    }
+
+    getWakeConditions(): WakeConditionRecord[] {
+        return [...this.state.wakeConditions];
+    }
+
+    recordDispatchedSubagentTask(
+        task: Omit<DispatchedSubagentTaskRecord, "status" | "updatedAt"> & Partial<Pick<DispatchedSubagentTaskRecord, "status" | "updatedAt">>,
+    ): void {
+        const now = new Date().toISOString();
+        const record: DispatchedSubagentTaskRecord = {
+            ...task,
+            status: task.status ?? "PENDING",
+            updatedAt: task.updatedAt ?? now,
+        };
+        const existingIndex = this.state.dispatchedSubagentTasks.findIndex((item) => item.taskId === record.taskId);
+        if (existingIndex >= 0) {
+            this.state.dispatchedSubagentTasks.splice(existingIndex, 1, {
+                ...this.state.dispatchedSubagentTasks[existingIndex],
+                ...record,
+                updatedAt: now,
+            });
+        } else {
+            this.state.dispatchedSubagentTasks.push(record);
+        }
+        while (this.state.dispatchedSubagentTasks.length > MAX_DISPATCHED_SUBAGENT_TASKS) {
+            this.state.dispatchedSubagentTasks.shift();
+        }
+        this.markDirty();
+    }
+
+    updateDispatchedSubagentTask(
+        taskId: string,
+        patch: Partial<Omit<DispatchedSubagentTaskRecord, "taskId" | "createdAt">>,
+    ): DispatchedSubagentTaskRecord | null {
+        const index = this.state.dispatchedSubagentTasks.findIndex((item) => item.taskId === taskId);
+        if (index === -1) {
+            return null;
+        }
+        const updated: DispatchedSubagentTaskRecord = {
+            ...this.state.dispatchedSubagentTasks[index],
+            ...patch,
+            updatedAt: new Date().toISOString(),
+        };
+        this.state.dispatchedSubagentTasks.splice(index, 1, updated);
+        this.markDirty();
+        return { ...updated };
+    }
+
+    getDispatchedSubagentTask(taskId: string): DispatchedSubagentTaskRecord | null {
+        const record = this.state.dispatchedSubagentTasks.find((item) => item.taskId === taskId);
+        return record ? { ...record } : null;
+    }
+
+    listDispatchedSubagentTasks(options?: { chatId?: string; status?: string; limit?: number; offset?: number }): {
+        tasks: DispatchedSubagentTaskRecord[];
+        total: number;
+        hasMore: boolean;
+    } {
+        const limit = Math.max(1, Math.min(options?.limit ?? 50, 200));
+        const offset = Math.max(options?.offset ?? 0, 0);
+        let tasks = [...this.state.dispatchedSubagentTasks];
+        if (options?.chatId) {
+            tasks = tasks.filter((task) => task.chatId === options.chatId);
+        }
+        if (options?.status) {
+            tasks = tasks.filter((task) => task.status === options.status);
+        }
+        tasks.sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+        const total = tasks.length;
+        return {
+            tasks: tasks.slice(offset, offset + limit).map((task) => ({ ...task })),
+            total,
+            hasMore: offset + limit < total,
+        };
     }
 
     /** 获取已到期的提醒（未触发的，triggerAt <= now） */
@@ -346,25 +448,25 @@ export class GlobalState {
 
         const obj = raw as Record<string, unknown>;
         return {
-            lastActiveAt: typeof obj.lastActiveAt === "string" ? obj.lastActiveAt : def.lastActiveAt,
-            taskList: Array.isArray(obj.taskList) ? obj.taskList : def.taskList,
-            recentDecisions: Array.isArray(obj.recentDecisions) ? obj.recentDecisions : def.recentDecisions,
-            pendingFollowups: Array.isArray(obj.pendingFollowups) ? obj.pendingFollowups : def.pendingFollowups,
-            attentionSummary: typeof obj.attentionSummary === "string" ? obj.attentionSummary : def.attentionSummary,
-            notes: Array.isArray(obj.notes) ? obj.notes : def.notes,
             schedulerEvents: Array.isArray(obj.schedulerEvents) ? obj.schedulerEvents : def.schedulerEvents,
+            memos: Array.isArray(obj.memos) ? obj.memos as MemoEntry[] : def.memos,
+            sessionDigests: Array.isArray(obj.sessionDigests) ? obj.sessionDigests as SessionDigestEntry[] : def.sessionDigests,
+            metaSessionHistory: Array.isArray(obj.metaSessionHistory) ? obj.metaSessionHistory as MetaSessionHistoryEntry[] : def.metaSessionHistory,
+            signalPool: Array.isArray(obj.signalPool) ? obj.signalPool as SignalPoolItem[] : def.signalPool,
+            wakeConditions: Array.isArray(obj.wakeConditions) ? obj.wakeConditions as WakeConditionRecord[] : def.wakeConditions,
+            dispatchedSubagentTasks: Array.isArray(obj.dispatchedSubagentTasks) ? obj.dispatchedSubagentTasks as DispatchedSubagentTaskRecord[] : def.dispatchedSubagentTasks,
         };
     }
 
     private defaultState(): MainAgentGlobalState {
         return {
-            lastActiveAt: new Date().toISOString(),
-            taskList: [],
-            recentDecisions: [],
-            pendingFollowups: [],
-            attentionSummary: "",
-            notes: [],
             schedulerEvents: [],
+            memos: [],
+            sessionDigests: [],
+            metaSessionHistory: [],
+            signalPool: [],
+            wakeConditions: [],
+            dispatchedSubagentTasks: [],
         };
     }
 }

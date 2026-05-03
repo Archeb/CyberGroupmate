@@ -13,6 +13,8 @@ import { codeActEvents, type CodeActProgressEvent } from "../sandbox/session-run
 import { contextEvents } from "../context-engine/context-engine.js";
 import type { ContextManifest } from "../context-engine/types.js";
 import { getGroupModelKey } from "../core/chat-id.js";
+import { getMetaCodeActState } from "../meta-sandbox/meta-session-runner.js";
+import { getMetaHistoryWindowStatus } from "../main-agent/meta-history-retention.js";
 
 const log = createLogger("dashboard-bridge");
 
@@ -352,20 +354,18 @@ export class EventBridge {
                 });
             });
 
-            pipeline.on("topics:triage-passed", (passedTopics: Array<{ topic: any; decision: any }>) => {
-                for (const { topic, decision } of passedTopics) {
+            pipeline.on("topics:signaled", (signals: Array<any>) => {
+                for (const signal of signals) {
                     this.broadcast({
-                        type: "recording:triage-passed",
+                        type: "recording:topics-signaled",
                         timestamp: new Date().toISOString(),
                         data: {
                             chatId: sub.chatId,
-                            topicId: topic.id,
-                            topicLabel: topic.label,
-                            decision: {
-                                should_intervene: decision.should_intervene,
-                                reason: decision.reason,
-                                callbackPotential: topic.callbackPotential ?? 0,
-                            },
+                            topicId: signal.topicId,
+                            topicLabel: signal.topicLabel,
+                            reason: signal.reason,
+                            callbackPotential: signal.callbackPotential,
+                            pressure: signal.pressure,
                         },
                     });
                 }
@@ -408,7 +408,7 @@ export class EventBridge {
     }
 
     buildSnapshot(): Record<string, unknown> {
-        const { subagentManager, q3, q5, mainLoop, globalState, sandboxPool, feedbackLoop } = this.deps;
+        const { subagentManager, accumulator, q5, mainLoop, globalState, sandboxPool } = this.deps;
 
         // 群组概览
         const groups: Record<string, unknown>[] = [];
@@ -424,7 +424,6 @@ export class EventBridge {
                 stickiness: sub.stickiness.level,
                 lastAttendedAt: sub.lastAttendedAt,
                 attendCount: sub.attendCount,
-                hasTriageEngaged: sub.hasTriageEngaged,
                 lastAgentReplyAt: sub.lastAgentReplyAt,
                 codeActQueueSize: (sub.codeActExecutor as any)?.getQueueSize?.() ?? 0,
                 codeActProcessing: (sub.codeActExecutor as any)?.isProcessing?.() ?? false,
@@ -434,19 +433,26 @@ export class EventBridge {
             });
         }
 
+        const metaCodeAct = getMetaCodeActState();
+        const metaHistoryStatus = getMetaHistoryWindowStatus(globalState.getMetaSessionHistory());
+
         return {
             groups,
-            queue: { active: q3.getAll(), dequeued: q3.getDequeueHistory() },
+            metaCodeAct: {
+                chatId: metaCodeAct.chatId,
+                queueSize: metaCodeAct.queueSize,
+                sessionSize: metaCodeAct.sessionSize,
+                executionCount: metaCodeAct.executionCount,
+                isProcessing: metaCodeAct.isProcessing,
+                historyBudget: metaHistoryStatus,
+            },
+            queue: accumulator.getSnapshot(),
             pendingCallbacks: q5.peek(),
             globalState: globalState.getState(),
             sandboxPool: sandboxPool.getStats(),
             mainLoop: {
                 running: mainLoop.isRunning(),
                 tickCount: mainLoop.getTickCount(),
-                conversationHistorySize: mainLoop.getConversationHistorySize(),
-            },
-            feedbackLoop: {
-                activeWindows: feedbackLoop.getActiveWindows(),
             },
             tokenPricing: this.deps.tokenStats.getPricing() ?? {},
         };

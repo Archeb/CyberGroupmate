@@ -180,7 +180,6 @@ async function createMockExporter(port: number, options?: {
     q5Size?: number;
     tickCount?: number;
     isRunning?: boolean;
-    feedbackWindows?: number;
     subagents?: unknown[];
 }) {
     const { MetricsExporter } = await import("../src/metrics/exporter.js");
@@ -201,13 +200,11 @@ async function createMockExporter(port: number, options?: {
             }),
         },
         q3: { getAll: () => new Array(opts.q3Size ?? 0).fill({}) },
+        accumulator: { getActiveCount: () => opts.q3Size ?? 0 },
         q5: { peek: () => new Array(opts.q5Size ?? 0).fill({}) },
         mainLoop: {
             getTickCount: () => opts.tickCount ?? 0,
             isRunning: () => opts.isRunning ?? false,
-        },
-        feedbackLoop: {
-            getActiveWindows: () => new Array(opts.feedbackWindows ?? 0).fill({}),
         },
     };
     const systemCollector = new SystemCollector(mockDeps as any);
@@ -552,17 +549,15 @@ describe("E2E Scrape — Gauge data flow (SystemCollector)", () => {
     test("SystemCollector gauges reflected in /metrics: sandbox pool, queues, memory, loop", async () => {
         const {
             sandboxPoolActive, sandboxPoolIdle,
-            q3QueueSize, q5CallbackPending,
+            accumulatorQueueSize, q5CallbackPending,
             mainLoopTicksTotal, mainLoopRunning,
-            feedbackLoopWindowsActive,
             processUptimeSeconds, processHeapUsedBytes,
         } = await import("../src/metrics/registry.js");
 
         // Reset relevant gauges
         sandboxPoolActive.reset(); sandboxPoolIdle.reset();
-        q3QueueSize.reset(); q5CallbackPending.reset();
+        accumulatorQueueSize.reset(); q5CallbackPending.reset();
         mainLoopTicksTotal.reset(); mainLoopRunning.reset();
-        feedbackLoopWindowsActive.reset();
         processUptimeSeconds.reset(); processHeapUsedBytes.reset();
 
         const { exporter } = await createMockExporter(19204, {
@@ -571,7 +566,6 @@ describe("E2E Scrape — Gauge data flow (SystemCollector)", () => {
             q5Size: 2,
             tickCount: 9999,
             isRunning: true,
-            feedbackWindows: 4,
         });
         await exporter.start();
 
@@ -591,10 +585,10 @@ describe("E2E Scrape — Gauge data flow (SystemCollector)", () => {
             assert.equal(spIdleVal, 2, `sandbox_pool_idle should be 2, got ${spIdleVal}`);
 
             // Queue sizes
-            const q3Fam = families.get("cybergroupmate_q3_queue_size");
-            assert.ok(q3Fam, "q3_queue_size family missing");
-            const q3Val = q3Fam.samples.find(s => s.name === "cybergroupmate_q3_queue_size")?.value;
-            assert.equal(q3Val, 5, `q3_queue_size should be 5, got ${q3Val}`);
+            const q3Fam = families.get("cybergroupmate_accumulator_queue_size");
+            assert.ok(q3Fam, "accumulator_queue_size family missing");
+            const q3Val = q3Fam.samples.find(s => s.name === "cybergroupmate_accumulator_queue_size")?.value;
+            assert.equal(q3Val, 5, `accumulator_queue_size should be 5, got ${q3Val}`);
 
             const q5Fam = families.get("cybergroupmate_q5_callback_pending");
             assert.ok(q5Fam, "q5_callback_pending family missing");
@@ -611,12 +605,6 @@ describe("E2E Scrape — Gauge data flow (SystemCollector)", () => {
             assert.ok(runningFam, "main_loop_running family missing");
             const runningVal = runningFam.samples.find(s => s.name === "cybergroupmate_main_loop_running")?.value;
             assert.equal(runningVal, 1, `main_loop_running should be 1 (true), got ${runningVal}`);
-
-            // Feedback loop
-            const fbFam = families.get("cybergroupmate_feedback_loop_windows_active");
-            assert.ok(fbFam, "feedback_loop_windows_active family missing");
-            const fbVal = fbFam.samples.find(s => s.name === "cybergroupmate_feedback_loop_windows_active")?.value;
-            assert.equal(fbVal, 4, `feedback windows should be 4, got ${fbVal}`);
 
             // Process metrics (just verify they are > 0 — actual values vary)
             const uptimeFam = families.get("cybergroupmate_process_uptime_seconds");
@@ -863,9 +851,8 @@ describe("E2E Scrape — All 30 cybergroupmate metrics present", () => {
                 "cybergroupmate_main_loop_running",
                 "cybergroupmate_sandbox_pool_active",
                 "cybergroupmate_sandbox_pool_idle",
-                "cybergroupmate_q3_queue_size",
+                "cybergroupmate_accumulator_queue_size",
                 "cybergroupmate_q5_callback_pending",
-                "cybergroupmate_feedback_loop_windows_active",
                 "cybergroupmate_process_uptime_seconds",
                 "cybergroupmate_process_heap_used_bytes",
                 "cybergroupmate_process_heap_total_bytes",
@@ -947,9 +934,8 @@ describe("Security — Localhost-only binding", () => {
         const gc = new GroupCollector({ subagentManager: mockSubagentManager as any });
         const sc = new SystemCollector({
             sandboxPool: { getStats: () => ({ total: 0, inUse: 0, idle: 0, instances: [] }) },
-            q3: { getAll: () => [] }, q5: { peek: () => [] },
+            q3: { getAll: () => [] }, accumulator: { getActiveCount: () => 0 }, q5: { peek: () => [] },
             mainLoop: { getTickCount: () => 0, isRunning: () => false },
-            feedbackLoop: { getActiveWindows: () => [] },
         } as any);
 
         const exporter = new MetricsExporter(gc, sc, { host: "127.0.0.1", port: 19212, path: "/custom-metrics" });

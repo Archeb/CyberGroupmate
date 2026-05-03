@@ -7,7 +7,7 @@
 </script>
 
 <h3 class="card-title text-sm">
-  <i class="fa-solid fa-robot opacity-50 mr-1"></i> Subagent / CodeAct
+  <i class="fa-solid fa-robot opacity-50 mr-1"></i> CodeAct
 </h3>
 <p class="text-xs opacity-50 mb-3">CodeAct 执行引擎和注意力系统参数。</p>
 {#if config.subagent}
@@ -105,9 +105,83 @@
       /></label
     >
   </div>
+  <div class="divider text-xs opacity-50 my-3">Meta-CodeAct 历史窗口</div>
+  <p class="text-xs opacity-40 mb-2">超过软上限后，Meta 历史会批量裁回较小窗口，减少连续多轮的小步裁剪带来的 cache miss。</p>
+  <div class="cfg-grid-3">
+    <label class="cfg-field"
+      ><span class="cfg-label">软上限字符数</span>
+      <input
+        type="number"
+        class="input input-xs input-bordered w-full"
+        value={config.subagent.metaHistory?.softCharLimit ?? ""}
+        on:input={(e) => {
+          if (!config.subagent.metaHistory) config.subagent.metaHistory = {};
+          config.subagent.metaHistory.softCharLimit = Number(e.target.value) || undefined;
+          config = config;
+        }}
+        placeholder="18000"
+      /></label
+    >
+    <label class="cfg-field"
+      ><span class="cfg-label">裁剪回落字符</span>
+      <input
+        type="number"
+        class="input input-xs input-bordered w-full"
+        value={config.subagent.metaHistory?.trimTargetChars ?? ""}
+        on:input={(e) => {
+          if (!config.subagent.metaHistory) config.subagent.metaHistory = {};
+          config.subagent.metaHistory.trimTargetChars = Number(e.target.value) || undefined;
+          config = config;
+        }}
+        placeholder="10000"
+      /></label
+    >
+    <label class="cfg-field"
+      ><span class="cfg-label">至少保留消息</span>
+      <input
+        type="number"
+        class="input input-xs input-bordered w-full"
+        value={config.subagent.metaHistory?.minMessages ?? ""}
+        on:input={(e) => {
+          if (!config.subagent.metaHistory) config.subagent.metaHistory = {};
+          config.subagent.metaHistory.minMessages = Number(e.target.value) || undefined;
+          config = config;
+        }}
+        placeholder="8"
+      /></label
+    >
+    <label class="cfg-field"
+      ><span class="cfg-label">硬上限消息数</span>
+      <input
+        type="number"
+        class="input input-xs input-bordered w-full"
+        value={config.subagent.metaHistory?.hardMessageLimit ?? ""}
+        on:input={(e) => {
+          if (!config.subagent.metaHistory) config.subagent.metaHistory = {};
+          config.subagent.metaHistory.hardMessageLimit = Number(e.target.value) || undefined;
+          config = config;
+        }}
+        placeholder="48"
+      /></label
+    >
+    <label class="cfg-field"
+      ><span class="cfg-label">硬裁剪回落消息</span>
+      <input
+        type="number"
+        class="input input-xs input-bordered w-full"
+        value={config.subagent.metaHistory?.trimTargetMessages ?? ""}
+        on:input={(e) => {
+          if (!config.subagent.metaHistory) config.subagent.metaHistory = {};
+          config.subagent.metaHistory.trimTargetMessages = Number(e.target.value) || undefined;
+          config = config;
+        }}
+        placeholder="32"
+      /></label
+    >
+  </div>
   <div class="divider text-xs opacity-50 my-3"><i class="fa-solid fa-puzzle-piece mr-1"></i>常驻模块 (Base Skills)</div>
   <p class="text-xs opacity-40 mb-2">
-    始终对 Subagent 可见的模块。平台 adapter（telegram/discord）会自动包含，无需在此列举。
+    始终对 CodeAct 可见的模块。平台 adapter（telegram/discord）会自动包含，无需在此列举。
   </p>
   <div class="flex flex-wrap gap-1.5 mb-2">
     {#each config.subagent.baseSkills || [] as sk}

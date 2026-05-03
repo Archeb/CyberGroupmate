@@ -257,6 +257,22 @@ export function parseResponse(response: string): {
     return { thinking, codeBlocks };
 }
 
+function hasSessionDigest(thinking?: string): boolean {
+    const trimmed = thinking?.trim();
+    if (!trimmed) return false;
+
+    const match = trimmed.match(/\[SESSION_DIGEST\]([\s\S]*?)(?:\[\/SESSION_DIGEST\]|$)/);
+    return Boolean(match?.[1]?.trim());
+}
+
+function buildMissingDigestObservation(): string {
+    return [
+        "[⚠ 结束前缺少 SESSION_DIGEST]",
+        "你已经输出 <end_task>，但没有输出 [SESSION_DIGEST]...[/SESSION_DIGEST]。",
+        "请用纯文本补充本次任务摘要，格式必须包含 [SESSION_DIGEST]做了什么、结果如何、是否还有遗留[/SESSION_DIGEST]，然后再输出 <end_task>。",
+    ].join("\n");
+}
+
 // ─── Session Runner ───
 
 /**
@@ -450,6 +466,19 @@ export async function runCodeActSession(
 
         // ─── <end_task> 且无代码块 → 直接结束 session ───
         if (hasEndTurn && codeBlocks.length === 0) {
+            if (!hasSessionDigest(thinking)) {
+                log.info(`Turn ${turnNum}: <end_task> 缺少 SESSION_DIGEST，要求补充摘要`);
+                turns.push(turn);
+                const observation = buildMissingDigestObservation();
+                emitProgress({
+                    turn: turnNum,
+                    phase: "observation",
+                    executionOutput: observation,
+                    isProcessing: true,
+                });
+                messages.push({ role: "user", content: observation });
+                continue;
+            }
             log.debug(`Turn ${turnNum}: 检测到 <end_task>，session 结束`);
             turns.push(turn);
             emitProgress({ turn: turnNum, phase: "end", thinking, isProcessing: false, endReason: "end_turn" });
@@ -588,6 +617,19 @@ ${fullDocs}
 
                             // 如果 Pass 2 有 <end_task> 且无代码块，结束 session
                             if (pass2HasEndTurn && pass2Parsed.codeBlocks.length === 0) {
+                                if (!hasSessionDigest(pass2Parsed.thinking)) {
+                                    log.info(`Turn ${turnNum}: Pass 2 <end_task> 缺少 SESSION_DIGEST，要求补充摘要`);
+                                    turns.push(turn);
+                                    const observation = buildMissingDigestObservation();
+                                    emitProgress({
+                                        turn: turnNum,
+                                        phase: "observation",
+                                        executionOutput: observation,
+                                        isProcessing: true,
+                                    });
+                                    messages.push({ role: "user", content: observation });
+                                    continue;
+                                }
                                 log.debug(`Turn ${turnNum}: Pass 2 检测到 <end_task>，session 结束`);
                                 turns.push(turn);
                                 emitProgress({ turn: turnNum, phase: "end", thinking: pass2Parsed.thinking, isProcessing: false, endReason: "end_turn" });
@@ -758,6 +800,18 @@ ${fullDocs}
         // 注意：正常情况下 hasEndTurn 在有代码块时已被强制设为 false，
         // 此处仅作为最终防线保留。
         if (hasEndTurn) {
+            if (!hasSessionDigest(turn.thinking)) {
+                log.info(`Turn ${turnNum}: 代码执行后 <end_task> 缺少 SESSION_DIGEST，要求补充摘要`);
+                const observation = buildMissingDigestObservation();
+                emitProgress({
+                    turn: turnNum,
+                    phase: "observation",
+                    executionOutput: observation,
+                    isProcessing: true,
+                });
+                messages.push({ role: "user", content: observation });
+                continue;
+            }
             log.debug(`Turn ${turnNum}: 代码已执行，检测到 <end_task>，session 结束`);
             emitProgress({ turn: turnNum, phase: "end", isProcessing: false, endReason: "end_turn" });
             return {
@@ -791,5 +845,3 @@ function truncateOutput(output: string): string {
         `\n...[truncated, ${output.length - MAX_OUTPUT_CHARS} chars omitted]`
     );
 }
-
-

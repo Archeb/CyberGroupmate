@@ -10,7 +10,6 @@ import assert from "node:assert/strict";
 import { SubagentManager } from "../src/subagent/subagent-manager.js";
 import { GroupSubagent } from "../src/subagent/group-subagent.js";
 import { Observer } from "../src/subagent/observer.js";
-import { DynamicAttentionQueue } from "../src/subagent/attention-queue.js";
 import type { NotificationEvent } from "../src/event/notification-center.js";
 
 /** 创建模拟 NCEvent */
@@ -94,18 +93,16 @@ describe("S2: SubagentManager + Observer", () => {
             assert.equal(obs.getTotalMessageCount(), 1);
         });
 
-        it("#5 getDigest() 返回 TopicDigest", () => {
+        it("#5 getMessageSnapshot() 返回 buffer 中的消息快照", () => {
             const obs = new Observer("chat1");
+            obs.onMessage(mockEvent({ chatId: "chat1", userId: "u1", text: "Hello" }));
+            obs.onMessage(mockEvent({ chatId: "chat1", userId: "u2", text: "World" }));
 
-            obs.setTopicDigests([
-                { topicId: "t1", label: "Test", summary: "A test", state: "ACTIVE",
-                  participants: ["u1"], keywords: ["test"], messageCount: 5,
-                  lastActivityAt: new Date().toISOString() },
-            ]);
-
-            const digests = obs.getDigest();
-            assert.equal(digests.length, 1);
-            assert.equal(digests[0].topicId, "t1");
+            const snapshot = obs.getMessageSnapshot();
+            assert.equal(snapshot.length, 2);
+            assert.equal(snapshot[0]?.userId, "u1");
+            assert.equal(snapshot[0]?.text, "Hello");
+            assert.equal(snapshot[1]?.userId, "u2");
         });
 
         it("#6 getEngagementScore() 纯算法计算", () => {
@@ -137,39 +134,34 @@ describe("S2: SubagentManager + Observer", () => {
             assert.ok(lowScore < highScore, `单条消息应低于多条, low=${lowScore}, high=${highScore}`);
         });
 
-        it("#7 checkAlert() 超阈值触发告警", () => {
+        it("#7 hasMentionKeyword() 命中关键词时返回 true", () => {
             const obs = new Observer("chat1", {
                 engagementWindowMs: 60000,
-                alertEngagementThreshold: 10, // 降低阈值方便测试
-                mentionKeywords: [],
+                alertEngagementThreshold: 10,
+                mentionKeywords: ["赛博群友", "bot"],
             });
 
-            // 发足够多的消息超过阈值
-            for (let i = 0; i < 10; i++) {
-                obs.onMessage(mockEvent({
-                    chatId: "chat1",
-                    userId: `user${i % 3}`,
-                    text: `msg ${i}`,
-                }));
-            }
-
-            const alert = obs.checkAlert();
-            assert.ok(alert !== null, "应该触发告警");
-            assert.equal(alert!.type, "OBSERVER_ALERT");
-            assert.equal(alert!.chatId, "chat1");
+            assert.equal(obs.hasMentionKeyword("你好，赛博群友"), true);
+            assert.equal(obs.hasMentionKeyword("plain text"), false);
         });
 
-        it("#8 checkAlert() 未超阈值不告警", () => {
+        it("#8 clearBuffer() 会清空 buffer 并重置 engagement / mention 计数", () => {
             const obs = new Observer("chat1", {
                 engagementWindowMs: 60000,
-                alertEngagementThreshold: 99, // 极高阈值
-                mentionKeywords: [],
+                alertEngagementThreshold: 99,
+                mentionKeywords: ["bot"],
             });
 
-            obs.onMessage(mockEvent({ chatId: "chat1", userId: "u1", text: "hi" }));
+            obs.onMessage(mockEvent({ chatId: "chat1", userId: "u1", text: "hello bot" }));
+            assert.equal(obs.getBufferSize(), 1);
+            assert.ok(obs.getEngagementScore() > 0);
+            assert.equal(obs.getMentionCount(), 1);
 
-            const alert = obs.checkAlert();
-            assert.equal(alert, null, "不应触发告警");
+            obs.clearBuffer();
+
+            assert.equal(obs.getBufferSize(), 0);
+            assert.equal(obs.getEngagementScore(), 0);
+            assert.equal(obs.getMentionCount(), 0);
         });
     });
 
@@ -231,94 +223,18 @@ describe("S2: SubagentManager + Observer", () => {
         });
     });
 
-    // ─── S2.4: DynamicAttentionQueue ───
-
-    describe("S2.4: DynamicAttentionQueue", () => {
-        it("#11 enqueueOrUpdate() 新增条目", () => {
-            const q = new DynamicAttentionQueue();
-            q.enqueueOrUpdate({ chatId: "c1", priority: 50 });
-
-            const entry = q.dequeue();
-            assert.ok(entry);
-            assert.equal(entry!.chatId, "c1");
-            assert.equal(entry!.priority, 50);
-        });
-
-        it("#12 enqueueOrUpdate() 更新已有条目（priority 取最高）", () => {
-            const q = new DynamicAttentionQueue();
-            q.enqueueOrUpdate({ chatId: "c1", priority: 30 });
-            q.enqueueOrUpdate({ chatId: "c1", priority: 70 });
-
-            const entry = q.get("c1");
-            assert.ok(entry);
-            assert.equal(entry!.priority, 70, "应取最高值");
-        });
-
-        it("#13 dequeue() 返回最高优先级", () => {
-            const q = new DynamicAttentionQueue();
-            q.enqueueOrUpdate({ chatId: "c1", priority: 30 });
-            q.enqueueOrUpdate({ chatId: "c2", priority: 80 });
-            q.enqueueOrUpdate({ chatId: "c3", priority: 50 });
-
-            const first = q.dequeue();
-            assert.equal(first!.chatId, "c2", "最高优先级应先出");
-
-            const second = q.dequeue();
-            assert.equal(second!.chatId, "c3", "第二高优先级");
-        });
-
-        it("#14 block() / unblock()", () => {
-            const q = new DynamicAttentionQueue();
-            q.enqueueOrUpdate({ chatId: "c1", priority: 90 });
-            q.enqueueOrUpdate({ chatId: "c2", priority: 50 });
-
-            // Block c1
-            q.block("c1", "executing");
-
-            // dequeue 应跳过 c1
-            const entry = q.dequeue();
-            assert.equal(entry!.chatId, "c2", "blocked 的应被跳过");
-
-            // c1 还在队列中
-            assert.equal(q.size, 1);
-            assert.equal(q.get("c1")!.blocked, true);
-
-            // unblock
-            q.unblock("c1");
-            assert.equal(q.get("c1")!.blocked, false);
-
-            const entry2 = q.dequeue();
-            assert.equal(entry2!.chatId, "c1", "unblock 后应可出队");
-        });
-
-        it("#15 evaluate() 时间衰减", () => {
-            const q = new DynamicAttentionQueue({ timeDecayPerSecond: 1 }); // 极快衰减
-
-            q.enqueueOrUpdate({ chatId: "c1", priority: 50 });
-
-            // 模拟时间流逝：将 enqueuedAt 设为 10 秒前
-            const entry = q.get("c1")!;
-            entry.enqueuedAt = Date.now() - 10000;
-
-            const eval1 = q.evaluate();
-            assert.ok(entry.priority < 50, `时间衰减后 priority 应下降: ${entry.priority}`);
-            assert.ok(entry.priority >= 0, "priority 不应为负");
-        });
-
-        // ─── Edge cases ───
-
-        it("#16 Observer: zero messages → engagement=0", () => {
+    describe("S2.4: Edge cases", () => {
+        it("#11 Observer: zero messages → engagement=0", () => {
             const obs = new Observer("g1", {
                 engagementWindowMs: 60000,
                 alertEngagementThreshold: 60,
                 mentionKeywords: [],
             });
             assert.equal(obs.getEngagementScore(), 0);
-            assert.equal(obs.checkAlert(), null);
             assert.equal(obs.getTotalMessageCount(), 0);
         });
 
-        it("#17 Observer: engagement capped at 100", () => {
+        it("#12 Observer: engagement capped at 100", () => {
             const obs = new Observer("g1", {
                 engagementWindowMs: 60000,
                 alertEngagementThreshold: 60,
@@ -330,38 +246,7 @@ describe("S2: SubagentManager + Observer", () => {
             assert.ok(obs.getEngagementScore() <= 100, `engagement 应 ≤ 100: ${obs.getEngagementScore()}`);
         });
 
-        it("#18 Q3: enqueueOrUpdate updates priority for same chatId", () => {
-            const q = new DynamicAttentionQueue();
-            q.enqueueOrUpdate({ chatId: "c1", priority: 10 });
-            q.enqueueOrUpdate({ chatId: "c1", priority: 50 });
-            assert.equal(q.size, 1, "同一 chatId 不重复入队");
-            const entry = q.dequeue();
-            assert.equal(entry?.priority, 50, "priority 应更新为 50");
-        });
-
-        it("#19 Q3: dequeue from empty queue returns null", () => {
-            const q = new DynamicAttentionQueue();
-            assert.equal(q.dequeue(), null);
-        });
-
-        it("#20 Q3: block nonexistent chatId is no-op", () => {
-            const q = new DynamicAttentionQueue();
-            q.block("nonexistent", "test");
-            assert.equal(q.size, 0);
-        });
-
-        it("#21 Q3 eviction: insert beyond maxSize evicts lowest priority", () => {
-            const q = new DynamicAttentionQueue({ maxSize: 3, timeDecayPerSecond: 0 });
-            q.enqueueOrUpdate({ chatId: "low", priority: 5 });
-            q.enqueueOrUpdate({ chatId: "mid", priority: 20 });
-            q.enqueueOrUpdate({ chatId: "high", priority: 50 });
-            q.enqueueOrUpdate({ chatId: "higher", priority: 60 });
-            assert.equal(q.size, 3);
-            assert.equal(q.get("low"), undefined, "最低优先级应被淘汰");
-            assert.ok(q.get("higher"), "新入的应存在");
-        });
-
-        it("#22 SubagentManager: getOrCreate returns same instance", () => {
+        it("#13 SubagentManager: getOrCreate returns same instance", () => {
             const mgr = new SubagentManager();
             const s1 = mgr.getOrCreate("g1");
             const s2 = mgr.getOrCreate("g1");

@@ -45,7 +45,7 @@ export interface AdditionalMemoryContext {
 
 // ─── Observer 产出 ───
 
-/** 话题摘要（Observer → Q3 AttentionQueueEntry） */
+/** 话题摘要（Observer → AttentionQueueEntry 快照） */
 export interface TopicDigest {
     /** Pipeline Topic ID */
     topicId: string;
@@ -63,7 +63,7 @@ export interface TopicDigest {
     messageCount: number;
     /** 最后活跃时间 */
     lastActivityAt: string;
-    /** Triage 判断理由（should_intervene=true 时填充） */
+    /** Triage 判断理由 / 行动提示 */
     triageReason?: string;
     /** 与当前话题程序化关联的记忆 */
     associatedMemories?: AssociatedMemory[];
@@ -71,15 +71,29 @@ export interface TopicDigest {
     callbackPotential?: number;
 }
 
+export interface AttentionRecentMessage {
+    messageId: string;
+    userId: string;
+    displayName?: string;
+    text: string;
+    timestamp: string;
+    replyToMessageId?: string;
+    replyTo?: string;
+    replyToMsgId?: string;
+    replyToText?: string;
+    mediaType?: string;
+    mediaInfo?: string;
+}
 
-// ─── 注意力队列 (Q3) ───
+
+// ─── 主循环 attend 快照 ───
 
 /** 注意力队列条目 */
 export interface AttentionQueueEntry {
     /** 群组 chatId */
     chatId: string;
     /** 来源标记 (subagent.md §2.2) */
-    source: 'DIGEST_UPDATE' | 'OBSERVER_ALERT' | 'DEFERRED_RE_ENTRY' | 'DIRECT_ADDRESS' | 'SCHEDULED_REVISIT' | 'SCHEDULER_TRIGGER';
+    source: 'DIGEST_UPDATE' | 'OBSERVER_ALERT' | 'DEFERRED_RE_ENTRY' | 'DIRECT_ADDRESS' | 'SCHEDULED_REVISIT' | 'SCHEDULER_TRIGGER' | 'PROACTIVE_IDLE' | 'TOPIC_SIGNAL';
     /** 当前优先级分数 (0-100) */
     priority: number;
     /** 基础优先级（不含时间衰减） */
@@ -104,16 +118,27 @@ export interface AttentionQueueEntry {
     // ─── subagent.md §2.2 补齐字段 ───
     /** Engagement 评分 (0-100) */
     engagementScore?: number;
+    /** DIRECT_ADDRESS 的触发原因（DM / @mention / name-mention） */
+    directAddressReason?: string;
     /** 紧急信号列表（如 @mention、关键词命中等） */
     urgentSignals?: string[];
     /** 快照时间戳 */
     snapshotTimestamp?: string;
     /** Scheduler 触发描述列表（watchdog 注入，source=SCHEDULER_TRIGGER 时存在） */
-    schedulerTriggers?: Array<{ id: string; type: "reminder" | "cron"; description: string }>;
+    schedulerTriggers?: Array<{
+        id: string;
+        type: "reminder" | "cron" | "wake_condition";
+        description: string;
+        bindingId?: string;
+        callback?: string;
+        data?: unknown;
+    }>;
     /** 当前队列快照中的最大 callbackPotential */
     callbackPotential?: number;
     /** 是否存在高 callbackPotential 话题 */
     hasHighCallbackPotential?: boolean;
+    /** 最近原始消息快照，用于 Meta 在话题摘要缺失时仍能看到内容 */
+    recentMessages?: AttentionRecentMessage[];
 }
 
 /** AttentionQueue 评估结果 */
@@ -203,8 +228,33 @@ export interface SubagentCallback {
     createdAt: string;
 
     // ─── subagent.md §2.2 C1/C2 补齐字段 ───
-    /** Session 摘要（CodeAct session 的结构化摘要） */
-    sessionSummary?: string;
+    /** 原始任务方向（Meta 派发时的 contentDirection） */
+    contentDirection?: string;
+}
+
+/** Meta 派发给 Subagent 的任务持久化记录 */
+export interface DispatchedSubagentTaskRecord {
+    taskId: string;
+    chatId: string;
+    contentDirection: string;
+    toneGuidance?: string;
+    suggestedEmojis?: string[];
+    context?: unknown;
+    useSkills?: string[];
+    tracking?: unknown;
+    status: "PENDING" | "RUNNING" | "COMPLETED" | "ERROR" | "SKIPPED" | "TIMEOUT";
+    createdAt: string;
+    updatedAt: string;
+    completedAt?: string;
+    sessionId?: string;
+    summary?: string;
+    sentMessages?: Array<{
+        messageId?: string;
+        text: string;
+        timestamp: string;
+    }>;
+    error?: string;
+    durationMs?: number;
 }
 
 // ─── GroupStickiness ───
@@ -297,8 +347,8 @@ export interface GroupContextPackage {
     toneGuidance?: string;
     /** 回复方向 */
     contentDirection?: string;
-    /** 可用贴纸目录（emoji + 描述 + 本地文件路径） */
-    availableStickers?: Array<{ emoji: string; description: string; uniqueFileId: string }>;
+    /** 可用贴纸目录（emoji 候选 + 描述 + 本地文件路径） */
+    availableStickers?: Array<{ emoji?: string; emojis?: string[]; description: string; uniqueFileId: string }>;
     /** 并行 Grounding 查证结果（联网搜索得到的事实信息） */
     groundingContext?: string;
 }
@@ -343,15 +393,6 @@ export interface Decision {
 
 
 /** Agent 工作笔记 */
-export interface AgentNote {
-    id: string;
-    content: string;
-    tags: string[];
-    relatedChatId?: string;
-    expiresAt?: string;
-    createdAt: string;
-}
-
 /** 调度事件（scheduler 命名空间） */
 export interface SchedulerEvent {
     /** 任务 ID */
@@ -360,8 +401,16 @@ export interface SchedulerEvent {
     type: "reminder" | "cron";
     /** 关联群组 */
     chatId: string;
+    /** 唤醒绑定目标。可以是 composite chatId，也可以是 "meta"。 */
+    bindingId?: string;
+    /** 展示名称 */
+    name?: string;
     /** 描述 / 自然语言任务描述（触发时注入 ATTENTION prompt） */
     description: string;
+    /** 触发时交给 main/meta agent 的回调正文。新调度 API 中必填。 */
+    callback?: string;
+    /** 调度附带的结构化数据。 */
+    data?: unknown;
     /** 触发时间 ISO 8601（reminder） */
     triggerAt?: string;
     /** cron 表达式（cron） */
@@ -378,48 +427,61 @@ export interface SchedulerEvent {
     lastTriggeredAt?: string;
 }
 
+export interface MemoEntry {
+    key: string;
+    value: unknown;
+    expiresAt?: string;
+    createdAt: string;
+}
+
+export interface SessionDigestEntry {
+    content: string;
+    createdAt: string;
+}
+
+export interface MetaSessionHistoryEntry {
+    role: "user" | "assistant";
+    content: string;
+    timestamp: string;
+}
+
+export interface SignalPoolItem {
+    chatId: string;
+    source: string;
+    payload: unknown;
+    enqueuedAt: number;
+    pressure: number;
+    ignoredCount: number;
+}
+
+export type WakeCondition =
+    | { type: "delay"; ms: number }
+    | { type: "callback_received"; taskId: string };
+
+export interface WakeConditionRecord {
+    id: string;
+    condition: WakeCondition;
+    registeredAt: string;
+}
+
 // ─── 全局状态 ───
 
 /** 主 Agent 全局状态 */
 export interface MainAgentGlobalState {
-    /** 最后活跃时间 */
-    lastActiveAt: string;
-    /** 当前任务列表 */
-    taskList: AgentTask[];
-    /** 最近决策记录（最近 50 条） */
-    recentDecisions: Array<{
-        chatId: string;
-        decision: string;
-        timestamp: string;
-    }>;
-    /** 跨群待办事项 */
-    pendingFollowups: Array<{
-        id: string;
-        sourceChatId: string;
-        targetChatId: string;
-        description: string;
-        status: "PENDING" | "IN_PROGRESS" | "DONE";
-        createdAt: string;
-        completedAt?: string;
-    }>;
-    /** 当前的注意力总结 */
-    attentionSummary: string;
-    /** Agent 工作笔记 */
-    notes: AgentNote[];
     /** 调度事件（定时提醒 + cron 任务） */
     schedulerEvents: SchedulerEvent[];
-}
-
-/** Agent 任务 */
-export interface AgentTask {
-    id: string;
-    description: string;
-    status: "PENDING" | "IN_PROGRESS" | "DONE" | "CANCELLED";
-    chatId?: string;
-    priority: "LOW" | "MEDIUM" | "HIGH";
-    createdAt: string;
-    updatedAt: string;
-    completedAt?: string;
+    /** Meta-CodeAct 全局备忘录 */
+    memos: MemoEntry[];
+    /** Meta-CodeAct 历史会话摘要 */
+    sessionDigests: SessionDigestEntry[];
+    /** Meta-CodeAct 精简对话历史（assistant/user） */
+    metaSessionHistory: MetaSessionHistoryEntry[];
+    /** Accumulator 信号池 */
+    signalPool: SignalPoolItem[];
+    /** Meta-CodeAct 唤醒条件 */
+    wakeConditions: WakeConditionRecord[];
+    /** Meta 派发给 Subagent 的任务历史 */
+    dispatchedSubagentTasks: DispatchedSubagentTaskRecord[];
 }
 
 // ─── 配置 ───

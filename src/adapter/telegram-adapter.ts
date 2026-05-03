@@ -153,7 +153,8 @@ interface PlainChat {
 
 /** 结构化媒体元数据（从 mtcute msg.media 提取） */
 export interface MediaInfo {
-    type: "photo" | "sticker" | "video" | "document" | "animation" | "other";
+    type: "photo" | "sticker" | "video" | "document" | "animation" | "audio" | "other";
+    rawType?: string;
     fileId?: string;
     uniqueFileId?: string;
     emoji?: string;
@@ -162,6 +163,11 @@ export interface MediaInfo {
     width?: number;
     height?: number;
     fileSize?: number;
+    /** 入站时自动下载到本地后的绝对路径（20MB 内） */
+    filePath?: string;
+    /** 下载状态。too_large 时需要 sandbox 手动调用 downloadMedia/getMessage 再自行处理。 */
+    downloadStatus?: "downloaded" | "cached" | "too_large" | "failed";
+    downloadError?: string;
 }
 
 interface PlainMessage {
@@ -183,6 +189,22 @@ interface PlainDialog {
     lastMessage?: PlainMessage;
     unreadCount: number;
 }
+
+type NormalizedIncomingMessage = {
+    chatId: string;
+    userId: string;
+    displayName: string;
+    username?: string;
+    text: string;
+    timestamp: string;
+    messageId?: string;
+    replyToMessageId?: string;
+    chatTitle?: string;
+    chatType?: string;
+    isDirectMessage?: boolean;
+    mentionsAgent?: boolean;
+    mediaInfo?: MediaInfo;
+};
 
 export class TelegramAdapter implements PlatformAdapter {
     readonly platform = "telegram";
@@ -238,7 +260,7 @@ export class TelegramAdapter implements PlatformAdapter {
         this.selfUser = this.normalizeUser(self);
 
         this.messageHandler = async (msg: any) => {
-            const normalized = this.normalizeIncomingMessage(msg);
+            const normalized = await this.normalizeIncomingMessage(msg);
             if (!normalized || !normalized.messageId || !normalized.text) return;
 
             // ─── 入站白名单（开启时仅处理列出的群组或私聊） ───
@@ -255,6 +277,10 @@ export class TelegramAdapter implements PlatformAdapter {
             if (this.invisibleUsers.has(normalized.userId)) {
                 log.debug("invisible 用户消息已丢弃", { userId: normalized.userId, chatId: normalized.chatId });
                 return;
+            }
+
+            if (normalized.mediaInfo && normalized.messageId) {
+                await this.downloadIncomingMedia(normalized.mediaInfo, normalized.chatId, normalized.messageId);
             }
 
             log.debug("接收 Telegram 消息", {
@@ -566,67 +592,8 @@ export class TelegramAdapter implements PlatformAdapter {
                 const fileIdOrMedia = args[0];
                 if (!fileIdOrMedia) throw new Error("downloadMedia: fileId is required");
                 const uniqueFileId = typeof args[3] === "string" ? args[3] : undefined;
-
-                // ── 缓存命中 → 直接返回 ──
-                if (uniqueFileId) {
-                    const cached = this.mediaCache.get(uniqueFileId);
-                    if (cached) {
-                        log.debug("downloadMedia: 缓存命中", { uniqueFileId });
-                        return { buffer: cached.toString("base64"), size: cached.length };
-                    }
-                }
-
-                try {
-                    const uint8 = await this.client.downloadAsBuffer(fileIdOrMedia);
-                    const buffer = Buffer.from(uint8);
-                    if (uniqueFileId) this.mediaCache.set(uniqueFileId, buffer);
-                    return { buffer: buffer.toString("base64"), size: buffer.length };
-                } catch (err) {
-                    const errMsg = err instanceof Error ? err.message : String(err);
-                    const isFileRefError = /file.?ref/i.test(errMsg) || /FILE_REFERENCE/i.test(errMsg);
-
-                    if (!isFileRefError) throw err;
-
-                    // File reference 过期 → 尝试 refetch 消息获取新的 fileId
-                    const chatId = args[1];
-                    const messageId = args[2];
-                    if (!chatId || !messageId) {
-                        log.warn("downloadMedia: file reference 过期但缺少 chatId/messageId，无法 refetch", { fileId: String(fileIdOrMedia) });
-                        throw err;
-                    }
-
-                    log.info("downloadMedia: file reference 过期，尝试 refetch", {
-                        chatId: String(chatId),
-                        messageId: String(messageId),
-                    });
-
-                    try {
-                        const peer = await this.ensurePeerCached(chatId);
-                        const msgIdNum = Number(messageId);
-                        if (!Number.isFinite(msgIdNum)) throw new Error("messageId 不是有效数字");
-
-                        const messages = await this.client.getMessages(peer, [msgIdNum]);
-                        const msg = messages?.[0];
-                        if (!msg) throw new Error("refetch 返回空消息");
-
-                        // 从刷新后的消息中提取新的 fileId
-                        const freshFileId = this.extractFileIdFromMessage(msg);
-                        if (!freshFileId) throw new Error("refetch 消息中未找到 fileId");
-
-                        log.info("downloadMedia: refetch 成功，重试下载", { freshFileId: freshFileId.slice(0, 30) + "..." });
-                        const uint8 = await this.client.downloadAsBuffer(freshFileId);
-                        const buffer = Buffer.from(uint8);
-                        if (uniqueFileId) this.mediaCache.set(uniqueFileId, buffer);
-                        return { buffer: buffer.toString("base64"), size: buffer.length };
-                    } catch (refetchErr) {
-                        log.warn("downloadMedia: refetch 重试也失败", {
-                            chatId: String(chatId),
-                            messageId: String(messageId),
-                            error: String(refetchErr),
-                        });
-                        throw err; // 抛出原始错误
-                    }
-                }
+                const buffer = await this.downloadMediaBuffer(fileIdOrMedia, args[1], args[2], uniqueFileId);
+                return { buffer: buffer.toString("base64"), size: buffer.length };
             }
             case "telegram.sendSticker": {
                 // args: [chatId, uniqueFileId, opts?]
@@ -962,7 +929,7 @@ export class TelegramAdapter implements PlatformAdapter {
      * 私聊仅当 rawId 在 users 中通过。
      */
     private passesTelegramWhitelist(
-        normalized: NonNullable<ReturnType<TelegramAdapter["normalizeIncomingMessage"]>>,
+        normalized: NormalizedIncomingMessage,
     ): boolean {
         const wl = this.config.whitelist;
         if (!wl?.enabled) return true;
@@ -994,7 +961,7 @@ export class TelegramAdapter implements PlatformAdapter {
      * 返回 true 表示消息是命令且已处理，调用者应跳过 NC push。
      */
     private async handleBotCommand(
-        normalized: NonNullable<ReturnType<TelegramAdapter["normalizeIncomingMessage"]>>,
+        normalized: NormalizedIncomingMessage,
         _rawMsg: any,
     ): Promise<boolean> {
         const text = normalized.text.trim();
@@ -1207,25 +1174,129 @@ export class TelegramAdapter implements PlatformAdapter {
         return peer;
     }
 
-    private normalizeIncomingMessage(msg: any): {
-        chatId: string;
-        userId: string;
-        displayName: string;
-        username?: string;
-        text: string;
-        timestamp: string;
-        messageId?: string;
-        replyToMessageId?: string;
-        chatTitle?: string;
-        chatType?: string;
-        isDirectMessage?: boolean;
-        mentionsAgent?: boolean;
-        mediaInfo?: MediaInfo;
-    } | null {
+    private async downloadMediaBuffer(
+        fileIdOrMedia: unknown,
+        chatId?: unknown,
+        messageId?: unknown,
+        uniqueFileId?: string,
+    ): Promise<Buffer> {
+        if (!this.client?.downloadAsBuffer) {
+            throw new Error("downloadMedia: current Telegram client does not support downloadAsBuffer");
+        }
+
+        // ── 缓存命中 → 直接返回 ──
+        if (uniqueFileId) {
+            const cached = this.mediaCache.get(uniqueFileId);
+            if (cached) {
+                log.debug("downloadMedia: 缓存命中", { uniqueFileId });
+                return cached;
+            }
+        }
+
+        try {
+            const uint8 = await this.client.downloadAsBuffer(fileIdOrMedia);
+            const buffer = Buffer.from(uint8);
+            if (uniqueFileId) this.mediaCache.set(uniqueFileId, buffer);
+            return buffer;
+        } catch (err) {
+            const errMsg = err instanceof Error ? err.message : String(err);
+            const isFileRefError = /file.?ref/i.test(errMsg) || /FILE_REFERENCE/i.test(errMsg);
+
+            if (!isFileRefError) throw err;
+
+            // File reference 过期 → 尝试 refetch 消息获取新的 fileId
+            if (!chatId || !messageId) {
+                log.warn("downloadMedia: file reference 过期但缺少 chatId/messageId，无法 refetch", { fileId: String(fileIdOrMedia) });
+                throw err;
+            }
+
+            log.info("downloadMedia: file reference 过期，尝试 refetch", {
+                chatId: String(chatId),
+                messageId: String(messageId),
+            });
+
+            try {
+                const peer = await this.ensurePeerCached(chatId);
+                const msgIdNum = Number(messageId);
+                if (!Number.isFinite(msgIdNum)) throw new Error("messageId 不是有效数字");
+
+                const messages = await this.client.getMessages(peer, [msgIdNum]);
+                const msg = messages?.[0];
+                if (!msg) throw new Error("refetch 返回空消息");
+
+                const freshFileId = this.extractFileIdFromMessage(msg);
+                if (!freshFileId) throw new Error("refetch 消息中未找到 fileId");
+
+                log.info("downloadMedia: refetch 成功，重试下载", { freshFileId: freshFileId.slice(0, 30) + "..." });
+                const uint8 = await this.client.downloadAsBuffer(freshFileId);
+                const buffer = Buffer.from(uint8);
+                if (uniqueFileId) this.mediaCache.set(uniqueFileId, buffer);
+                return buffer;
+            } catch (refetchErr) {
+                log.warn("downloadMedia: refetch 重试也失败", {
+                    chatId: String(chatId),
+                    messageId: String(messageId),
+                    error: String(refetchErr),
+                });
+                throw err; // 抛出原始错误
+            }
+        }
+    }
+
+    private async downloadIncomingMedia(mediaInfo: MediaInfo, chatId: string, messageId: string): Promise<void> {
+        if (!this.mediaDownloader || !mediaInfo.fileId) return;
+
+        const uniqueFileId = mediaInfo.uniqueFileId ?? mediaInfo.fileId;
+        const existing = this.mediaDownloader.getExistingPath(uniqueFileId);
+        if (existing) {
+            mediaInfo.uniqueFileId = uniqueFileId;
+            mediaInfo.filePath = existing;
+            mediaInfo.downloadStatus = "cached";
+            return;
+        }
+
+        if (!this.mediaDownloader.isWithinSizeLimit(mediaInfo.fileSize)) {
+            mediaInfo.downloadStatus = "too_large";
+            return;
+        }
+
+        try {
+            const buffer = await this.downloadMediaBuffer(mediaInfo.fileId, chatId, messageId, uniqueFileId);
+            const saved = this.mediaDownloader.saveMedia(buffer, {
+                chatId,
+                messageId,
+                uniqueFileId,
+                mediaType: mediaInfo.type,
+                mimeType: mediaInfo.mimeType,
+                fileName: mediaInfo.fileName,
+            });
+            mediaInfo.uniqueFileId = uniqueFileId;
+            mediaInfo.fileSize = mediaInfo.fileSize ?? buffer.length;
+            if (saved) {
+                mediaInfo.filePath = saved.path;
+                mediaInfo.downloadStatus = "downloaded";
+            } else {
+                mediaInfo.downloadStatus = "too_large";
+            }
+        } catch (err) {
+            mediaInfo.downloadStatus = "failed";
+            mediaInfo.downloadError = String(err).slice(0, 300);
+            log.warn("入站媒体自动下载失败", {
+                chatId,
+                messageId,
+                type: mediaInfo.type,
+                fileId: mediaInfo.fileId.slice(0, 30),
+                error: String(err),
+            });
+        }
+    }
+
+    private async normalizeIncomingMessage(msg: any): Promise<NormalizedIncomingMessage | null> {
         const plain = this.normalizeMessage(msg);
         if (!plain.chat?.id) return null;
 
         const senderId = plain.sender?.id ?? "0";
+        const chatId = composeChatId("telegram", plain.chat.id);
         const numericChatId = Number(plain.chat.id);
         const isDirectMessage = plain.chat.type === "private" || (!Number.isNaN(numericChatId) && numericChatId > 0);
         const mentionsAgent = Boolean(plain.isMention);
@@ -1249,6 +1320,9 @@ export class TelegramAdapter implements PlatformAdapter {
                 case "animation":
                     text = "[🎞 GIF]";
                     break;
+                case "audio":
+                    text = "[🎙 语音/音频]";
+                    break;
                 case "document":
                     text = "[📎 文件]";
                     break;
@@ -1264,7 +1338,7 @@ export class TelegramAdapter implements PlatformAdapter {
         }
 
         return {
-            chatId: composeChatId("telegram", plain.chat.id),
+            chatId,
             userId: /^-?\d+$/.test(senderId) ? composeChatId("telegram", senderId) : senderId,
             displayName: plain.sender?.displayName ?? plain.sender?.firstName ?? "Unknown",
             username: plain.sender?.username ?? undefined,
@@ -1324,6 +1398,7 @@ export class TelegramAdapter implements PlatformAdapter {
         if (!media) return undefined;
 
         const rawType = String(media.type ?? "");
+        const mimeType = typeof media.mimeType === "string" ? media.mimeType : undefined;
         let type: MediaInfo["type"];
         switch (rawType) {
             case "photo": type = "photo"; break;
@@ -1331,19 +1406,24 @@ export class TelegramAdapter implements PlatformAdapter {
             case "video": type = "video"; break;
             case "document": type = "document"; break;
             case "animation": type = "animation"; break;
+            case "audio":
+            case "voice":
+                type = "audio";
+                break;
             default:
                 // 未知类型但有 media 对象 → 标记为 other
                 if (!rawType) return undefined;
-                type = "other";
+                type = mimeType?.startsWith("audio/") ? "audio" : "other";
                 break;
         }
 
         return {
             type,
+            rawType: rawType || undefined,
             fileId: typeof media.fileId === "string" ? media.fileId : undefined,
             uniqueFileId: typeof media.uniqueFileId === "string" ? media.uniqueFileId : undefined,
             emoji: typeof media.emoji === "string" ? media.emoji : undefined,
-            mimeType: typeof media.mimeType === "string" ? media.mimeType : undefined,
+            mimeType,
             fileName: typeof media.fileName === "string" ? media.fileName : undefined,
             width: typeof media.width === "number" ? media.width : undefined,
             height: typeof media.height === "number" ? media.height : undefined,

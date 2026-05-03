@@ -23,6 +23,13 @@ import {
     reloadAllPrompts,
 } from "../core/prompt-loader.js";
 import { getConnectionConfigs, mcpBridge, replaceConnectionConfigs, type McpServerConfig } from "../sandbox/modules/mcp-bridge/index.js";
+import {
+    META_CODEACT_CHAT_ID,
+    getMetaCodeActState,
+    requestCancelMetaCodeActSession,
+    resetMetaCodeActState,
+} from "../meta-sandbox/meta-session-runner.js";
+import { getMetaHistoryWindowStatus } from "../main-agent/meta-history-retention.js";
 
 const log = createLogger("dashboard-api");
 const SKILLS_ROOT = join(process.cwd(), "workspace", "skills");
@@ -101,6 +108,24 @@ export function createApiRouter(deps: DashboardDeps, bridge: EventBridge): Route
     // ─── Overview ───
     router.get("/overview", (_req, res) => {
         res.json(bridge.buildSnapshot());
+    });
+
+    // ─── Subagent Task History ───
+    router.get("/subagent-tasks", (req, res) => {
+        const limit = Math.min(parseInt(qs(req.query.limit)) || 50, 200);
+        const offset = Math.max(parseInt(qs(req.query.offset)) || 0, 0);
+        const chatId = qs(req.query.chatId) || undefined;
+        const status = qs(req.query.status) || undefined;
+        res.json(deps.globalState.listDispatchedSubagentTasks({ chatId, status, limit, offset }));
+    });
+
+    router.get("/subagent-tasks/:taskId", (req, res) => {
+        const task = deps.globalState.getDispatchedSubagentTask(req.params.taskId);
+        if (!task) {
+            res.status(404).json({ error: "task not found" });
+            return;
+        }
+        res.json(task);
     });
 
     // ─── Skills ───
@@ -457,41 +482,58 @@ export function createApiRouter(deps: DashboardDeps, bridge: EventBridge): Route
         }
     });
 
-    // ─── Attention Queue (Q3) ───
+    // ─── Attention Queue ───
     router.get("/queue", (_req, res) => {
-        res.json({ active: deps.q3.getAll(), dequeued: deps.q3.getDequeueHistory() });
+        res.json(deps.accumulator.getSnapshot());
     });
 
     router.post("/queue/enqueue", (req, res) => {
-        const { chatId, priority } = req.body;
+        const { chatId, priority, note } = req.body;
         if (!chatId) { res.status(400).json({ error: "chatId required" }); return; }
         const sub = deps.subagentManager.get(chatId);
         if (!sub) { res.status(404).json({ error: "chat not found" }); return; }
-        const entry = sub.buildQueueEntry();
-        if (priority) entry.priority = Number(priority);
-        deps.q3.enqueueOrUpdate(entry);
-        bridge.broadcast({ type: "queue:update", timestamp: new Date().toISOString(), data: deps.q3.getAll() });
-        log.info("手动入队 Q3", { chatId, priority });
+        deps.accumulator.ingest(0, {
+            chatId,
+            source: "DIRECT_ADDRESS",
+            payload: { reason: typeof note === "string" && note.trim() ? `dashboard-manual: ${note.trim()}` : "dashboard-manual" },
+            enqueuedAt: Date.now(),
+            pressure: Number(priority) || 0,
+        });
+        bridge.broadcast({ type: "queue:update", timestamp: new Date().toISOString(), data: deps.accumulator.getSnapshot() });
+        log.info("手动注入 accumulator", { chatId, priority, note: typeof note === "string" ? note.slice(0, 200) : undefined });
         res.json({ ok: true });
     });
 
     router.post("/queue/boost", (req, res) => {
         const { chatId, amount } = req.body;
         if (!chatId) { res.status(400).json({ error: "chatId required" }); return; }
-        deps.q3.boost(chatId, Number(amount) || 20);
-        bridge.broadcast({ type: "queue:update", timestamp: new Date().toISOString(), data: deps.q3.getAll() });
+        deps.accumulator.ingest(0, {
+            chatId,
+            source: "DIRECT_ADDRESS",
+            payload: { reason: "dashboard-boost" },
+            enqueuedAt: Date.now(),
+            pressure: Number(amount) || 20,
+        });
+        bridge.broadcast({ type: "queue:update", timestamp: new Date().toISOString(), data: deps.accumulator.getSnapshot() });
         res.json({ ok: true });
     });
 
     router.delete("/queue/:chatId", (req, res) => {
-        deps.q3.remove(req.params.chatId);
-        bridge.broadcast({ type: "queue:update", timestamp: new Date().toISOString(), data: deps.q3.getAll() });
+        deps.accumulator.remove(req.params.chatId);
+        bridge.broadcast({ type: "queue:update", timestamp: new Date().toISOString(), data: deps.accumulator.getSnapshot() });
         res.json({ ok: true });
     });
 
     // ─── Decisions & GlobalState ───
     router.get("/decisions", (_req, res) => {
-        res.json(deps.globalState.getRecentDecisions());
+        res.json(
+            deps.globalState.getSessionDigests().map((digest) => ({
+                chatId: "__meta__",
+                decision: digest.content,
+                content: digest.content,
+                timestamp: digest.createdAt,
+            }))
+        );
     });
 
     router.get("/global-state", (_req, res) => {
@@ -619,6 +661,14 @@ export function createApiRouter(deps: DashboardDeps, bridge: EventBridge): Route
 
     // ─── CodeAct ───
     router.get("/codeact/:chatId", (req, res) => {
+        if (req.params.chatId === META_CODEACT_CHAT_ID) {
+            res.json({
+                ...getMetaCodeActState(),
+                historyBudget: getMetaHistoryWindowStatus(deps.globalState.getMetaSessionHistory()),
+            });
+            return;
+        }
+
         const sub = deps.subagentManager.get(req.params.chatId);
         if (!sub) { res.status(404).json({ error: "chat not found" }); return; }
         const executor = sub.codeActExecutor as CodeActExecutor | null;
@@ -635,6 +685,17 @@ export function createApiRouter(deps: DashboardDeps, bridge: EventBridge): Route
 
     router.post("/codeact/:chatId/cancel", async (req, res) => {
         const chatId = req.params.chatId;
+        if (chatId === META_CODEACT_CHAT_ID) {
+            const ok = requestCancelMetaCodeActSession();
+            res.json({
+                ok: true,
+                message: ok
+                    ? "Meta execution cancel requested"
+                    : "No active Meta execution",
+            });
+            return;
+        }
+
         try {
             const sub = deps.subagentManager.get(chatId);
             const executor = sub?.codeActExecutor as CodeActExecutor | null;
@@ -645,7 +706,7 @@ export function createApiRouter(deps: DashboardDeps, bridge: EventBridge): Route
                 await deps.sandboxPool.destroy(chatId);
             }
 
-            deps.q3.unblock(chatId);
+            deps.accumulator.unblock(chatId);
             log.info("CodeAct 手动取消", { chatId });
             res.json({ ok: true, message: "Execution cancel requested, queue cleared and sandbox destroyed" });
         } catch (err) {
@@ -654,6 +715,29 @@ export function createApiRouter(deps: DashboardDeps, bridge: EventBridge): Route
     });
 
     router.post("/codeact/:chatId/reset-session", (req, res) => {
+        if (req.params.chatId === META_CODEACT_CHAT_ID) {
+            const state = getMetaCodeActState();
+            if (state.isProcessing) {
+                res.status(409).json({ error: "meta codeact is processing, cancel it before resetting session" });
+                return;
+            }
+
+            resetMetaCodeActState();
+            const clearedHistory = deps.globalState.clearMetaSessionHistory();
+            const clearedDigests = deps.globalState.clearSessionDigests();
+            const resetContext = deps.mainLoop.resetMetaSessionContext();
+            deps.globalState.save();
+            log.info("Meta CodeAct session 已重置", { clearedHistory, clearedDigests, resetContext });
+            res.json({
+                ok: true,
+                message: "Meta session cleared",
+                clearedHistory,
+                clearedDigests,
+                resetContext,
+            });
+            return;
+        }
+
         const sub = deps.subagentManager.get(req.params.chatId);
         if (!sub) { res.status(404).json({ error: "chat not found" }); return; }
         const executor = sub.codeActExecutor as CodeActExecutor | null;
@@ -711,14 +795,9 @@ export function createApiRouter(deps: DashboardDeps, bridge: EventBridge): Route
         }
     });
 
-    // ─── FeedbackLoop ───
-    router.get("/feedbackloop", (_req, res) => {
-        res.json({ activeWindows: deps.feedbackLoop.getActiveWindows() });
-    });
-
-    // ─── Main Agent Conversation History ───
-    router.get("/main-agent/history", (_req, res) => {
-        res.json(deps.mainLoop.getConversationHistory());
+    // ─── Dispatch tracking summary (details live in todo/remind) ───
+    router.get("/dispatch-tracking", (_req, res) => {
+        res.json({ activeWindows: [] });
     });
 
     // ─── Callbacks (Q5) ───

@@ -8,7 +8,7 @@
     <div class="stat-value text-primary">{$appState.groups.length}</div>
   </div>
   <div class="stat">
-    <div class="stat-title">Q3 队列</div>
+    <div class="stat-title">Accumulator</div>
     <div class="stat-value text-secondary">{($appState.queue?.active || []).length}</div>
   </div>
   <div class="stat">

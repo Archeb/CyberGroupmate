@@ -37,18 +37,28 @@ shared/todo.d.ts — 不只是代办，可以当你的记事本用。 用于持�
 - `remove`: 删除 todo。
 
 ## mcp
-mcp-bridge.d.ts — MCP Server 连接器类型定义 连接外部 MCP (Model Context Protocol) Server，自动发现并代理其工具。 支持 stdio 和 Streamable HTTP 两种传输，连接由宿主进程全局持久化。
+mcp-bridge.d.ts — MCP Server 连接器类型定义 连接外部 MCP (Model Context Protocol) Server，自动发现并代理其工具。 支持 stdio 和 Streamable HTTP 两种传输。
 
-- `connect`: 安装并连接一个全局 MCP Server。根据配置使用 stdio 或 Streamable HTTP 建立连接，自动发现所有 tools。
+- `connect`: 安装并连接一个 MCP Server。 根据配置使用 stdio 或 Streamable HTTP 建立连接，自动发现所有 tools。 连接信息会在宿主进程中全局持久化，所有 sandbox / subagent 共享， 直到显式调用 disconnect()。
 - `disconnect`: 断开全局连接并清理 MCP Server 子进程
 - `list`: 列出所有全局已连接的 MCP Servers 及其工具
 - `call`: 直接调用指定 server 的 tool（无需先调用 connect 返回的代理对象）
+
+## memory
+modules/memory.d.ts — 记忆检索模块类型定义
+
+- `searchFacts`: searchFacts(query, options?)
+- `searchTopics`: searchTopics(query, options?)
+- `searchMessages`: searchMessages(query, options?)
+- `getUserProfile`: getUserProfile(userId, chatId?)
+- `getRecentInteractions`: getRecentInteractions(chatId?, userId?, limit?)
+- `semanticSearch`: semanticSearch(query, options?)
 
 ## onebot
 onebot.d.ts — QQ / OneBot 平台 API 系统注入的 OneBot host proxy 接口。 也会以 `qq` 别名暴露给 sandbox。
 
 - `sendText`: 发送文本消息。
-- `sendMedia`: 发送媒体消息。支持本地文件路径或 URL。
+- `sendMedia`: 发送媒体消息。支持本地文件路径或 URL。 当 `type` 为 `audio` / `voice` 时，QQ/NapCat 不支持 `replyTo`，该参数会被忽略。
 - `sendFile`: 发送文件。
 - `sendSticker`: 发送贴纸或图片表情。
 - `sendFace`: 发送 QQ 系统表情（CQ face）。
@@ -73,6 +83,7 @@ shared/runtime.d.ts — 系统级能力
 - `env.set`: 新增或覆盖环境变量。
 - `env.delete`: 删除环境变量（不存在时安全返回）
 - `remind`: 设置一次性定时提醒（自然语言）。到期后 agent 将被唤醒并收到 description 作为新任务。重复定时提醒请用 cron ⚠️ description 必须是详细的自然语言描述，不是代码。 写清楚：要做什么、给谁发、发什么内容、如何获取信息等。 限制：最短 1 分钟，最长 365 天，每个群最多 10 个活跃提醒。
+- `elevate`: 将当前任务升级给 Meta Agent 处理，并立即入队一次跨群 callback attention。 用于当前 subagent 视角无法完成的跨群/跨人/全局编排任务：例如需要查别的群、协调多个群、让 Meta 重新分派给其他群、或当前群写权限不足。 request 必须写成详细自然语言，说明当前群、已经查到什么、卡在哪里、希望 Meta 做什么。
 - `extendSteps`: 增加当前 CodeAct session 的可用轮次。 仅对当前 session（本轮任务）生效，不会持久化到下次任务。 在本轮代码中调用后，从下一轮开始生效。
 - `modifyTimeout`: 修改当前 CodeAct session 后续代码执行超时（毫秒）。 仅对当前 session（本轮任务）生效，不会持久化到下次任务。 在本轮代码中调用后，从下一段代码执行开始生效。
 

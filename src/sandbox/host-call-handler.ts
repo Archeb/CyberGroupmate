@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { relative, resolve } from "node:path";
+import { randomUUID } from "node:crypto";
 import { ensureCompositeId, getPlatform } from "../core/chat-id.js";
 import {
     loadConfig,
@@ -15,10 +16,10 @@ import { describeImage, ensureSupportedFormat } from "../core/vision-processor.j
 import { MemoryStoreV2 } from "../memory-v2/index.js";
 import { embed } from "../memory-v2/embedding.js";
 import { GlobalState } from "../main-agent/global-state.js";
+import type { AttentionAccumulator } from "../accumulator/attention-accumulator.js";
 import type { PlatformAdapter } from "../adapter/platform-adapter.js";
 import { SandboxPool } from "./sandbox-pool.js";
 import { type Sandbox } from "./sandbox.js";
-import { createTaskListSkill, buildTaskListHostCalls } from "./skills/task-list.js";
 
 const log = createLogger("sandbox-host-calls");
 
@@ -38,6 +39,7 @@ interface McpBridgeLike {
 interface CreateSandboxHostCallHandlerDeps {
     appConfig: AppConfig;
     globalState: GlobalState;
+    accumulator: AttentionAccumulator;
     memory: MemoryStoreV2;
     adapters: PlatformAdapter[];
     sandbox: Sandbox;
@@ -75,6 +77,7 @@ export function createSandboxHostCallHandler(chatId: string, deps: CreateSandbox
     const {
         appConfig,
         globalState,
+        accumulator,
         memory,
         adapters,
         sandbox,
@@ -86,13 +89,16 @@ export function createSandboxHostCallHandler(chatId: string, deps: CreateSandbox
         applyHostManagedEnv,
     } = deps;
 
-    const listSchedulerItems = () => globalState.getSchedulerEvents(chatId).map((event) => ({
+    const listSchedulerItems = () => globalState.getSchedulerEvents()
+        .filter((event) => (event.bindingId ?? event.chatId) === chatId)
+        .map((event) => ({
         id: event.id,
         type: event.type,
-        description: event.description,
+        description: event.callback ?? event.taskTemplate ?? event.description,
+        bindingId: event.bindingId ?? event.chatId,
         triggerAt: event.triggerAt,
         cronExpr: event.cronExpr,
-        taskDescription: event.taskTemplate,
+        taskDescription: event.callback ?? event.taskTemplate,
         createdAt: event.createdAt,
         triggered: event.triggered,
     }));
@@ -151,7 +157,8 @@ export function createSandboxHostCallHandler(chatId: string, deps: CreateSandbox
                 throw new Error("cron 最短触发间隔为 1 小时");
             }
             const maxCrons = appConfig.subagent?.scheduler?.maxCrons ?? 10;
-            const existing = globalState.getSchedulerEvents(chatId)
+            const existing = globalState.getSchedulerEvents()
+                .filter((event) => (event.bindingId ?? event.chatId) === chatId)
                 .filter((event) => event.type === "cron");
             if (existing.length >= maxCrons) {
                 throw new Error(`cron 数量上限 ${maxCrons}，请先删除不需要的任务`);
@@ -160,7 +167,11 @@ export function createSandboxHostCallHandler(chatId: string, deps: CreateSandbox
             if (duplicate) {
                 throw new Error(`已存在完全相同的 cron 任务描述: ${duplicate.id}`);
             }
-            const event = globalState.addCron(chatId, name, cronExpr, taskDescription);
+            const event = globalState.addCron("__meta__", name, cronExpr, taskDescription, {
+                bindingId: chatId,
+                name,
+                callback: taskDescription,
+            });
             return { id: event.id, items: listSchedulerItems() };
         }
         if (method === "cron.remove") {
@@ -169,11 +180,12 @@ export function createSandboxHostCallHandler(chatId: string, deps: CreateSandbox
             return;
         }
         if (method === "cron.list") {
-            return globalState.getSchedulerEvents(chatId)
+            return globalState.getSchedulerEvents()
+                .filter((event) => (event.bindingId ?? event.chatId) === chatId)
                 .filter((event) => event.type === "cron")
                 .map((event) => ({
                     id: event.id,
-                    name: event.description,
+                    name: event.name ?? event.description,
                     cronExpr: event.cronExpr,
                 }));
         }
@@ -187,7 +199,8 @@ export function createSandboxHostCallHandler(chatId: string, deps: CreateSandbox
                 throw new Error("remind 最长 365 天（525600 分钟）");
             }
             const maxReminders = appConfig.subagent?.scheduler?.maxReminders ?? 10;
-            const existingReminders = globalState.getSchedulerEvents(chatId)
+            const existingReminders = globalState.getSchedulerEvents()
+                .filter((event) => (event.bindingId ?? event.chatId) === chatId)
                 .filter((event) => event.type === "reminder" && !event.triggered);
             if (existingReminders.length >= maxReminders) {
                 throw new Error(`remind 数量上限 ${maxReminders}，请等待已有提醒触发或手动取消`);
@@ -197,9 +210,46 @@ export function createSandboxHostCallHandler(chatId: string, deps: CreateSandbox
                 throw new Error(`已存在完全相同的提醒描述: ${duplicate.id}`);
             }
             const triggerAt = new Date(Date.now() + delayMinutes * 60000).toISOString();
-            const event = globalState.addReminder(chatId, description, triggerAt);
+            const event = globalState.addReminder("__meta__", description, triggerAt, undefined, {
+                bindingId: chatId,
+                name: description.slice(0, 60),
+                callback: description,
+            });
             log.info("runtime.remind 已设置", { id: event.id, chatId, triggerAt, description: description.slice(0, 80) });
             return { reminderId: event.id, triggerAt, items: listSchedulerItemsForRemind() };
+        }
+
+        if (method === "runtime.elevate") {
+            const [request, options] = args as [string, { urgency?: string; data?: unknown } | undefined];
+            const description = String(request ?? "").trim();
+            if (!description) {
+                throw new Error("runtime.elevate request 不能为空");
+            }
+            const urgency = options?.urgency === "high" ? "high" : "normal";
+            const now = Date.now();
+            const id = `elevate:${randomUUID()}`;
+            accumulator.ingest(0, {
+                chatId: "__meta__",
+                source: "WAKE_CONDITION",
+                enqueuedAt: now,
+                pressure: urgency === "high" ? 100 : 80,
+                payload: {
+                    id,
+                    type: "wake_condition",
+                    description,
+                    bindingId: chatId,
+                    callback: description,
+                    data: {
+                        type: "subagent_elevation",
+                        sourceChatId: chatId,
+                        urgency,
+                        data: options?.data ?? null,
+                    },
+                },
+            });
+            const enqueuedAt = new Date(now).toISOString();
+            log.info("runtime.elevate 已入队 Meta attention", { id, chatId, urgency, description: description.slice(0, 120) });
+            return { ok: true, id, enqueuedAt };
         }
 
         if (method === "runtime.env.list") {
@@ -417,12 +467,6 @@ export function createSandboxHostCallHandler(chatId: string, deps: CreateSandbox
         if (method === "mcp.call") {
             const [serverName, toolName, toolArgs] = args as [string, string, Record<string, unknown> | undefined];
             return mcpBridge.call(serverName, toolName, toolArgs ?? {});
-        }
-
-        const taskListSkill = createTaskListSkill(globalState);
-        const taskListCalls = buildTaskListHostCalls(taskListSkill);
-        if (method in taskListCalls) {
-            return taskListCalls[method](args[0]);
         }
 
         const currentEnvPlan = getCurrentEnvPlan();

@@ -445,7 +445,8 @@ export class OneBotAdapter implements PlatformAdapter {
 
     private async sendMedia(chatId: string, media: Record<string, unknown>, opts: Record<string, unknown>): Promise<unknown> {
         const parsed = parseChatId(chatId);
-        const segments = await this.buildOutgoingSegments(media, opts);
+        const sanitizedOpts = this.sanitizeOutgoingMediaOptions(chatId, media, opts);
+        const segments = await this.buildOutgoingSegments(media, sanitizedOpts);
         if (parsed.groupId != null) {
             return this.callAction("send_group_msg", {
                 group_id: Number(parsed.groupId),
@@ -747,6 +748,22 @@ export class OneBotAdapter implements PlatformAdapter {
             segments.push({ type: "text", data: { text: caption } });
         }
         return segments;
+    }
+
+    private sanitizeOutgoingMediaOptions(chatId: string, media: Record<string, unknown>, opts: Record<string, unknown>): Record<string, unknown> {
+        const mediaType = String(media.type ?? "");
+        if ((mediaType !== "audio" && mediaType !== "voice") || opts.replyTo == null) {
+            return opts;
+        }
+
+        log.warn("OneBot 语音暂不支持 replyTo，已忽略该参数", {
+            chatId,
+            replyTo: String(opts.replyTo),
+        });
+
+        const nextOpts = { ...opts };
+        delete nextOpts.replyTo;
+        return nextOpts;
     }
 
     private applyReplyTo(text: string, replyTo: unknown): string | OneBotMessageSegment[] {

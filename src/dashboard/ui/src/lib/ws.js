@@ -51,10 +51,6 @@ function handleEvent(event) {
   switch (event.type) {
     case 'snapshot': {
       const data = event.data;
-      // Normalize queue format
-      if (Array.isArray(data.queue)) {
-        data.queue = { active: data.queue, dequeued: [] };
-      }
       appState.set(data);
       // Token pricing config
       if (data.tokenPricing) {
@@ -67,11 +63,7 @@ function handleEvent(event) {
       break;
     case 'queue:update': {
       appState.update(s => {
-        if (Array.isArray(event.data)) {
-          s.queue = { active: event.data, dequeued: s.queue?.dequeued || [] };
-        } else {
-          s.queue = event.data;
-        }
+        s.queue = event.data;
         return s;
       });
       break;
@@ -94,7 +86,7 @@ function handleEvent(event) {
     case 'recording:flush-start':
     case 'recording:flush-complete':
     case 'recording:flush-error':
-    case 'recording:triage-passed':
+    case 'recording:topics-signaled':
       handleRecordingEvent({ ...event.data, _type: event.type, _timestamp: event.timestamp });
       break;
   }

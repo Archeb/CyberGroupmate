@@ -12,6 +12,7 @@
 
 import type { NotificationEvent } from "../event/notification-center.js";
 import type {
+    AttentionRecentMessage,
     SubagentConfig,
 } from "./types.js";
 import { DEFAULT_SUBAGENT_CONFIG } from "./types.js";
@@ -130,7 +131,7 @@ export class Observer {
 
     /**
      * 检查文本是否包含 mentionKeywords 中的任意关键字
-     * 用于 Q3 即时入队判定（文本提及 agent 名字等）
+    * 用于即时注意力注入判定（文本提及 agent 名字等）
      */
     hasMentionKeyword(text: string): boolean {
         if (this.config.mentionKeywords.length === 0) return false;
@@ -184,16 +185,21 @@ export class Observer {
      *
      * 返回最近 upTo 条 buffer 中的消息事件，供上下文构建使用。
      */
-    getMessageSnapshot(upTo: number = 20): Array<{
-        userId: string;
-        text: string;
-        timestamp: number;
-    }> {
+    getMessageSnapshot(upTo: number = 20): AttentionRecentMessage[] {
         const slice = this.buffer.slice(-upTo);
         return slice.map(m => ({
+            messageId: String(m.event.messageId ?? m.event.id ?? m.event._id ?? `${this.chatId}:${m.timestamp}`),
             userId: String(m.event.userId ?? m.event.user_id ?? m.event.senderId ?? ""),
+            displayName: typeof m.event.displayName === "string"
+                ? m.event.displayName
+                : typeof m.event.display_name === "string"
+                    ? m.event.display_name
+                    : undefined,
             text: String(m.event.text ?? m.event.message ?? ""),
-            timestamp: m.timestamp,
+            timestamp: new Date(m.timestamp).toISOString(),
+            replyToMessageId: m.event.replyToMessageId ? String(m.event.replyToMessageId) : undefined,
+            mediaType: (m.event as any).mediaInfo?.type ?? undefined,
+            mediaInfo: (m.event as any).mediaInfo ? JSON.stringify((m.event as any).mediaInfo) : undefined,
         }));
     }
 

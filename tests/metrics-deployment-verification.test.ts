@@ -286,10 +286,18 @@ describe("Metrics Deployment Verification", () => {
     // ═══ 2. Configuration Verification ═══
 
     describe("Configuration", () => {
-        it("#12 config.yaml has metrics section", () => {
+        it("#12 metrics can be enabled by default without an explicit config section", async () => {
             const configContent = readFileSync(join(projectRoot, "config.yaml"), "utf-8");
-            assert.ok(configContent.includes("metrics:"), "config.yaml should have metrics section");
-            assert.ok(configContent.includes("enabled: true"), "metrics should be enabled");
+            const configMod = await import("../src/core/config.js");
+            const config = configMod.loadConfig();
+            const metricsEnabled = config.metrics?.enabled !== false;
+
+            if (configContent.includes("metrics:")) {
+                assert.ok(configContent.includes("enabled: true") || metricsEnabled,
+                    "metrics section should either enable metrics explicitly or inherit the default enabled behavior");
+            } else {
+                assert.ok(metricsEnabled, "metrics should default to enabled when metrics section is absent");
+            }
         });
 
         it("#13 MetricsConfig type matches config.yaml fields", async () => {
@@ -319,7 +327,7 @@ describe("Metrics Deployment Verification", () => {
                 "MainAgentLoop should have setOnAttendComplete method");
         });
 
-        it("#16 main.ts uses setOnAttendComplete instead of broken .on('attend')", () => {
+        it("#16 main.ts wires metrics through meta dispatch instrumentation instead of broken .on('attend')", () => {
             const mainSource = readFileSync(join(projectRoot, "src/main.ts"), "utf-8");
 
             // Should NOT have the broken pattern
@@ -330,8 +338,8 @@ describe("Metrics Deployment Verification", () => {
 
             // Should have the correct pattern
             assert.ok(
-                mainSource.includes("setOnAttendComplete"),
-                "main.ts should use setOnAttendComplete callback",
+                mainSource.includes("onTaskDispatched"),
+                "main.ts should wire metrics through onTaskDispatched",
             );
         });
     });

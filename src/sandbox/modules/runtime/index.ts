@@ -100,5 +100,13 @@ export function installRuntime(env: CapabilityRegistryEnv) {
                 }>;
             };
         },
+        elevate: async (
+            request: string,
+            options?: { urgency?: "normal" | "high"; data?: unknown },
+        ): Promise<{ ok: true; id: string; enqueuedAt: string }> => {
+            if (!_callbacks) throw new Error("Runtime not initialized");
+            const result = await _callbacks.callHost("runtime.elevate", [request, options]);
+            return result as { ok: true; id: string; enqueuedAt: string };
+        },
     };
 }

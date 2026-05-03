@@ -39,7 +39,7 @@ export interface Message {
     mentionsAgent?: boolean;
     /** 内部标记：是否歧义归属 */
     _ambiguous?: boolean;
-    /** 媒体类型: "photo" | "sticker" | "video" | "document" | "animation" | "other" */
+    /** 媒体类型: "photo" | "sticker" | "video" | "document" | "animation" | "audio" | "other" */
     mediaType?: string;
     /** 媒体元数据 JSON（含 fileId, uniqueFileId, emoji 等） */
     mediaInfo?: string;
@@ -63,9 +63,7 @@ export type TopicState =
 
 /** 话题级 Triage 的结构化输出 */
 export interface TriageDecision {
-    /** 是否应该介入 */
-    should_intervene: boolean;
-    /** 判断理由 */
+    /** 判断理由 / 行动提示 */
     reason: string;
 }
 
@@ -326,8 +324,9 @@ export interface TopicSummaryTriageResult {
     topics: Array<{
         topicId: string;
         summary: string;
-        /** Triage 结果 */
-        should_intervene: boolean;
+        /** 是否进入 Layer 2 TOPIC_SIGNAL 信号池 */
+        shouldSignal: boolean;
+        /** Triage 元数据 */
         reason: string;
     }>;
 }

@@ -196,15 +196,15 @@ describe("SystemCollector", () => {
             q3: {
                 getAll: () => [],
             },
+            accumulator: {
+                getActiveCount: () => 0,
+            },
             q5: {
                 peek: () => [],
             },
             mainLoop: {
                 getTickCount: () => 42,
                 isRunning: () => true,
-            },
-            feedbackLoop: {
-                getActiveWindows: () => [],
             },
         };
 
@@ -222,9 +222,9 @@ describe("SystemCollector", () => {
         const mockDeps = {
             sandboxPool: { getStats: () => ({ total: 0, inUse: 0, idle: 0, instances: [] }) },
             q3: { getAll: () => [] },
+            accumulator: { getActiveCount: () => 0 },
             q5: { peek: () => [] },
             mainLoop: { getTickCount: () => 0, isRunning: () => false },
-            feedbackLoop: { getActiveWindows: () => [] },
         };
 
         const collector = new SystemCollector(mockDeps as any);
@@ -315,9 +315,9 @@ describe("MetricsExporter", () => {
         const mockDeps = {
             sandboxPool: { getStats: () => ({ total: 0, inUse: 0, idle: 0, instances: [] }) },
             q3: { getAll: () => [] },
+            accumulator: { getActiveCount: () => 0 },
             q5: { peek: () => [] },
             mainLoop: { getTickCount: () => 0, isRunning: () => true },
-            feedbackLoop: { getActiveWindows: () => [] },
         };
         const systemCollector = new SystemCollector(mockDeps as any);
 
@@ -362,9 +362,9 @@ describe("MetricsExporter", () => {
         const mockDeps = {
             sandboxPool: { getStats: () => ({ total: 0, inUse: 0, idle: 0, instances: [] }) },
             q3: { getAll: () => [] },
+            accumulator: { getActiveCount: () => 0 },
             q5: { peek: () => [] },
             mainLoop: { getTickCount: () => 0, isRunning: () => true },
-            feedbackLoop: { getActiveWindows: () => [] },
         };
         const systemCollector = new SystemCollector(mockDeps as any);
 
@@ -395,9 +395,9 @@ describe("MetricsExporter", () => {
         const mockDeps = {
             sandboxPool: { getStats: () => ({ total: 0, inUse: 0, idle: 0, instances: [] }) },
             q3: { getAll: () => [] },
+            accumulator: { getActiveCount: () => 0 },
             q5: { peek: () => [] },
             mainLoop: { getTickCount: () => 0, isRunning: () => true },
-            feedbackLoop: { getActiveWindows: () => [] },
         };
         const systemCollector = new SystemCollector(mockDeps as any);
 
@@ -426,9 +426,9 @@ describe("MetricsExporter", () => {
         const mockDeps = {
             sandboxPool: { getStats: () => ({ total: 0, inUse: 0, idle: 0, instances: [] }) },
             q3: { getAll: () => [] },
+            accumulator: { getActiveCount: () => 0 },
             q5: { peek: () => [] },
             mainLoop: { getTickCount: () => 0, isRunning: () => true },
-            feedbackLoop: { getActiveWindows: () => [] },
         };
         const systemCollector = new SystemCollector(mockDeps as any);
 

@@ -98,12 +98,12 @@ export interface EmbeddingConfig {
 }
 
 /** 组件路由中可配置超时的组件名 */
-export type RoutingComponentKey = 'attend' | 'session' | 'recording_cluster' | 'recording_triage' | 'reflection' | 'compact' | 'memory' | 'vision';
+export type RoutingComponentKey = 'meta' | 'session' | 'recording_cluster' | 'recording_triage' | 'reflection' | 'compact' | 'memory' | 'vision';
 
 /** 组件级 LLM 路由 — 每个组件可指定一个或多个 profile（fallback chain） */
 export interface LLMRoutingConfig {
-    /** 注意力决策（attend-handler） */
-    attend?: string | string[];
+    /** Meta-CodeAct 主循环编排 */
+    meta?: string | string[];
     /** CodeAct 多轮交互（session-runner） */
     session?: string | string[];
     /** 话题聚类（recording-pipeline Step 1） */
@@ -131,7 +131,7 @@ export interface PersonaConfig {
 }
 
 export interface NotificationConfig {
-    /** 触发 Q3 即时入队 + Observer 提权的关键词（agent 名字等） */
+    /** 触发即时注意力注入 + Observer 提权的关键词（agent 名字等） */
     mentionKeywords: string[];
 }
 
@@ -237,6 +237,20 @@ export interface ContextBudgetConfig {
     maxBriefingTokens?: number;
 }
 
+/** Meta-CodeAct 历史保留预算 */
+export interface MetaHistoryBudgetConfig {
+    /** 超过该字符数后触发批量裁剪。默认 18000 */
+    softCharLimit?: number;
+    /** 触发裁剪后回落到的字符目标。默认 10000 */
+    trimTargetChars?: number;
+    /** 至少保留的消息条数。默认 8 */
+    minMessages?: number;
+    /** 极端短消息场景下的硬条数上限。默认 48 */
+    hardMessageLimit?: number;
+    /** 命中硬上限后的回落条数。默认 32 */
+    trimTargetMessages?: number;
+}
+
 /** Subagent 系统外部配置（从 config.yaml 加载） */
 export interface SubagentExternalConfig {
     maxSandboxInstances?: number;
@@ -271,16 +285,12 @@ export interface SubagentExternalConfig {
     observer?: {
         engagementWindowMs?: number;
     };
-    mainLoop?: {
-        maxAttendsPerTick?: number;
-    };
     decision?: {
         batchThreshold?: number;
         noneThreshold?: number;
         batchMessageThreshold?: number;
     };
     globalState?: {
-        maxRecentDecisions?: number;
         autoSaveInterval?: number;
     };
     codeAct?: {
@@ -288,6 +298,7 @@ export interface SubagentExternalConfig {
         maxSessionMessages?: number;
         maxTurns?: number;
     };
+    metaHistory?: MetaHistoryBudgetConfig;
     scheduler?: {
         /** 每个群最大 reminder 数量。默认 10 */
         maxReminders?: number;
@@ -506,7 +517,7 @@ export function loadConfig(configPath?: string, forceReload?: boolean): AppConfi
     // 解析 per-component timeouts
     const rawTimeouts = (fileRouting.timeouts ?? {}) as Record<string, unknown>;
     const parsedTimeouts: LLMRoutingConfig['timeouts'] = {};
-    for (const key of ['attend', 'session', 'recording_cluster', 'recording_triage', 'recording', 'reflection', 'compact', 'memory', 'vision'] as const) {
+    for (const key of ['meta', 'session', 'recording_cluster', 'recording_triage', 'recording', 'reflection', 'compact', 'memory', 'vision'] as const) {
         if (rawTimeouts[key] != null) {
             parsedTimeouts[key] = num(rawTimeouts[key], 60000);
         }
@@ -515,7 +526,7 @@ export function loadConfig(configPath?: string, forceReload?: boolean): AppConfi
     // 兼容旧配置：如果只配了 recording，同时应用到 cluster 和 triage
     const recordingFallback = parseRoutingValue(fileRouting.recording);
     const llmRouting: LLMRoutingConfig = {
-        attend: parseRoutingValue(fileRouting.attend),
+        meta: parseRoutingValue(fileRouting.meta),
         session: parseRoutingValue(fileRouting.session),
         recording_cluster: parseRoutingValue(fileRouting.recording_cluster) ?? recordingFallback,
         recording_triage: parseRoutingValue(fileRouting.recording_triage) ?? recordingFallback,
@@ -782,6 +793,7 @@ function parseSubagentConfig(fileConfig: Record<string, unknown>): SubagentExter
     const rawGS = (raw.global_state ?? {}) as Record<string, unknown>;
     const rawCA = (raw.code_act ?? {}) as Record<string, unknown>;
     const rawCD = (raw.cosine_decay ?? {}) as Record<string, unknown>;
+    const rawMH = (raw.meta_history ?? {}) as Record<string, unknown>;
     const rawSched = (raw.scheduler ?? {}) as Record<string, unknown>;
 
     // Parse stickiness levels
@@ -825,22 +837,25 @@ function parseSubagentConfig(fileConfig: Record<string, unknown>): SubagentExter
         observer: Object.keys(rawObs).length > 0 ? {
             engagementWindowMs: rawObs.engagement_window_ms != null ? num(rawObs.engagement_window_ms, 300000) : undefined,
         } : undefined,
-        mainLoop: Object.keys(rawML).length > 0 ? {
-            maxAttendsPerTick: rawML.max_attends_per_tick != null ? num(rawML.max_attends_per_tick, 3) : undefined,
-        } : undefined,
         decision: Object.keys(rawDec).length > 0 ? {
             batchThreshold: rawDec.batch_threshold != null ? num(rawDec.batch_threshold, 50) : undefined,
             noneThreshold: rawDec.none_threshold != null ? num(rawDec.none_threshold, 10) : undefined,
             batchMessageThreshold: rawDec.batch_message_threshold != null ? num(rawDec.batch_message_threshold, 10) : undefined,
         } : undefined,
         globalState: Object.keys(rawGS).length > 0 ? {
-            maxRecentDecisions: rawGS.max_recent_decisions != null ? num(rawGS.max_recent_decisions, 50) : undefined,
             autoSaveInterval: rawGS.auto_save_interval != null ? num(rawGS.auto_save_interval, 30000) : undefined,
         } : undefined,
         codeAct: Object.keys(rawCA).length > 0 ? {
             maxExecutionTimeMs: rawCA.max_execution_time_ms != null ? num(rawCA.max_execution_time_ms, 60000) : undefined,
             maxSessionMessages: rawCA.max_session_messages != null ? num(rawCA.max_session_messages, 100) : undefined,
             maxTurns: rawCA.max_turns != null ? num(rawCA.max_turns, 30) : undefined,
+        } : undefined,
+        metaHistory: Object.keys(rawMH).length > 0 ? {
+            softCharLimit: rawMH.soft_char_limit != null ? num(rawMH.soft_char_limit, 18000) : undefined,
+            trimTargetChars: rawMH.trim_target_chars != null ? num(rawMH.trim_target_chars, 10000) : undefined,
+            minMessages: rawMH.min_messages != null ? num(rawMH.min_messages, 8) : undefined,
+            hardMessageLimit: rawMH.hard_message_limit != null ? num(rawMH.hard_message_limit, 48) : undefined,
+            trimTargetMessages: rawMH.trim_target_messages != null ? num(rawMH.trim_target_messages, 32) : undefined,
         } : undefined,
         scheduler: Object.keys(rawSched).length > 0 ? {
             maxReminders: rawSched.max_reminders != null ? num(rawSched.max_reminders, 10) : undefined,
@@ -1361,7 +1376,6 @@ export function serializeConfigToObject(config: AppConfig): Record<string, unkno
             };
         }
         if (sa.observer) s.observer = { engagement_window_ms: sa.observer.engagementWindowMs };
-        if (sa.mainLoop) s.main_loop = { max_attends_per_tick: sa.mainLoop.maxAttendsPerTick };
         if (sa.decision) {
             s.decision = {
                 batch_threshold: sa.decision.batchThreshold,
@@ -1371,7 +1385,6 @@ export function serializeConfigToObject(config: AppConfig): Record<string, unkno
         }
         if (sa.globalState) {
             s.global_state = {
-                max_recent_decisions: sa.globalState.maxRecentDecisions,
                 auto_save_interval: sa.globalState.autoSaveInterval,
             };
         }
@@ -1381,6 +1394,14 @@ export function serializeConfigToObject(config: AppConfig): Record<string, unkno
                 max_session_messages: sa.codeAct.maxSessionMessages,
                 max_turns: sa.codeAct.maxTurns,
             };
+        }
+        if (sa.metaHistory) {
+            s.meta_history = {};
+            if (sa.metaHistory.softCharLimit != null) (s.meta_history as any).soft_char_limit = sa.metaHistory.softCharLimit;
+            if (sa.metaHistory.trimTargetChars != null) (s.meta_history as any).trim_target_chars = sa.metaHistory.trimTargetChars;
+            if (sa.metaHistory.minMessages != null) (s.meta_history as any).min_messages = sa.metaHistory.minMessages;
+            if (sa.metaHistory.hardMessageLimit != null) (s.meta_history as any).hard_message_limit = sa.metaHistory.hardMessageLimit;
+            if (sa.metaHistory.trimTargetMessages != null) (s.meta_history as any).trim_target_messages = sa.metaHistory.trimTargetMessages;
         }
         if (sa.scheduler) {
             s.scheduler = {};
@@ -1551,6 +1572,31 @@ export function validateConfig(config: unknown): { valid: boolean; errors: strin
             if (typeof cb[field] === "number" && (cb[field] as number < 0 || cb[field] as number > 1)) {
                 errors.push(`contextBudget.${field} 应在 0-1 之间`);
             }
+        }
+    }
+
+    const subagent = c.subagent as Record<string, unknown> | undefined;
+    const metaHistory = subagent?.metaHistory as Record<string, unknown> | undefined;
+    if (metaHistory) {
+        const positiveFields = ["softCharLimit", "trimTargetChars", "minMessages", "hardMessageLimit", "trimTargetMessages"];
+        for (const field of positiveFields) {
+            if (metaHistory[field] != null && (!(typeof metaHistory[field] === "number") || (metaHistory[field] as number) <= 0)) {
+                errors.push(`subagent.metaHistory.${field} 应大于 0`);
+            }
+        }
+        if (
+            typeof metaHistory.softCharLimit === "number"
+            && typeof metaHistory.trimTargetChars === "number"
+            && metaHistory.trimTargetChars > metaHistory.softCharLimit
+        ) {
+            errors.push("subagent.metaHistory.trimTargetChars 不能大于 softCharLimit");
+        }
+        if (
+            typeof metaHistory.hardMessageLimit === "number"
+            && typeof metaHistory.trimTargetMessages === "number"
+            && metaHistory.trimTargetMessages > metaHistory.hardMessageLimit
+        ) {
+            errors.push("subagent.metaHistory.trimTargetMessages 不能大于 hardMessageLimit");
         }
     }
 

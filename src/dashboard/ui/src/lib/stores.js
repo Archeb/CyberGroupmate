@@ -11,12 +11,28 @@ export const wsStatus = writable('disconnected');
 // ─── App State (from snapshot) ───
 export const appState = writable({
   groups: [],
-  queue: { active: [], dequeued: [] },
+  metaCodeAct: {
+    chatId: '__meta__',
+    queueSize: 0,
+    sessionSize: 0,
+    executionCount: 0,
+    isProcessing: false,
+    historyBudget: {
+      softCharLimit: 18000,
+      trimTargetChars: 10000,
+      minMessages: 8,
+      hardMessageLimit: 48,
+      trimTargetMessages: 32,
+      currentChars: 0,
+      currentMessages: 0,
+      willTrimOnNextAppend: false,
+    },
+  },
+  queue: { active: [], dequeued: [], blockedChatIds: [] },
   pendingCallbacks: [],
   globalState: {},
   sandboxPool: {},
   mainLoop: {},
-  feedbackLoop: {},
 });
 
 // ─── Messages ───

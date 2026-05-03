@@ -5,7 +5,7 @@
 
   let globalStateEl;
   let pool = {};
-  let feedbackWindows = [];
+  let trackingWindows = [];
   let callbacks = [];
   let scheduler = { reminders: [], crons: [], summary: {} };
   let showTriggeredReminders = false;
@@ -18,8 +18,8 @@
     if (globalStateEl) renderJsonHighlighted(globalStateEl, gs);
 
     pool = await api('/sandbox/pool');
-    const fl = await api('/feedbackloop');
-    feedbackWindows = fl.activeWindows || [];
+    const fl = await api('/dispatch-tracking');
+    trackingWindows = fl.activeWindows || [];
     callbacks = await api('/callbacks') || [];
     scheduler = await api('/scheduler') || { reminders: [], crons: [], summary: {} };
   }
@@ -92,12 +92,12 @@
     </div>
   </div>
 
-  <!-- FeedbackLoop -->
+  <!-- Dispatch tracking -->
   <div class="card bg-base-100">
     <div class="card-body p-4">
-      <h3 class="card-title text-sm">追问检测窗口 (FeedbackLoop)</h3>
-      {#if feedbackWindows.length}
-        {#each feedbackWindows as w}
+      <h3 class="card-title text-sm">Dispatch 待跟进</h3>
+      {#if trackingWindows.length}
+        {#each trackingWindows as w}
           <div class="flex justify-between text-xs px-2 py-1 bg-base-200 rounded mb-1">
             <span class="font-mono">
               {#if getPlatform(w.chatId)}<span class="platform-badge platform-{getPlatform(w.chatId)}">{platformLabel(getPlatform(w.chatId))}</span>{/if}
@@ -107,7 +107,7 @@
           </div>
         {/each}
       {:else}
-        <div class="text-xs opacity-60">无活跃窗口</div>
+        <div class="text-xs opacity-60">无待跟进窗口</div>
       {/if}
     </div>
   </div>

@@ -1,10 +1,5 @@
 <script>
   import { createEventDispatcher, onMount } from 'svelte';
-  import editorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker';
-  import jsonWorker from 'monaco-editor/esm/vs/language/json/json.worker?worker';
-  import cssWorker from 'monaco-editor/esm/vs/language/css/css.worker?worker';
-  import htmlWorker from 'monaco-editor/esm/vs/language/html/html.worker?worker';
-  import tsWorker from 'monaco-editor/esm/vs/language/typescript/ts.worker?worker';
 
   export let value = '';
   export let language = 'plaintext';
@@ -20,6 +15,8 @@
   let editor;
   let monacoApi;
   let themeObserver;
+  let EditorWorker;
+  let JsonWorker;
   let syncingFromEditor = false;
   let syncingFromProps = false;
   let editorSnapshot = value ?? '';
@@ -29,13 +26,34 @@
   function ensureMonacoEnvironment() {
     globalThis.MonacoEnvironment = {
       getWorker(_, label) {
-        if (label === 'json') return new jsonWorker();
-        if (label === 'css' || label === 'scss' || label === 'less') return new cssWorker();
-        if (label === 'html' || label === 'handlebars' || label === 'razor') return new htmlWorker();
-        if (label === 'typescript' || label === 'javascript') return new tsWorker();
-        return new editorWorker();
+        if (label === 'json') return new JsonWorker();
+        return new EditorWorker();
       },
     };
+  }
+
+  async function loadMonaco() {
+    const [
+      editorWorkerModule,
+      jsonWorkerModule,
+      ,
+      ,
+      ,
+      ,
+      monacoModule,
+    ] = await Promise.all([
+      import('monaco-editor/esm/vs/editor/editor.worker?worker'),
+      import('monaco-editor/esm/vs/language/json/json.worker?worker'),
+      import('monaco-editor/esm/vs/language/json/monaco.contribution'),
+      import('monaco-editor/esm/vs/basic-languages/javascript/javascript.contribution'),
+      import('monaco-editor/esm/vs/basic-languages/typescript/typescript.contribution'),
+      import('monaco-editor/esm/vs/basic-languages/markdown/markdown.contribution'),
+      import('monaco-editor/esm/vs/editor/editor.api'),
+    ]);
+
+    EditorWorker = editorWorkerModule.default;
+    JsonWorker = jsonWorkerModule.default;
+    return monacoModule;
   }
 
   function getTheme() {
@@ -80,8 +98,8 @@
   }
 
   onMount(async () => {
+    monacoApi = await loadMonaco();
     ensureMonacoEnvironment();
-    monacoApi = await import('monaco-editor');
     applyTheme();
 
     editor = monacoApi.editor.create(container, {

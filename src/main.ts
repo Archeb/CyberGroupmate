@@ -2,11 +2,11 @@
  * main.ts — Orchestrator / Main Agent ↔ Subagent Architecture
  *
  * 系统入口点。管理 agent 的完整生命周期：
- * PlatformAdapter → NC → MessageLogWriter + GroupDispatcher → Observer → Q3
+ * PlatformAdapter → NC → MessageLogWriter + GroupDispatcher → Observer → Accumulator
  * → MainAgentLoop → DecisionMaker → CodeActExecutor → Q5 → GlobalState
  *
  * 架构切换自 subagent.md v0.5.0:
- * - 主 Agent: 快层·决策者，拥有全局上下文，串行轮询 Q3 做出决策
+ * - 主 Agent: 快层·决策者，拥有全局上下文，串行轮询 Accumulator 做出决策
  * - Subagent: 慢层·执行者，per-group Observer + CodeActExecutor
  */
 
@@ -23,11 +23,7 @@ import {
     type EnvironmentVariable,
 } from "./core/config.js";
 import { describeImage, ensureSupportedFormat } from "./core/vision-processor.js";
-import {
-    TopicRegistry,
-    FeedbackLoop,
-    type AgentMessageSentEvent,
-} from "./pipeline/index.js";
+import { TopicRegistry } from "./pipeline/index.js";
 import {
     existsSync,
     mkdirSync,
@@ -42,16 +38,22 @@ import { OneBotAdapter } from "./adapter/onebot-adapter.js";
 import type { PlatformAdapter } from "./adapter/platform-adapter.js";
 
 import { SubagentManager } from "./subagent/subagent-manager.js";
-import { DynamicAttentionQueue } from "./subagent/attention-queue.js";
 import { CallbackQueue } from "./subagent/callback-queue.js";
+import { AttentionAccumulator } from "./accumulator/attention-accumulator.js";
+import {
+    createDirectAddressItem,
+    createSchedulerItem,
+} from "./accumulator/queue-entry-adapter.js";
 import { MainAgentLoop } from "./main-agent/main-agent-loop.js";
 import { GlobalState } from "./main-agent/global-state.js";
-import { createAttendHandler } from "./main-agent/attend-handler.js";
-import { createDispatchHandler } from "./main-agent/dispatch-handler.js";
+import { createMetaSessionHandler } from "./main-agent/meta-session-handler.js";
+import { buildWakeConditionPayload, matchDelayWakeReminder } from "./main-agent/wake-conditions.js";
 import { evaluateStickiness, createStickiness, updateStickiness } from "./subagent/stickiness.js";
 import { matchesCron } from "./core/cron-matcher.js";
 import { autoReconnect as autoReconnectMcp, initMcpBridge, mcpBridge } from "./sandbox/modules/mcp-bridge/index.js";
-import { refreshModuleRegistryCache } from "./subagent/code-act-executor.js";
+import { CodeActExecutor, refreshModuleRegistryCache } from "./subagent/code-act-executor.js";
+import { MetaSandbox } from "./meta-sandbox/meta-sandbox.js";
+import { buildMetaApiContext } from "./meta-sandbox/meta-api/index.js";
 
 const log = createLogger("main");
 
@@ -325,6 +327,7 @@ async function main(): Promise<void> {
                 sandbox,
                 sandboxPool,
                 mcpBridge,
+                accumulator,
                 buildEnvPlan,
                 getCurrentEnvPlan: () => currentEnvPlan,
                 setCurrentEnvPlan: (plan) => {
@@ -401,6 +404,7 @@ async function main(): Promise<void> {
 
     // ─── Subagent 架构组件初始化 ───
     // 注意: message_log 落盘由 RecordingPipeline Step 4 负责，不再需要独立的 MessageLogWriter hook
+    let accumulator: AttentionAccumulator;
     const subagentManager = new SubagentManager({
         observerConfig: {
             engagementWindowMs: 5 * 60 * 1000,
@@ -412,6 +416,29 @@ async function main(): Promise<void> {
             personaDescription: appConfig.persona?.description ?? "赛博群友",
             memory,
             pipelineConfig: appConfig.recordingPipeline,
+            publishTopicSignals: (signals) => {
+                for (const signal of signals) {
+                    accumulator.ingest(2, {
+                        chatId: signal.chatId,
+                        source: "TOPIC_SIGNAL",
+                        payload: signal.payload,
+                        enqueuedAt: signal.enqueuedAt,
+                        pressure: signal.pressure,
+                    });
+                }
+
+                if (signals.length > 0) {
+                    log.info("topic-signals → Accumulator", {
+                        chatId: signals[0]?.chatId,
+                        count: signals.length,
+                        topics: signals.map((signal) => ({
+                            topicId: signal.topicId,
+                            pressure: signal.pressure,
+                            callbackPotential: signal.callbackPotential,
+                        })),
+                    });
+                }
+            },
         },
         memory,  // 用于启动时恢复 TopicRegistry
         sessionsDir: SESSIONS_DIR,
@@ -433,50 +460,32 @@ async function main(): Promise<void> {
     if (restoredChatIds.length > 0) {
         log.info("已恢复 subagent sessions", { count: restoredChatIds.length, chatIds: restoredChatIds });
     }
-    const q3 = new DynamicAttentionQueue({
-        timeDecayPerSecond: appConfig.subagent?.attentionQueue?.timeDecayPerSecond ?? 0.001,
-        maxSize: appConfig.subagent?.attentionQueue?.maxSize ?? 100,
-    });
     const q5 = new CallbackQueue();
     const globalState = new GlobalState({
         filePath: join(DATA_DIR, "global-state.json"),
         autoSaveInterval: 30000,
     });
+    accumulator = new AttentionAccumulator(globalState, {
+        windowMs: appConfig.subagent?.pollInterval ?? 5000,
+    });
+    accumulator.restoreSignalPool();
 
     log.info("Subagent 组件初始化完成", {
-        attentionQueueMaxSize: appConfig.subagent?.attentionQueue?.maxSize ?? 100,
+        restoredSignalPoolSize: accumulator.getSignalPoolSize(),
     });
-
-    // FeedbackLoop 创建（需要在 subagentManager 之后，以支持 per-group registryLookup）
-    // architecture_v2.md §3 Q3 路径 (5): 追问检测 → Q3 入队
-    const feedbackLoop = new FeedbackLoop(
-        memory,
-        nc,
-        (chatId: string) => subagentManager.get(chatId)?.topicRegistry ?? null,
-        3 * 60 * 1000,  // evaluationDelayMs
-        (chatId: string, triggerText: string) => {
-            const sub = subagentManager.get(chatId);
-            if (!sub) return;
-            // 重置 lastAgentReplyAt 使 triage 允许介入（绕过防重复守卫）
-            sub.updateLastAgentReplyAt(0);
-            q3.enqueueOrUpdate(sub.buildQueueEntry());
-            q3.boost(chatId, 15);
-            log.info("追问检测 → Q3 入队", { chatId, triggerText: triggerText.slice(0, 50) });
-        },
-    );
 
     // ─── NC.onPush: 消息实时处理管线 ───
     // mentionKeywords 现在在每次消息到达时动态从 loadConfig() 读取（支持热重载）
 
-    // Hook 2: 消息分发到 per-group GroupSubagent (Observer + RecordingPipeline) → 更新 Q3
+    // Hook 2: 消息分发到 per-group GroupSubagent (Observer + RecordingPipeline)
     nc.onPush(event => {
         if (shuttingDown) return;
         const chatId = String(event.chatId ?? "");
         if (!chatId) return;
 
         // ─── Agent 发出消息的即时落盘（Fix: 修复 agent 消息不可见导致重复回复） ───
-        // system.agent_message_sent 事件之前只被 FeedbackLoop 消费，
-        // 不写入 message_log，导致 getRecentMessages() 缺少 agent 消息。
+        // system.agent_message_sent 事件不属于普通 adapter 入站消息；
+        // 这里即时写入 message_log，确保 getRecentMessages() 能看到 agent 消息。
         const eventType = String(event.type ?? "");
         if (eventType === "system.agent_message_sent") {
             // Fix: sandbox 发出的 agent_message_sent 事件中 chatId 是 raw ID（因为
@@ -516,7 +525,7 @@ async function main(): Promise<void> {
                 agentSub.recordingPipeline.onMessage(agentMsg);
             }
 
-            return; // agent 消息不走后续 Observer/Q3 逻辑
+            return; // agent 消息不走后续 Observer/Accumulator 逻辑
         }
 
         // 接收所有消息类型事件（TelegramAdapter 使用 "nc.message"）
@@ -577,34 +586,10 @@ async function main(): Promise<void> {
         }
 
         const sub = subagentManager.getOrCreate(chatId);
-        // 监听 triage-engage 事件：RecordingPipeline flush 后 triage 通过时触发 Q3 重入队
-        if (!sub.listenerCount("triage-engage")) {
-            sub.on("triage-engage", (cid: string) => {
-                const isBlocked = q3.isBlocked(cid);
-                const entry = sub.buildQueueEntry();
-                log.info("triage-engage → Q3 入队", {
-                    chatId: cid,
-                    isBlocked,
-                    priority: entry.priority,
-                    callbackPotential: entry.callbackPotential ?? 0,
-                    source: entry.source,
-                    topicDigestCount: entry.topicDigests?.length,
-                    hasTriageEngaged: sub.hasTriageEngaged,
-                });
-                if (!isBlocked) {
-                    q3.enqueueOrUpdate(entry);
-                } else {
-                    log.warn("triage-engage: Q3 入队被阻塞，chatId 在 blockedChatIds 中", { chatId: cid });
-                }
-            });
-        }
         // Per-group: Observer + RecordingPipeline 同时处理消息 (subagent.md §3.1)
         sub.onMessage(event);
 
-        // Q3 入队策略（architecture_v2.md §3）：
-        // - 正常路径：RecordingPipeline flush → triage → triage-engage 事件 → Q3 入队
-        // - 紧急路径：DM / @mention / 文本提及 agent 名字 → 立即 Q3 入队
-        // Observer engagement 仅用于 Q3 内部优先级排序，不作为入队触发条件。
+        // 紧急路径：DM / @mention / 文本提及 agent 名字 → 立即注入 Layer 0。
         const isDM = !!event.isDirectMessage;
         const isMention = !!event.mentionsAgent;
         // 文本提及检测：检查消息内容是否包含配置的 mention_keywords（agent 名字等）
@@ -614,15 +599,22 @@ async function main(): Promise<void> {
         const hasNameMention = mentionKeywords.length > 0 && mentionKeywords.some(kw => messageText.includes(kw));
 
         if (isDM || isMention || hasNameMention) {
-            q3.enqueueOrUpdate(sub.buildQueueEntry("DIRECT_ADDRESS"));
-            log.info("即时 → Q3 入队", {
+            const entry = sub.buildQueueEntry("DIRECT_ADDRESS");
+            accumulator.ingest(0, createDirectAddressItem(chatId, {
+                reason: isDM ? "DM" : isMention ? "@mention" : "name-mention",
+                queueEntry: entry,
+                event: {
+                    messageId: event.messageId ?? event.id,
+                    userId: event.userId ?? event.senderId,
+                },
+            }));
+            log.info("即时 → Layer0", {
                 chatId,
                 reason: isDM ? "DM" : isMention ? "@mention" : "文本提及",
                 engagement: sub.observer.getEngagementScore(),
             });
 
             // 记录入方向交互（用户 → agent，此刻已发生）
-            // 配合 feedback-loop.ts 的 agent_replied 出方向记录，构成完整双向交互链
             try {
                 const rawUserId = String(event.userId ?? event.senderId ?? "");
                 const userId = rawUserId ? ensureCompositeId(getPlatform(chatId), rawUserId) : "";
@@ -661,37 +653,6 @@ async function main(): Promise<void> {
             });
         }
 
-    });
-
-    // Hook 3: FeedbackLoop 消息追踪
-    nc.onPush(event => {
-        if (shuttingDown) return;
-        if ((event as any).type === "system.agent_message_sent" && feedbackLoop) {
-            const sentEvent = event as Record<string, unknown>;
-            const fbPlatform = String(sentEvent.scene ?? "") as import("./core/chat-id.js").PlatformName;
-            const fbCompositeChatId = ensureCompositeId(fbPlatform, String(sentEvent.chatId ?? ""));
-            feedbackLoop.recordAgentMessage({
-                scene: String(sentEvent.scene ?? ""),
-                chatId: fbCompositeChatId,
-                messageId: sentEvent.messageId ? String(sentEvent.messageId) : undefined,
-                text: String(sentEvent.text ?? ""),
-                timestamp: String(sentEvent.timestamp ?? new Date().toISOString()),
-                replyToMessageId: sentEvent.replyToMessageId ? String(sentEvent.replyToMessageId) : undefined,
-            } satisfies AgentMessageSentEvent);
-        }
-    });
-
-    // Hook 4: 追问实时检测 (architecture_v2.md §3 Q3 路径 5)
-    // 在 FeedbackLoop 的追问窗口内检测同群用户消息并触发 Q3 入队
-    nc.onPush(event => {
-        if (shuttingDown) return;
-        const chatId = String(event.chatId ?? "");
-        if (!chatId) return;
-        const eventType = String(event.type ?? "");
-        if (eventType !== "nc.message") return;
-        const userId = String(event.userId ?? event.user_id ?? event.senderId ?? "");
-        const text = String(event.text ?? event.message ?? "");
-        feedbackLoop.checkFollowUp(chatId, userId, text);
     });
 
     // Per-group TopicRegistry 定时清理（遍历所有 subagent 的 topicRegistry）
@@ -806,50 +767,101 @@ async function main(): Promise<void> {
     if (reflectionInterval.unref) reflectionInterval.unref();
 
     // ─── MainAgentLoop 配置 ───
-    const mainLoop = new MainAgentLoop(q3, q5, subagentManager, {
+    const mainLoop = new MainAgentLoop(accumulator, q5, subagentManager, {
         pollInterval: appConfig.subagent?.pollInterval ?? 5000,
-        maxAttendsPerTick: 3,
-        cosineDecayCyclePeriod: appConfig.subagent?.cosineDecay?.defaultCyclePeriod ?? 20,
-    }, globalState);
+    }, globalState, adapters);
 
 
 
-    // Attend handler: 主 Agent LLM 决策逻辑（subagent.md §12.2 ➛➜➝）
-    mainLoop.setAttendHandler(createAttendHandler({
-        memory,
-        globalState,
-        subagentManager,
-        mainLoop,
+    const sendTyping = async (chatId: string) => {
+        const adapter = getAdapterForChat(chatId);
+        if (!adapter) {
+            return;
+        }
+        const typingMethod = `${adapter.platform}.sendTyping`;
+        await adapter.handleCall(typingMethod, [chatId]);
+    };
 
-        persona: appConfig.persona,
-        adapters,
-        mediaDownloader: sharedMediaDownloader,
-        imageCatalog,
-
-    }));
-
-    // Dispatch handler: 分派任务到 CodeActExecutor / Deferred Re-entry
-    mainLoop.setDispatchHandler(createDispatchHandler({
-        memory,
-        globalState,
-        subagentManager,
-        sandboxPool,
-        nc,
-        q3,
-        q5,
-
-        persona: appConfig.persona,
-        appConfig,
-        adapters,
-        sendTyping: async (chatId: string) => {
-            const adapter = getAdapterForChat(chatId);
-            if (adapter) {
-                const typingMethod = `${adapter.platform}.sendTyping`;
-                await adapter.handleCall(typingMethod, [chatId]);
+    const buildDownloadFn = (chatId: string) => {
+        const adapter = adapters.find((item) => chatId.startsWith(item.platform + ":"));
+        if (!adapter) {
+            return undefined;
+        }
+        return async (fileId: string, mediaChatId?: string, messageId?: string, uniqueFileId?: string): Promise<Buffer> => {
+            const result = await adapter.handleCall(`${adapter.platform}.downloadMedia`, [fileId, mediaChatId ?? chatId, messageId, uniqueFileId]);
+            if (Buffer.isBuffer(result)) {
+                return result;
             }
+            if (result && typeof result === "object" && "buffer" in result) {
+                return Buffer.from((result as { buffer: string }).buffer, "base64");
+            }
+            throw new Error(`downloadMedia: unexpected result type: ${typeof result}`);
+        };
+    };
+
+    const metaApiContext = buildMetaApiContext({
+        memory,
+        subagentManager,
+        globalState,
+        accumulator,
+        groundingConfig: appConfig.grounding,
+        onTaskDispatched: (task) => {
+            metricsInstance?.groupCollector.onAttend(task.chatId, "REPLY");
         },
-        mediaDownloader: sharedMediaDownloader,
-        imageCatalog,
+        initializeExecutor: (executor, chatId) => {
+            const realExecutor = executor as CodeActExecutor;
+            const currentConfig = loadConfig();
+            const persona = currentConfig.persona;
+            const visionConfig = currentConfig.vision;
+            const visionLlmConfig = currentConfig.llmRouting.vision
+                ? resolveComponentProfiles("vision", currentConfig)[0]
+                : undefined;
+            const chatAdapter = adapters.find((item) => chatId.startsWith(item.platform + ":"));
+            const formatMention = chatAdapter
+                ? (rawId: string, username?: string) => chatAdapter.formatMention(rawId, username)
+                : undefined;
+
+            realExecutor.setCallbackHandler((cb) => {
+                q5.enqueue(cb);
+                accumulator.unblock(cb.chatId);
+
+                setTimeout(() => {
+                    try {
+                        const sub = subagentManager.get(cb.chatId);
+                        if (sub?.recordingPipeline) {
+                            sub.recordingPipeline.flush();
+                        }
+                    } catch (error) {
+                        log.debug("post-session flush failed", { chatId: cb.chatId, error: String(error) });
+                    }
+                }, 60_000);
+            });
+            realExecutor.setDependencies(
+                sandboxPool,
+                nc,
+                persona,
+                memory,
+                visionConfig,
+                buildDownloadFn(chatId),
+                sendTyping,
+                visionLlmConfig,
+                sharedMediaDownloader,
+                formatMention,
+                globalState,
+            );
+        },
+    });
+    const metaSandbox = new MetaSandbox(metaApiContext);
+
+    mainLoop.setMetaSessionHandler(createMetaSessionHandler({
+        getPersona: () => loadConfig().persona,
+        globalState,
+        memory,
+        sandbox: metaSandbox,
+        getLlmConfigs: () => resolveComponentProfiles("meta", loadConfig()),
+        maxTurns: 10,
+        codeTimeout: 30_000,
+        llmTimeoutMs: 60_000,
     }));
 
     log.info("MainAgentLoop 配置完成");
@@ -914,13 +926,12 @@ async function main(): Promise<void> {
             {
                 nc,
                 subagentManager,
-                q3,
+                accumulator,
                 q5,
                 mainLoop,
                 globalState,
                 sandboxPool,
                 memory,
-                feedbackLoop,
                 tokenStats,
                 mediaDownloader: sharedMediaDownloader,
                 imageCatalog,
@@ -956,7 +967,7 @@ async function main(): Promise<void> {
     if (metricsEnabled) {
         const { startMetrics } = await import("./metrics/index.js");
         metricsInstance = await startMetrics(
-            { subagentManager, sandboxPool, q3, q5, mainLoop, feedbackLoop },
+            { subagentManager, sandboxPool, accumulator, q5, mainLoop },
             appConfig.metrics,
         );
 
@@ -967,13 +978,6 @@ async function main(): Promise<void> {
             if (eventType !== "nc.message") return;
             const chatId = String(event.chatId ?? "");
             if (chatId) metricsInstance!.groupCollector.onMessage(chatId);
-        });
-
-        // Hook 2: attend 决策后更新 group_attends_total
-        mainLoop.setOnAttendComplete((chatId, result) => {
-            for (const d of result.decisions) {
-                metricsInstance!.groupCollector.onAttend(chatId, d.action);
-            }
         });
 
         log.info("指标 exporter 已启动", {
@@ -994,7 +998,7 @@ async function main(): Promise<void> {
 
     // ─── 统一调度器 Watchdog ───
     // 每 30 秒检查到期 reminder 和匹配的 cron 事件
-    // 触发时通过 Q3 注意力队列唤醒主 Agent，而非直接执行代码
+    // 触发时通过 AttentionAccumulator 唤醒主 Agent，而非直接执行代码
     const schedulerWatchdogInterval = setInterval(() => {
         const now = new Date();
 
@@ -1003,6 +1007,46 @@ async function main(): Promise<void> {
         for (const reminder of dueReminders) {
             globalState.markReminderTriggered(reminder.id);
 
+            const wakeMatch = matchDelayWakeReminder(reminder, globalState.getWakeConditions());
+            if (wakeMatch) {
+                globalState.removeWakeCondition(wakeMatch.conditionId);
+                accumulator.ingest(1, {
+                    chatId: "__meta__",
+                    source: "WAKE_CONDITION",
+                    enqueuedAt: Date.now(),
+                    payload: buildWakeConditionPayload(wakeMatch, { reminderId: reminder.id }),
+                });
+                log.info("Meta wake delay 到期 → Layer1", {
+                    reminderId: reminder.id,
+                    conditionId: wakeMatch.conditionId,
+                });
+                continue;
+            }
+
+            const reminderCallback = reminder.callback ?? reminder.description;
+            const reminderBindingId = reminder.bindingId ?? (reminder.chatId === "__meta__" ? "meta" : reminder.chatId);
+            if (reminder.chatId === "__meta__" || reminder.callback || reminder.bindingId) {
+                accumulator.ingest(1, {
+                    chatId: "__meta__",
+                    source: "SCHEDULER",
+                    enqueuedAt: Date.now(),
+                    payload: {
+                        id: reminder.id,
+                        type: "reminder",
+                        description: reminderCallback,
+                        callback: reminderCallback,
+                        bindingId: reminderBindingId,
+                        data: reminder.data,
+                    },
+                });
+                log.info("Reminder 到期 → Meta Layer1", {
+                    id: reminder.id,
+                    bindingId: reminderBindingId,
+                    desc: reminderCallback.slice(0, 80),
+                });
+                continue;
+            }
+
             const sub = subagentManager.getOrCreate(reminder.chatId);
             const entry = sub.buildQueueEntry("SCHEDULER_TRIGGER");
             entry.schedulerTriggers = [{
@@ -1010,9 +1054,13 @@ async function main(): Promise<void> {
                 type: "reminder",
                 description: reminder.description,
             }];
-            q3.enqueueOrUpdate(entry);
-            q3.boost(reminder.chatId, 80);
-            log.info("Reminder 到期 → Q3", { id: reminder.id, desc: reminder.description.slice(0, 80), chatId: reminder.chatId });
+            accumulator.ingest(1, createSchedulerItem(reminder.chatId, {
+                type: "reminder",
+                id: reminder.id,
+                description: reminder.description,
+                queueEntry: entry,
+            }));
+            log.info("Reminder 到期 → Layer1", { id: reminder.id, desc: reminder.description.slice(0, 80), chatId: reminder.chatId });
         }
 
         // ── 清理过期已触发 Reminder（超过 7 天） ──
@@ -1046,7 +1094,26 @@ async function main(): Promise<void> {
             if (!matchesCron(evt.cronExpr, now)) continue;
 
             globalState.markCronTriggered(evt.id);
-            const taskDesc = evt.taskTemplate ?? evt.description;
+            const taskDesc = evt.callback ?? evt.taskTemplate ?? evt.description;
+            const cronBindingId = evt.bindingId ?? (evt.chatId === "__meta__" ? "meta" : evt.chatId);
+
+            if (evt.chatId === "__meta__" || evt.callback || evt.bindingId) {
+                accumulator.ingest(1, {
+                    chatId: "__meta__",
+                    source: "SCHEDULER",
+                    enqueuedAt: Date.now(),
+                    payload: {
+                        id: evt.id,
+                        type: "cron",
+                        description: taskDesc,
+                        callback: taskDesc,
+                        bindingId: cronBindingId,
+                        data: evt.data,
+                    },
+                });
+                log.info("Cron 触发 → Meta Layer1", { id: evt.id, name: evt.name ?? evt.description, bindingId: cronBindingId });
+                continue;
+            }
 
             const sub = subagentManager.getOrCreate(evt.chatId);
             const entry = sub.buildQueueEntry("SCHEDULER_TRIGGER");
@@ -1055,9 +1122,13 @@ async function main(): Promise<void> {
                 type: "cron",
                 description: taskDesc,
             }];
-            q3.enqueueOrUpdate(entry);
-            q3.boost(evt.chatId, 80);
-            log.info("Cron 触发 → Q3", { id: evt.id, name: evt.description, chatId: evt.chatId });
+            accumulator.ingest(1, createSchedulerItem(evt.chatId, {
+                type: "cron",
+                id: evt.id,
+                description: taskDesc,
+                queueEntry: entry,
+            }));
+            log.info("Cron 触发 → Layer1", { id: evt.id, name: evt.description, chatId: evt.chatId });
         }
     }, 30_000);
     if (schedulerWatchdogInterval.unref) schedulerWatchdogInterval.unref();
@@ -1153,9 +1224,6 @@ async function main(): Promise<void> {
         clearInterval(reflectionInterval);
         clearInterval(schedulerWatchdogInterval);
 
-        // 停止反馈检测定时器
-        feedbackLoop.dispose();
-
         // 先停止平台输入，避免新消息继续进入系统
         await Promise.allSettled(adapters.map((adapter) =>
             runWithTimeout(`adapter.stop:${adapter.platform}`, () => adapter.stop(), 10_000)
@@ -1195,6 +1263,7 @@ async function main(): Promise<void> {
         _metricsStopFn?.();
 
         // 保存全局状态并释放其自动保存计时器
+        accumulator.dispose();
         globalState.dispose();
 
         // 释放其余资源

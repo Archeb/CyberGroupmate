@@ -2,15 +2,12 @@
   import { onDestroy, tick } from 'svelte';
   import { activeTab } from '../lib/stores.js';
   import { api } from '../lib/api.js';
-  import { escapeHtml, shortId, formatCodeActContent, isAtBottom, scrollToBottom, getGroupLabel, getPlatform, platformLabel } from '../lib/utils.js';
+  import { isAtBottom, scrollToBottom, getGroupLabel, getPlatform, platformLabel } from '../lib/utils.js';
 
   let decisions = [];
-  let history = [];
   let pollTimer = null;
   let decisionsEl;
-  let historyEl;
   let wasBottomD = true;
-  let wasBottomH = true;
 
   $: if ($activeTab === 'decisions') {
     startPolling();
@@ -30,23 +27,15 @@
   }
 
   async function refresh() {
-    const [d, h] = await Promise.all([
-      api('/decisions').catch(() => []),
-      api('/main-agent/history').catch(() => []),
-    ]);
-    // 检测是否有新数据
+    const d = await api('/decisions').catch(() => []);
     const hadNewDecisions = d && d.length !== decisions.length;
-    const hadNewHistory = h && h.length !== history.length;
     decisions = d || [];
-    history = h || [];
 
     await tick();
     if (hadNewDecisions && decisionsEl && wasBottomD) scrollToBottom(decisionsEl);
-    if (hadNewHistory && historyEl && wasBottomH) scrollToBottom(historyEl);
   }
 
   function onScrollD() { if (decisionsEl) wasBottomD = isAtBottom(decisionsEl); }
-  function onScrollH() { if (historyEl) wasBottomH = isAtBottom(historyEl); }
 
   function quickQueryGroup(chatId) {
     activeTab.set('memory');
@@ -68,12 +57,11 @@
 </script>
 
 <div class="dp-layout">
-  <!-- Decisions -->
   <div class="dp-col card bg-base-100">
     <div class="card-body p-3 min-h-0 flex flex-col">
       <div class="flex justify-between items-center shrink-0 mb-2">
         <h3 class="card-title text-sm">
-          最近决策
+          Session Digests
           <span class="badge badge-sm badge-ghost ml-1">{decisions.length}</span>
         </h3>
       </div>
@@ -91,28 +79,6 @@
               <span class="dp-time">{d.timestamp ? new Date(d.timestamp).toLocaleTimeString() : ''}</span>
             </div>
             <div class="dp-content">{d.decision || d.content || JSON.stringify(d)}</div>
-          </div>
-        {/each}
-      </div>
-    </div>
-  </div>
-
-  <!-- Main Agent Conversation History -->
-  <div class="dp-col card bg-base-100">
-    <div class="card-body p-3 min-h-0 flex flex-col">
-      <div class="flex justify-between items-center shrink-0 mb-2">
-        <h3 class="card-title text-sm">
-          主 Agent 对话历史
-          <span class="badge badge-sm badge-ghost ml-1">{history.length}</span>
-        </h3>
-      </div>
-
-      <div bind:this={historyEl} class="overflow-y-auto flex-1 min-h-0 space-y-2" onscroll={onScrollH}>
-        {#each history as msg}
-          {@const content = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content, null, 2)}
-          <div class="codeact-msg role-{msg.role}">
-            <span class="role-label">{msg.role}</span>
-            <div class="mt-1 text-xs">{@html formatCodeActContent(content)}</div>
           </div>
         {/each}
       </div>

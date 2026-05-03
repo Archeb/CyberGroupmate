@@ -35,6 +35,7 @@ import type { MediaDownloader } from "../core/media-downloader.js";
 import type { ChatMessage } from "../core/llm.js";
 import { createLogger } from "../core/logger.js";
 import { getRawId, ensureCompositeId, getPlatform } from "../core/chat-id.js";
+import type { GlobalState } from "../main-agent/global-state.js";
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -152,11 +153,11 @@ function formatThinkingTranscript(result: SessionResult): string {
         .filter((part): part is string => !!part);
 
     const transcript = parts.join("\n\n");
-    return `本次思考过程：\n\n\`\`\`text\n${transcript || "（无纯文本思考）"}\n\`\`\``;
+    return `本次思考过程：\n\`\`\`text\n${transcript || ""}\n\`\`\``;
 }
 
 function formatThinkingPlaceholder(reason: string): string {
-    return `本次思考过程：\n\n\`\`\`text\n${reason}\n\`\`\``;
+    return `本次思考过程：\n\`\`\`text\n${reason}\n\`\`\``;
 }
 export interface CodeActExecutorConfig {
     /** 单次执行最大超时 (ms)。默认 60000 */
@@ -234,6 +235,8 @@ export class CodeActExecutor {
 
     /** Memory 引用（层 1 用于刷新目标消息） */
     private memory: MemoryStoreV2 | null = null;
+    /** GlobalState 引用（用于同步 Meta Session Digest 与任务历史） */
+    private globalState: Pick<GlobalState, "getSessionDigests" | "updateDispatchedSubagentTask"> | null = null;
 
     constructor(chatId: string, config?: Partial<CodeActExecutorConfig>) {
         this.chatId = chatId;
@@ -292,6 +295,7 @@ export class CodeActExecutor {
         visionLlmConfig?: LLMConfig,
         mediaDownloader?: MediaDownloader,
         formatMention?: (rawUserId: string, username?: string) => string | undefined,
+        globalState?: Pick<GlobalState, "getSessionDigests" | "updateDispatchedSubagentTask">,
     ): void {
         this.sandboxPool = sandboxPool;
         this.nc = nc;
@@ -307,7 +311,8 @@ export class CodeActExecutor {
         this.sendTypingFn = sendTyping;
         this.mediaDownloader = mediaDownloader;
         this.formatMentionFn = formatMention;
-        log.info("setDependencies", { chatId: this.chatId, hasSandboxPool: true, hasVision: !!visionConfig, hasVisionLlm: !!visionLlmConfig, hasDownload: !!downloadFn, hasTyping: !!sendTyping, hasMediaDownloader: !!mediaDownloader, hasMention: !!formatMention });
+        this.globalState = globalState ?? this.globalState;
+        log.info("setDependencies", { chatId: this.chatId, hasSandboxPool: true, hasVision: !!visionConfig, hasVisionLlm: !!visionLlmConfig, hasDownload: !!downloadFn, hasTyping: !!sendTyping, hasMediaDownloader: !!mediaDownloader, hasMention: !!formatMention, hasGlobalState: !!this.globalState });
     }
 
     /**
@@ -390,7 +395,16 @@ export class CodeActExecutor {
                 error: cancelledByUser ? undefined : String(err),
                 durationMs,
                 createdAt: new Date().toISOString(),
+                contentDirection: (task.contextSnapshot.contentDirection ?? task.decisions.map(d => d.contentDirection ?? "").filter(Boolean).join("; ")) || undefined,
             };
+
+            this.globalState?.updateDispatchedSubagentTask(task.taskId, {
+                status: callback.status,
+                summary: callback.summary,
+                error: callback.error,
+                durationMs,
+                completedAt: callback.createdAt,
+            });
 
             if (cancelledByUser) {
                 log.info("execute: 已取消", { chatId: this.chatId, taskId: task.taskId, error: String(err) });
@@ -498,6 +512,9 @@ export class CodeActExecutor {
 
         // 3. 渲染系统 prompt (subagent.md §12.2 ➎ — 稳定部分，保持 Mustache 模板)
         const currentConfig = loadConfig();
+        const availableStickers = ctx.availableStickers?.length
+            ? ctx.availableStickers
+            : this.buildAvailableStickers(task);
         const baseSkills = currentConfig.subagent?.baseSkills ?? [
             "runtime", "fs", "skills", "mcp", "cron", "todo", "memory", "vision", "shell",
         ];
@@ -535,8 +552,9 @@ export class CodeActExecutor {
             personContext,
             memoryContext: memoryContextText || undefined,
             targetMessages,
-            availableStickers: ctx.availableStickers,
+            availableStickers,
             groundingContext: ctx.groundingContext,
+            sessionDigests: this.globalState?.getSessionDigests(),
         };
         // 重新计算 toneGuidance（避免上面的 ternary 混乱）
         resolveCtx.toneGuidance = toneGuidance || undefined;
@@ -614,6 +632,10 @@ export class CodeActExecutor {
             chatId: this.chatId,
             taskId: task.taskId,
             historyMessages: this.session.length,
+        });
+
+        this.globalState?.updateDispatchedSubagentTask(task.taskId, {
+            status: "RUNNING",
         });
 
         let sessionResult: SessionResult;
@@ -702,8 +724,7 @@ export class CodeActExecutor {
             isDirectMessage: ctx.isDirectMessage,
             executionType: "CODEACT",
             status: isError ? "ERROR" : "COMPLETED",
-            summary: `CodeAct session ${sessionResult.sessionId}: ${sessionResult.endReason}, ` +
-                `${sessionResult.turns.length} turns, ${sentCollector.allSent.length} messages sent\n\n${thinkingTranscript}`,
+            summary: thinkingTranscript,
             replyContent: sessionResult.turns
                 .filter((t: any) => t.role === "assistant" && t.content)
                 .map((t: any) => t.content)
@@ -715,7 +736,18 @@ export class CodeActExecutor {
             error: sessionResult.error,
             durationMs,
             createdAt: new Date().toISOString(),
+            contentDirection,
         };
+
+        this.globalState?.updateDispatchedSubagentTask(task.taskId, {
+            status: callback.status,
+            sessionId: sessionResult.sessionId,
+            summary: callback.summary,
+            sentMessages: callback.sentMessages,
+            error: callback.error,
+            durationMs,
+            completedAt: callback.createdAt,
+        });
 
         log.info("executeWithSandbox: 完成", {
             chatId: this.chatId,
@@ -732,6 +764,34 @@ export class CodeActExecutor {
         });
 
         return callback;
+    }
+
+    private buildAvailableStickers(task: CodeActReplyTask): Array<{ emoji?: string; emojis?: string[]; description: string; uniqueFileId: string }> | undefined {
+        if (!this.memory) return undefined;
+
+        const suggestedEmojis = task.decisions.flatMap(decision => decision.suggestedEmojis ?? []);
+        if (suggestedEmojis.length === 0) return undefined;
+
+        const matches = this.memory.searchStickersByEmoji(suggestedEmojis, 12);
+        const seen = new Set<string>();
+        const stickers: Array<{ emoji?: string; emojis?: string[]; description: string; uniqueFileId: string }> = [];
+
+        for (const match of matches) {
+            if (!match.enabled || seen.has(match.uniqueFileId)) continue;
+            const filePath = this.mediaDownloader?.getExistingPath(match.uniqueFileId);
+            if (filePath && filePath.toLowerCase().endsWith(".webm")) continue;
+
+            const cached = this.memory.getStickerDescription(match.uniqueFileId);
+            stickers.push({
+                uniqueFileId: match.uniqueFileId,
+                description: match.description,
+                emoji: match.emoji,
+                emojis: cached?.emojis?.length ? cached.emojis : [match.emoji],
+            });
+            seen.add(match.uniqueFileId);
+        }
+
+        return stickers.length > 0 ? stickers : undefined;
     }
 
     /**
@@ -761,7 +821,15 @@ export class CodeActExecutor {
             tokensUsed: 0,
             durationMs,
             createdAt: new Date().toISOString(),
+            contentDirection: (task.contextSnapshot.contentDirection ?? task.decisions.map(d => d.contentDirection ?? "").filter(Boolean).join("; ")) || undefined,
         };
+
+        this.globalState?.updateDispatchedSubagentTask(task.taskId, {
+            status: callback.status,
+            summary: callback.summary,
+            durationMs,
+            completedAt: callback.createdAt,
+        });
 
         log.info("execute: 完成 (skeleton)", { chatId: this.chatId, taskId: task.taskId, durationMs });
         return callback;

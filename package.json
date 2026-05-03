@@ -8,7 +8,8 @@
   "scripts": {
     "start": "tsx src/main.ts",
     "dev": "tsx watch src/main.ts",
-    "test": "tsx --test tests/**/*.test.ts",
+    "test": "tsx scripts/run-tests.ts",
+    "test:sandbox": "tsx --test tests/*sandbox*.test.ts",
     "cli": "tsx src/cli.ts",
     "tg-convert": "tsx src/tools/tg-to-jsonl.ts",
     "dashboard:dev": "cd src/dashboard/ui && npm run dev",

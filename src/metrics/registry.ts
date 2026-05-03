@@ -351,21 +351,15 @@ export const sandboxPoolIdle = registry.register(
     new Gauge(),
 );
 
-export const q3QueueSize = registry.register(
-    "cybergroupmate_q3_queue_size",
-    "注意力队列（Q3）当前待处理群组数",
+export const accumulatorQueueSize = registry.register(
+    "cybergroupmate_accumulator_queue_size",
+    "AttentionAccumulator 当前待处理群组数",
     new Gauge(),
 );
 
 export const q5CallbackPending = registry.register(
     "cybergroupmate_q5_callback_pending",
     "回调队列（Q5）待处理回调数",
-    new Gauge(),
-);
-
-export const feedbackLoopWindowsActive = registry.register(
-    "cybergroupmate_feedback_loop_windows_active",
-    "FeedbackLoop 当前活跃追问窗口数",
     new Gauge(),
 );
 

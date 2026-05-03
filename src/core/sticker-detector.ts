@@ -89,8 +89,10 @@ export class StickerDetector {
 - 表情包：有明显情绪表达、梗图、配文表情、简笔画风格、可爱动物等
 - 不是：风景照、真人照片（非表情化的）、截图、文档、商品图等
 
+如果是表情包，emojis 必须是数组，候选数量无上限但至少 2 个，覆盖主要情绪、近义情绪、动作/语气。
+
 请用以下 JSON 格式回复（仅返回 JSON，不要包含其他内容）：
-{"is_sticker": true/false, "description": "几个词的简短描述", "emoji": "单个代表emoji"}`,
+{"is_sticker": true/false, "description": "几个词的简短描述", "emojis": ["emoji1", "emoji2", "..."]}`,
                 imageParts: [{ url: dataUri }],
             },
         ];
@@ -102,14 +104,14 @@ export class StickerDetector {
         const raw = response.content.trim();
         let isSticker = false;
         let description = "";
-        let emoji: string | undefined;
+        let emojis: string[] = [];
 
         try {
             const jsonStr = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
             const parsed = JSON.parse(jsonStr);
             isSticker = !!parsed.is_sticker;
             description = String(parsed.description ?? "").trim();
-            emoji = typeof parsed.emoji === "string" ? parsed.emoji : undefined;
+            emojis = normalizeEmojiCandidates(parsed.emojis ?? parsed.emoji);
         } catch {
             log.debug("classifyImage: JSON 解析失败，视为非表情包", { contentHash: entry.contentHash, raw: raw.slice(0, 100) });
             isSticker = false;
@@ -119,15 +121,15 @@ export class StickerDetector {
             contentHash: entry.contentHash,
             isSticker,
             description: description || undefined,
-            emoji,
+            emoji: emojis[0],
         });
 
         if (isSticker && description) {
-            await this.promoteToSticker(entry, description, emoji);
+            await this.promoteToSticker(entry, description, emojis);
         }
     }
 
-    private async promoteToSticker(entry: ImageCatalogEntry, description: string, emoji?: string): Promise<void> {
+    private async promoteToSticker(entry: ImageCatalogEntry, description: string, emojis?: string[]): Promise<void> {
         if (!entry.filePath || !existsSync(entry.filePath)) return;
 
         const rawBuffer = readFileSync(entry.filePath);
@@ -148,7 +150,7 @@ export class StickerDetector {
         this.deps.memory.setStickerDescription(
             entry.uniqueFileId ?? entry.contentHash,
             description,
-            emoji,
+            emojis,
             this.deps.newStickerEnabledByDefault !== false,
         );
 
@@ -162,10 +164,28 @@ export class StickerDetector {
             contentHash: entry.contentHash,
             uniqueFileId: entry.uniqueFileId ?? entry.contentHash,
             description: description.slice(0, 50),
-            emoji,
+            emojis,
             stickerPath: saved.path,
         });
     }
+}
+
+function normalizeEmojiCandidates(value: unknown): string[] {
+    const candidates: string[] = [];
+    const add = (item: unknown) => {
+        if (typeof item !== "string") return;
+        const trimmed = item.trim();
+        if (!trimmed || candidates.includes(trimmed)) return;
+        candidates.push(trimmed);
+    };
+
+    if (Array.isArray(value)) {
+        for (const item of value) add(item);
+    } else {
+        add(value);
+    }
+
+    return candidates;
 }
 
 function inferMimeType(filePath: string): string {

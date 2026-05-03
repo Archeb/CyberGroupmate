@@ -35,8 +35,10 @@ export interface ExecutorResolveContext extends ResolveContext {
     personContext?: string;
     memoryContext?: string;
     targetMessages?: string;
-    availableStickers?: Array<{ description: string; uniqueFileId: string }>;
+    availableStickers?: Array<{ emoji?: string; emojis?: string[]; description: string; uniqueFileId: string }>;
     groundingContext?: string;
+    sessionDigests?: Array<{ createdAt: string; content: string }>;
+    sessionDigestLimit?: number;
     imageParts?: unknown[];
 }
 
@@ -194,6 +196,35 @@ function renderTargetMessagesBody(data: ExecutorTargetMessagesData): string {
     return data.entries.map(entry => entry.content).join("\n");
 }
 
+function clampSessionDigestLimit(value: unknown): number {
+    if (typeof value !== "number" || !Number.isFinite(value)) return 10;
+    return Math.max(1, Math.min(30, Math.floor(value)));
+}
+
+// ═══ 0. Meta Session Digests ═══
+
+/** Meta 历史 Session Digests — persistent（给 subagent 同步总编排者最近状态） */
+export const executorSessionDigestsProvider: SectionProvider<Array<{ createdAt: string; content: string }>> = {
+    schema: {
+        name: "executor.session_digests",
+        label: "Meta 历史 Session Digests",
+        source: "globalState.sessionDigests",
+        cache: "volatile",
+        history: "persistent",
+    },
+    resolve(ctx: ExecutorResolveContext) {
+        if (!ctx.sessionDigests?.length) return null;
+        const limit = clampSessionDigestLimit(ctx.sessionDigestLimit);
+        return ctx.sessionDigests.slice(-limit);
+    },
+    render(data) {
+        return [
+            "# 历史 Session Digests",
+            ...data.map((item) => `- [${item.createdAt}] ${item.content}`),
+        ].join("\n");
+    },
+};
+
 // ═══ 1. Task Header ═══
 
 /** 任务元信息 header — persistent */
@@ -235,7 +266,7 @@ export const executorDecisionsProvider: SectionProvider<{
 }> = {
     schema: {
         name: "executor.decisions",
-        label: "参考回复方式",
+        label: "行动决策",
         source: "attend-handler.decisions",
         cache: "volatile",
         history: "persistent",
@@ -252,7 +283,7 @@ export const executorDecisionsProvider: SectionProvider<{
     },
     render(data) {
         return [
-            "## 参考回复方式",
+            "## 行动决策",
             "",
             data.decisions,
             `语气: ${data.toneGuidance}`,
@@ -439,7 +470,11 @@ export const executorStickersProvider: SectionProvider<string> = {
     resolve(ctx: ExecutorResolveContext) {
         if (!ctx.availableStickers?.length) return null;
         return ctx.availableStickers
-            .map(s => `- ${s.description} (uniqueFileId: ${s.uniqueFileId})`)
+            .map(s => {
+                const emojis = s.emojis?.length ? s.emojis : (s.emoji ? [s.emoji] : []);
+                const emojiText = emojis.length ? `${emojis.join(" ")} ` : "";
+                return `- ${emojiText}${s.description} (uniqueFileId: ${s.uniqueFileId})`;
+            })
             .join("\n");
     },
     render(data) {
@@ -497,12 +532,13 @@ export const executorFooterProvider: SectionProvider<true> = {
 /** 获取 executor task prompt 的全部 providers（有序） */
 export function getExecutorTaskProviders(): SectionProvider[] {
     return [
+        executorSessionDigestsProvider,
         executorHeaderProvider,
-        executorDecisionsProvider,
         executorTopicSummaryProvider,
         executorPersonContextProvider,
         executorMemoryContextProvider,
         executorTargetMessagesProvider,
+        executorDecisionsProvider,
         executorStickersProvider,
         executorGroundingProvider,
         executorFooterProvider,

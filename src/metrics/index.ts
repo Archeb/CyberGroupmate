@@ -21,20 +21,18 @@ import { GroupCollector } from "./collectors/group-collector.js";
 import { SystemCollector } from "./collectors/system-collector.js";
 import type { SubagentManager } from "../subagent/subagent-manager.js";
 import type { SandboxPool } from "../sandbox/sandbox-pool.js";
-import type { DynamicAttentionQueue } from "../subagent/attention-queue.js";
 import type { CallbackQueue } from "../subagent/callback-queue.js";
 import type { MainAgentLoop } from "../main-agent/main-agent-loop.js";
-import type { FeedbackLoop } from "../pipeline/feedback-loop.js";
 import type { MetricsConfig } from "../core/config.js";
+import type { AttentionAccumulator } from "../accumulator/attention-accumulator.js";
 
 /** startMetrics 所需的系统组件依赖 */
 export interface MetricsDeps {
     subagentManager: SubagentManager;
     sandboxPool: SandboxPool;
-    q3: DynamicAttentionQueue;
+    accumulator: AttentionAccumulator;
     q5: CallbackQueue;
     mainLoop: MainAgentLoop;
-    feedbackLoop: FeedbackLoop;
 }
 
 /** 完整 Metrics 实例（供 main.ts 保存引用用于 push 事件） */
@@ -61,10 +59,9 @@ export async function startMetrics(deps: MetricsDeps, config?: MetricsConfig): P
 
     const systemCollector = new SystemCollector({
         sandboxPool: deps.sandboxPool,
-        q3: deps.q3,
+        accumulator: deps.accumulator,
         q5: deps.q5,
         mainLoop: deps.mainLoop,
-        feedbackLoop: deps.feedbackLoop,
     });
 
     const exporter = new MetricsExporter(groupCollector, systemCollector, {

@@ -19,9 +19,7 @@ export type {
     TopicClusteringResult,
     TopicSummaryTriageResult,
 } from "./types.js";
-export type { AgentMessageSentEvent } from "./feedback-loop.js";
 
 // ─── 核心组件 ───
 export { TopicRegistry, type RestorableTopic } from "./topic-registry.js";
 export { RecordingPipeline } from "./recording-pipeline.js";
-export { FeedbackLoop } from "./feedback-loop.js";
