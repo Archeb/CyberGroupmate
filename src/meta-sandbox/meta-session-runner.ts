@@ -340,11 +340,7 @@ function formatObservation(output: string): string {
 }
 
 function buildAssistantHistoryContent(content: string): string {
-    const firstCodeBlock = findFirstCodeBlock(content);
-    if (!firstCodeBlock) {
-        return content.trim();
-    }
-    return stripEndTurnMarker(content.slice(0, firstCodeBlock.start)).trim();
+    return content.trim();
 }
 
 function findFirstCodeBlock(content: string): FirstCodeBlockMatch | null {

@@ -350,6 +350,12 @@ describe("createMetaSessionHandler", () => {
                     "<end_turn>",
                 ].join("\n"),
             },
+            {
+                content: [
+                    "[SESSION_DIGEST]second run saw prior history[/SESSION_DIGEST]",
+                    "<end_turn>",
+                ].join("\n"),
+            },
         ];
 
         const globalStateStub = {
@@ -409,7 +415,7 @@ describe("createMetaSessionHandler", () => {
         assert.ok(llmCalls[0]?.options?.contextManifest);
         assert.ok((llmCalls[0]?.options?.contextManifest?.sections?.length ?? 0) > 0);
 
-        const secondCallMessages = llmCalls[1]?.messages ?? [];
+        const secondCallMessages = llmCalls.at(-1)?.messages ?? [];
         const priorPrompt = secondCallMessages.find((message) =>
             message.role === "user" && message.content.includes("# 注意力切换:")
         );
@@ -420,8 +426,8 @@ describe("createMetaSessionHandler", () => {
             message.role === "assistant" && message.content.includes("先做一次查询")
         );
         assert.ok(priorQueryAssistant);
-        assert.doesNotMatch(priorQueryAssistant.content, /console\.log/);
-        assert.doesNotMatch(priorQueryAssistant.content, /<end_turn>/);
+        assert.match(priorQueryAssistant.content, /console\.log/);
+        assert.match(priorQueryAssistant.content, /<end_turn>/);
 
         assert.equal(
             secondCallMessages.some((message) => message.content.includes("stored history after observation")),

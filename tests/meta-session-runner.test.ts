@@ -201,7 +201,7 @@ describe("runMetaSession", () => {
         assert.deepEqual(llmOptions[1]?.stop, ["[MetaSandbox observation]"]);
         assert.match(llmCalls[1][llmCalls[1].length - 1].content, /MetaSandbox observation/);
         assert.match(llmCalls[1][llmCalls[1].length - 1].content, /42/);
-        assert.doesNotMatch(llmCalls[1][llmCalls[1].length - 2].content, /const value = 1/);
+        assert.match(llmCalls[1][llmCalls[1].length - 2].content, /const value = await tools\.answer/);
         assert.doesNotMatch(llmCalls[1][llmCalls[1].length - 2].content, /<end_turn>/);
     });
 
@@ -252,10 +252,10 @@ describe("runMetaSession", () => {
         assert.equal(llmCalls.length, 2);
         assert.equal(result.sessionDigest, "dispatched greeting task");
         assert.match(result.turns[0]?.observation ?? "", /task-1/);
-        assert.doesNotMatch(result.messages.map((message) => message.content).join("\n\n"), /dispatched greeting task/);
+        assert.match(result.messages.map((message) => message.content).join("\n\n"), /dispatched greeting task/);
     });
 
-    it("strips post-code content, runs only first block, then waits next round to end", async () => {
+    it("keeps post-code history, runs only first block, then waits next round to end", async () => {
         const sandbox = new MetaSandbox({
             tools: {
                 answer: async () => 42,
@@ -320,9 +320,9 @@ describe("runMetaSession", () => {
         assert.equal(llmCalls.length, 2);
         const secondCallText = llmCalls[1]?.map((message) => message.content).join("\n\n") ?? "";
         assert.match(secondCallText, /Need one real lookup/);
-        assert.doesNotMatch(secondCallText, /second block must not run/);
-        assert.doesNotMatch(secondCallText, /fake completed/);
-        assert.doesNotMatch(secondCallText, /Now I will dispatch/);
+        assert.match(secondCallText, /second block must not run/);
+        assert.match(secondCallText, /fake completed/);
+        assert.match(secondCallText, /Now I will dispatch/);
     });
 
     it("keeps requesting an explicit end_turn when the model emits no runnable code", async () => {
