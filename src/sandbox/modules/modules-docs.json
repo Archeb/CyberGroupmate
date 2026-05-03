@@ -32,7 +32,7 @@
       {
         "name": "sendMedia",
         "brief": "发送媒体消息（附件）到指定频道。支持 URL 和本地文件路径（支持绝对路径或基于 cwd 工作区的相对路径）。",
-        "fullDoc": "```typescript\nsendMedia(channelId: string, media: { url?: string; file?: string; caption?: string; fileName?: string }, opts?: { replyTo?: string }): Promise<{ id: string; text: string; channelId: string; guildId?: string; timestamp: string; }>\n```\n\n\n发送媒体消息（附件）到指定频道。支持 URL 和本地文件路径（支持绝对路径或基于 cwd 工作区的相对路径）。\n\n**参数：**\n- `channelId`: 目标频道 ID\n- `media`: 媒体对象，支持 URL 或文件内容\n- `opts`: 可选参数\n\n**示例：**\n```typescript\n// sendMedia(channelId, { url: \"https://example.com/image.png\", caption: \"看看这张图\" })\n```\n\n```typescript\n// sendMedia(channelId, { file: \"screenshot.png\", caption: \"本地截图\" }) // 自动基于 process.cwd() 解析\n```"
+        "fullDoc": "```typescript\nsendMedia(channelId: string, media: string | { type?: \"photo\" | \"video\" | \"document\" | \"audio\" | \"auto\"; url?: string; file?: string; caption?: string; fileName?: string }, opts?: { replyTo?: string; caption?: string }): Promise<{ id: string; text: string; channelId: string; guildId?: string; timestamp: string; }>\n```\n\n\n发送媒体消息（附件）到指定频道。支持 URL 和本地文件路径（支持绝对路径或基于 cwd 工作区的相对路径）。\n\n**参数：**\n- `channelId`: 目标频道 ID\n- `media`: 媒体对象或路径字符串，支持 URL、本地文件路径、data URL 或文件内容\n- `opts`: 可选参数\n\n**示例：**\n```typescript\n// sendMedia(channelId, { url: \"https://example.com/image.png\", caption: \"看看这张图\" })\n```\n\n```typescript\n// sendMedia(channelId, { file: \"screenshot.png\", caption: \"本地截图\" }) // 自动基于 process.cwd() 解析\n```\n\n```typescript\n// sendMedia(channelId, \"screenshot.png\")\n```"
       },
       {
         "name": "sendTyping",
