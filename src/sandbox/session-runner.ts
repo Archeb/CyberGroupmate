@@ -21,7 +21,7 @@ import type { ContextManifest } from "../context-engine/types.js";
 import { ulid } from "ulid";
 import { createLogger } from "../core/logger.js";
 import { EventEmitter } from "node:events";
-import { extractApiCalls, needsDocLookup } from "./api-intent-extractor.js";
+import { extractApiCalls, getDocLookupMethods } from "./api-intent-extractor.js";
 
 // ─── CodeAct Progress Events ───
 
@@ -537,10 +537,11 @@ export async function runCodeActSession(
             // 合并所有代码块的 API 调用
             const allCode = codeBlocks.map(b => b.code).join("\n");
             const calledMethods = extractApiCalls(allCode, twoPassConfig.getPrefixMap());
+            const docLookupMethods = getDocLookupMethods(calledMethods);
 
-            if (needsDocLookup(calledMethods)) {
+            if (docLookupMethods.length > 0) {
                 // ─── 无状态去重：检查 messages 中哪些方法文档已经存在 ───
-                const missingMethods = calledMethods.filter(method => {
+                const missingMethods = docLookupMethods.filter(method => {
                     // 文档注入时使用 "### module.method" 作为标记
                     const marker = `### ${method}`;
                     return !messages.some(m =>
