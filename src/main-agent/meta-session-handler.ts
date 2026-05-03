@@ -164,7 +164,7 @@ async function buildMetaMessages(
         : null;
     const instructionRender = engine.render({
         currentTurnInstruction: [
-            "请检查是否需要跨群检索、分派任务、写 todo 或注册 remind/cron。若无需动作，请直接结束本轮。",
+            "检查是否需要跨群检索、分派任务、写 todo 或注册 remind/cron。请勿自己执行具体任务，若无需动作，请直接结束本轮。",
             proactiveInstruction,
         ].filter(Boolean).join("\n\n"),
     });
