@@ -7,8 +7,9 @@ import type {
 } from "../../subagent/types.js";
 import type { AssociatedMemory, GroupModel } from "../../memory-v2/types.js";
 import { deriveChatType, formatTopicList, type FormattableTopic } from "../prompt-renderer-utils.js";
-import { formatMessageLine, type RawMessage } from "../../core/message-enricher.js";
+import { formatMessageLine, type RawMessage, type StickerDescriptionLookup } from "../../core/message-enricher.js";
 import { getDunbarTierLabel, getRawId } from "../../core/chat-id.js";
+import type { VisionConfig } from "../../core/config.js";
 
 const META_ASSOCIATED_MEMORIES_ENABLED = false;
 
@@ -54,6 +55,8 @@ interface MetaMessagesData {
     messages: AttentionRecentMessage[];
     newMessageCount: number;
     fallbackToRecent?: boolean;
+    attendMediaMode?: VisionConfig["attendMode"];
+    stickerDescriptions?: Record<string, { description: string; emoji?: string; emojis?: string[] }>;
 }
 
 interface MetaGroupModelData {
@@ -181,11 +184,77 @@ function toRawMessage(message: AttentionRecentMessage, messagesById?: Map<string
     };
 }
 
-function formatMetaMessages(messages: AttentionRecentMessage[]): string[] {
-    const messagesById = new Map(messages.map((message) => [message.messageId, message]));
-    return messages.map((message) =>
-        formatMessageLine(toRawMessage(message, messagesById), { includeMediaTags: true })
+function formatMetaMessages(data: MetaMessagesData): string[] {
+    const messagesById = new Map(data.messages.map((message) => [message.messageId, message]));
+    const stickerDescriptionLookup: StickerDescriptionLookup | undefined = data.attendMediaMode === "enrich"
+        ? {
+            getStickerDescription(uniqueFileId) {
+                return data.stickerDescriptions?.[uniqueFileId] ?? null;
+            },
+        }
+        : undefined;
+
+    return data.messages.map((message) =>
+        formatMessageLine(toRawMessage(message, messagesById), {
+            includeMediaTags: true,
+            stickerDescriptionLookup,
+        })
     );
+}
+
+function collectStickerDescriptions(
+    messages: AttentionRecentMessage[],
+    lookup?: StickerDescriptionLookup,
+): MetaMessagesData["stickerDescriptions"] | undefined {
+    if (!lookup) return undefined;
+    const descriptions: NonNullable<MetaMessagesData["stickerDescriptions"]> = {};
+    for (const message of messages) {
+        if (message.mediaType !== "sticker" || !message.mediaInfo) continue;
+        try {
+            const info = JSON.parse(message.mediaInfo) as { uniqueFileId?: string; fileId?: string };
+            const uniqueFileId = info.uniqueFileId ?? info.fileId;
+            if (!uniqueFileId || descriptions[uniqueFileId]) continue;
+            const cached = lookup.getStickerDescription(uniqueFileId);
+            if (cached) {
+                descriptions[uniqueFileId] = cached;
+            }
+        } catch {
+            /* ignore malformed mediaInfo */
+        }
+    }
+
+    return Object.keys(descriptions).length > 0 ? descriptions : undefined;
+}
+
+function getMessageSignature(message: AttentionRecentMessage, data: MetaMessagesData): string {
+    let cachedStickerDescription = "";
+    if (data.attendMediaMode === "enrich" && message.mediaType === "sticker" && message.mediaInfo) {
+        try {
+            const info = JSON.parse(message.mediaInfo) as { uniqueFileId?: string; fileId?: string };
+            const uniqueFileId = info.uniqueFileId ?? info.fileId;
+            const cached = uniqueFileId ? data.stickerDescriptions?.[uniqueFileId] : undefined;
+            cachedStickerDescription = cached
+                ? [cached.description, stableStringList(cached.emojis ?? (cached.emoji ? [cached.emoji] : []))].join("::")
+                : "";
+        } catch {
+            cachedStickerDescription = "";
+        }
+    }
+
+    return [
+        message.messageId,
+        message.userId,
+        message.displayName,
+        message.text,
+        message.timestamp,
+        message.replyToMessageId ?? message.replyToMsgId ?? "",
+        message.replyTo ?? "",
+        message.replyToText ?? "",
+        message.mediaType ?? "",
+        message.mediaInfo ?? "",
+        data.attendMediaMode ?? "",
+        cachedStickerDescription,
+    ].join("::");
 }
 
 export const metaHistoricalProvider: SectionProvider<MetaHistoricalData> = {
@@ -495,10 +564,17 @@ export const metaMessagesProvider: SectionProvider<MetaMessagesData> = {
         if (messages.length === 0) {
             return null;
         }
+        const sliced = messages.slice(-30);
+        const attendMediaMode = ctx.attendMediaMode as VisionConfig["attendMode"] | undefined;
+        const stickerDescriptionLookup = ctx.stickerDescriptionLookup as StickerDescriptionLookup | undefined;
         return {
-            messages: messages.slice(-30),
+            messages: sliced,
             newMessageCount: Number(ctx.newMessageCount ?? messages.length),
             fallbackToRecent: ctx.fallbackToRecentMessages === true,
+            attendMediaMode,
+            stickerDescriptions: attendMediaMode === "enrich"
+                ? collectStickerDescriptions(sliced, stickerDescriptionLookup)
+                : undefined,
         };
     },
     diff(current, committed): DiffResult<MetaMessagesData> {
@@ -510,8 +586,12 @@ export const metaMessagesProvider: SectionProvider<MetaMessagesData> = {
             };
         }
 
-        const committedIds = new Set(committed.messages.map((message) => message.messageId));
-        const deltaMessages = current.messages.filter((message) => !committedIds.has(message.messageId));
+        const committedSignatures = new Map(
+            committed.messages.map((message) => [message.messageId, getMessageSignature(message, committed)])
+        );
+        const deltaMessages = current.messages.filter(
+            (message) => committedSignatures.get(message.messageId) !== getMessageSignature(message, current)
+        );
         const fallbackMessages = current.fallbackToRecent && deltaMessages.length === 0
             ? current.messages.slice(-20)
             : [];
@@ -521,6 +601,8 @@ export const metaMessagesProvider: SectionProvider<MetaMessagesData> = {
                 messages: fallbackMessages.length > 0 ? fallbackMessages : deltaMessages,
                 newMessageCount: deltaMessages.length,
                 fallbackToRecent: fallbackMessages.length > 0,
+                attendMediaMode: current.attendMediaMode,
+                stickerDescriptions: current.stickerDescriptions,
             },
             stats: {
                 total: current.messages.length,
@@ -530,14 +612,14 @@ export const metaMessagesProvider: SectionProvider<MetaMessagesData> = {
         };
     },
     render(data) {
-        const lines = formatMetaMessages(data.messages);
+        const lines = formatMetaMessages(data);
         return `## 新消息 (自上次关注以来, 共 ${data.newMessageCount} 条)\n${lines.join("\n")}`;
     },
     renderDelta(delta) {
         if (delta.messages.length === 0) {
             return "";
         }
-        const lines = formatMetaMessages(delta.messages);
+        const lines = formatMetaMessages(delta);
         if (delta.fallbackToRecent) {
             return `## 最近消息上下文\n(无新消息增量；attention 已触发，兜底附上最近 ${delta.messages.length} 条消息)\n${lines.join("\n")}`;
         }

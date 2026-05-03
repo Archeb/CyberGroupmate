@@ -546,6 +546,9 @@ export interface IMemoryStoreV2 {
     /** 获取指定 chatId 最近的原始消息 */
     getRecentMessages(chatId: string, limit?: number): RecentMessageEntry[];
 
+    /** 获取已缓存的 sticker 描述（只读，用于上下文富化） */
+    getStickerDescription(uniqueFileId: string): { description: string; emoji?: string; emojis?: string[] } | null;
+
     /** 搜索核心事实 */
     searchFacts(query: string, options?: {
         subject?: string;

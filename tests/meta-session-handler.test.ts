@@ -628,4 +628,76 @@ describe("createMetaSessionHandler", () => {
         assert.doesNotMatch(prompt, /群内规则/);
         assert.doesNotMatch(prompt, /某个群自己的规则/);
     });
+
+    it("uses cached sticker descriptions in attend media enrich mode and falls back to emoji on cache miss", async () => {
+        const sandbox = new MetaSandbox({});
+        const llmCalls: ChatMessage[][] = [];
+        const memoryStub = {
+            ...createMemoryStub(),
+            getStickerDescription: (uniqueFileId: string) => uniqueFileId === "sticker-known"
+                ? { description: "笑到拍桌子的夸张表情", emojis: ["😂", "🤣"] }
+                : null,
+        };
+        const entry: AttentionQueueEntry = {
+            ...createEntry(),
+            recentMessages: [
+                {
+                    messageId: "9001",
+                    userId: "telegram:u1",
+                    displayName: "阿喵",
+                    text: "[🎭 贴纸: 😂]",
+                    timestamp: "2026-05-01T14:28:01.000Z",
+                    mediaType: "sticker",
+                    mediaInfo: JSON.stringify({
+                        type: "sticker",
+                        fileId: "file-known",
+                        uniqueFileId: "sticker-known",
+                        emoji: "😂",
+                    }),
+                },
+                {
+                    messageId: "9002",
+                    userId: "telegram:u1",
+                    displayName: "阿喵",
+                    text: "",
+                    timestamp: "2026-05-01T14:28:02.000Z",
+                    mediaType: "sticker",
+                    mediaInfo: JSON.stringify({
+                        type: "sticker",
+                        fileId: "file-miss",
+                        uniqueFileId: "sticker-miss",
+                        emoji: "👀",
+                    }),
+                },
+            ],
+        };
+        const handler = createMetaSessionHandler({
+            getPersona: () => ({ name: "测试编排者", description: "验证 enrich 媒体策略" }),
+            globalState: {
+                getSessionDigests: () => [],
+                getMetaSessionHistory: () => [],
+                appendMetaSessionHistory: () => undefined,
+            },
+            memory: memoryStub as any,
+            sandbox,
+            getLlmConfigs: () => [TEST_LLM_CONFIG],
+            getVisionConfig: () => ({ attendMode: "enrich" }),
+            llmCaller: async (messages): Promise<LLMResponse> => {
+                llmCalls.push(messages.map((message) => ({ ...message })));
+                return {
+                    content: "[SESSION_DIGEST]sticker enrich[/SESSION_DIGEST]\n<end_turn>",
+                };
+            },
+        });
+
+        await handler([entry], []);
+
+        const prompt = llmCalls[0]
+            ?.filter((message) => message.role === "user")
+            .map((message) => message.content)
+            .join("\n\n") ?? "";
+        assert.match(prompt, /\[🎭 贴纸 😂 🤣: 笑到拍桌子的夸张表情\]/);
+        assert.doesNotMatch(prompt, /\[🎭 贴纸: 😂\].*\[🎭 贴纸 😂 🤣: 笑到拍桌子的夸张表情\]/);
+        assert.match(prompt, /\[🎭 贴纸: 👀\]/);
+    });
 });

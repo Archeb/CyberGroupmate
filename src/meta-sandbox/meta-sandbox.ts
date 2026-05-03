@@ -81,7 +81,7 @@ export class MetaSandbox {
                 return seen.get(value as object);
             }
 
-            const wrapped: Record<string, unknown> = Array.isArray(value) ? [] : {};
+            const wrapped = (Array.isArray(value) ? [] : {}) as Record<string, unknown>;
             seen.set(value as object, wrapped);
             for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
                 const childPath = path ? `${path}.${key}` : key;

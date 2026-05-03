@@ -17,6 +17,7 @@
     >
       <option value={undefined}>默认 (disable)</option>
       <option value="disable">disable（禁用媒体富化）</option>
+      <option value="enrich">enrich（只读缓存描述）</option>
       <option value="describe">describe（仅文字描述）</option>
       <option value="vision">vision（看图 + 内联图片）</option>
     </select></label

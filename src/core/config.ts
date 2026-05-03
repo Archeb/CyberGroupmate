@@ -315,8 +315,8 @@ export interface SubagentExternalConfig {
 
 /** Vision 处理配置 */
 export interface VisionConfig {
-    /** attend-handler 媒体策略：vision=看图(内联图片)、describe=仅文字描述、disable=禁用媒体富化。默认 disable */
-    attendMode?: "vision" | "describe" | "disable";
+    /** attend/meta 媒体策略：vision=看图(内联图片)、describe=仅文字描述、enrich=仅使用已有缓存描述、disable=禁用媒体富化。默认 disable */
+    attendMode?: "vision" | "describe" | "enrich" | "disable";
     /** 以 file 形式发送的大图压缩阈值（长边像素）。默认 1024 */
     maxImageSize?: number;
     /** 单轮上下文最多内联几张图片，超出走 vision 描述。默认 3 */

@@ -1,4 +1,4 @@
-import type { LLMConfig } from "../core/config.js";
+import type { LLMConfig, VisionConfig } from "../core/config.js";
 import type { ChatMessage } from "../core/llm.js";
 import { getGroupModelKey } from "../core/chat-id.js";
 import { createLogger } from "../core/logger.js";
@@ -36,9 +36,11 @@ const META_HISTORY_SECTION_ALLOWLIST = new Set([
 export interface MetaSessionHandlerDeps {
     getPersona: () => { name?: string; description?: string } | undefined;
     globalState: Pick<GlobalState, "getSessionDigests" | "getMetaSessionHistory" | "appendMetaSessionHistory">;
-    memory: Pick<IMemoryStoreV2, "getGroupModel" | "getProfilesForChat" | "getPersonIdentity" | "getTopicById" | "todoList" | "getRecentMessages">;
+    memory: Pick<IMemoryStoreV2, "getGroupModel" | "getProfilesForChat" | "getPersonIdentity" | "getTopicById" | "todoList" | "getRecentMessages">
+        & Partial<Pick<IMemoryStoreV2, "getStickerDescription">>;
     sandbox: MetaSandbox;
     getLlmConfigs: () => LLMConfig[];
+    getVisionConfig?: () => VisionConfig | undefined;
     llmCaller?: MetaLLMCaller;
     maxTurns?: number;
     codeTimeout?: number;
@@ -332,6 +334,7 @@ async function buildMetaResolveContext(
     const isDirectMessage = groupModel?.isDirectMessage ?? entry.directAddressReason === "DM";
     const chatType = isSyntheticMeta ? "系统" : deriveChatType(isDirectMessage);
     const recentMessageContext = buildRecentMessageContext(deps.memory, entry, isSyntheticMeta);
+    const visionConfig = deps.getVisionConfig?.() ?? loadConfig().vision;
 
     return {
         chatId: entry.chatId,
@@ -350,6 +353,8 @@ async function buildMetaResolveContext(
         topicDigests,
         recentMessages: recentMessageContext.messages,
         fallbackToRecentMessages: recentMessageContext.fallbackToRecent,
+        attendMediaMode: visionConfig?.attendMode,
+        stickerDescriptionLookup: typeof deps.memory.getStickerDescription === "function" ? deps.memory : undefined,
         groupModel: groupModel ?? undefined,
         tonePreset: tonePresetFor(entry.stickinessLevel),
         activeUserProfiles: activeUserProfiles.length > 0 ? activeUserProfiles : undefined,
