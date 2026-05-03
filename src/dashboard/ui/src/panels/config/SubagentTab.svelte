@@ -51,6 +51,18 @@
       /></label
     >
     <label class="cfg-field"
+      ><span class="cfg-label">Post-task 窗口 (ms)</span>
+      <input
+        type="number"
+        class="input input-xs input-bordered w-full"
+        bind:value={config.subagent.postTaskWindowMs}
+        min="0"
+        step="1000"
+        placeholder="120000"
+      />
+      <span class="text-xs opacity-50 mt-1">Subagent 发言后等待群聊发酵，并在窗口内接管 L0 追问。</span></label
+    >
+    <label class="cfg-field"
       ><span class="cfg-label">限制写入到绑定 Chat</span>
       <input
         type="checkbox"

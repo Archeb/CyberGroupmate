@@ -52,6 +52,7 @@ import { evaluateStickiness, createStickiness, updateStickiness } from "./subage
 import { matchesCron } from "./core/cron-matcher.js";
 import { autoReconnect as autoReconnectMcp, initMcpBridge, mcpBridge } from "./sandbox/modules/mcp-bridge/index.js";
 import { CodeActExecutor, refreshModuleRegistryCache } from "./subagent/code-act-executor.js";
+import { PostTaskWindowManager, buildDispatchedRecordForPostTaskDirect } from "./subagent/post-task-window.js";
 import { MetaSandbox } from "./meta-sandbox/meta-sandbox.js";
 import { buildMetaApiContext } from "./meta-sandbox/meta-api/index.js";
 
@@ -405,6 +406,7 @@ async function main(): Promise<void> {
     // ─── Subagent 架构组件初始化 ───
     // 注意: message_log 落盘由 RecordingPipeline Step 4 负责，不再需要独立的 MessageLogWriter hook
     let accumulator: AttentionAccumulator;
+    let postTaskWindows: PostTaskWindowManager | null = null;
     const subagentManager = new SubagentManager({
         observerConfig: {
             engagementWindowMs: 5 * 60 * 1000,
@@ -417,7 +419,9 @@ async function main(): Promise<void> {
             memory,
             pipelineConfig: appConfig.recordingPipeline,
             publishTopicSignals: (signals) => {
-                for (const signal of signals) {
+                const deliverableSignals = signals.filter((signal) => !postTaskWindows?.hasActiveWindow(signal.chatId));
+                const suppressedCount = signals.length - deliverableSignals.length;
+                for (const signal of deliverableSignals) {
                     accumulator.ingest(2, {
                         chatId: signal.chatId,
                         source: "TOPIC_SIGNAL",
@@ -427,11 +431,20 @@ async function main(): Promise<void> {
                     });
                 }
 
-                if (signals.length > 0) {
+                if (suppressedCount > 0) {
+                    log.info("topic-signals suppressed by post-task window", {
+                        count: suppressedCount,
+                        chatIds: [...new Set(signals
+                            .filter((signal) => postTaskWindows?.hasActiveWindow(signal.chatId))
+                            .map((signal) => signal.chatId))],
+                    });
+                }
+
+                if (deliverableSignals.length > 0) {
                     log.info("topic-signals → Accumulator", {
-                        chatId: signals[0]?.chatId,
-                        count: signals.length,
-                        topics: signals.map((signal) => ({
+                        chatId: deliverableSignals[0]?.chatId,
+                        count: deliverableSignals.length,
+                        topics: deliverableSignals.map((signal) => ({
                             topicId: signal.topicId,
                             pressure: signal.pressure,
                             callbackPotential: signal.callbackPotential,
@@ -469,6 +482,15 @@ async function main(): Promise<void> {
         windowMs: appConfig.subagent?.pollInterval ?? 5000,
     });
     accumulator.restoreSignalPool();
+    postTaskWindows = new PostTaskWindowManager({
+        windowMs: appConfig.subagent?.postTaskWindowMs,
+        callbackQueue: q5,
+        accumulator,
+        subagentManager,
+        onDirectTaskEnqueued: (task) => {
+            globalState.recordDispatchedSubagentTask(buildDispatchedRecordForPostTaskDirect(task));
+        },
+    });
 
     log.info("Subagent 组件初始化完成", {
         restoredSignalPoolSize: accumulator.getSignalPoolSize(),
@@ -524,6 +546,7 @@ async function main(): Promise<void> {
                 };
                 agentSub.recordingPipeline.onMessage(agentMsg);
             }
+            postTaskWindows.recordMessage(compositeChatId, event);
 
             return; // agent 消息不走后续 Observer/Accumulator 逻辑
         }
@@ -597,20 +620,41 @@ async function main(): Promise<void> {
         const mentionKeywords = (loadConfig().notification?.mentionKeywords ?? []).map(k => k.toLowerCase()).filter(k => k.length > 0);
         const messageText = String(event.text ?? event.message ?? "").toLowerCase();
         const hasNameMention = mentionKeywords.length > 0 && mentionKeywords.some(kw => messageText.includes(kw));
+        const isReplyToAgentInPostTaskWindow = postTaskWindows.isReplyToWindowSentMessage(chatId, event);
+        const directReason = isDM
+            ? "DM"
+            : isMention
+                ? "@mention"
+                : hasNameMention
+                    ? "name-mention"
+                    : isReplyToAgentInPostTaskWindow
+                        ? "reply-to-agent"
+                        : "";
+        const isDirectAttention = directReason.length > 0;
+        const inPostTaskWindow = postTaskWindows.hasActiveWindow(chatId);
 
-        if (isDM || isMention || hasNameMention) {
-            const entry = sub.buildQueueEntry("DIRECT_ADDRESS");
-            accumulator.ingest(0, createDirectAddressItem(chatId, {
-                reason: isDM ? "DM" : isMention ? "@mention" : "name-mention",
-                queueEntry: entry,
-                event: {
-                    messageId: event.messageId ?? event.id,
-                    userId: event.userId ?? event.senderId,
-                },
-            }));
+        postTaskWindows.recordMessage(chatId, event, {
+            isDirectAttention,
+            directReason: directReason || undefined,
+        });
+
+        if (isDirectAttention) {
+            const handledByPostTaskWindow = postTaskWindows.tryForwardDirectMessage(chatId, event, directReason);
+            if (!handledByPostTaskWindow) {
+                const entry = sub.buildQueueEntry("DIRECT_ADDRESS");
+                accumulator.ingest(0, createDirectAddressItem(chatId, {
+                    reason: directReason,
+                    queueEntry: entry,
+                    event: {
+                        messageId: event.messageId ?? event.id,
+                        userId: event.userId ?? event.senderId,
+                    },
+                }));
+            }
             log.info("即时 → Layer0", {
                 chatId,
-                reason: isDM ? "DM" : isMention ? "@mention" : "文本提及",
+                reason: directReason,
+                handledByPostTaskWindow,
                 engagement: sub.observer.getEngagementScore(),
             });
 
@@ -642,7 +686,7 @@ async function main(): Promise<void> {
 
         // 层 2 消息前送：如果该 chatId 的 CodeActExecutor 正在执行，推入 pending buffer
         const executor = sub.codeActExecutor as import("./subagent/code-act-executor.js").CodeActExecutor | null;
-        if (executor?.isProcessing()) {
+        if (executor?.isProcessing() && !inPostTaskWindow) {
             executor.pushPendingMessage({
                 id: String(event.messageId ?? event.id ?? `msg_${Date.now()}`),
                 sender: String(event.displayName ?? event.senderName ?? event.userName ?? "?"),
@@ -822,8 +866,7 @@ async function main(): Promise<void> {
                 : undefined;
 
             realExecutor.setCallbackHandler((cb) => {
-                q5.enqueue(cb);
-                accumulator.unblock(cb.chatId);
+                postTaskWindows.handleCallback(cb);
 
                 setTimeout(() => {
                     try {
@@ -1217,6 +1260,8 @@ async function main(): Promise<void> {
                 total: flushResults.length,
             });
         }
+
+        postTaskWindows.dispose();
 
         // 释放 subagent（含 pipeline 计时器）
         subagentManager.dispose();

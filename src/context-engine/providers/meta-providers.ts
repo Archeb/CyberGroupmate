@@ -369,6 +369,27 @@ export const metaCallbacksProvider: SectionProvider<MetaCallbacksData> = {
                 cb.sentMessages?.length
                     ? `  sentMessages=${cb.sentMessages.map((msg) => `"${msg.text}"`).join(" / ")}`
                     : "",
+                cb.postTaskMessages?.length
+                    ? [
+                        `  postTaskWindow=${cb.postTaskWindow?.durationMs ?? ""}ms, messages=${cb.postTaskMessages.length}, direct=${cb.postTaskWindow?.directMessageCount ?? 0}`,
+                        ...cb.postTaskMessages.map((msg) =>
+                            `    - [${msg.timestamp}] ${msg.sender}${msg.isDirectAttention ? ` (${msg.directReason ?? "direct"})` : ""}: ${msg.text}${msg.replyToMessageId ? ` (replyTo=${msg.replyToMessageId})` : ""}`
+                        ),
+                    ].join("\n")
+                    : "",
+                cb.postTaskFollowUpCallbacks?.length
+                    ? [
+                        `  postTaskFollowUps=${cb.postTaskFollowUpCallbacks.length}`,
+                        ...cb.postTaskFollowUpCallbacks.map((follow) => [
+                            `    - taskId=${follow.taskId}, status=${follow.status}, durationMs=${follow.durationMs}`,
+                            follow.sentMessages?.length
+                                ? `      sentMessages=${follow.sentMessages.map((msg) => `"${msg.text}"`).join(" / ")}`
+                                : "",
+                            follow.error ? `      error=${follow.error}` : "",
+                            follow.summary ? `      thinkingTranscript=${follow.summary}` : "",
+                        ].filter(Boolean).join("\n")),
+                    ].join("\n")
+                    : "",
                 cb.error ? `  error=${cb.error}` : "",
                 typeof cb.durationMs === "number" ? `  durationMs=${cb.durationMs}` : "",
                 cb.summary ? `  thinkingTranscript=${cb.summary}` : "",

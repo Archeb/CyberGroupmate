@@ -357,6 +357,8 @@ metrics:
 # subagent:
 #   # 是否限制 Sandbox 只能通过平台 adapter 向当前绑定的 chatId 执行写操作 (false)
 #   restrict_adapter_writes_to_bound_chat: false
+#   # Subagent 发言后的发酵窗口。窗口内 L0 追问交给 subagent，结束后 callback 回 Meta (120000)
+#   post_task_window_ms: 120000
 #   # 常驻模块清单：始终全量注入子代理运行时的底层基础模块和指定扩展。
 #   # 平台 adapter (例如 telegram/discord) 会在实际生成时自动混入此列表，不需要在此处填写。
 #   # 默认情况下包含以下必备的核心模块，如需精简可自行删改。

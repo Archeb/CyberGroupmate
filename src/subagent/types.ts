@@ -230,6 +230,44 @@ export interface SubagentCallback {
     // ─── subagent.md §2.2 C1/C2 补齐字段 ───
     /** 原始任务方向（Meta 派发时的 contentDirection） */
     contentDirection?: string;
+    /** Post-task 发酵窗口内收集到的群聊消息 */
+    postTaskMessages?: PostTaskReactionMessage[];
+    /** Post-task 窗口内由 L0 直接追问触发的补充执行结果 */
+    postTaskFollowUpCallbacks?: SubagentPostTaskFollowUpCallback[];
+    /** Post-task 窗口元信息 */
+    postTaskWindow?: {
+        startedAt: string;
+        endedAt: string;
+        durationMs: number;
+        messageCount: number;
+        directMessageCount: number;
+        followUpCallbackCount: number;
+    };
+}
+
+/** Post-task 发酵窗口内记录的群聊消息 */
+export interface PostTaskReactionMessage {
+    messageId: string;
+    sender: string;
+    text: string;
+    timestamp: string;
+    isDirectAttention?: boolean;
+    directReason?: string;
+    replyToMessageId?: string;
+    mediaType?: string;
+    mediaInfo?: string;
+}
+
+/** Post-task 窗口内补充执行的 callback 摘要 */
+export interface SubagentPostTaskFollowUpCallback {
+    taskId: string;
+    status: SubagentCallback["status"];
+    summary: string;
+    sentMessages?: SubagentCallback["sentMessages"];
+    error?: string;
+    durationMs: number;
+    createdAt: string;
+    contentDirection?: string;
 }
 
 /** Meta 派发给 Subagent 的任务持久化记录 */

@@ -730,7 +730,7 @@ export class CodeActExecutor {
                 .map((t: any) => t.content)
                 .join("\n") || undefined,
             sentMessages: sentCollector.allSent.length > 0
-                ? sentCollector.allSent.map(m => ({ text: m.text, timestamp: m.timestamp }))
+                ? sentCollector.allSent.map(m => ({ messageId: m.messageId, text: m.text, timestamp: m.timestamp }))
                 : undefined,
             tokensUsed: (sessionResult as any).tokensUsed ?? undefined,
             error: sessionResult.error,
