@@ -488,19 +488,19 @@ export function createApiRouter(deps: DashboardDeps, bridge: EventBridge): Route
     });
 
     router.post("/queue/enqueue", (req, res) => {
-        const { chatId, priority } = req.body;
+        const { chatId, priority, note } = req.body;
         if (!chatId) { res.status(400).json({ error: "chatId required" }); return; }
         const sub = deps.subagentManager.get(chatId);
         if (!sub) { res.status(404).json({ error: "chat not found" }); return; }
         deps.accumulator.ingest(0, {
             chatId,
             source: "DIRECT_ADDRESS",
-            payload: { reason: "dashboard-manual" },
+            payload: { reason: typeof note === "string" && note.trim() ? `dashboard-manual: ${note.trim()}` : "dashboard-manual" },
             enqueuedAt: Date.now(),
             pressure: Number(priority) || 0,
         });
         bridge.broadcast({ type: "queue:update", timestamp: new Date().toISOString(), data: deps.accumulator.getSnapshot() });
-        log.info("手动注入 accumulator", { chatId, priority });
+        log.info("手动注入 accumulator", { chatId, priority, note: typeof note === "string" ? note.slice(0, 200) : undefined });
         res.json({ ok: true });
     });
 
