@@ -15,6 +15,8 @@ import { createLogger } from "../core/logger.js";
 import type { MediaDownloader } from "../core/media-downloader.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
 
 const log = createLogger("telegram-adapter");
 
@@ -113,6 +115,7 @@ interface TelegramClientLike {
     leaveChat?(chatId: unknown): Promise<unknown>;
     downloadAsBuffer?(location: unknown): Promise<Uint8Array>;
     getMessages?(chatId: unknown, messageIds: number[]): Promise<unknown[]>;
+    _normalizeInputFile?(input: unknown, params: { fileName?: string; fileMime?: string; fileSize?: number }): Promise<unknown>;
     // ─── 扩展方法 ───
     getFullUser?(userId: unknown): Promise<unknown>;
     getFullChat?(chatId: unknown): Promise<unknown>;
@@ -205,6 +208,10 @@ type NormalizedIncomingMessage = {
     mentionsAgent?: boolean;
     mediaInfo?: MediaInfo;
 };
+
+type PreparedTelegramSticker =
+    | { kind: "static"; path: string; buffer: Buffer; fileName: string; mimeType: "image/webp" }
+    | { kind: "video"; path: string; fileName: string; mimeType: "video/webm" };
 
 export class TelegramAdapter implements PlatformAdapter {
     readonly platform = "telegram";
@@ -607,34 +614,24 @@ export class TelegramAdapter implements PlatformAdapter {
                 const stickerPath = this.mediaDownloader.getExistingPath(uniqueFileId);
                 if (!stickerPath) throw new Error(`sendSticker: 未找到贴纸文件 uniqueFileId=${uniqueFileId}`);
                 if (!fs.existsSync(stickerPath)) throw new Error(`sendSticker: 文件不存在 ${stickerPath}`);
-                if (stickerPath.toLowerCase().endsWith(".webm")) {
-                    throw new Error("sendSticker: 禁止发送 webm 格式贴纸 (通常为视频贴纸)");
-                }
-                let stickerBuffer = fs.readFileSync(stickerPath);
-                // 非 webp/png 格式的贴纸（如来自 QQ 的 jpg）需要转换为 PNG
-                // Telegram sticker 要求: webp/png, ≤512x512, ≤512KB
-                const lowerPath = stickerPath.toLowerCase();
-                if (!lowerPath.endsWith(".webp") && !lowerPath.endsWith(".png")) {
-                    try {
-                        const { ensureSupportedFormat } = await import("../core/vision-processor.js");
-                        const ext = path.extname(stickerPath).toLowerCase();
-                        const mimeMap: Record<string, string> = {
-                            ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
-                            ".gif": "image/gif", ".bmp": "image/bmp",
-                            ".tiff": "image/tiff", ".tif": "image/tiff",
-                            ".avif": "image/avif",
-                        };
-                        const mime = mimeMap[ext] ?? "image/jpeg";
-                        const { buffer: converted } = await ensureSupportedFormat(stickerBuffer, mime);
-                        stickerBuffer = Buffer.from(converted);
-                    } catch (err) {
-                        log.warn("sendSticker: 格式转换失败，使用原始文件", { error: String(err) });
-                    }
-                }
+                const preparedSticker = this.prepareOutgoingStickerForTelegram(stickerPath);
                 const stickerOpts = args[2] ?? undefined;
+                if (preparedSticker.kind === "video") {
+                    const videoStickerMedia = await this.buildTelegramVideoStickerMedia(preparedSticker);
+                    return this.handleCall("telegram.sendMedia", [
+                        stickerTarget,
+                        videoStickerMedia,
+                        stickerOpts,
+                    ]);
+                }
                 return this.handleCall("telegram.sendMedia", [
                     stickerTarget,
-                    { type: "sticker", file: stickerBuffer },
+                    {
+                        type: "sticker",
+                        file: preparedSticker.buffer,
+                        fileName: preparedSticker.fileName,
+                        fileMime: preparedSticker.mimeType,
+                    },
                     stickerOpts,
                 ]);
             }
@@ -865,6 +862,251 @@ export class TelegramAdapter implements PlatformAdapter {
 
         if (this.config.mode === "userbot" && !this.config.phone) {
             throw new Error("telegram.phone is required in userbot mode");
+        }
+    }
+
+    private prepareOutgoingStickerForTelegram(sourcePath: string): PreparedTelegramSticker {
+        const lowerPath = sourcePath.toLowerCase();
+        if (lowerPath.endsWith(".tgs")) {
+            throw new Error(`sendSticker: 暂不支持发送 TGS 动态贴纸 (${path.basename(sourcePath)})`);
+        }
+        if (lowerPath.endsWith(".webm")) {
+            return {
+                kind: "video",
+                path: sourcePath,
+                fileName: this.ensureFileNameExtension(path.basename(sourcePath), ".webm"),
+                mimeType: "video/webm",
+            };
+        }
+        if (lowerPath.endsWith(".webp")) {
+            return {
+                kind: "static",
+                path: sourcePath,
+                buffer: fs.readFileSync(sourcePath),
+                fileName: this.ensureFileNameExtension(path.basename(sourcePath), ".webp"),
+                mimeType: "image/webp",
+            };
+        }
+
+        if (this.isAnimatedStickerSource(sourcePath)) {
+            try {
+                const webmPath = this.convertStickerAnimationToTelegramWebm(sourcePath);
+                return {
+                    kind: "video",
+                    path: webmPath,
+                    fileName: path.basename(webmPath),
+                    mimeType: "video/webm",
+                };
+            } catch (err) {
+                log.warn("sendSticker: GIF 转 webm 失败，降级为静态 webp", {
+                    sourcePath,
+                    error: String(err).slice(0, 200),
+                });
+            }
+        }
+
+        const webpPath = this.convertStickerImageToTelegramWebp(sourcePath);
+        return {
+            kind: "static",
+            path: webpPath,
+            buffer: fs.readFileSync(webpPath),
+            fileName: path.basename(webpPath),
+            mimeType: "image/webp",
+        };
+    }
+
+    private convertStickerImageToTelegramWebp(sourcePath: string): string {
+        const outPath = this.outgoingTelegramStickerPath(sourcePath, "static-webp-v1", ".webp");
+        if (this.hasUsableFile(outPath)) return outPath;
+
+        const attempts = [
+            { size: 512, quality: 90 },
+            { size: 512, quality: 80 },
+            { size: 384, quality: 80 },
+            { size: 320, quality: 75 },
+        ];
+        let lastError: unknown;
+        for (const attempt of attempts) {
+            try {
+                execFileSync("ffmpeg", [
+                    "-hide_banner", "-loglevel", "error",
+                    "-y",
+                    "-i", sourcePath,
+                    "-vf", `scale=${attempt.size}:${attempt.size}:force_original_aspect_ratio=decrease:flags=lanczos,format=rgba`,
+                    "-frames:v", "1",
+                    "-an",
+                    "-c:v", "libwebp",
+                    "-quality", String(attempt.quality),
+                    "-compression_level", "6",
+                    outPath,
+                ], {
+                    timeout: 15000,
+                    maxBuffer: 20 * 1024 * 1024,
+                });
+                if (this.hasUsableFile(outPath)) {
+                    if (fs.statSync(outPath).size <= 512 * 1024 || attempt === attempts.at(-1)) {
+                        return outPath;
+                    }
+                }
+            } catch (err) {
+                lastError = err;
+            }
+        }
+        throw new Error(`sendSticker: 贴纸转 WebP 失败: ${String(lastError ?? "unknown error").slice(0, 200)}`);
+    }
+
+    private convertStickerAnimationToTelegramWebm(sourcePath: string): string {
+        const outPath = this.outgoingTelegramStickerPath(sourcePath, "animated-webm-v1", ".webm");
+        if (this.hasUsableFile(outPath)) return outPath;
+
+        const attempts = [
+            { size: 512, fps: 30, crf: 34 },
+            { size: 384, fps: 24, crf: 40 },
+            { size: 320, fps: 20, crf: 46 },
+        ];
+        let lastError: unknown;
+        for (const attempt of attempts) {
+            try {
+                const filter = [
+                    `fps=${attempt.fps}`,
+                    `scale=${attempt.size}:${attempt.size}:force_original_aspect_ratio=decrease:flags=lanczos`,
+                    "scale=max(2\\,trunc(iw/2)*2):max(2\\,trunc(ih/2)*2)",
+                    "format=yuva420p",
+                ].join(",");
+                execFileSync("ffmpeg", [
+                    "-hide_banner", "-loglevel", "error",
+                    "-y",
+                    "-t", "3",
+                    "-i", sourcePath,
+                    "-an",
+                    "-vf", filter,
+                    "-c:v", "libvpx-vp9",
+                    "-pix_fmt", "yuva420p",
+                    "-b:v", "0",
+                    "-crf", String(attempt.crf),
+                    "-deadline", "good",
+                    "-cpu-used", "4",
+                    outPath,
+                ], {
+                    timeout: 20000,
+                    maxBuffer: 20 * 1024 * 1024,
+                });
+                if (this.hasUsableFile(outPath)) {
+                    if (fs.statSync(outPath).size <= 512 * 1024 || attempt === attempts.at(-1)) {
+                        return outPath;
+                    }
+                }
+            } catch (err) {
+                lastError = err;
+            }
+        }
+        throw new Error(`sendSticker: GIF 贴纸转 WebM 失败: ${String(lastError ?? "unknown error").slice(0, 200)}`);
+    }
+
+    private async buildTelegramVideoStickerMedia(sticker: Extract<PreparedTelegramSticker, { kind: "video" }>): Promise<Record<string, unknown>> {
+        const normalizeInputFile = this.client?._normalizeInputFile?.bind(this.client);
+        if (typeof normalizeInputFile !== "function") {
+            throw new Error("sendSticker: 当前 Telegram client 不支持上传 video sticker");
+        }
+
+        const stat = fs.statSync(sticker.path);
+        const inputFile = await normalizeInputFile(sticker.path, {
+            fileName: sticker.fileName,
+            fileMime: sticker.mimeType,
+            fileSize: stat.size,
+        });
+        const metadata = this.probeVideoMetadata(sticker.path);
+        return {
+            _: "inputMediaUploadedDocument",
+            file: inputFile,
+            mimeType: sticker.mimeType,
+            nosoundVideo: true,
+            attributes: [
+                { _: "documentAttributeFilename", fileName: sticker.fileName },
+                {
+                    _: "documentAttributeSticker",
+                    stickerset: { _: "inputStickerSetEmpty" },
+                    alt: "",
+                },
+                {
+                    _: "documentAttributeVideo",
+                    duration: metadata.duration ?? 0,
+                    w: metadata.width ?? 512,
+                    h: metadata.height ?? 512,
+                    supportsStreaming: true,
+                },
+            ],
+        };
+    }
+
+    private outgoingTelegramStickerPath(sourcePath: string, variant: string, ext: ".webp" | ".webm"): string {
+        const stat = fs.statSync(sourcePath);
+        const hash = createHash("sha1")
+            .update(`${sourcePath}:${stat.size}:${stat.mtimeMs}:${variant}`)
+            .digest("hex")
+            .slice(0, 16);
+        const outDir = path.resolve(process.cwd(), "workspace", "Downloads", "other", "tg-converted");
+        fs.mkdirSync(outDir, { recursive: true });
+        const rawBase = path.basename(sourcePath, path.extname(sourcePath));
+        const safeBase = rawBase.replace(/[^a-zA-Z0-9._-]+/g, "_").slice(0, 80) || "sticker";
+        return path.join(outDir, `${safeBase}_${hash}${ext}`);
+    }
+
+    private isAnimatedStickerSource(sourcePath: string): boolean {
+        try {
+            const raw = execFileSync("ffprobe", [
+                "-v", "error",
+                "-select_streams", "v:0",
+                "-count_frames",
+                "-show_entries", "stream=nb_read_frames",
+                "-of", "default=nokey=1:noprint_wrappers=1",
+                sourcePath,
+            ], {
+                timeout: 5000,
+                maxBuffer: 1024 * 1024,
+            }).toString().trim();
+            const frames = Number(raw.split(/\s+/)[0]);
+            return Number.isFinite(frames) ? frames > 1 : sourcePath.toLowerCase().endsWith(".gif");
+        } catch {
+            return sourcePath.toLowerCase().endsWith(".gif");
+        }
+    }
+
+    private probeVideoMetadata(filePath: string): { width?: number; height?: number; duration?: number } {
+        try {
+            const raw = execFileSync("ffprobe", [
+                "-v", "error",
+                "-select_streams", "v:0",
+                "-show_entries", "stream=width,height,duration",
+                "-of", "json",
+                filePath,
+            ], {
+                timeout: 5000,
+                maxBuffer: 1024 * 1024,
+            }).toString();
+            const parsed = JSON.parse(raw) as { streams?: Array<{ width?: number; height?: number; duration?: string | number }> };
+            const stream = parsed.streams?.[0];
+            if (!stream) return {};
+            const duration = Number(stream.duration);
+            return {
+                width: typeof stream.width === "number" ? stream.width : undefined,
+                height: typeof stream.height === "number" ? stream.height : undefined,
+                duration: Number.isFinite(duration) ? Math.ceil(duration) : undefined,
+            };
+        } catch {
+            return {};
+        }
+    }
+
+    private ensureFileNameExtension(fileName: string, ext: ".webp" | ".webm"): string {
+        return fileName.toLowerCase().endsWith(ext) ? fileName : `${fileName}${ext}`;
+    }
+
+    private hasUsableFile(filePath: string): boolean {
+        try {
+            return fs.existsSync(filePath) && fs.statSync(filePath).isFile() && fs.statSync(filePath).size > 0;
+        } catch {
+            return false;
         }
     }
 
