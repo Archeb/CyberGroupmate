@@ -1820,6 +1820,32 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
         return result;
     }
 
+    /**
+     * 统计最近 N 天每个 chat 与 agent 的互动次数（DIRECT_ADDRESS 逻辑）
+     * 互动类型: direct_message, agent_mentioned, agent_replied
+     */
+    countInteractionsPerChat(days: number = 7): Map<string, { interactionCount: number; activeDays: number; lastInteractionAt: string | null }> {
+        const since = new Date(Date.now() - days * 86400_000).toISOString();
+        const rows = this.db.prepare(`
+            SELECT chat_id, COUNT(*) as cnt, COUNT(DISTINCT DATE(created_at)) as active_days, MAX(created_at) as last_at
+            FROM interactions
+            WHERE created_at >= ?
+              AND chat_id <> ''
+              AND type IN ('direct_message', 'agent_mentioned', 'agent_replied')
+            GROUP BY chat_id
+        `).all(since) as { chat_id: string; cnt: number; active_days: number; last_at: string }[];
+
+        const result = new Map<string, { interactionCount: number; activeDays: number; lastInteractionAt: string | null }>();
+        for (const r of rows) {
+            result.set(r.chat_id, {
+                interactionCount: r.cnt,
+                activeDays: r.active_days,
+                lastInteractionAt: r.last_at ?? null,
+            });
+        }
+        return result;
+    }
+
     getProfilesForChat(chatId: string): PersonGroupProfile[] {
         const rows = this.db.prepare(
             "SELECT * FROM person_group_profiles WHERE chat_id = ? ORDER BY message_count DESC"

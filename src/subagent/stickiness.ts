@@ -20,7 +20,7 @@ import type {
     SubagentConfig,
 } from "./types.js";
 import { DEFAULT_SUBAGENT_CONFIG } from "./types.js";
-import type { IMemoryStoreV2, GroupModel } from "../memory-v2/types.js";
+import type { GroupModel } from "../memory-v2/types.js";
 import { createLogger } from "../core/logger.js";
 
 const log = createLogger("stickiness");
@@ -32,14 +32,12 @@ export interface StickinessConfig {
         priorityMultiplier: number;
         depthCyclePeriod: number;
     }>;
-    /** 升级阈值：日均消息数 */
-    upgradeThresholds: {
-        /** STRANGER → ACQUAINTANCE */
-        strangerToAcquaintance: number;
-        /** ACQUAINTANCE → FAMILIAR */
-        acquaintanceToFamiliar: number;
-        /** FAMILIAR → CORE */
-        familiarToCore: number;
+    /** 基于近 7 天 agent 互动量排名的分层阈值 */
+    rankingThresholds: {
+        /** 前 15% */
+        coreTopRatio: number;
+        /** 前 50%（不含 CORE 部分） */
+        familiarTopRatio: number;
     };
     /** 降级阈值：连续无交互天数 */
     downgradeThresholds: {
@@ -54,10 +52,9 @@ export interface StickinessConfig {
 
 const DEFAULT_STICKINESS_CONFIG: StickinessConfig = {
     defaults: DEFAULT_SUBAGENT_CONFIG.stickiness.defaults,
-    upgradeThresholds: {
-        strangerToAcquaintance: 5,
-        acquaintanceToFamiliar: 20,
-        familiarToCore: 50,
+    rankingThresholds: {
+        coreTopRatio: 0.15,
+        familiarTopRatio: 0.5,
     },
     downgradeThresholds: {
         coreToFamiliar: 14,
@@ -65,6 +62,11 @@ const DEFAULT_STICKINESS_CONFIG: StickinessConfig = {
         acquaintanceToStranger: 60,
     },
 };
+
+export interface StickinessInteractionActivity {
+    chatId: string;
+    interactionCount: number;
+}
 
 /** 各级别预设值（不可改） */
 const LEVEL_PRESETS: Record<StickinessLevel, {
@@ -105,32 +107,30 @@ export function createStickiness(
 }
 
 /**
- * 基于 GroupModel 数据评估亲密度级别
+ * 基于近 7 天 agent 互动量在活跃群中的相对排名评估亲密度级别
  *
  * @param groupModel - 群组画像
  * @param daysSinceLastInteraction - 距上次交互的天数
  * @param currentLevel - 当前级别（用于升降级判断）
+ * @param recentInteractionActivity - 有近 7 天 agent 互动记录的群及互动数
  */
 export function evaluateStickiness(
     groupModel: GroupModel | null,
     daysSinceLastInteraction: number,
     currentLevel: StickinessLevel,
+    recentInteractionActivity: StickinessInteractionActivity[] = [],
     config?: Partial<StickinessConfig>,
 ): StickinessLevel {
     const cfg = { ...DEFAULT_STICKINESS_CONFIG, ...config };
 
-    // 无数据 → STRANGER
     if (!groupModel) return "STRANGER";
 
-    const avgMsgs = groupModel.avgMessagesPerDay ?? 0;
+    const rankedLevel = rankByRecentInteraction(groupModel.chatId, recentInteractionActivity, cfg);
+    if (rankedLevel) return rankedLevel;
 
-    // 检查降级
+    // 没有近期 agent 互动记录时，才保持当前等级或按无互动天数降级。
     const downgradeResult = checkDowngrade(currentLevel, daysSinceLastInteraction, cfg);
     if (downgradeResult) return downgradeResult;
-
-    // 检查升级
-    const upgradeResult = checkUpgrade(currentLevel, avgMsgs, cfg);
-    if (upgradeResult) return upgradeResult;
 
     return currentLevel;
 }
@@ -171,21 +171,25 @@ function checkDowngrade(
     return null;
 }
 
-function checkUpgrade(
-    level: StickinessLevel,
-    avgMsgsPerDay: number,
+function rankByRecentInteraction(
+    chatId: string,
+    activity: StickinessInteractionActivity[],
     config: StickinessConfig,
 ): StickinessLevel | null {
-    switch (level) {
-        case "STRANGER":
-            if (avgMsgsPerDay >= config.upgradeThresholds.strangerToAcquaintance) return "ACQUAINTANCE";
-            break;
-        case "ACQUAINTANCE":
-            if (avgMsgsPerDay >= config.upgradeThresholds.acquaintanceToFamiliar) return "FAMILIAR";
-            break;
-        case "FAMILIAR":
-            if (avgMsgsPerDay >= config.upgradeThresholds.familiarToCore) return "CORE";
-            break;
-    }
-    return null;
+    const active = activity
+        .filter(item => item.interactionCount > 0)
+        .sort((a, b) => b.interactionCount - a.interactionCount || a.chatId.localeCompare(b.chatId));
+    if (active.length === 0) return null;
+
+    const target = active.find(item => item.chatId === chatId);
+    if (!target) return null;
+
+    const coreCutoffIndex = Math.max(0, Math.ceil(active.length * config.rankingThresholds.coreTopRatio) - 1);
+    const familiarCutoffIndex = Math.max(0, Math.ceil(active.length * config.rankingThresholds.familiarTopRatio) - 1);
+    const coreCutoff = active[coreCutoffIndex]?.interactionCount ?? Infinity;
+    const familiarCutoff = active[familiarCutoffIndex]?.interactionCount ?? Infinity;
+
+    if (target.interactionCount >= coreCutoff) return "CORE";
+    if (target.interactionCount >= familiarCutoff) return "FAMILIAR";
+    return "ACQUAINTANCE";
 }

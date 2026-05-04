@@ -507,6 +507,9 @@ export interface IMemoryStoreV2 {
     /** 写入交互记录到 interactions 表 */
     storeInteraction(episode: Omit<InteractionEpisode, "id">): string;
 
+    /** 按 chat 聚合近期 DIRECT_ADDRESS 类互动次数 */
+    countInteractionsPerChat(days?: number): Map<string, { interactionCount: number; activeDays: number; lastInteractionAt: string | null }>;
+
     /** 向量搜索 topics（纯 JS 余弦相似度） */
     vectorSearchTopics(queryEmbedding: Float32Array, limit?: number, chatId?: string): Array<TopicNode & { similarity: number }>;
 

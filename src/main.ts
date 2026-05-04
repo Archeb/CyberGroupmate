@@ -59,6 +59,39 @@ import { buildMetaApiContext } from "./meta-sandbox/meta-api/index.js";
 const log = createLogger("main");
 
 let _metricsStopFn: (() => void) | null = null;
+
+interface StickinessInteractionStats {
+    chatId: string;
+    interactionCount: number;
+    lastInteractionAt: string | null;
+}
+
+function getStickinessInteractionStats(memory: MemoryStoreV2, days: number): StickinessInteractionStats[] {
+    const grouped = new Map<string, StickinessInteractionStats>();
+    for (const [chatId, stats] of memory.countInteractionsPerChat(days)) {
+        const groupKey = getGroupModelKey(chatId);
+        const current = grouped.get(groupKey);
+        if (!current) {
+            grouped.set(groupKey, {
+                chatId: groupKey,
+                interactionCount: stats.interactionCount,
+                lastInteractionAt: stats.lastInteractionAt,
+            });
+            continue;
+        }
+        current.interactionCount += stats.interactionCount;
+        if (stats.lastInteractionAt && (!current.lastInteractionAt || stats.lastInteractionAt > current.lastInteractionAt)) {
+            current.lastInteractionAt = stats.lastInteractionAt;
+        }
+    }
+    return [...grouped.values()];
+}
+
+function daysSinceInteraction(chatId: string, stats: StickinessInteractionStats[]): number {
+    const lastInteractionAt = stats.find(item => item.chatId === chatId)?.lastInteractionAt;
+    if (!lastInteractionAt) return Number.POSITIVE_INFINITY;
+    return (Date.now() - new Date(lastInteractionAt).getTime()) / 86400_000;
+}
 let _gracefulShutdown: ((signal: string) => Promise<void>) | null = null;
 let _shutdownStarted = false;
 
@@ -456,13 +489,21 @@ async function main(): Promise<void> {
         memory,  // 用于启动时恢复 TopicRegistry
         sessionsDir: SESSIONS_DIR,
 
-        // Stickiness 恢复：从 GroupModel 查询 avgMessagesPerDay 推断级别（architecture_v2.md §2.2）
+        // Stickiness 恢复：按近 7 天 agent 互动量在活跃群中的排名推断级别
         stickinessProvider: (chatId: string) => {
-            const gm = memory.getGroupModel(getGroupModelKey(chatId));
+            const groupKey = getGroupModelKey(chatId);
+            const gm = memory.getGroupModel(groupKey);
             if (!gm) return undefined;
-            const level = evaluateStickiness(gm, 0, "STRANGER");
+            const recentInteractionStats = getStickinessInteractionStats(memory, 7);
+            const lastInteractionStats = getStickinessInteractionStats(memory, 3650);
+            const level = evaluateStickiness(
+                gm,
+                daysSinceInteraction(groupKey, lastInteractionStats),
+                "STRANGER",
+                recentInteractionStats,
+            );
             if (level !== "STRANGER") {
-                log.info("stickinessProvider: 从 GroupModel 恢复", { chatId, level, avgMsgs: gm.avgMessagesPerDay });
+                log.info("stickinessProvider: 从互动排名恢复", { chatId, level });
                 return createStickiness(level);
             }
             return undefined;
@@ -517,16 +558,32 @@ async function main(): Promise<void> {
             // 未来 discord.ts → "discord"），用 ensureCompositeId 补全前缀。
             const platform = String(event.scene ?? "") as import("./core/chat-id.js").PlatformName;
             const compositeChatId = ensureCompositeId(platform, chatId);
+            const messageId = String(event.messageId ?? `agent-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
+            const timestamp = typeof event.timestamp === "string"
+                ? event.timestamp
+                : new Date(typeof event.timestamp === "number" ? event.timestamp : Date.now()).toISOString();
+            const agentName = appConfig.persona?.name ?? "agent";
+            const text = String(event.text ?? "");
             try {
                 memory.storeMessageBatch([{
-                    messageId: String(event.messageId ?? `agent-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`),
+                    messageId,
                     chatId: compositeChatId,
-                    userId: appConfig.persona?.name ?? "agent",
+                    userId: agentName,
                     displayName: appConfig.persona?.name ?? "赛博群友",
-                    text: String(event.text ?? ""),
+                    text,
                     replyToMessageId: event.replyToMessageId ? String(event.replyToMessageId) : undefined,
-                    timestamp: String(event.timestamp ?? new Date().toISOString()),
+                    timestamp,
                 }]);
+                memory.storeInteraction({
+                    chatId: compositeChatId,
+                    userId: agentName,
+                    topicId: null,
+                    type: "agent_replied",
+                    summary: text.slice(0, 200),
+                    sentiment: "neutral",
+                    significance: 0.7,
+                    date: timestamp,
+                });
             } catch (err) {
                 log.warn("Agent 消息落盘失败", { chatId: compositeChatId, error: String(err) });
             }
@@ -536,11 +593,11 @@ async function main(): Promise<void> {
             const agentSub = subagentManager.get(compositeChatId);
             if (agentSub?.recordingPipeline) {
                 const agentMsg: import("./pipeline/types.js").Message = {
-                    id: String(event.messageId ?? `agent-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`),
+                    id: messageId,
                     chatId: compositeChatId,
-                    senderId: appConfig.persona?.name ?? "agent",
+                    senderId: agentName,
                     senderName: appConfig.persona?.name ?? "赛博群友",
-                    text: String(event.text ?? ""),
+                    text,
                     timestamp: Date.now(),
                     replyToMessageId: event.replyToMessageId ? String(event.replyToMessageId) : undefined,
                 };
@@ -776,16 +833,21 @@ async function main(): Promise<void> {
                     // Stickiness 重评估（architecture_v2.md §2.2）
                     const sub = subagentManager.get(chatId);
                     if (sub) {
-                        const gm = memory.getGroupModel(getGroupModelKey(chatId));
+                        const groupKey = getGroupModelKey(chatId);
+                        const gm = memory.getGroupModel(groupKey);
                         if (gm) {
-                            const daysSinceLastInteraction = gm.lastReflectedAt
-                                ? (Date.now() - new Date(gm.lastReflectedAt).getTime()) / 86400_000
-                                : 0;
-                            const newLevel = evaluateStickiness(gm, daysSinceLastInteraction, sub.stickiness.level);
+                            const recentInteractionStats = getStickinessInteractionStats(memory, 7);
+                            const lastInteractionStats = getStickinessInteractionStats(memory, 3650);
+                            const newLevel = evaluateStickiness(
+                                gm,
+                                daysSinceInteraction(groupKey, lastInteractionStats),
+                                sub.stickiness.level,
+                                recentInteractionStats,
+                            );
                             if (newLevel !== sub.stickiness.level) {
                                 const oldLevel = sub.stickiness.level;
                                 sub.stickiness = updateStickiness(sub.stickiness, newLevel);
-                                log.info("Stickiness 变更", { chatId, from: oldLevel, to: newLevel, avgMsgs: gm.avgMessagesPerDay });
+                                log.info("Stickiness 变更", { chatId, from: oldLevel, to: newLevel });
                             }
                         }
                     }
