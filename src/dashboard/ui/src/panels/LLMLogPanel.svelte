@@ -21,6 +21,35 @@
     return `$${cost.toFixed(4)}`;
   }
 
+  // Anthropic reports /v1/messages input_tokens as non-cache input; normalize only display totals.
+  function getUsageDisplay(usage, provider) {
+    if (!usage) return null;
+    const promptTokens = usage.promptTokens ?? 0;
+    const completionTokens = usage.completionTokens ?? 0;
+    const cachedTokens = usage.cachedTokens ?? 0;
+    const cacheCreationTokens = usage.cacheCreationTokens ?? 0;
+    const isAnthropic = provider === "anthropic";
+    const hasInput = usage.promptTokens != null || usage.cachedTokens != null || usage.cacheCreationTokens != null;
+    const inputTokens = hasInput
+      ? (isAnthropic ? promptTokens + cachedTokens + cacheCreationTokens : promptTokens)
+      : undefined;
+    const totalTokens = isAnthropic
+      ? (usage.totalTokens != null
+        ? usage.totalTokens + cachedTokens + cacheCreationTokens
+        : (inputTokens != null || usage.completionTokens != null ? (inputTokens ?? 0) + completionTokens : undefined))
+      : (usage.totalTokens ?? (inputTokens != null || usage.completionTokens != null ? (inputTokens ?? 0) + completionTokens : undefined));
+
+    return {
+      inputTokens,
+      totalTokens,
+      promptTokens,
+      cachedTokens,
+      cacheCreationTokens,
+      completionTokens: usage.completionTokens,
+      showsExpandedAnthropicInput: isAnthropic && (cachedTokens > 0 || cacheCreationTokens > 0),
+    };
+  }
+
   const CALLER_COLORS = {
     "session-runner": "badge-accent",
     "meta-session": "badge-primary",
@@ -423,6 +452,7 @@
           {@const callerBadge = CALLER_COLORS[entry.caller] || "badge-ghost"}
           {@const time = new Date(entry.timestamp).toLocaleTimeString()}
           {@const msgCount = entry.messageSummaries?.length ?? 0}
+          {@const usageDisplay = getUsageDisplay(r?.usage, entry.provider)}
           {@const hasImages = entry.messageSummaries?.some(
             (m) => m.imageCount > 0,
           )}
@@ -450,9 +480,9 @@
               ><i class="fa-solid fa-envelope fa-xs"></i>{msgCount}{hasImages ? " " : ""}{#if hasImages}<i class="fa-solid fa-image fa-xs"></i>{/if}</span
             >
             <span class="llm-row-duration">
-              {#if r}{r.durationMs}ms{r.usage?.totalTokens
-                  ? ` (${r.usage.totalTokens}tok)`
-                  : ""}{@const cost = calculateCallCost(r.usage, entry.model)}{cost > 0 ? ` ${formatCost(cost)}` : ""}{:else}...{/if}
+              {#if r}{r.durationMs}ms{usageDisplay?.totalTokens
+                  ? ` (${usageDisplay.totalTokens}tok)`
+                  : ""}{@const cost = calculateCallCost(r.usage, entry.model, entry.provider)}{cost > 0 ? ` ${formatCost(cost)}` : ""}{:else}...{/if}
             </span>
             {#if hasContextManifest(entry)}
               <span class="llm-row-manifest" title="{entry.contextManifest.engineId} · {entry.contextManifest.sections.length} sections">
@@ -496,6 +526,7 @@
         <div class="text-sm opacity-40 p-4">← 点击左侧条目查看详情</div>
       {:else}
         {@const r = selectedEntry.response}
+        {@const usageDisplay = getUsageDisplay(r?.usage, selectedEntry.provider)}
         {@const callerBadge =
           CALLER_COLORS[selectedEntry.caller] || "badge-ghost"}
         <!-- Header -->
@@ -515,15 +546,16 @@
             {/if}
             {#if r}
               <span class="opacity-60">{r.durationMs}ms</span>
-              {#if r.usage}
+              {#if usageDisplay}
                 <span class="opacity-40">
-                  prompt:{r.usage.promptTokens ?? "?"}
-                  {#if r.usage.cachedTokens}(cached:{r.usage.cachedTokens}){/if}
-                  {#if r.usage.cacheCreationTokens}(创建:{r.usage.cacheCreationTokens}){/if}
-                  / completion:{r.usage.completionTokens ?? "?"}
-                  / total:{r.usage.totalTokens ?? "?"}
+                  input:{usageDisplay.inputTokens ?? "?"}
+                  {#if usageDisplay.showsExpandedAnthropicInput}(non-cache:{usageDisplay.promptTokens}){/if}
+                  {#if usageDisplay.cachedTokens}(cached:{usageDisplay.cachedTokens}){/if}
+                  {#if usageDisplay.cacheCreationTokens}(创建:{usageDisplay.cacheCreationTokens}){/if}
+                  / completion:{usageDisplay.completionTokens ?? "?"}
+                  / total:{usageDisplay.totalTokens ?? "?"}
                 </span>
-                {@const detailCost = calculateCallCost(r.usage, selectedEntry.model)}
+                {@const detailCost = calculateCallCost(r.usage, selectedEntry.model, selectedEntry.provider)}
                 {#if detailCost > 0}
                   <span class="text-warning">{formatCost(detailCost)}</span>
                 {/if}
