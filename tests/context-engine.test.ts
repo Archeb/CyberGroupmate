@@ -43,6 +43,7 @@ import {
     executorFooterProvider,
     type ExecutorResolveContext,
 } from "../src/context-engine/providers/executor-providers.js";
+import { metaAttendHeaderProvider } from "../src/context-engine/providers/meta-providers.js";
 import { existsSync } from "node:fs";
 
 // ═══ Test Helpers ═══
@@ -377,6 +378,20 @@ describe("ContextManifest", () => {
 });
 
 describe("Pipeline Providers", () => {
+    it("metaAttendHeaderProvider 渲染完整 composite chatId", () => {
+        const data = metaAttendHeaderProvider.resolve({
+            chatId: "telegram:2070293084",
+            chatTitle: "Li",
+            chatType: "私聊",
+        });
+        assert.ok(data);
+        const rendered = metaAttendHeaderProvider.render(data);
+
+        assert.match(rendered, /chatId: telegram:2070293084/);
+        assert.match(rendered, /raw: 2070293084/);
+        assert.doesNotMatch(rendered, /onebot:private/);
+    });
+
     it("callbackProvider 渲染包含任务与总结信息", () => {
         const rendered = callbackProvider.render({
             chatId: "telegram:test",

@@ -424,7 +424,7 @@ export const metaAttendHeaderProvider: SectionProvider<MetaAttendHeaderData> = {
         };
     },
     render(data) {
-        return `# 注意力切换: ${data.chatTitle} (${getRawId(data.chatId)}) [${data.chatType}]`;
+        return `# 注意力切换: ${data.chatTitle} (chatId: ${data.chatId}, raw: ${getRawId(data.chatId)}) [${data.chatType}]`;
     },
 };
 
