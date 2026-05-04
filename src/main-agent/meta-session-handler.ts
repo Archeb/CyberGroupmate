@@ -636,7 +636,7 @@ await dispatch.getTask(taskId: string): Promise<{
 } | null>
 await dispatch.listTasks(options?: { chatId?: string, status?: string, limit?: number, offset?: number }): Promise<{ tasks, total, hasMore }>
 \`\`\`
-dispatch 的 chatId 参数必须使用「注意力切换」头部里的完整 composite chatId（例如 \`telegram:2070293084\`），不要只凭 raw id 猜平台，也不要把 Telegram 私聊改写成 \`onebot:private:...\`。
+dispatch 的 chatId 参数要用「注意力切换」头部里的带平台的 composite chatId（如 \`telegram:1234567890\`）
 dispatch 会自动将 context 序列化后注入 Subagent 的任务 prompt。你查到的跨群信息、事实、讨论记录都可以放在 context 里。tracking 会把待跟进项写入 todo，bindingId 为目标 chatId；如果设置 remindAfterMinutes，还会注册一次性唤醒。
 当回复适合用贴纸表达情绪或活跃气氛时，在 taskSpec.suggestedEmojis 填 2-6 个相关 emoji；系统会用这些 emoji 搜索可用贴纸并交给 Subagent 最终决定是否发送。
 当你派发的是提问、跨群转述、等待群友回应或重要回复时，优先在同一次 dispatch.taskToGroup() 里填写 tracking；这样系统会自动保留 taskId、trackingKey、目标 chatId 和 callback，避免另写 todo/remind 时漏掉上下文。
