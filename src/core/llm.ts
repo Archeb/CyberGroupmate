@@ -26,6 +26,7 @@ import { EventEmitter } from "node:events";
 
 // Provider 实现
 import { callOpenAI } from "./llm/openai.js";
+import { callOpenAIResponses } from "./llm/openai-responses.js";
 import { callAnthropic } from "./llm/anthropic.js";
 import { callGoogle } from "./llm/google.js";
 
@@ -417,6 +418,8 @@ async function _callLLMSingleKeyInner(
                 result = await callAnthropic(messages, config, model, temperature, maxTokens, thinkingLevel, prefill, stop, combinedSignal);
             } else if (config.provider === "google") {
                 result = await callGoogle(messages, config, model, temperature, maxTokens, thinkingLevel, prefill, stop, combinedSignal);
+            } else if (config.provider === "openai_responses") {
+                result = await callOpenAIResponses(messages, config, model, temperature, maxTokens, thinkingLevel, prefill, stop, combinedSignal);
             } else {
                 result = await callOpenAI(messages, config, model, temperature, maxTokens, thinkingLevel, prefill, stop, combinedSignal);
             }

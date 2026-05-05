@@ -84,7 +84,7 @@
           <label class="cfg-field"
             ><span class="cfg-label">Provider</span>
             <select class="select select-xs select-bordered w-full" bind:value={p.provider}>
-              <option value="openai">openai (兼容)</option><option value="anthropic">anthropic</option><option value="google">google (Gemini)</option>
+              <option value="openai">openai (兼容)</option><option value="openai_responses">openai (responses)</option><option value="anthropic">anthropic</option><option value="google">google (Gemini)</option>
             </select></label
           >
           <label class="cfg-field"
@@ -145,7 +145,7 @@
             <label class="cfg-field"><span class="cfg-label">Region</span><input type="text" class="input input-xs input-bordered w-full" bind:value={p.vertexRegion} placeholder="global" /></label>
           </div>
         {/if}
-        {#if p.provider === "openai" || p.provider === "anthropic"}
+        {#if p.provider === "openai" || p.provider === "openai_responses" || p.provider === "anthropic"}
           <div class="divider text-xs opacity-50 my-2"><i class="fa-solid fa-plus-circle mr-1"></i>Extra Body & Headers（可选）</div>
           <p class="text-xs opacity-40 mb-2">额外请求体字段和自定义请求头，JSON 对象格式。会被展开合并到对应的 API 请求中。</p>
           <div class="cfg-field"><span class="cfg-label">Extra Body (JSON)</span>

@@ -33,7 +33,7 @@ export interface PoolConfig {
 }
 
 export interface LLMConfig {
-    provider: "anthropic" | "openai" | "google";
+    provider: "anthropic" | "openai" | "openai_responses" | "google";
     baseUrl: string;
     apiKey: string;
     model: string;
@@ -1009,7 +1009,7 @@ function parseLLMProfile(raw: Record<string, unknown>): LLMConfig {
     }
 
     return {
-        provider: (str(raw.provider) as "anthropic" | "openai" | "google") ?? DEFAULT_LLM.provider,
+        provider: (str(raw.provider) as "anthropic" | "openai" | "openai_responses" | "google") ?? DEFAULT_LLM.provider,
         baseUrl: str(raw.base_url) ?? DEFAULT_LLM.baseUrl,
         apiKey: str(raw.api_key) ?? DEFAULT_LLM.apiKey,
         model: str(raw.model) ?? DEFAULT_LLM.model,
