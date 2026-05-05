@@ -35,6 +35,22 @@ describe("createConversationsApi", () => {
                 text: "我这周五白天都在公司。",
                 timestamp: "2026-01-01T08:00:00Z",
             },
+            {
+                messageId: "g1-2",
+                chatId: "g1",
+                userId: "u1",
+                displayName: "Alice",
+                text: "死亡读秒这个功能刚才有人提到。",
+                timestamp: "2026-01-03T10:00:00Z",
+            },
+            {
+                messageId: "g2-3",
+                chatId: "g2",
+                userId: "u2",
+                displayName: "Bob",
+                text: "windowserver 又开始占用很高。",
+                timestamp: "2026-01-03T11:00:00Z",
+            },
         ]);
 
         memory.upsertPersonIdentity("u1", {
@@ -89,13 +105,24 @@ describe("createConversationsApi", () => {
         assert.equal(result.messages[0].chatLabel, "[二号群(g2)]");
     });
 
+    it("splits message keyword terms and searches them with OR semantics", async () => {
+        const api = createConversationsApi(memory);
+        const result = await api.query({
+            chatIds: ["g1", "g2"],
+            keyword: "死亡读秒 windowserver",
+            limit: 10,
+        });
+
+        assert.deepEqual(result.messages.map((row) => row.messageId), ["g2-3", "g1-2"]);
+    });
+
     it("resolves user aliases before searching message bodies", async () => {
         const api = createConversationsApi(memory);
         const result = await api.query({ user: "Soha", limit: 10 });
 
         assert.deepEqual(result.resolvedUsers.map((user) => user.userId), ["u2"]);
-        assert.equal(result.messages.length, 2);
-        assert.deepEqual(result.messages.map((row) => row.messageId), ["g2-1", "g2-2"]);
+        assert.equal(result.messages.length, 3);
+        assert.deepEqual(result.messages.map((row) => row.messageId), ["g2-3", "g2-1", "g2-2"]);
         assert.ok(result.messages.every((row) => row.userId === "u2"));
         assert.equal(result.messages[0].chatLabel, "[二号群(g2)]");
     });
@@ -104,9 +131,9 @@ describe("createConversationsApi", () => {
         const api = createConversationsApi(memory);
         const result = await api.query({ chatIds: ["g2"], userId: "u2", limit: 5 });
 
-        assert.equal(result.messages.length, 2);
+        assert.equal(result.messages.length, 3);
         assert.equal(result.topics.length, 1);
-        assert.equal(result.messages[0].messageId, "g2-1");
+        assert.equal(result.messages[0].messageId, "g2-3");
         assert.equal(result.topics[0].topicId.length > 0, true);
         assert.equal(result.topics[0].label, "团建后技术闲聊");
     });

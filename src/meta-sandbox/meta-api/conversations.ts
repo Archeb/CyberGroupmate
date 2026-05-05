@@ -149,10 +149,10 @@ function queryMessages(
     const { filters, limit, chatIds, keyword, userIds, fallbackName } = input;
 
     if (userIds.length > 0) {
-        const rows = queryMessagesWith(memory, {
+        const rows = queryMessagesByKeyword(memory, {
             chatIds,
             userIds,
-            textLike: keyword,
+            keyword,
             after: filters.after,
             before: filters.before,
             limit,
@@ -177,9 +177,9 @@ function queryMessages(
     }
 
     if (keyword) {
-        return queryMessagesWith(memory, {
+        return queryMessagesByKeyword(memory, {
             chatIds,
-            textLike: keyword,
+            keyword,
             after: filters.after,
             before: filters.before,
             limit,
@@ -221,6 +221,46 @@ function queryMessagesWith(
     },
 ): MessageSearchResult[] {
     return sortMessages(memory.queryMessages(input)).slice(0, input.limit);
+}
+
+function queryMessagesByKeyword(
+    memory: ConversationsReader,
+    input: {
+        chatIds: string[];
+        userIds?: string[];
+        keyword?: string;
+        after?: string;
+        before?: string;
+        limit: number;
+    },
+): MessageSearchResult[] {
+    const terms = splitSearchTerms(input.keyword);
+    if (terms.length === 0) {
+        return queryMessagesWith(memory, {
+            chatIds: input.chatIds,
+            userIds: input.userIds,
+            after: input.after,
+            before: input.before,
+            limit: input.limit,
+        });
+    }
+
+    const merged = new Map<string, MessageSearchResult>();
+    for (const term of terms) {
+        const rows = queryMessagesWith(memory, {
+            chatIds: input.chatIds,
+            userIds: input.userIds,
+            textLike: term,
+            after: input.after,
+            before: input.before,
+            limit: input.limit,
+        });
+        for (const row of rows) {
+            merged.set(`${row.chatId}:${row.messageId}`, row);
+        }
+    }
+
+    return sortMessages([...merged.values()]).slice(0, input.limit);
 }
 
 function queryTopics(
@@ -386,4 +426,11 @@ function uniqueStrings(values?: string[]): string[] {
         return [];
     }
     return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
+}
+
+function splitSearchTerms(query?: string): string[] {
+    if (!query) {
+        return [];
+    }
+    return uniqueStrings(query.split(/\s+/).map((term) => term.replace(/"/g, "")));
 }
