@@ -33,7 +33,8 @@
     "typescript": "^5.9.3",
     "ulid": "^2.3.0",
     "ws": "^8.19.0",
-    "yaml": "^2.8.2"
+    "yaml": "^2.8.2",
+    "openai": "^4.104.0"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.0.0",
