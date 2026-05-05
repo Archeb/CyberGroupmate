@@ -117,6 +117,16 @@
               }}
             /><span>Prefill</span></label>
         </div>
+        {#if p.provider === "openai_responses"}
+          <div class="cfg-grid-2 mt-2">
+            <label class="cfg-field"><span class="cfg-label">Responses 请求模式</span>
+              <select class="select select-xs select-bordered w-full" bind:value={p.responsesRequestMode}>
+                <option value="non_stream">non_stream（默认）</option>
+                <option value="stream">stream（后台聚合完整输出）</option>
+              </select>
+            </label>
+          </div>
+        {/if}
         {#if p.provider === "google"}
           <div class="divider text-xs opacity-50 my-2"><i class="fa-brands fa-google mr-1"></i>Vertex AI 设置（可选）</div>
           <p class="text-xs opacity-40 mb-2">粘贴服务账号 JSON 密钥后自动启用 Vertex AI 模式。留空则使用 AI Studio（需填 API Key）。</p>

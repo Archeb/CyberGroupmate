@@ -6,6 +6,20 @@ import OpenAI from "openai";
 import type { LLMConfig } from "../config.js";
 import type { ChatMessage, LLMResponse } from "./types.js";
 
+type ResponsesUsage = {
+    input_tokens?: number;
+    output_tokens?: number;
+    total_tokens?: number;
+    input_tokens_details?: {
+        cached_tokens?: number;
+    };
+};
+
+type ResponsesResult = {
+    output_text?: string;
+    usage?: ResponsesUsage;
+};
+
 export async function callOpenAIResponses(
     messages: ChatMessage[],
     config: LLMConfig,
@@ -55,22 +69,24 @@ export async function callOpenAIResponses(
         });
     }
 
-    const response = await client.responses.create(
-        {
-            model,
-            store: false,
-            ...(systemMessages.length > 0 ? { instructions: systemMessages.join("\n\n") } : {}),
-            input,
-            temperature,
-            max_output_tokens: maxTokens,
-            ...(thinkingLevel && thinkingLevel !== "none" ? { reasoning: { effort: thinkingLevel } } : {}),
-            ...(stop && stop.length > 0 ? { stop } : {}),
-            ...(config.extraBody ?? {}),
-        },
-        {
-            signal,
-        },
-    );
+    const requestBody = {
+        model,
+        store: false,
+        ...(systemMessages.length > 0 ? { instructions: systemMessages.join("\n\n") } : {}),
+        input,
+        temperature,
+        max_output_tokens: maxTokens,
+        ...(thinkingLevel && thinkingLevel !== "none" ? { reasoning: { effort: thinkingLevel } } : {}),
+        ...(stop && stop.length > 0 ? { stop } : {}),
+        ...(config.extraBody ?? {}),
+    };
+
+    const requestMode = config.responsesRequestMode ?? "non_stream";
+    const response = requestMode === "stream"
+        ? await collectResponseFromStream(
+            await client.responses.create({ ...requestBody, stream: true }, { signal }),
+        )
+        : await client.responses.create(requestBody, { signal }) as ResponsesResult;
 
     const content = response.output_text ?? "";
     if (!content) {
@@ -88,4 +104,28 @@ export async function callOpenAIResponses(
             }
             : undefined,
     };
+}
+
+async function collectResponseFromStream(stream: unknown): Promise<ResponsesResult> {
+    const asyncIterator = (stream as AsyncIterable<unknown>)?.[Symbol.asyncIterator];
+    if (!asyncIterator) {
+        throw new Error("OpenAI Responses stream mode did not return an async iterable");
+    }
+
+    let outputText = "";
+    let usage: ResponsesUsage | undefined;
+    for await (const event of stream as AsyncIterable<Record<string, unknown>>) {
+        if (event.type === "response.output_text.delta") {
+            outputText += typeof event.delta === "string" ? event.delta : "";
+        }
+        if (event.type === "response.completed") {
+            const completed = event.response as ResponsesResult | undefined;
+            if (completed?.output_text) {
+                outputText = completed.output_text;
+            }
+            usage = completed?.usage ?? usage;
+        }
+    }
+
+    return { output_text: outputText, usage };
 }

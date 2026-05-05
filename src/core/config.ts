@@ -76,6 +76,8 @@ export interface LLMConfig {
      * 适用于某些 API 在出错时返回 200 但 content 包含错误信息的情况。
      */
     errorContentPatterns?: string[];
+    /** OpenAI Responses API 请求模式：stream / non_stream。仅 provider=openai_responses 时生效，默认 non_stream。 */
+    responsesRequestMode?: "stream" | "non_stream";
 }
 
 /** 相似度度量方法 */
@@ -1033,6 +1035,7 @@ function parseLLMProfile(raw: Record<string, unknown>): LLMConfig {
         errorContentPatterns: (Array.isArray(raw.error_content_patterns) && raw.error_content_patterns.length > 0)
             ? raw.error_content_patterns.map(String)
             : undefined,
+        responsesRequestMode: (str(raw.responses_request_mode) as "stream" | "non_stream" | undefined),
     };
 }
 
@@ -1131,6 +1134,7 @@ export function serializeConfigToObject(config: AppConfig): Record<string, unkno
         if (p.extraBody && Object.keys(p.extraBody).length > 0) entry.extra_body = p.extraBody;
         if (p.customHeaders && Object.keys(p.customHeaders).length > 0) entry.custom_headers = p.customHeaders;
         if (p.errorContentPatterns && p.errorContentPatterns.length > 0) entry.error_content_patterns = p.errorContentPatterns;
+        if (p.responsesRequestMode) entry.responses_request_mode = p.responsesRequestMode;
         if (p.supportsPrefill === false) entry.supports_prefill = false;
         if (p.pricing) {
             const pricing: Record<string, unknown> = {
