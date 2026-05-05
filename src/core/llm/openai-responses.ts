@@ -23,7 +23,14 @@ export async function callOpenAIResponses(
         defaultHeaders: config.customHeaders,
     });
 
-    const input: Array<Record<string, unknown>> = messages.map(m => {
+    const systemMessages = messages
+        .filter(m => m.role === "system")
+        .map(m => m.content.trim())
+        .filter(Boolean);
+
+    const input: Array<Record<string, unknown>> = messages
+        .filter(m => m.role !== "system")
+        .map(m => {
         if (m.imageParts && m.imageParts.length > 0 && m.role === "user") {
             const content: Array<Record<string, unknown>> = [{ type: "input_text", text: m.content }];
             for (const img of m.imageParts) {
@@ -44,13 +51,14 @@ export async function callOpenAIResponses(
     if (prefill) {
         input.push({
             role: "assistant",
-            content: [{ type: "output_text", text: prefill }],
+            content: [{ type: "input_text", text: prefill }],
         });
     }
 
     const response = await client.responses.create(
         {
             model,
+            ...(systemMessages.length > 0 ? { instructions: systemMessages.join("\n\n") } : {}),
             input,
             temperature,
             max_output_tokens: maxTokens,
