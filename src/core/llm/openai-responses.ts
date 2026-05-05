@@ -58,6 +58,7 @@ export async function callOpenAIResponses(
     const response = await client.responses.create(
         {
             model,
+            store: false,
             ...(systemMessages.length > 0 ? { instructions: systemMessages.join("\n\n") } : {}),
             input,
             temperature,
