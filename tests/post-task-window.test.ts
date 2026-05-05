@@ -153,6 +153,15 @@ describe("PostTaskWindowManager", () => {
         const { manager, q5, enqueued } = makeManager({ windowMs: 200, directTasks });
 
         manager.handleCallback(makeCallback());
+        manager.recordMessage("telegram:1", {
+            _id: "evt-1",
+            _ts: "2026-05-03T12:00:05.000Z",
+            type: "nc.message",
+            chatId: "telegram:1",
+            messageId: "msg-1",
+            displayName: "Alice",
+            text: "前面这句也还没送过",
+        });
         const event = {
             _id: "evt-2",
             _ts: "2026-05-03T12:00:10.000Z",
@@ -172,13 +181,67 @@ describe("PostTaskWindowManager", () => {
         assert.equal(enqueued.length, 1);
         assert.deepEqual(directTasks.map((task) => task.taskId), [enqueued[0].taskId]);
         assert.equal(enqueued[0].chatId, "telegram:1");
-        assert.deepEqual(enqueued[0].targetMessageIds, ["msg-2"]);
+        assert.deepEqual(enqueued[0].targetMessageIds, ["msg-1", "msg-2"]);
         assert.equal(enqueued[0].replyStrategy, "DIRECT_REPLY");
         assert.equal(enqueued[0].skipRefreshTaskMessages, true);
         assert.match(enqueued[0].continuationPrompt ?? "", /\[📩 新消息到达\]/);
+        assert.match(enqueued[0].continuationPrompt ?? "", /前面这句也还没送过/);
         assert.match(enqueued[0].continuationPrompt ?? "", /你刚才说的是这个意思吗？/);
         assert.equal(enqueued[0].contextSnapshot.recentMessages, undefined);
         assert.equal(enqueued[0].contextSnapshot.personContext, undefined);
+        manager.dispose();
+    });
+
+    it("does not resend post-task messages already forwarded to the subagent", () => {
+        const { manager, enqueued } = makeManager({ windowMs: 200 });
+
+        manager.handleCallback(makeCallback());
+        manager.recordMessage("telegram:1", {
+            _id: "evt-1",
+            _ts: "2026-05-03T12:00:05.000Z",
+            type: "nc.message",
+            chatId: "telegram:1",
+            messageId: "msg-1",
+            displayName: "Alice",
+            text: "第一条",
+        });
+        manager.tryForwardDirectMessage("telegram:1", {
+            _id: "evt-2",
+            _ts: "2026-05-03T12:00:10.000Z",
+            type: "nc.message",
+            chatId: "telegram:1",
+            messageId: "msg-2",
+            displayName: "Bob",
+            text: "第二条",
+            replyToMessageId: "sent-1",
+        }, "reply-to-agent");
+
+        manager.recordMessage("telegram:1", {
+            _id: "evt-3",
+            _ts: "2026-05-03T12:00:15.000Z",
+            type: "nc.message",
+            chatId: "telegram:1",
+            messageId: "msg-3",
+            displayName: "Carol",
+            text: "第三条",
+            replyToMessageId: "sent-1",
+        }, { isDirectAttention: true, directReason: "reply-to-agent" });
+        manager.tryForwardDirectMessage("telegram:1", {
+            _id: "evt-3",
+            _ts: "2026-05-03T12:00:15.000Z",
+            type: "nc.message",
+            chatId: "telegram:1",
+            messageId: "msg-3",
+            displayName: "Carol",
+            text: "第三条",
+            replyToMessageId: "sent-1",
+        }, "reply-to-agent");
+
+        assert.equal(enqueued.length, 2);
+        assert.deepEqual(enqueued[0].targetMessageIds, ["msg-1", "msg-2"]);
+        assert.deepEqual(enqueued[1].targetMessageIds, ["msg-3"]);
+        assert.doesNotMatch(enqueued[1].continuationPrompt ?? "", /第一条/);
+        assert.match(enqueued[1].continuationPrompt ?? "", /第三条/);
         manager.dispose();
     });
 

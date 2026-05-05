@@ -38,6 +38,7 @@ interface ActivePostTaskWindow {
     callbacks: SubagentCallback[];
     messages: PostTaskReactionMessage[];
     sentMessageIds: Set<string>;
+    deliveredMessageIds: Set<string>;
     timer: ReturnType<typeof setTimeout> | null;
 }
 
@@ -84,6 +85,7 @@ export class PostTaskWindowManager {
             callbacks: [],
             messages: [],
             sentMessageIds: new Set<string>(),
+            deliveredMessageIds: new Set<string>(),
             timer: null,
         };
         rememberEventMessageId(window.sentMessageIds, event);
@@ -132,6 +134,7 @@ export class PostTaskWindowManager {
             callbacks: [callback],
             messages: [],
             sentMessageIds: new Set<string>(),
+            deliveredMessageIds: new Set<string>(),
             timer: null,
         };
         this.rememberSentMessageIds(window, callback);
@@ -177,7 +180,9 @@ export class PostTaskWindowManager {
             return false;
         }
 
-        const message = toReactionMessage(event, { isDirectAttention: true, directReason });
+        const message = ensureWindowMessage(window, event, { isDirectAttention: true, directReason });
+        const undeliveredMessages = collectUndeliveredMessages(window, message);
+        const targetMessageIds = undeliveredMessages.map((item) => item.messageId);
         const contentDirection = [
             "Post-task window 内有人直接叫住你、回复你或提及你。请自然判断是否需要补一轮。",
         ].join("");
@@ -202,25 +207,28 @@ export class PostTaskWindowManager {
                 reason: `Post-task L0 direct attention: ${directReason}`,
                 confidence: 1,
                 contentDirection,
-                targetMessageIds: [message.messageId],
+                targetMessageIds,
                 toneGuidance: contextSnapshot.toneGuidance,
             }],
             contextSnapshot,
             replyMode: "SINGLE",
             createdAt: new Date().toISOString(),
-            targetMessageIds: [message.messageId],
+            targetMessageIds,
             replyStrategy: "DIRECT_REPLY",
-            continuationPrompt: formatPostTaskContinuationPrompt(message, directReason),
+            continuationPrompt: formatPostTaskContinuationPrompt(undeliveredMessages, directReason),
             skipRefreshTaskMessages: true,
         };
 
         executor.enqueue(task);
+        for (const item of undeliveredMessages) {
+            window.deliveredMessageIds.add(item.messageId);
+        }
         this.onDirectTaskEnqueued?.(task);
         log.info("direct message forwarded to subagent during post-task window", {
             chatId,
             taskId: task.taskId,
             directReason,
-            messageId: message.messageId,
+            messageIds: targetMessageIds,
         });
         return true;
     }
@@ -341,18 +349,52 @@ function toReactionMessage(
     };
 }
 
-function formatPostTaskContinuationPrompt(message: PostTaskReactionMessage, directReason: string): string {
+function ensureWindowMessage(
+    window: ActivePostTaskWindow,
+    event: NotificationEvent,
+    options?: { isDirectAttention?: boolean; directReason?: string },
+): PostTaskReactionMessage {
+    const messageId = String(event.messageId ?? event.id ?? event._id ?? `msg_${Date.now()}`);
+    const existing = window.messages.find((item) => item.messageId === messageId);
+    if (existing) {
+        existing.isDirectAttention = options?.isDirectAttention ?? existing.isDirectAttention;
+        existing.directReason = options?.directReason ?? existing.directReason;
+        return existing;
+    }
+
+    const message = toReactionMessage(event, options);
+    window.messages.push(message);
+    return message;
+}
+
+function collectUndeliveredMessages(
+    window: ActivePostTaskWindow,
+    triggerMessage: PostTaskReactionMessage,
+): PostTaskReactionMessage[] {
+    const selected = window.messages.filter((item) => !window.deliveredMessageIds.has(item.messageId));
+    if (!selected.some((item) => item.messageId === triggerMessage.messageId)) {
+        selected.push(triggerMessage);
+    }
+    return selected;
+}
+
+function formatPostTaskContinuationPrompt(messages: PostTaskReactionMessage[], directReason: string): string {
+    const lines = messages.map((message) => formatReactionMessageLine(message));
+    return [
+        "[📩 新消息到达]",
+        ...lines,
+        "",
+        `[post-task direct attention: ${directReason}] 这些消息发生在你刚完成上一轮任务后的发酵窗口内，其中有人直接叫住你、回复你或提及你。请基于上一轮会话、刚才发出的内容和上面所有尚未处理的新消息判断是否需要简短回应；需要时调用 sendMessage/sendSticker，不需要则直接结束，不要硬接。`,
+    ].join("\n");
+}
+
+function formatReactionMessageLine(message: PostTaskReactionMessage): string {
     const mediaSuffix = message.mediaType
         ? ` [${message.mediaType}${message.mediaInfo ? ` ${message.mediaInfo}` : ""}]`
         : "";
     const replySuffix = message.replyToMessageId ? ` (replyTo=${message.replyToMessageId})` : "";
     const text = message.text || "[non-text message]";
-    return [
-        "[📩 新消息到达]",
-        `[${message.timestamp}] [msgId:${message.messageId}] ${message.sender}${replySuffix}: ${text}${mediaSuffix}`,
-        "",
-        `[post-task direct attention: ${directReason}] 这条消息发生在你刚完成上一轮任务后的发酵窗口内。请基于上一轮会话和刚才发出的内容判断是否需要简短回应；需要时调用 sendMessage/sendSticker，不需要则直接结束，不要硬接。`,
-    ].join("\n");
+    return `[${message.timestamp}] [msgId:${message.messageId}] ${message.sender}${replySuffix}: ${text}${mediaSuffix}`;
 }
 
 export function buildDispatchedRecordForPostTaskDirect(task: CodeActReplyTask): DispatchedSubagentTaskRecord {
