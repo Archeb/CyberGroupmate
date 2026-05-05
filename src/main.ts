@@ -701,6 +701,32 @@ async function main(): Promise<void> {
         const chatId = String(event.chatId ?? "");
         if (chatId) lastActivityPerChat.set(chatId, Date.now());
     });
+    // ─── NC.onPush: 群名变更实时同步到 group_models ───
+    nc.onPush(event => {
+        if (shuttingDown) return;
+        const eventType = String(event.type ?? "");
+        if (eventType !== "onebot.group_name_change") return;
+        const chatId = String(event.chatId ?? "");
+        const newName = String(event.newName ?? "");
+        if (!chatId || !newName) return;
+        try {
+            const existing = memory.getGroupModel(getGroupModelKey(chatId));
+            if (!existing || existing.chatTitle !== newName) {
+                memory.upsertGroupModel(getGroupModelKey(chatId), { chatTitle: newName, isDirectMessage: false });
+                log.info("群名变更已同步到 GroupModel", { chatId, chatTitle: newName });
+                // 通知 subagent-manager 刷新活跃 session 的 chatTitle
+                const sub = subagentManager.get(chatId);
+                if (sub) {
+                    const executor = sub.codeActExecutor as import("./subagent/code-act-executor.js").CodeActExecutor | null;
+                    if (executor) {
+                        executor.updateChatTitle(newName);
+                    }
+                }
+            }
+        } catch (err) {
+            log.warn("群名变更同步 GroupModel 失败", { chatId, error: String(err) });
+        }
+    });
 
     const reflectionInterval = setInterval(async () => {
         if (shuttingDown) return;
