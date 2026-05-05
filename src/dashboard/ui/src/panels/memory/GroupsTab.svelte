@@ -4,8 +4,39 @@
   import { shortId, escapeHtml, getPlatform, platformLabel, getChatTypeLabel } from '../../lib/utils.js';
 
   let groups = [];
+  let filterType = 'all'; // 'all' | 'group' | 'dm'
+  let filterPlatform = 'all'; // 'all' | 'telegram' | 'onebot' | 'discord'
+  let searchQuery = '';
 
   $: if ($activeTab === 'memory' && $activeMemoryTab === 'm-groups') load();
+
+  $: filtered = groups.filter(g => {
+    // 类型筛选
+    if (filterType === 'group' && g.isDirectMessage) return false;
+    if (filterType === 'dm' && !g.isDirectMessage) return false;
+    // 平台筛选
+    if (filterPlatform !== 'all') {
+      const platform = getPlatform(g.chatId);
+      if (platform !== filterPlatform) return false;
+    }
+    // 搜索
+    if (searchQuery) {
+      const q = searchQuery.toLowerCase();
+      const title = (g.chatTitle || '').toLowerCase();
+      const chatId = (g.chatId || '').toLowerCase();
+      const desc = (g.description || '').toLowerCase();
+      if (!title.includes(q) && !chatId.includes(q) && !desc.includes(q)) return false;
+    }
+    return true;
+  });
+
+  // 统计
+  $: stats = {
+    total: groups.length,
+    groups: groups.filter(g => !g.isDirectMessage).length,
+    dms: groups.filter(g => g.isDirectMessage).length,
+    platforms: [...new Set(groups.map(g => getPlatform(g.chatId)).filter(Boolean))],
+  };
 
   async function load() {
     groups = await api('/memory/groups');
@@ -24,24 +55,81 @@
     pendingMemoryLink.set({ tab: 'm-chatlog', chatId });
     activeMemoryTab.set('m-chatlog');
   }
+
+  function clearFilters() {
+    filterType = 'all';
+    filterPlatform = 'all';
+    searchQuery = '';
+  }
 </script>
 
 <div class="card bg-base-100">
   <div class="card-body p-4">
     <div class="flex justify-between items-center mb-2">
       <h3 class="card-title text-sm">群组画像 (GroupModel)</h3>
-      <button class="btn btn-xs btn-primary" onclick={load}>刷新</button>
+      <div class="flex items-center gap-2">
+        <span class="badge badge-sm badge-ghost">{stats.total} 条</span>
+        <button class="btn btn-xs btn-primary" onclick={load}>刷新</button>
+      </div>
     </div>
+
+    <!-- 筛选控件 -->
+    <div class="flex flex-wrap items-center gap-2 mb-3 p-2 bg-base-200 rounded-lg">
+      <!-- 类型筛选 -->
+      <div class="join">
+        <button class="btn btn-xs join-item" class:btn-active={filterType === 'all'} onclick={() => filterType = 'all'}>
+          全部 ({stats.total})
+        </button>
+        <button class="btn btn-xs join-item" class:btn-active={filterType === 'group'} onclick={() => filterType = 'group'}>
+          群聊 ({stats.groups})
+        </button>
+        <button class="btn btn-xs join-item" class:btn-active={filterType === 'dm'} onclick={() => filterType = 'dm'}>
+          私聊 ({stats.dms})
+        </button>
+      </div>
+
+      <!-- 平台筛选 -->
+      <div class="join">
+        <button class="btn btn-xs join-item" class:btn-active={filterPlatform === 'all'} onclick={() => filterPlatform = 'all'}>
+          全部平台
+        </button>
+        {#each stats.platforms as p}
+          <button class="btn btn-xs join-item" class:btn-active={filterPlatform === p} onclick={() => filterPlatform = p}>
+            {platformLabel(p)}
+          </button>
+        {/each}
+      </div>
+
+      <!-- 搜索框 -->
+      <div class="flex-1 min-w-[120px]">
+        <input
+          type="text"
+          placeholder="搜索标题/ID/描述..."
+          class="input input-xs input-bordered w-full"
+          bind:value={searchQuery}
+        />
+      </div>
+
+      <!-- 清除筛选 -->
+      {#if filterType !== 'all' || filterPlatform !== 'all' || searchQuery}
+        <button class="btn btn-xs btn-ghost" onclick={clearFilters}>
+          <i class="fa-solid fa-xmark"></i> 清除
+        </button>
+      {/if}
+    </div>
+
     <div class="overflow-x-auto">
       <table class="table table-xs">
         <thead><tr>
           <th>ChatId</th><th>类型</th><th>标题</th><th>描述</th><th>角色</th><th>参与度</th><th>活跃人数</th><th>日均消息</th><th>热门话题</th><th>操作</th>
         </tr></thead>
         <tbody>
-          {#if !groups.length}
-            <tr><td colspan="11" class="text-center opacity-60">暂无数据</td></tr>
+          {#if !filtered.length}
+            <tr><td colspan="10" class="text-center opacity-60">
+              {groups.length ? '无匹配结果' : '暂无数据'}
+            </td></tr>
           {:else}
-            {#each groups as g}
+            {#each filtered as g}
               {@const chatType = getChatTypeLabel(g.chatId) || (g.isDirectMessage ? '私聊' : '群聊')}
               <tr>
                 <td class="font-mono text-xs" title={g.chatId}>
