@@ -105,6 +105,10 @@ interface TelegramClientLike {
         add(handler: (msg: unknown) => void | Promise<void>): void;
         remove(handler: (msg: unknown) => void | Promise<void>): void;
     };
+    onRawUpdate?: {
+        add(handler: (update: unknown) => void | Promise<void>): void;
+        remove(handler: (update: unknown) => void | Promise<void>): void;
+    };
     destroy?(): Promise<void>;
     getMe?(): Promise<unknown>;
     sendText?(chatId: unknown, text: unknown, opts?: unknown): Promise<unknown>;
@@ -219,6 +223,7 @@ export class TelegramAdapter implements PlatformAdapter {
     private client: any | null = null;
     private selfUser: PlainUser | null = null;
     private messageHandler: ((msg: any) => Promise<void>) | null = null;
+    private rawUpdateHandler: ((updateInfo: unknown) => void | Promise<void>) | null = null;
     private mediaCache = new MediaFileCache();
 
     // ─── 拟人化延迟状态 ───
@@ -359,6 +364,13 @@ export class TelegramAdapter implements PlatformAdapter {
         };
 
         client.onNewMessage.add(this.messageHandler);
+        // 监听 raw updates 以检测群名变更
+        if (client.onRawUpdate) {
+            this.rawUpdateHandler = (updateInfo: unknown) => {
+                this.handleRawUpdate(updateInfo);
+            };
+            client.onRawUpdate.add(this.rawUpdateHandler);
+        }
         this.print(`✅ TelegramAdapter 已启动: ${this.selfUser.displayName ?? this.selfUser.firstName ?? this.selfUser.id} (${this.selfUser.id})`);
     }
 
@@ -368,6 +380,10 @@ export class TelegramAdapter implements PlatformAdapter {
         if (this.messageHandler) {
             this.client.onNewMessage.remove(this.messageHandler);
             this.messageHandler = null;
+        }
+        if (this.rawUpdateHandler && this.client.onRawUpdate) {
+            this.client.onRawUpdate.remove(this.rawUpdateHandler);
+            this.rawUpdateHandler = null;
         }
 
         if (typeof this.client.destroy === "function") {
@@ -1374,6 +1390,53 @@ export class TelegramAdapter implements PlatformAdapter {
         };
     }
 
+
+    /**
+     * 处理 Telegram raw updates，检测群名变更。
+     * mtcute 的 onRawUpdate 提供 RawUpdateInfo，其中 update._ 包含 TL 类型名。
+     * 群名变更对应的 TL 类型: updateChannel (supergroup/channel), updateChat (basic group)
+     */
+    private async handleRawUpdate(updateInfo: unknown): Promise<void> {
+        try {
+            const raw = updateInfo as { update?: { _: string; channelId?: number; chatId?: number }; peers?: unknown };
+            const update = raw.update;
+            if (!update) return;
+
+            const updateType = update._;
+            // 检测可能涉及群名变更的更新类型
+            if (updateType !== "updateChannel" && updateType !== "updateChat") return;
+
+            // 从 peers 中提取 chat 信息，或通过 getChat API 刷新
+            let chatId: string | undefined;
+            if (updateType === "updateChannel" && typeof update.channelId === "number") {
+                chatId = composeChatId("telegram", String(update.channelId));
+            } else if (updateType === "updateChat" && typeof update.chatId === "number") {
+                chatId = composeChatId("telegram", String(update.chatId));
+            }
+            if (!chatId || !this.client) return;
+
+            // 通过 getChat 获取最新群信息
+            if (typeof this.client.getChat !== "function") return;
+            const peer = await this.ensurePeerCached(chatId);
+            const chat = await this.client.getChat(peer);
+            if (!chat) return;
+
+            const newTitle = typeof chat.title === "string" ? chat.title : undefined;
+            if (!newTitle) return;
+
+            // 广播群名刷新事件（main.ts 中的 onPush hook 会同步到 group_models 和 session）
+            this.nc.push({
+                type: "telegram.chat_title_refresh",
+                chatId,
+                chatTitle: newTitle,
+                platform: "telegram",
+            });
+            log.info("Telegram 群名刷新", { chatId, chatTitle: newTitle });
+        } catch (err) {
+            // 非关键路径，静默失败
+            log.debug("handleRawUpdate: 处理失败", { error: String(err) });
+        }
+    }
     private normalizeMessage(message: any): PlainMessage {
         let forwardFrom: string | undefined;
         let forwardFromUrl: string | undefined;

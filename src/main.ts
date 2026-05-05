@@ -705,21 +705,23 @@ async function main(): Promise<void> {
     nc.onPush(event => {
         if (shuttingDown) return;
         const eventType = String(event.type ?? "");
-        if (eventType !== "onebot.group_name_change") return;
+        // 支持 OneBot 群名变更通知和 Telegram 群名刷新事件
+        if (eventType !== "onebot.group_name_change" && eventType !== "telegram.chat_title_refresh") return;
         const chatId = String(event.chatId ?? "");
-        const newName = String(event.newName ?? "");
-        if (!chatId || !newName) return;
+        const newTitle = String(event.newName ?? event.chatTitle ?? "");
+        if (!chatId || !newTitle) return;
         try {
             const existing = memory.getGroupModel(getGroupModelKey(chatId));
-            if (!existing || existing.chatTitle !== newName) {
-                memory.upsertGroupModel(getGroupModelKey(chatId), { chatTitle: newName, isDirectMessage: false });
-                log.info("群名变更已同步到 GroupModel", { chatId, chatTitle: newName });
+            if (!existing || existing.chatTitle !== newTitle) {
+                const isDM = eventType === "onebot.group_name_change" ? false : !!existing?.isDirectMessage;
+                memory.upsertGroupModel(getGroupModelKey(chatId), { chatTitle: newTitle, isDirectMessage: isDM });
+                log.info("群名变更已同步到 GroupModel", { chatId, chatTitle: newTitle, source: eventType });
                 // 通知 subagent-manager 刷新活跃 session 的 chatTitle
                 const sub = subagentManager.get(chatId);
                 if (sub) {
                     const executor = sub.codeActExecutor as import("./subagent/code-act-executor.js").CodeActExecutor | null;
                     if (executor) {
-                        executor.updateChatTitle(newName);
+                        executor.updateChatTitle(newTitle);
                     }
                 }
             }
