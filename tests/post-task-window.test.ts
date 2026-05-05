@@ -24,6 +24,7 @@ function makeManager(options?: {
     windowMs?: number;
     q5?: CallbackQueue;
     enqueued?: CodeActReplyTask[];
+    directTasks?: CodeActReplyTask[];
     unblocks?: string[];
     blocks?: string[];
 }) {
@@ -51,6 +52,9 @@ function makeManager(options?: {
         subagentManager: {
             get: () => subagent,
         } as any,
+        onDirectTaskEnqueued: options?.directTasks
+            ? (task) => options.directTasks?.push(task)
+            : undefined,
     });
     return { manager, q5, enqueued, unblocks, blocks };
 }
@@ -145,7 +149,8 @@ describe("PostTaskWindowManager", () => {
     });
 
     it("forwards direct post-task messages to the subagent", () => {
-        const { manager, q5, enqueued } = makeManager({ windowMs: 200 });
+        const directTasks: CodeActReplyTask[] = [];
+        const { manager, q5, enqueued } = makeManager({ windowMs: 200, directTasks });
 
         manager.handleCallback(makeCallback());
         const event = {
@@ -165,6 +170,7 @@ describe("PostTaskWindowManager", () => {
         assert.equal(handled, true);
         assert.equal(q5.size, 0);
         assert.equal(enqueued.length, 1);
+        assert.deepEqual(directTasks.map((task) => task.taskId), [enqueued[0].taskId]);
         assert.equal(enqueued[0].chatId, "telegram:1");
         assert.deepEqual(enqueued[0].targetMessageIds, ["msg-2"]);
         assert.equal(enqueued[0].replyStrategy, "DIRECT_REPLY");

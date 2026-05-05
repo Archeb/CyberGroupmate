@@ -18,6 +18,7 @@ import { AttentionAccumulator } from "../accumulator/attention-accumulator.js";
 import { createLogger } from "../core/logger.js";
 import { buildWakeConditionPayload, matchCallbackWakeConditions } from "./wake-conditions.js";
 import type { PlatformAdapter } from "../adapter/platform-adapter.js";
+import { markChatAsRead } from "../adapter/read-receipts.js";
 import type { MetaSessionHandler } from "./meta-session-handler.js";
 
 const log = createLogger("main-agent-loop");
@@ -372,16 +373,7 @@ export class MainAgentLoop {
     }
 
     private markAsRead(chatId: string): void {
-        const adapter = this.adapters.find((item) => chatId.startsWith(`${item.platform}:`));
-        if (!adapter?.markAsRead) {
-            return;
-        }
-        adapter.markAsRead(chatId).catch((error) => {
-            log.debug("markAsRead failed after Meta attend", {
-                chatId,
-                error: String(error).slice(0, 100),
-            });
-        });
+        markChatAsRead(this.adapters, chatId, "meta-attend");
     }
 
     /**

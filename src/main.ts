@@ -36,6 +36,7 @@ import { TelegramAdapter } from "./adapter/telegram-adapter.js";
 import { DiscordAdapter } from "./adapter/discord-adapter.js";
 import { OneBotAdapter } from "./adapter/onebot-adapter.js";
 import type { PlatformAdapter } from "./adapter/platform-adapter.js";
+import { markChatAsRead } from "./adapter/read-receipts.js";
 
 import { SubagentManager } from "./subagent/subagent-manager.js";
 import { CallbackQueue } from "./subagent/callback-queue.js";
@@ -436,6 +437,10 @@ async function main(): Promise<void> {
         }
     }
 
+    function markDirectSubagentDeliveryAsRead(chatId: string, reason: string): void {
+        markChatAsRead(adapters, chatId, reason);
+    }
+
     // ─── Subagent 架构组件初始化 ───
     // 注意: message_log 落盘由 RecordingPipeline Step 4 负责，不再需要独立的 MessageLogWriter hook
     let accumulator: AttentionAccumulator;
@@ -529,7 +534,11 @@ async function main(): Promise<void> {
         accumulator,
         subagentManager,
         onDirectTaskEnqueued: (task) => {
-            globalState.recordDispatchedSubagentTask(buildDispatchedRecordForPostTaskDirect(task));
+            try {
+                globalState.recordDispatchedSubagentTask(buildDispatchedRecordForPostTaskDirect(task));
+            } finally {
+                markDirectSubagentDeliveryAsRead(task.chatId, "post-task-direct");
+            }
         },
     });
 
@@ -752,6 +761,7 @@ async function main(): Promise<void> {
                 mediaType: (event as any).mediaInfo?.type ?? undefined,
                 mediaInfo: (event as any).mediaInfo ? JSON.stringify((event as any).mediaInfo) : undefined,
             });
+            markDirectSubagentDeliveryAsRead(chatId, "pending-message-forward");
         }
 
     });
