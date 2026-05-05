@@ -56,6 +56,12 @@ export async function callOpenAIResponses(
             }
             return { role: m.role, content };
         }
+        if (m.role === "assistant") {
+            return {
+                role: m.role,
+                content: [{ type: "output_text", text: m.content }],
+            };
+        }
         return {
             role: m.role,
             content: [{ type: "input_text", text: m.content }],
@@ -65,7 +71,7 @@ export async function callOpenAIResponses(
     if (prefill) {
         input.push({
             role: "assistant",
-            content: [{ type: "input_text", text: prefill }],
+            content: [{ type: "output_text", text: prefill }],
         });
     }
 
