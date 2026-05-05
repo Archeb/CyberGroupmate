@@ -25,6 +25,13 @@ function normalizeWhitelistId(raw: string): string {
     return s;
 }
 
+function normalizeTelegramStateId(raw: string): string {
+    const trimmed = raw.trim();
+    if (!trimmed) return trimmed;
+    if (trimmed.startsWith("telegram:")) return trimmed;
+    return `telegram:${trimmed}`;
+}
+
 // ─── 常量 ───
 
 const DEFAULT_MEDIA_CACHE_DIR = "workspace/media-cache";
@@ -872,15 +879,16 @@ export class TelegramAdapter implements PlatformAdapter {
 
     /** 检查用户是否处于 invisible 状态 */
     isUserInvisible(userId: string): boolean {
-        return this.invisibleUsers.has(userId);
+        return this.invisibleUsers.has(normalizeTelegramStateId(userId));
     }
 
     /** 检查聊天是否被 mute（未过期） */
     isChatMuted(chatId: string): boolean {
-        const expiry = this.mutedChats.get(chatId);
+        const normalizedChatId = normalizeTelegramStateId(chatId);
+        const expiry = this.mutedChats.get(normalizedChatId);
         if (expiry === undefined) return false;
         if (Date.now() >= expiry) {
-            this.mutedChats.delete(chatId);
+            this.mutedChats.delete(normalizedChatId);
             return false;
         }
         return true;
@@ -888,7 +896,7 @@ export class TelegramAdapter implements PlatformAdapter {
 
     /** 获取 mute 剩余时间的可读字符串 */
     private getMuteRemainingHours(chatId: string): string {
-        const expiry = this.mutedChats.get(chatId);
+        const expiry = this.mutedChats.get(normalizeTelegramStateId(chatId));
         if (!expiry) return "0 小时";
         const remainMs = Math.max(0, expiry - Date.now());
         const remainMin = Math.ceil(remainMs / 60_000);
@@ -899,16 +907,18 @@ export class TelegramAdapter implements PlatformAdapter {
 
     /** 外部设置 mute（Dashboard 用） */
     muteChat(chatId: string, hours: number): void {
+        const normalizedChatId = normalizeTelegramStateId(chatId);
         const h = Math.max(0.1, Math.min(24, hours));
         const expiryMs = Date.now() + h * 3_600_000;
-        this.mutedChats.set(chatId, expiryMs);
-        log.info("muteChat (external)", { chatId, hours: h, expiryMs });
+        this.mutedChats.set(normalizedChatId, expiryMs);
+        log.info("muteChat (external)", { chatId: normalizedChatId, hours: h, expiryMs });
     }
 
     /** 外部解除 mute（Dashboard 用） */
     unmuteChat(chatId: string): void {
-        this.mutedChats.delete(chatId);
-        log.info("unmuteChat (external)", { chatId });
+        const normalizedChatId = normalizeTelegramStateId(chatId);
+        this.mutedChats.delete(normalizedChatId);
+        log.info("unmuteChat (external)", { chatId: normalizedChatId });
     }
 
     /** 获取所有被禁言的聊天 */
@@ -968,7 +978,7 @@ export class TelegramAdapter implements PlatformAdapter {
 
         // ── /invisible ──
         if (/^\/invisible(?:@\S+)?$/i.test(text)) {
-            const userId = normalized.userId;
+            const userId = normalizeTelegramStateId(normalized.userId);
             if (this.invisibleUsers.has(userId)) {
                 this.invisibleUsers.delete(userId);
                 saveInvisibleUsers(this.invisibleUsers);
@@ -987,26 +997,28 @@ export class TelegramAdapter implements PlatformAdapter {
         const muteMatch = text.match(/^\/mute(?:@\S+)?(?:\s+(\d+(?:\.\d+)?))?$/i);
         if (muteMatch) {
             // 无参数 + 已在 mute 中 → 解除禁言（toggle）
-            if (!muteMatch[1] && this.isChatMuted(normalized.chatId)) {
-                this.mutedChats.delete(normalized.chatId);
-                log.info("/mute OFF (toggle)", { chatId: normalized.chatId });
+            const normalizedChatId = normalizeTelegramStateId(normalized.chatId);
+            if (!muteMatch[1] && this.isChatMuted(normalizedChatId)) {
+                this.mutedChats.delete(normalizedChatId);
+                log.info("/mute OFF (toggle)", { chatId: normalizedChatId });
                 await this.replySafe(normalized.chatId, `🔊 Bot 禁言已解除。`);
                 return true;
             }
             let hours = muteMatch[1] ? parseFloat(muteMatch[1]) : 1;
             hours = Math.max(1, Math.min(24, hours));  // clamp [1, 24]
             const expiryMs = Date.now() + hours * 3_600_000;
-            this.mutedChats.set(normalized.chatId, expiryMs);
-            log.info("/mute ON", { chatId: normalized.chatId, hours, expiryMs });
+            this.mutedChats.set(normalizedChatId, expiryMs);
+            log.info("/mute ON", { chatId: normalizedChatId, hours, expiryMs });
             await this.replySafe(normalized.chatId, `🔇 Bot 已在本聊天禁言 ${hours} 小时。期间消息仍会被记录和处理，但 Bot 不会发送任何消息。再次发送 /mute 可解除。`);
             return true;
         }
 
         // ── /unmute ──
         if (/^\/unmute(?:@\S+)?$/i.test(text)) {
-            if (this.mutedChats.has(normalized.chatId)) {
-                this.mutedChats.delete(normalized.chatId);
-                log.info("/unmute", { chatId: normalized.chatId });
+            const normalizedChatId = normalizeTelegramStateId(normalized.chatId);
+            if (this.mutedChats.has(normalizedChatId)) {
+                this.mutedChats.delete(normalizedChatId);
+                log.info("/unmute", { chatId: normalizedChatId });
                 await this.replySafe(normalized.chatId, `🔊 Bot 禁言已解除。`);
             } else {
                 await this.replySafe(normalized.chatId, `ℹ️ Bot 当前未被禁言。`);

@@ -174,7 +174,7 @@ describe("TelegramAdapter", () => {
         assert.equal(events.length, 1);
         assert.equal(events[0].type, "nc.message");
         assert.equal(events[0].scene, "telegram");
-        assert.equal(events[0].chatId, "-100123");
+        assert.equal(events[0].chatId, "telegram:-100123");
         assert.equal(events[0].messageId, "555");
         assert.equal(events[0].displayName, "Alice");
         assert.equal(events[0].mentionsAgent, true);
@@ -182,8 +182,8 @@ describe("TelegramAdapter", () => {
         assert.deepEqual(events[0].source, {
             scene: "telegram",
             platform: "telegram",
-            chatId: "-100123",
-            userId: "777",
+            chatId: "telegram:-100123",
+            userId: "telegram:777",
             chatType: "supergroup",
             messageId: "555",
             replyToMessageId: undefined,

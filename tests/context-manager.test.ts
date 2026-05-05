@@ -349,8 +349,8 @@ describe("ContextBudget 配置集成", () => {
 
 // ─── 9. main.ts 回归验证 ───
 
-describe("main.ts rolling truncation 已替换", () => {
-    it("main.ts 不含 'messages.length > 25' 旧逻辑", async () => {
+describe("context compaction wiring", () => {
+    it("旧的 rolling truncation 逻辑已删除", async () => {
         const { readFileSync } = await import("node:fs");
         const mainContent = readFileSync("src/main.ts", "utf-8");
         assert.ok(
@@ -359,21 +359,21 @@ describe("main.ts rolling truncation 已替换", () => {
         );
     });
 
-    it("main.ts 包含 shouldCompact 调用", async () => {
+    it("当前由 code-act-executor 接入 shouldCompact", async () => {
         const { readFileSync } = await import("node:fs");
-        const mainContent = readFileSync("src/main.ts", "utf-8");
+        const executorContent = readFileSync("src/subagent/code-act-executor.ts", "utf-8");
         assert.ok(
-            mainContent.includes("shouldCompact"),
-            "main.ts 应包含 shouldCompact 调用"
+            executorContent.includes("shouldCompact"),
+            "code-act-executor.ts 应包含 shouldCompact 调用"
         );
     });
 
-    it("main.ts 包含 compact 调用", async () => {
+    it("当前由 code-act-executor 接入 compact", async () => {
         const { readFileSync } = await import("node:fs");
-        const mainContent = readFileSync("src/main.ts", "utf-8");
+        const executorContent = readFileSync("src/subagent/code-act-executor.ts", "utf-8");
         assert.ok(
-            mainContent.includes("await compact("),
-            "main.ts 应包含 compact 调用"
+            executorContent.includes("await contextManagerCompact("),
+            "code-act-executor.ts 应包含 context-manager compact 调用"
         );
     });
 });

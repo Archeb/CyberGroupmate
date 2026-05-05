@@ -582,7 +582,7 @@ describe("Regression: prompt-renderer.ts 已删除", () => {
 
     it("保留的模板文件仍存在", () => {
         const keptTemplates = [
-            "system-prompts/main-agent/mainagent-main-system.md",
+            "system-prompts/meta-agent/meta-system.md",
             "system-prompts/executor/subagent-execution.md",
         ];
         for (const tmpl of keptTemplates) {
@@ -601,9 +601,9 @@ describe("Regression: prompt-renderer.ts 已删除", () => {
 // ═══ 10. Executor Providers ═══
 
 describe("Executor Providers", () => {
-    it("getExecutorTaskProviders 返回 9 个 provider", () => {
+    it("getExecutorTaskProviders 返回 10 个 provider", () => {
         const providers = getExecutorTaskProviders();
-        assert.equal(providers.length, 9);
+        assert.equal(providers.length, 10);
         const names = providers.map(p => p.schema.name);
         assert.ok(names.includes("executor.header"));
         assert.ok(names.includes("executor.decisions"));
@@ -809,8 +809,8 @@ describe("Executor Providers", () => {
         };
 
         const result = engine.render(ctx);
-        // header + decisions + targetMessages + footer = 4 active, rest skipped
-        assert.ok(result.manifest.sections.length === 9, `应有 9 个 section，实际: ${result.manifest.sections.length}`);
+        // sessionDigests + header + decisions + targetMessages + footer 等 provider 都会进入 manifest，未命中的 section 也会以 skipped 形式保留
+        assert.ok(result.manifest.sections.length === 10, `应有 10 个 section，实际: ${result.manifest.sections.length}`);
         assert.ok(result.manifest.summary.activeSections >= 3, `active sections >= 3`);
     });
 });
