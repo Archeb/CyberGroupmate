@@ -4,7 +4,7 @@
 
   let stats = {
     rows: [],
-    totals: { promptTokens: 0, completionTokens: 0, cachedTokens: 0, cacheCreationTokens: 0, callCount: 0, totalCost: 0 },
+    totals: { inputTokens: 0, promptTokens: 0, completionTokens: 0, cachedTokens: 0, cacheCreationTokens: 0, callCount: 0, totalCost: 0 },
     updatedAt: '',
   };
   let meta = { models: [], callers: [] };
@@ -92,6 +92,10 @@
     return n.toLocaleString();
   }
 
+  function displayInputTokens(row) {
+    return row?.inputTokens ?? row?.promptTokens ?? 0;
+  }
+
   function timeAgo(iso) {
     if (!iso) return '-';
     const diff = Date.now() - new Date(iso).getTime();
@@ -171,7 +175,7 @@
 
   <div class="token-stats-summary">
     <div class="stat-card"><div class="stat-label">总调用</div><div class="stat-value">{formatTokens(stats.totals.callCount)}</div></div>
-    <div class="stat-card"><div class="stat-label">总输入 Token</div><div class="stat-value">{formatTokens(stats.totals.promptTokens)}</div></div>
+    <div class="stat-card"><div class="stat-label">总输入 Token</div><div class="stat-value">{formatTokens(displayInputTokens(stats.totals))}</div></div>
     <div class="stat-card"><div class="stat-label">总输出 Token</div><div class="stat-value">{formatTokens(stats.totals.completionTokens)}</div></div>
     <div class="stat-card"><div class="stat-label">缓存命中</div><div class="stat-value">{formatTokens(stats.totals.cachedTokens)}</div></div>
     <div class="stat-card stat-card-cost"><div class="stat-label">总费用</div><div class="stat-value">{formatCost(stats.totals.totalCost)}</div></div>
@@ -187,7 +191,7 @@
             {#if groupBy === 'model' || groupBy === 'both'}<th>模型</th>{/if}
             {#if groupBy === 'caller' || groupBy === 'both'}<th>模块</th>{/if}
             <th class="num sortable" onclick={() => toggleSort('callCount')}>调用 {sortIcon('callCount')}</th>
-            <th class="num sortable" onclick={() => toggleSort('promptTokens')}>输入 {sortIcon('promptTokens')}</th>
+            <th class="num sortable" onclick={() => toggleSort('inputTokens')}>输入 {sortIcon('inputTokens')}</th>
             <th class="num sortable" onclick={() => toggleSort('completionTokens')}>输出 {sortIcon('completionTokens')}</th>
             <th class="num hide-mobile">缓存命中</th>
             <th class="num hide-mobile">缓存创建</th>
@@ -201,7 +205,7 @@
               {#if groupBy === 'model' || groupBy === 'both'}<td class="key-name">{row.model ?? row.key}</td>{/if}
               {#if groupBy === 'caller' || groupBy === 'both'}<td class="key-name">{row.caller ?? row.key}</td>{/if}
               <td class="num">{formatTokens(row.callCount)}</td>
-              <td class="num">{formatTokens(row.promptTokens)}</td>
+              <td class="num">{formatTokens(displayInputTokens(row))}</td>
               <td class="num">{formatTokens(row.completionTokens)}</td>
               <td class="num hide-mobile">{row.cachedTokens ? formatTokens(row.cachedTokens) : '-'}</td>
               <td class="num hide-mobile">{row.cacheCreationTokens ? formatTokens(row.cacheCreationTokens) : '-'}</td>
@@ -214,7 +218,7 @@
           <tr>
             <td colspan={groupBy === 'both' ? 2 : 1}><b>合计</b></td>
             <td class="num"><b>{formatTokens(stats.totals.callCount)}</b></td>
-            <td class="num"><b>{formatTokens(stats.totals.promptTokens)}</b></td>
+            <td class="num"><b>{formatTokens(displayInputTokens(stats.totals))}</b></td>
             <td class="num"><b>{formatTokens(stats.totals.completionTokens)}</b></td>
             <td class="num hide-mobile"><b>{stats.totals.cachedTokens ? formatTokens(stats.totals.cachedTokens) : '-'}</b></td>
             <td class="num hide-mobile"><b>{stats.totals.cacheCreationTokens ? formatTokens(stats.totals.cacheCreationTokens) : '-'}</b></td>

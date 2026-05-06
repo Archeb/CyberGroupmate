@@ -69,7 +69,7 @@ export interface DiscoveredSkill {
     dtsPath?: string;
     /** 纯 AgentSkill 标记 */
     isAgentSkill?: boolean;
-    /** SKILL.md 路径（纯 AgentSkill 必有） */
+    /** SKILL.md 路径（如存在） */
     skillMdPath?: string;
 }
 
@@ -98,6 +98,7 @@ export function discoverSkills(): DiscoveredSkill[] {
         if (entry === "node_modules" || entry.startsWith(".")) continue;
 
         const skillMd = join(dirPath, "SKILL.md");
+        const skillMdPath = existsSync(skillMd) ? skillMd : undefined;
 
         // 查找入口文件（优先 index.ts，其次 index.js）
         const indexTs = join(dirPath, "index.ts");
@@ -105,16 +106,16 @@ export function discoverSkills(): DiscoveredSkill[] {
         const indexPath = existsSync(indexTs) ? indexTs : existsSync(indexJs) ? indexJs : null;
 
         if (!indexPath) {
-            if (existsSync(skillMd)) {
+            if (skillMdPath) {
                 // ═══ 纯 AgentSkill：只有 SKILL.md，无代码入口 ═══
                 // 从 frontmatter 提取名称
                 try {
-                    const raw = readFileSync(skillMd, "utf-8");
+                    const raw = readFileSync(skillMdPath, "utf-8");
                     const parsed = parseSkillMdFrontmatter(raw);
                     const name = parsed.name ? toSafeSkillName(parsed.name) : toSafeSkillName(entry);
-                    skills.push({ name, indexPath: "", isAgentSkill: true, skillMdPath: skillMd });
+                    skills.push({ name, indexPath: "", isAgentSkill: true, skillMdPath });
                 } catch {
-                    skills.push({ name: toSafeSkillName(entry), indexPath: "", isAgentSkill: true, skillMdPath: skillMd });
+                    skills.push({ name: toSafeSkillName(entry), indexPath: "", isAgentSkill: true, skillMdPath });
                 }
             } else {
                 log.warn(`[skill-loader] ⚠ 跳过 ${entry}/: 未找到 index.ts、index.js 或 SKILL.md\n`);
@@ -128,10 +129,61 @@ export function discoverSkills(): DiscoveredSkill[] {
         const dtsPath = preferredDts ? join(dirPath, preferredDts)
             : dtsFiles.length > 0 ? join(dirPath, dtsFiles[0]) : undefined;
 
-        skills.push({ name: toSafeIdentifier(entry), indexPath, dtsPath });
+        skills.push({ name: toSafeIdentifier(entry), indexPath, dtsPath, skillMdPath });
     }
 
     return skills;
+}
+
+function buildAgentSkillUse(skillName: string, skillMdPath: string): { description: string; use: () => string } {
+    const raw = readFileSync(skillMdPath, "utf-8");
+    const parsed = parseSkillMdFrontmatter(raw);
+    const description = parsed.description || "Agent Skill";
+    const body = parsed.body;
+
+    return {
+        description,
+        use: () => {
+            const header = `\n═══ [AgentSkill: ${skillName}] ${description} ═══`;
+            const footer = `═══ [/${skillName}] ═══\n`;
+            const content = `${header}\n${body}\n${footer}`;
+            console.log(content);
+            return content;
+        },
+    };
+}
+
+function attachSkillGuideUse(skill: DiscoveredSkill, exports: Record<string, unknown>): void {
+    if (!skill.skillMdPath || typeof exports !== "object" || exports === null || "use" in exports) return;
+    try {
+        exports.use = buildAgentSkillUse(skill.name, skill.skillMdPath).use;
+    } catch (err) {
+        const msg = err instanceof Error ? err.stack ?? err.message : String(err);
+        log.warn(`[skill-loader] ⚠ 读取 Skill "${skill.name}" 的 SKILL.md 指南失败:\n${msg}\n`);
+    }
+}
+
+function createSkillMdModuleEntry(skill: DiscoveredSkill): ModuleEntry | null {
+    if (!skill.skillMdPath) return null;
+
+    try {
+        const raw = readFileSync(skill.skillMdPath, "utf-8");
+        const parsed = parseSkillMdFrontmatter(raw);
+        const description = parsed.description || "Agent Skill";
+        return {
+            name: skill.name,
+            description,
+            methods: [{
+                name: "use",
+                brief: `打印并阅读该 Skill 的详细指南。调用方式: await ${skill.name}.use()`,
+                fullDoc: "",  // use() 本身即自文档（调用后输出 SKILL.md 全文），无需 two-pass 注入
+            }],
+        };
+    } catch (err) {
+        const msg = err instanceof Error ? err.stack ?? err.message : String(err);
+        log.warn(`解析 AgentSkill "${skill.name}" 的文档失败`, { error: msg });
+        return null;
+    }
 }
 
 /**
@@ -206,22 +258,13 @@ export async function loadAllSkills(): Promise<LoadedSkill[]> {
         // ═══ 纯 AgentSkill：生成虚拟 use() 导出 ═══
         if (skill.isAgentSkill && skill.skillMdPath) {
             try {
-                const raw = readFileSync(skill.skillMdPath, "utf-8");
-                const parsed = parseSkillMdFrontmatter(raw);
-                const description = parsed.description || "Agent Skill";
-                const body = parsed.body;
                 const skillName = skill.name;
+                const guide = buildAgentSkillUse(skillName, skill.skillMdPath);
 
                 loaded.push({
                     name: skillName,
                     exports: {
-                        use: () => {
-                            const header = `\n═══ [AgentSkill: ${skillName}] ${description} ═══`;
-                            const footer = `═══ [/${skillName}] ═══\n`;
-                            const content = `${header}\n${body}\n${footer}`;
-                            console.log(content);
-                            return content;
-                        },
+                        use: guide.use,
                     },
                     isAgentSkill: true,
                 });
@@ -236,6 +279,7 @@ export async function loadAllSkills(): Promise<LoadedSkill[]> {
         // ═══ 代码型 TS Skill：从 index.ts/js 动态 import ═══
         const exports = await loadSingleSkill(skill.name, skill.indexPath);
         if (exports) {
+            attachSkillGuideUse(skill, exports);
             loaded.push({
                 name: skill.name,
                 exports,
@@ -268,42 +312,36 @@ export function parseAllSkillDocs(): ModuleEntry[] {
     for (const skill of discovered) {
         // ═══ 纯 AgentSkill：从 SKILL.md frontmatter 生成 ModuleEntry ═══
         if (skill.isAgentSkill && skill.skillMdPath) {
-            try {
-                const raw = readFileSync(skill.skillMdPath, "utf-8");
-                const parsed = parseSkillMdFrontmatter(raw);
-                const description = parsed.description || "Agent Skill";
-                entries.push({
-                    name: skill.name,
-                    description,
-                    methods: [{
-                        name: "use",
-                        brief: `打印并阅读该 Skill 的详细指南。调用方式: await ${skill.name}.use()`,
-                        fullDoc: "",  // use() 本身即自文档（调用后输出 SKILL.md 全文），无需 two-pass 注入
-                    }],
-                });
-            } catch (err) {
-                const msg = err instanceof Error ? err.stack ?? err.message : String(err);
-                log.warn(`解析 AgentSkill "${skill.name}" 的文档失败`, { error: msg });
-            }
+            const entry = createSkillMdModuleEntry(skill);
+            if (entry) entries.push(entry);
             continue;
         }
 
         // ═══ 代码型 TS Skill：从 .d.ts 解析 ═══
-        if (!skill.dtsPath) continue;
-        try {
-            const content = readFileSync(skill.dtsPath, "utf-8");
-            const parsed = parseDtsFile(content, skill.dtsPath);
+        let parsedAny = false;
+        if (skill.dtsPath) {
+            try {
+                const content = readFileSync(skill.dtsPath, "utf-8");
+                const parsed = parseDtsFile(content, skill.dtsPath);
 
-            // 修正默认占位符名称为实际的 skill.name
-            for (const mod of parsed) {
-                if (mod.name === "default") {
-                    mod.name = skill.name;
+                // 修正默认占位符名称为实际的 skill.name
+                for (const mod of parsed) {
+                    if (mod.name === "default") {
+                        mod.name = skill.name;
+                    }
+                    entries.push(mod);
                 }
-                entries.push(mod);
+                parsedAny = parsed.length > 0;
+            } catch (err) {
+                const msg = err instanceof Error ? err.stack ?? err.message : String(err);
+                log.warn(`解析 Skill "${skill.name}" 的文档失败`, { error: msg });
             }
-        } catch (err) {
-            const msg = err instanceof Error ? err.stack ?? err.message : String(err);
-            log.warn(`解析 Skill "${skill.name}" 的文档失败`, { error: msg });
+        }
+
+        // 代码型 Skill 如果没有可解析 .d.ts，但带 SKILL.md，则用指南生成可分配名册项。
+        if (!parsedAny && skill.skillMdPath) {
+            const entry = createSkillMdModuleEntry(skill);
+            if (entry) entries.push(entry);
         }
     }
 
@@ -393,22 +431,13 @@ export async function reloadAllSkills(): Promise<LoadedSkill[]> {
         // ═══ 纯 AgentSkill：重新读取 SKILL.md 并生成新的 use() 闭包 ═══
         if (skill.isAgentSkill && skill.skillMdPath) {
             try {
-                const raw = readFileSync(skill.skillMdPath, "utf-8");
-                const parsed = parseSkillMdFrontmatter(raw);
-                const description = parsed.description || "Agent Skill";
-                const body = parsed.body;
                 const skillName = skill.name;
+                const guide = buildAgentSkillUse(skillName, skill.skillMdPath);
 
                 loaded.push({
                     name: skillName,
                     exports: {
-                        use: () => {
-                            const header = `\n═══ [AgentSkill: ${skillName}] ${description} ═══`;
-                            const footer = `═══ [/${skillName}] ═══\n`;
-                            const content = `${header}\n${body}\n${footer}`;
-                            console.log(content);
-                            return content;
-                        },
+                        use: guide.use,
                     },
                     isAgentSkill: true,
                 });
@@ -437,6 +466,7 @@ export async function reloadAllSkills(): Promise<LoadedSkill[]> {
                     if (!key.startsWith("__")) exports[key] = value;
                 }
             }
+            attachSkillGuideUse(skill, exports);
 
             loaded.push({
                 name: skill.name,

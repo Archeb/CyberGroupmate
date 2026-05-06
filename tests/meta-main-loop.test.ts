@@ -16,6 +16,7 @@ import { MetaSandbox } from "../src/meta-sandbox/meta-sandbox.js";
 import { CallbackQueue } from "../src/subagent/callback-queue.js";
 import { SubagentManager } from "../src/subagent/subagent-manager.js";
 import type { AttentionQueueEntry } from "../src/subagent/types.js";
+import type { LLMResponse } from "../src/core/llm.js";
 
 function createMetaMemoryStub() {
     return {
@@ -181,13 +182,8 @@ describe("MainAgentLoop meta session path", () => {
         });
         const sandbox = new MetaSandbox(metaApiContext);
 
-        loop.setMetaSessionHandler(createMetaSessionHandler({
-            getPersona: () => ({ name: "测试编排者", description: "验证真实 meta session dispatch" }),
-            globalState,
-            memory: createMetaMemoryStub() as any,
-            sandbox,
-            getLlmConfigs: () => [TEST_LLM_CONFIG],
-            llmCaller: async () => ({
+        const responses: LLMResponse[] = [
+            {
                 content: [
                     "准备下发任务。",
                     "```ts",
@@ -201,7 +197,22 @@ describe("MainAgentLoop meta session path", () => {
                     "[SESSION_DIGEST]dispatched task to telegram:g1[/SESSION_DIGEST]",
                     "<end_turn>",
                 ].join("\n"),
-            }),
+            },
+            {
+                content: "Done.\n[SESSION_DIGEST]dispatched task to telegram:g1[/SESSION_DIGEST]\n<end_turn>",
+            },
+        ];
+        loop.setMetaSessionHandler(createMetaSessionHandler({
+            getPersona: () => ({ name: "测试编排者", description: "验证真实 meta session dispatch" }),
+            globalState,
+            memory: createMetaMemoryStub() as any,
+            sandbox,
+            getLlmConfigs: () => [TEST_LLM_CONFIG],
+            llmCaller: async () => {
+                const next = responses.shift();
+                assert.ok(next);
+                return next;
+            },
         }));
 
         accumulator.ingest(2, {
@@ -471,6 +482,87 @@ describe("MainAgentLoop meta session path", () => {
         assert.deepEqual(receivedEntries[0]?.schedulerTriggers, []);
 
         globalState.dispose();
+    });
+
+    it("runs proactive idle 15 minutes after meta activity, then repeats every 30 minutes", async () => {
+        const dir = tempDir();
+        const globalState = new GlobalState({
+            filePath: join(dir, "global-state.json"),
+            autoSaveInterval: 0,
+        });
+        const accumulator = new AttentionAccumulator(globalState, { windowMs: 0, topN: 2 });
+        const callbackQueue = new CallbackQueue();
+        const subagentManager = new SubagentManager({ sessionsDir: join(dir, "sessions") });
+        const loop = new MainAgentLoop(accumulator, callbackQueue, subagentManager, {}, globalState);
+        const originalNow = Date.now;
+        const fifteenMinutes = 15 * 60 * 1000;
+        const thirtyMinutes = 30 * 60 * 1000;
+        let now = 1_800_000_000_000;
+        let receivedEntries: AttentionQueueEntry[] = [];
+
+        loop.setMetaSessionHandler(async (entries) => {
+            receivedEntries = entries;
+            return { endReason: "end_turn", sessionDigest: "idle handled" };
+        });
+
+        Date.now = () => now;
+        try {
+            (loop as any).lastNonIdleActivityAt = now;
+            (loop as any).lastProactiveIdleAt = 0;
+
+            now += fifteenMinutes - 1;
+            let result = await loop.tick();
+            assert.deepEqual(result.phase3Attended, []);
+            assert.equal(receivedEntries.length, 0);
+
+            now += 1;
+            result = await loop.tick();
+            assert.deepEqual(result.phase3Attended, ["__meta__"]);
+            assert.equal(receivedEntries[0]?.source, "PROACTIVE_IDLE");
+
+            const firstIdleAt = now;
+            receivedEntries = [];
+            now = firstIdleAt + thirtyMinutes - 1;
+            result = await loop.tick();
+            assert.deepEqual(result.phase3Attended, []);
+            assert.equal(receivedEntries.length, 0);
+
+            now += 1;
+            result = await loop.tick();
+            assert.deepEqual(result.phase3Attended, ["__meta__"]);
+            assert.equal(receivedEntries[0]?.source, "PROACTIVE_IDLE");
+
+            const secondIdleAt = now;
+            receivedEntries = [];
+            now = secondIdleAt + 5 * 60 * 1000;
+            accumulator.ingest(1, {
+                chatId: "__meta__",
+                source: "SCHEDULER",
+                payload: {
+                    id: "rem-reset",
+                    type: "reminder",
+                    description: "reset proactive idle baseline",
+                },
+                enqueuedAt: now,
+            });
+            result = await loop.tick();
+            assert.deepEqual(result.phase3Attended, ["__meta__"]);
+            assert.equal(receivedEntries[0]?.source, "SCHEDULER_TRIGGER");
+
+            receivedEntries = [];
+            now += fifteenMinutes - 1;
+            result = await loop.tick();
+            assert.deepEqual(result.phase3Attended, []);
+            assert.equal(receivedEntries.length, 0);
+
+            now += 1;
+            result = await loop.tick();
+            assert.deepEqual(result.phase3Attended, ["__meta__"]);
+            assert.equal(receivedEntries[0]?.source, "PROACTIVE_IDLE");
+        } finally {
+            Date.now = originalNow;
+            globalState.dispose();
+        }
     });
 
     it("includes recent direct-address messages in the meta prompt", async () => {

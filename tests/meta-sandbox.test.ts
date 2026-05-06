@@ -54,4 +54,18 @@ console.log(typeof agents.listStatus);
         assert.equal(third.error, false);
         assert.equal(third.output, "[log] function");
     });
+
+    it("emits meta-api call observations even without console.log", async () => {
+        const sandbox = new MetaSandbox({
+            dispatch: {
+                taskToGroup: async () => ({ taskId: "task-42", status: "PENDING" }),
+            },
+        });
+        sandbox.beginSession("s1");
+
+        const result = await sandbox.execute("await dispatch.taskToGroup('telegram:g1', { contentDirection: 'reply' });");
+        assert.equal(result.error, false);
+        assert.match(result.output, /\[log\] \[meta-api\] dispatch.taskToGroup ->/);
+        assert.match(result.output, /task-42/);
+    });
 });

@@ -101,7 +101,7 @@ export function setTokenPricing(pricing, llmProfiles) {
 }
 
 /** Calculate cost for a single call */
-export function calculateCallCost(usage, model) {
+export function calculateCallCost(usage, model, provider) {
   if (!usage) return 0;
   const pricing = get(tokenPricing);
   const profileName = _modelToProfile[model];
@@ -113,7 +113,10 @@ export function calculateCallCost(usage, model) {
   const completion = usage.completionTokens ?? 0;
   const cached = usage.cachedTokens ?? 0;
   const cacheCreation = usage.cacheCreationTokens ?? 0;
-  const regularPrompt = Math.max(0, prompt - cached);
+  // Anthropic input_tokens is already non-cache input; OpenAI/Google include cache hits in prompt tokens.
+  const regularPrompt = provider === 'anthropic'
+    ? prompt
+    : Math.max(0, prompt - cached);
 
   let cost = 0;
   cost += (regularPrompt / M) * p.input;
@@ -121,6 +124,18 @@ export function calculateCallCost(usage, model) {
   cost += (cached / M) * (p.cachedInput ?? p.input);
   cost += (cacheCreation / M) * (p.cacheCreation ?? p.input);
   return cost;
+}
+
+function getUsageTotalTokens(usage, provider) {
+  if (!usage) return 0;
+  const prompt = usage.promptTokens ?? 0;
+  const completion = usage.completionTokens ?? 0;
+  const cached = usage.cachedTokens ?? 0;
+  const cacheCreation = usage.cacheCreationTokens ?? 0;
+  const rawTotal = usage.totalTokens ?? (prompt + completion);
+  return provider === 'anthropic'
+    ? rawTotal + cached + cacheCreation
+    : rawTotal;
 }
 
 /** 初始加载：从 llm:init 事件接收最近 N 条 log */
@@ -132,7 +147,7 @@ export function handleLLMInit(data) {
   // 用后端汇总统计重建 llmStats（含累计 cost）
   const costTotal = (logs || []).reduce((sum, e) => {
     if (e.response && !e.response.error) {
-      return sum + calculateCallCost(e.response.usage, e.model);
+      return sum + calculateCallCost(e.response.usage, e.model, e.provider);
     }
     return sum;
   }, 0);
@@ -162,6 +177,7 @@ export function handleLLMResponse(data) {
   const logs = get(llmLogs);
   const entry = logs.find(e => e.callId === data.callId);
   const model = entry?.model ?? '';
+  const provider = entry?.provider ?? '';
 
   llmLogs.update(logs => {
     const e = logs.find(e => e.callId === data.callId);
@@ -169,7 +185,7 @@ export function handleLLMResponse(data) {
     return logs;
   });
 
-  const cost = data.error ? 0 : calculateCallCost(data.usage, model);
+  const cost = data.error ? 0 : calculateCallCost(data.usage, model, provider);
 
   llmStats.update(s => {
     if (data.error) {
@@ -177,8 +193,8 @@ export function handleLLMResponse(data) {
     } else {
       s.success++;
     }
-    if (data.usage?.totalTokens) {
-      s.totalTokens += data.usage.totalTokens;
+    if (data.usage) {
+      s.totalTokens += getUsageTotalTokens(data.usage, provider);
     }
     if (data.usage?.cachedTokens) {
       s.totalCachedTokens += data.usage.cachedTokens;

@@ -1,6 +1,6 @@
-import type { LLMConfig } from "../core/config.js";
+import type { LLMConfig, VisionConfig } from "../core/config.js";
 import type { ChatMessage } from "../core/llm.js";
-import { getGroupModelKey } from "../core/chat-id.js";
+import { getGroupModelKey, parseChatId } from "../core/chat-id.js";
 import { createLogger } from "../core/logger.js";
 import { loadPromptFile } from "../core/prompt-loader.js";
 import { ContextEngine } from "../context-engine/context-engine.js";
@@ -36,9 +36,11 @@ const META_HISTORY_SECTION_ALLOWLIST = new Set([
 export interface MetaSessionHandlerDeps {
     getPersona: () => { name?: string; description?: string } | undefined;
     globalState: Pick<GlobalState, "getSessionDigests" | "getMetaSessionHistory" | "appendMetaSessionHistory">;
-    memory: Pick<IMemoryStoreV2, "getGroupModel" | "getProfilesForChat" | "getPersonIdentity" | "getTopicById" | "todoList" | "getRecentMessages">;
+    memory: Pick<IMemoryStoreV2, "getGroupModel" | "getProfilesForChat" | "getPersonIdentity" | "getTopicById" | "todoList" | "getRecentMessages">
+        & Partial<Pick<IMemoryStoreV2, "getStickerDescription">>;
     sandbox: MetaSandbox;
     getLlmConfigs: () => LLMConfig[];
+    getVisionConfig?: () => VisionConfig | undefined;
     llmCaller?: MetaLLMCaller;
     maxTurns?: number;
     codeTimeout?: number;
@@ -162,7 +164,7 @@ async function buildMetaMessages(
         : null;
     const instructionRender = engine.render({
         currentTurnInstruction: [
-            "请检查是否需要跨群检索、分派任务、写 todo 或注册 remind/cron。若无需动作，请直接结束本轮。",
+            "你可以**写代码**来跨群检索、分派任务、写 todo 或注册 remind/cron，但请勿自己执行具体任务。若无需动作，则不输出代码。",
             proactiveInstruction,
         ].filter(Boolean).join("\n\n"),
     });
@@ -329,9 +331,10 @@ async function buildMetaResolveContext(
         : deps.memory.getGroupModel(getGroupModelKey(entry.chatId));
     const topicDigests = enrichTopicDigests(entry.topicDigests, deps.memory);
     const activeUserProfiles = isSyntheticMeta ? [] : buildActiveUserProfiles(entry, deps.memory);
-    const isDirectMessage = groupModel?.isDirectMessage ?? entry.directAddressReason === "DM";
+    const isDirectMessage = groupModel?.isDirectMessage ?? inferDirectMessageFromChatId(entry.chatId) ?? entry.directAddressReason === "DM";
     const chatType = isSyntheticMeta ? "系统" : deriveChatType(isDirectMessage);
     const recentMessageContext = buildRecentMessageContext(deps.memory, entry, isSyntheticMeta);
+    const visionConfig = deps.getVisionConfig?.() ?? loadConfig().vision;
 
     return {
         chatId: entry.chatId,
@@ -350,10 +353,28 @@ async function buildMetaResolveContext(
         topicDigests,
         recentMessages: recentMessageContext.messages,
         fallbackToRecentMessages: recentMessageContext.fallbackToRecent,
+        attendMediaMode: visionConfig?.attendMode,
+        stickerDescriptionLookup: typeof deps.memory.getStickerDescription === "function" ? deps.memory : undefined,
         groupModel: groupModel ?? undefined,
         tonePreset: tonePresetFor(entry.stickinessLevel),
         activeUserProfiles: activeUserProfiles.length > 0 ? activeUserProfiles : undefined,
     };
+}
+
+function inferDirectMessageFromChatId(chatId: string): boolean | undefined {
+    try {
+        const parsed = parseChatId(chatId);
+        if (parsed.platform === "onebot") {
+            return parsed.rawId.startsWith("private:");
+        }
+        if (parsed.platform === "telegram") {
+            const numericId = Number(parsed.rawId);
+            return Number.isFinite(numericId) ? numericId > 0 : undefined;
+        }
+        return undefined;
+    } catch {
+        return undefined;
+    }
 }
 
 function buildRecentMessageContext(
@@ -615,6 +636,7 @@ await dispatch.getTask(taskId: string): Promise<{
 } | null>
 await dispatch.listTasks(options?: { chatId?: string, status?: string, limit?: number, offset?: number }): Promise<{ tasks, total, hasMore }>
 \`\`\`
+dispatch 的 chatId 参数要用「注意力切换」头部里的带平台的 composite chatId（如 \`telegram:1234567890\`）
 dispatch 会自动将 context 序列化后注入 Subagent 的任务 prompt。你查到的跨群信息、事实、讨论记录都可以放在 context 里。tracking 会把待跟进项写入 todo，bindingId 为目标 chatId；如果设置 remindAfterMinutes，还会注册一次性唤醒。
 当回复适合用贴纸表达情绪或活跃气氛时，在 taskSpec.suggestedEmojis 填 2-6 个相关 emoji；系统会用这些 emoji 搜索可用贴纸并交给 Subagent 最终决定是否发送。
 当你派发的是提问、跨群转述、等待群友回应或重要回复时，优先在同一次 dispatch.taskToGroup() 里填写 tracking；这样系统会自动保留 taskId、trackingKey、目标 chatId 和 callback，避免另写 todo/remind 时漏掉上下文。

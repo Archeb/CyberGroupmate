@@ -18,6 +18,7 @@ import { AttentionAccumulator } from "../accumulator/attention-accumulator.js";
 import { createLogger } from "../core/logger.js";
 import { buildWakeConditionPayload, matchCallbackWakeConditions } from "./wake-conditions.js";
 import type { PlatformAdapter } from "../adapter/platform-adapter.js";
+import { markChatAsRead } from "../adapter/read-receipts.js";
 import type { MetaSessionHandler } from "./meta-session-handler.js";
 
 const log = createLogger("main-agent-loop");
@@ -32,7 +33,8 @@ const DEFAULT_LOOP_CONFIG: MainAgentLoopConfig = {
     pollInterval: DEFAULT_SUBAGENT_CONFIG.pollInterval,
 };
 
-const DEFAULT_PROACTIVE_IDLE_INTERVAL_MS = 30 * 60 * 1000;
+const PROACTIVE_IDLE_INITIAL_DELAY_MS = 15 * 60 * 1000;
+const PROACTIVE_IDLE_REPEAT_INTERVAL_MS = 30 * 60 * 1000;
 
 /**
  * MainAgentLoop — 主 Agent Meta-CodeAct 循环
@@ -220,10 +222,7 @@ export class MainAgentLoop {
         const queueSnapshot = this.accumulator.getSnapshot();
         if (queueSnapshot.active.length === 0 && callbacks.length === 0) {
             const now = Date.now();
-            if (
-                now - this.lastNonIdleActivityAt >= DEFAULT_PROACTIVE_IDLE_INTERVAL_MS
-                && now - this.lastProactiveIdleAt >= DEFAULT_PROACTIVE_IDLE_INTERVAL_MS
-            ) {
+            if (this.shouldTriggerProactiveIdle(now)) {
                 this.lastProactiveIdleAt = now;
                 this.accumulator.ingest(1, {
                     chatId: "__meta__",
@@ -374,16 +373,7 @@ export class MainAgentLoop {
     }
 
     private markAsRead(chatId: string): void {
-        const adapter = this.adapters.find((item) => chatId.startsWith(`${item.platform}:`));
-        if (!adapter?.markAsRead) {
-            return;
-        }
-        adapter.markAsRead(chatId).catch((error) => {
-            log.debug("markAsRead failed after Meta attend", {
-                chatId,
-                error: String(error).slice(0, 100),
-            });
-        });
+        markChatAsRead(this.adapters, chatId, "meta-attend");
     }
 
     /**
@@ -405,6 +395,18 @@ export class MainAgentLoop {
      */
     setGlobalState(gs: GlobalState): void {
         this.globalState = gs;
+    }
+
+    private shouldTriggerProactiveIdle(now: number): boolean {
+        const hasIdleRunAfterRecentActivity = this.lastProactiveIdleAt > 0
+            && this.lastProactiveIdleAt >= this.lastNonIdleActivityAt;
+        const baselineAt = hasIdleRunAfterRecentActivity
+            ? this.lastProactiveIdleAt
+            : this.lastNonIdleActivityAt;
+        const requiredDelay = hasIdleRunAfterRecentActivity
+            ? PROACTIVE_IDLE_REPEAT_INTERVAL_MS
+            : PROACTIVE_IDLE_INITIAL_DELAY_MS;
+        return now - baselineAt >= requiredDelay;
     }
 
 

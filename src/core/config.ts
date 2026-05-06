@@ -33,7 +33,7 @@ export interface PoolConfig {
 }
 
 export interface LLMConfig {
-    provider: "anthropic" | "openai" | "google";
+    provider: "anthropic" | "openai" | "openai_responses" | "google";
     baseUrl: string;
     apiKey: string;
     model: string;
@@ -76,6 +76,8 @@ export interface LLMConfig {
      * 适用于某些 API 在出错时返回 200 但 content 包含错误信息的情况。
      */
     errorContentPatterns?: string[];
+    /** OpenAI Responses API 请求模式：stream / non_stream。仅 provider=openai_responses 时生效，默认 non_stream。 */
+    responsesRequestMode?: "stream" | "non_stream";
 }
 
 /** 相似度度量方法 */
@@ -257,6 +259,8 @@ export interface SubagentExternalConfig {
     sandboxIdleTimeout?: number;
     pollInterval?: number;
     alertEngagementThreshold?: number;
+    /** Subagent 发言后等待群聊自然发酵并接管 L0 追问的窗口时长 (ms)。默认 120000 */
+    postTaskWindowMs?: number;
     /** 是否限制 sandbox 只能对其绑定的 chatId 执行 adapter 写操作。默认 false */
     restrictAdapterWritesToBoundChat?: boolean;
     cosineDecay?: {
@@ -315,8 +319,8 @@ export interface SubagentExternalConfig {
 
 /** Vision 处理配置 */
 export interface VisionConfig {
-    /** attend-handler 媒体策略：vision=看图(内联图片)、describe=仅文字描述、disable=禁用媒体富化。默认 disable */
-    attendMode?: "vision" | "describe" | "disable";
+    /** attend/meta 媒体策略：vision=看图(内联图片)、describe=仅文字描述、enrich=仅使用已有缓存描述、disable=禁用媒体富化。默认 disable */
+    attendMode?: "vision" | "describe" | "enrich" | "disable";
     /** 以 file 形式发送的大图压缩阈值（长边像素）。默认 1024 */
     maxImageSize?: number;
     /** 单轮上下文最多内联几张图片，超出走 vision 描述。默认 3 */
@@ -813,6 +817,7 @@ function parseSubagentConfig(fileConfig: Record<string, unknown>): SubagentExter
         sandboxIdleTimeout: raw.sandbox_idle_timeout != null ? num(raw.sandbox_idle_timeout, 600000) : undefined,
         pollInterval: raw.poll_interval != null ? num(raw.poll_interval, 5000) : undefined,
         alertEngagementThreshold: raw.alert_engagement_threshold != null ? num(raw.alert_engagement_threshold, 60) : undefined,
+        postTaskWindowMs: raw.post_task_window_ms != null ? num(raw.post_task_window_ms, 120000) : undefined,
         restrictAdapterWritesToBoundChat: raw.restrict_adapter_writes_to_bound_chat != null ? Boolean(raw.restrict_adapter_writes_to_bound_chat) : undefined,
         cosineDecay: Object.keys(rawCD).length > 0 ? {
             defaultCyclePeriod: rawCD.default_cycle_period != null ? num(rawCD.default_cycle_period, 20) : undefined,
@@ -1006,7 +1011,7 @@ function parseLLMProfile(raw: Record<string, unknown>): LLMConfig {
     }
 
     return {
-        provider: (str(raw.provider) as "anthropic" | "openai" | "google") ?? DEFAULT_LLM.provider,
+        provider: (str(raw.provider) as "anthropic" | "openai" | "openai_responses" | "google") ?? DEFAULT_LLM.provider,
         baseUrl: str(raw.base_url) ?? DEFAULT_LLM.baseUrl,
         apiKey: str(raw.api_key) ?? DEFAULT_LLM.apiKey,
         model: str(raw.model) ?? DEFAULT_LLM.model,
@@ -1030,6 +1035,7 @@ function parseLLMProfile(raw: Record<string, unknown>): LLMConfig {
         errorContentPatterns: (Array.isArray(raw.error_content_patterns) && raw.error_content_patterns.length > 0)
             ? raw.error_content_patterns.map(String)
             : undefined,
+        responsesRequestMode: (str(raw.responses_request_mode) as "stream" | "non_stream" | undefined),
     };
 }
 
@@ -1128,6 +1134,7 @@ export function serializeConfigToObject(config: AppConfig): Record<string, unkno
         if (p.extraBody && Object.keys(p.extraBody).length > 0) entry.extra_body = p.extraBody;
         if (p.customHeaders && Object.keys(p.customHeaders).length > 0) entry.custom_headers = p.customHeaders;
         if (p.errorContentPatterns && p.errorContentPatterns.length > 0) entry.error_content_patterns = p.errorContentPatterns;
+        if (p.responsesRequestMode) entry.responses_request_mode = p.responsesRequestMode;
         if (p.supportsPrefill === false) entry.supports_prefill = false;
         if (p.pricing) {
             const pricing: Record<string, unknown> = {
@@ -1337,6 +1344,7 @@ export function serializeConfigToObject(config: AppConfig): Record<string, unkno
         if (sa.sandboxIdleTimeout != null) s.sandbox_idle_timeout = sa.sandboxIdleTimeout;
         if (sa.pollInterval != null) s.poll_interval = sa.pollInterval;
         if (sa.alertEngagementThreshold != null) s.alert_engagement_threshold = sa.alertEngagementThreshold;
+        if (sa.postTaskWindowMs != null) s.post_task_window_ms = sa.postTaskWindowMs;
         if (sa.restrictAdapterWritesToBoundChat != null) {
             s.restrict_adapter_writes_to_bound_chat = sa.restrictAdapterWritesToBoundChat;
         }
@@ -1576,6 +1584,9 @@ export function validateConfig(config: unknown): { valid: boolean; errors: strin
     }
 
     const subagent = c.subagent as Record<string, unknown> | undefined;
+    if (subagent?.postTaskWindowMs != null && (!(typeof subagent.postTaskWindowMs === "number") || subagent.postTaskWindowMs < 0)) {
+        errors.push("subagent.postTaskWindowMs 应大于等于 0");
+    }
     const metaHistory = subagent?.metaHistory as Record<string, unknown> | undefined;
     if (metaHistory) {
         const positiveFields = ["softCharLimit", "trimTargetChars", "minMessages", "hardMessageLimit", "trimTargetMessages"];

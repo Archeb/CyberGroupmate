@@ -478,6 +478,54 @@ describe("storeInteraction", () => {
         assert.equal(row.type, "agent_replied");
         assert.equal(row.sentiment, "positive");
     });
+
+    it("should count DIRECT_ADDRESS interactions per chat", () => {
+        const now = new Date().toISOString();
+        mem.storeInteraction({
+            date: now,
+            chatId: "chat-a",
+            userId: "u1",
+            topicId: null,
+            type: "agent_mentioned",
+            summary: "@agent ping",
+            sentiment: "neutral",
+            significance: 0.6,
+        });
+        mem.storeInteraction({
+            date: now,
+            chatId: "chat-a",
+            userId: "agent",
+            topicId: null,
+            type: "agent_replied",
+            summary: "agent reply",
+            sentiment: "neutral",
+            significance: 0.7,
+        });
+        mem.storeInteraction({
+            date: now,
+            chatId: "chat-b",
+            userId: "u2",
+            topicId: null,
+            type: "direct_message",
+            summary: "dm",
+            sentiment: "neutral",
+            significance: 0.8,
+        });
+        mem.storeInteraction({
+            date: now,
+            chatId: "chat-a",
+            userId: "u3",
+            topicId: null,
+            type: "reaction",
+            summary: "reaction should not count",
+            sentiment: "neutral",
+            significance: 0.2,
+        });
+
+        const stats = mem.countInteractionsPerChat(7);
+        assert.equal(stats.get("chat-a")?.interactionCount, 2);
+        assert.equal(stats.get("chat-b")?.interactionCount, 1);
+    });
 });
 
 // ─── 10. recall() ───

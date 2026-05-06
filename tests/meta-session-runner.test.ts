@@ -201,11 +201,11 @@ describe("runMetaSession", () => {
         assert.deepEqual(llmOptions[1]?.stop, ["[MetaSandbox observation]"]);
         assert.match(llmCalls[1][llmCalls[1].length - 1].content, /MetaSandbox observation/);
         assert.match(llmCalls[1][llmCalls[1].length - 1].content, /42/);
-        assert.doesNotMatch(llmCalls[1][llmCalls[1].length - 2].content, /const value = 1/);
+        assert.match(llmCalls[1][llmCalls[1].length - 2].content, /const value = await tools\.answer/);
         assert.doesNotMatch(llmCalls[1][llmCalls[1].length - 2].content, /<end_turn>/);
     });
 
-    it("ends after successful code execution when code is followed only by digest and end_turn", async () => {
+    it("ignores code+end_turn and waits for a pure-text digest+end_turn turn", async () => {
         const sandbox = new MetaSandbox({
             tools: {
                 dispatch: async () => ({ taskId: "task-1", status: "PENDING" }),
@@ -213,6 +213,23 @@ describe("runMetaSession", () => {
         });
         const llmCalls: ChatMessage[][] = [];
 
+        const responses: LLMResponse[] = [
+            {
+                content: [
+                    "Need to dispatch once.",
+                    "",
+                    "```ts",
+                    "return await tools.dispatch();",
+                    "```",
+                    "",
+                    "[SESSION_DIGEST]dispatched greeting task[/SESSION_DIGEST]",
+                    "<end_turn>",
+                ].join("\n"),
+            },
+            {
+                content: "Done.\n[SESSION_DIGEST]dispatched greeting task[/SESSION_DIGEST]\n<end_turn>",
+            },
+        ];
         const result = await runMetaSession(
             [
                 { role: "system", content: "system" },
@@ -223,37 +240,29 @@ describe("runMetaSession", () => {
             {
                 llmCaller: async (messages) => {
                     llmCalls.push(messages.map((message) => ({ ...message })));
-                    return {
-                        content: [
-                            "Need to dispatch once.",
-                            "",
-                            "```ts",
-                            "return await tools.dispatch();",
-                            "```",
-                            "",
-                            "[SESSION_DIGEST]dispatched greeting task[/SESSION_DIGEST]",
-                            "<end_turn>",
-                        ].join("\n"),
-                    };
+                    const next = responses.shift();
+                    assert.ok(next);
+                    return next;
                 },
             },
         );
 
         assert.equal(result.endReason, "end_turn");
-        assert.equal(result.turns.length, 1);
-        assert.equal(llmCalls.length, 1);
+        assert.equal(result.turns.length, 2);
+        assert.equal(llmCalls.length, 2);
         assert.equal(result.sessionDigest, "dispatched greeting task");
         assert.match(result.turns[0]?.observation ?? "", /task-1/);
-        assert.doesNotMatch(result.messages.map((message) => message.content).join("\n\n"), /dispatched greeting task/);
+        assert.match(result.messages.map((message) => message.content).join("\n\n"), /dispatched greeting task/);
     });
 
-    it("ignores fabricated observations and extra code after the first code block", async () => {
+    it("keeps post-code history, runs only first block, then waits next round to end", async () => {
         const sandbox = new MetaSandbox({
             tools: {
                 answer: async () => 42,
             },
         });
         const llmCalls: ChatMessage[][] = [];
+
         const responses: LLMResponse[] = [
             {
                 content: [
@@ -282,7 +291,6 @@ describe("runMetaSession", () => {
                 content: "Done.\n[SESSION_DIGEST]real observation handled[/SESSION_DIGEST]\n<end_turn>",
             },
         ];
-
         const result = await runMetaSession(
             [
                 { role: "system", content: "system" },
@@ -309,11 +317,12 @@ describe("runMetaSession", () => {
         assert.match(result.turns[0]?.observation ?? "", /42/);
         assert.equal(result.sessionDigest, "real observation handled");
 
+        assert.equal(llmCalls.length, 2);
         const secondCallText = llmCalls[1]?.map((message) => message.content).join("\n\n") ?? "";
         assert.match(secondCallText, /Need one real lookup/);
-        assert.doesNotMatch(secondCallText, /second block must not run/);
-        assert.doesNotMatch(secondCallText, /fake completed/);
-        assert.doesNotMatch(secondCallText, /Now I will dispatch/);
+        assert.match(secondCallText, /second block must not run/);
+        assert.match(secondCallText, /fake completed/);
+        assert.match(secondCallText, /Now I will dispatch/);
     });
 
     it("keeps requesting an explicit end_turn when the model emits no runnable code", async () => {

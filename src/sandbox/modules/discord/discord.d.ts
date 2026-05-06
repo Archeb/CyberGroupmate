@@ -22,12 +22,13 @@ declare const discord: {
     /**
      * 发送媒体消息（附件）到指定频道。支持 URL 和本地文件路径（支持绝对路径或基于 cwd 工作区的相对路径）。
      * @param channelId 目标频道 ID
-     * @param media 媒体对象，支持 URL 或文件内容
+     * @param media 媒体对象或路径字符串，支持 URL、本地文件路径、data URL 或文件内容
      * @param opts 可选参数
      * @example sendMedia(channelId, { url: "https://example.com/image.png", caption: "看看这张图" })
      * @example sendMedia(channelId, { file: "screenshot.png", caption: "本地截图" }) // 自动基于 process.cwd() 解析
+     * @example sendMedia(channelId, "screenshot.png")
      */
-    sendMedia(channelId: string, media: { url?: string; file?: string; caption?: string; fileName?: string }, opts?: { replyTo?: string }): Promise<{ id: string; text: string; channelId: string; guildId?: string; timestamp: string; }>;
+    sendMedia(channelId: string, media: string | { type?: "photo" | "video" | "document" | "audio" | "auto"; url?: string; file?: string; caption?: string; fileName?: string }, opts?: { replyTo?: string; caption?: string }): Promise<{ id: string; text: string; channelId: string; guildId?: string; timestamp: string; }>;
 
     // ─── 状态操作 ───
 

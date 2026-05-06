@@ -36,15 +36,26 @@ function toHourKey(iso: string): string {
     return iso.slice(0, 13); // "YYYY-MM-DDTHH"
 }
 
-function makeBucketKey(hourKey: string, model: string, caller: string): string {
-    return `${hourKey}|${model}|${caller}`;
+function makeBucketKey(hourKey: string, provider: string, model: string, caller: string): string {
+    return `${hourKey}|${provider}|${model}|${caller}`;
 }
 
-function parseBucketKey(key: string): { hourKey: string; model: string; caller: string } {
+function parseBucketKey(key: string): { hourKey: string; provider: string; model: string; caller: string } {
+    const parts = key.split("|");
+    if (parts.length >= 4) {
+        return {
+            hourKey: parts[0],
+            provider: parts[1],
+            model: parts[2],
+            caller: parts.slice(3).join("|"),
+        };
+    }
+
     const idx1 = key.indexOf("|");
     const idx2 = key.indexOf("|", idx1 + 1);
     return {
         hourKey: key.slice(0, idx1),
+        provider: "",
         model: key.slice(idx1 + 1, idx2),
         caller: key.slice(idx2 + 1),
     };
@@ -66,7 +77,7 @@ export interface TokenBucket {
 /** v2 持久化数据结构 */
 export interface TokenStatsDataV2 {
     version: 2;
-    /** key = "hourKey|model|caller" */
+    /** key = "hourKey|provider|model|caller"；旧数据也兼容 "hourKey|model|caller" */
     buckets: Record<string, TokenBucket>;
     updatedAt: string;
 }
@@ -90,7 +101,7 @@ interface TokenStatsDataV1 {
 
 export type GroupBy = "model" | "caller" | "both";
 export type Period = "hour" | "day" | "week" | "month" | "all";
-export type SortBy = "cost" | "promptTokens" | "completionTokens" | "callCount";
+export type SortBy = "cost" | "inputTokens" | "promptTokens" | "completionTokens" | "callCount";
 export type SortDir = "asc" | "desc";
 
 export interface TokenStatsQuery {
@@ -112,6 +123,9 @@ export interface TokenStatsRow {
     key: string;
     model?: string;
     caller?: string;
+    /** 归一化后的总输入 token；Anthropic 会包含 cache read / cache creation */
+    inputTokens: number;
+    /** API 原始 prompt/input token；Anthropic 下是 non-cache input */
     promptTokens: number;
     completionTokens: number;
     cachedTokens: number;
@@ -123,6 +137,9 @@ export interface TokenStatsRow {
 }
 
 export interface TokenStatsTotals {
+    /** 归一化后的总输入 token；Anthropic 会包含 cache read / cache creation */
+    inputTokens: number;
+    /** API 原始 prompt/input token；Anthropic 下是 non-cache input */
     promptTokens: number;
     completionTokens: number;
     cachedTokens: number;
@@ -147,6 +164,7 @@ export interface TokenStatsResult {
 export function calculateCallCost(
     usage: Pick<NonNullable<LLMResponse["usage"]>, "promptTokens" | "completionTokens" | "cachedTokens" | "cacheCreationTokens">,
     pricing?: TokenPricingEntry,
+    provider?: string,
 ): number {
     if (!pricing) return 0;
 
@@ -156,9 +174,10 @@ export function calculateCallCost(
     const cachedTokens = usage.cachedTokens ?? 0;
     const cacheCreationTokens = usage.cacheCreationTokens ?? 0;
 
-    // Anthropic: input_tokens 已排除 cache_read 和 cache_creation
-    // OpenAI: cached_tokens 包含在 prompt_tokens 中，需减去
-    const regularPrompt = Math.max(0, promptTokens - cachedTokens);
+    // Anthropic input_tokens 已经是 non-cache input；OpenAI/Google 的 cache hit 包含在 prompt tokens 中。
+    const regularPrompt = provider === "anthropic"
+        ? promptTokens
+        : Math.max(0, promptTokens - cachedTokens);
 
     let cost = 0;
     cost += (regularPrompt / M) * pricing.input;
@@ -166,6 +185,15 @@ export function calculateCallCost(
     cost += (cachedTokens / M) * (pricing.cachedInput ?? pricing.input);
     cost += (cacheCreationTokens / M) * (pricing.cacheCreation ?? pricing.input);
     return cost;
+}
+
+function getDisplayInputTokens(
+    usage: Pick<NonNullable<LLMResponse["usage"]>, "promptTokens" | "cachedTokens" | "cacheCreationTokens">,
+    provider?: string,
+): number {
+    const promptTokens = usage.promptTokens ?? 0;
+    if (provider !== "anthropic") return promptTokens;
+    return promptTokens + (usage.cachedTokens ?? 0) + (usage.cacheCreationTokens ?? 0);
 }
 
 // ─── 主类 ───
@@ -178,6 +206,8 @@ export class TokenStatsCollector {
 
     /** model name → pricing */
     private modelPricing: Record<string, TokenPricingEntry> = {};
+    /** model name → provider（兼容旧版 token-stats 桶） */
+    private modelToProvider: Record<string, string> = {};
     /** model name → profile name（前端显示用） */
     private modelToProfile: Record<string, string> = {};
 
@@ -190,9 +220,11 @@ export class TokenStatsCollector {
     /** 从 LLM profiles 中提取 pricing 映射 */
     setProfiles(profiles: Record<string, LLMConfig>): void {
         this.modelPricing = {};
+        this.modelToProvider = {};
         this.modelToProfile = {};
         for (const [name, cfg] of Object.entries(profiles)) {
             this.modelToProfile[cfg.model] = name;
+            this.modelToProvider[cfg.model] = cfg.provider;
             if (cfg.pricing) {
                 this.modelPricing[cfg.model] = cfg.pricing;
             }
@@ -204,13 +236,15 @@ export class TokenStatsCollector {
      * @param model  - 模型名
      * @param caller - 调用方标识（自动归一化别名）
      * @param usage  - token 用量
+     * @param provider - LLM provider（用于处理 Anthropic cache token 语义）
      */
-    record(model: string, caller: string, usage: LLMResponse["usage"]): void {
+    record(model: string, caller: string, usage: LLMResponse["usage"], provider = ""): void {
         if (!usage) return;
 
         const now = new Date().toISOString();
         const normalizedCaller = normalizeCaller(caller);
-        const bucketKey = makeBucketKey(toHourKey(now), model, normalizedCaller);
+        const effectiveProvider = provider || this.modelToProvider[model] || "";
+        const bucketKey = makeBucketKey(toHourKey(now), effectiveProvider, model, normalizedCaller);
 
         if (!this.data.buckets[bucketKey]) {
             this.data.buckets[bucketKey] = {
@@ -258,7 +292,8 @@ export class TokenStatsCollector {
         const aggregated = new Map<string, TokenStatsRow>();
 
         for (const [bucketKey, bucket] of Object.entries(this.data.buckets)) {
-            const { hourKey, model, caller } = parseBucketKey(bucketKey);
+            const { hourKey, provider: storedProvider, model, caller } = parseBucketKey(bucketKey);
+            const provider = storedProvider || this.modelToProvider[model] || "";
 
             // 时间过滤（字符串比较，UTC hour key 是可排序的）
             if (hourKey < fromKey || hourKey > toKey) continue;
@@ -277,6 +312,7 @@ export class TokenStatsCollector {
                     key: aggKey,
                     model: groupBy !== "caller" ? model : undefined,
                     caller: groupBy !== "model" ? caller : undefined,
+                    inputTokens: 0,
                     promptTokens: 0,
                     completionTokens: 0,
                     cachedTokens: 0,
@@ -289,6 +325,7 @@ export class TokenStatsCollector {
             }
 
             const row = aggregated.get(aggKey)!;
+            row.inputTokens += getDisplayInputTokens(bucket, provider);
             row.promptTokens += bucket.promptTokens;
             row.completionTokens += bucket.completionTokens;
             row.cachedTokens += bucket.cachedTokens;
@@ -298,7 +335,7 @@ export class TokenStatsCollector {
             if (bucket.lastSeenAt > row.lastSeenAt) row.lastSeenAt = bucket.lastSeenAt;
 
             // 费用按桶内 model 动态计算（groupBy=caller 时跨模型累加各自定价）
-            row.totalCost += calculateCallCost(bucket, this.modelPricing[model]);
+            row.totalCost += calculateCallCost(bucket, this.modelPricing[model], provider);
         }
 
         // 排序
@@ -307,6 +344,7 @@ export class TokenStatsCollector {
             let diff: number;
             switch (sortBy) {
                 case "cost": diff = a.totalCost - b.totalCost; break;
+                case "inputTokens": diff = a.inputTokens - b.inputTokens; break;
                 case "promptTokens": diff = a.promptTokens - b.promptTokens; break;
                 case "completionTokens": diff = a.completionTokens - b.completionTokens; break;
                 case "callCount": diff = a.callCount - b.callCount; break;
@@ -318,6 +356,7 @@ export class TokenStatsCollector {
         // 合计
         const totals: TokenStatsTotals = rows.reduce(
             (acc, r) => ({
+                inputTokens: acc.inputTokens + r.inputTokens,
                 promptTokens: acc.promptTokens + r.promptTokens,
                 completionTokens: acc.completionTokens + r.completionTokens,
                 cachedTokens: acc.cachedTokens + r.cachedTokens,
@@ -325,7 +364,7 @@ export class TokenStatsCollector {
                 callCount: acc.callCount + r.callCount,
                 totalCost: acc.totalCost + r.totalCost,
             }),
-            { promptTokens: 0, completionTokens: 0, cachedTokens: 0, cacheCreationTokens: 0, callCount: 0, totalCost: 0 },
+            { inputTokens: 0, promptTokens: 0, completionTokens: 0, cachedTokens: 0, cacheCreationTokens: 0, callCount: 0, totalCost: 0 },
         );
 
         return {
@@ -412,7 +451,7 @@ export class TokenStatsCollector {
         for (const [model, stats] of Object.entries(v1.byModel)) {
             // 使用 lastSeenAt 的小时作为桶 key；caller 标记为 legacy
             const hourKey = toHourKey(stats.lastSeenAt || new Date().toISOString());
-            const bucketKey = makeBucketKey(hourKey, model, "legacy");
+            const bucketKey = makeBucketKey(hourKey, "", model, "legacy");
             data.buckets[bucketKey] = {
                 promptTokens: stats.promptTokens,
                 completionTokens: stats.completionTokens,

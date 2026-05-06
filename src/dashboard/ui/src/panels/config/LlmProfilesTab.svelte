@@ -84,7 +84,7 @@
           <label class="cfg-field"
             ><span class="cfg-label">Provider</span>
             <select class="select select-xs select-bordered w-full" bind:value={p.provider}>
-              <option value="openai">openai (兼容)</option><option value="anthropic">anthropic</option><option value="google">google (Gemini)</option>
+              <option value="openai">openai (兼容)</option><option value="openai_responses">openai (responses)</option><option value="anthropic">anthropic</option><option value="google">google (Gemini)</option>
             </select></label
           >
           <label class="cfg-field"
@@ -117,6 +117,16 @@
               }}
             /><span>Prefill</span></label>
         </div>
+        {#if p.provider === "openai_responses"}
+          <div class="cfg-grid-2 mt-2">
+            <label class="cfg-field"><span class="cfg-label">Responses 请求模式</span>
+              <select class="select select-xs select-bordered w-full" bind:value={p.responsesRequestMode}>
+                <option value="non_stream">non_stream（默认）</option>
+                <option value="stream">stream（后台聚合完整输出）</option>
+              </select>
+            </label>
+          </div>
+        {/if}
         {#if p.provider === "google"}
           <div class="divider text-xs opacity-50 my-2"><i class="fa-brands fa-google mr-1"></i>Vertex AI 设置（可选）</div>
           <p class="text-xs opacity-40 mb-2">粘贴服务账号 JSON 密钥后自动启用 Vertex AI 模式。留空则使用 AI Studio（需填 API Key）。</p>
@@ -145,7 +155,7 @@
             <label class="cfg-field"><span class="cfg-label">Region</span><input type="text" class="input input-xs input-bordered w-full" bind:value={p.vertexRegion} placeholder="global" /></label>
           </div>
         {/if}
-        {#if p.provider === "openai" || p.provider === "anthropic"}
+        {#if p.provider === "openai" || p.provider === "openai_responses" || p.provider === "anthropic"}
           <div class="divider text-xs opacity-50 my-2"><i class="fa-solid fa-plus-circle mr-1"></i>Extra Body & Headers（可选）</div>
           <p class="text-xs opacity-40 mb-2">额外请求体字段和自定义请求头，JSON 对象格式。会被展开合并到对应的 API 请求中。</p>
           <div class="cfg-field"><span class="cfg-label">Extra Body (JSON)</span>

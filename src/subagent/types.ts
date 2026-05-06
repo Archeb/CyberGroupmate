@@ -182,6 +182,10 @@ export interface CodeActReplyTask {
     useSkills?: string[];
     /** 主 Agent / dispatch 阶段检索到的额外记忆上下文 */
     memoryContext?: AdditionalMemoryContext | null;
+    /** 轻量续接 prompt：用于 post-task window/L2 前送类消息，不渲染完整任务包 */
+    continuationPrompt?: string;
+    /** 跳过执行前刷新最近消息，避免轻量续接被扩展成完整目标消息包 */
+    skipRefreshTaskMessages?: boolean;
 }
 
 /** 回复策略 (subagent.md §2.2 B1) */
@@ -229,6 +233,44 @@ export interface SubagentCallback {
 
     // ─── subagent.md §2.2 C1/C2 补齐字段 ───
     /** 原始任务方向（Meta 派发时的 contentDirection） */
+    contentDirection?: string;
+    /** Post-task 发酵窗口内收集到的群聊消息 */
+    postTaskMessages?: PostTaskReactionMessage[];
+    /** Post-task 窗口内由 L0 直接追问触发的补充执行结果 */
+    postTaskFollowUpCallbacks?: SubagentPostTaskFollowUpCallback[];
+    /** Post-task 窗口元信息 */
+    postTaskWindow?: {
+        startedAt: string;
+        endedAt: string;
+        durationMs: number;
+        messageCount: number;
+        directMessageCount: number;
+        followUpCallbackCount: number;
+    };
+}
+
+/** Post-task 发酵窗口内记录的群聊消息 */
+export interface PostTaskReactionMessage {
+    messageId: string;
+    sender: string;
+    text: string;
+    timestamp: string;
+    isDirectAttention?: boolean;
+    directReason?: string;
+    replyToMessageId?: string;
+    mediaType?: string;
+    mediaInfo?: string;
+}
+
+/** Post-task 窗口内补充执行的 callback 摘要 */
+export interface SubagentPostTaskFollowUpCallback {
+    taskId: string;
+    status: SubagentCallback["status"];
+    summary: string;
+    sentMessages?: SubagentCallback["sentMessages"];
+    error?: string;
+    durationMs: number;
+    createdAt: string;
     contentDirection?: string;
 }
 

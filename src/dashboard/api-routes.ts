@@ -10,6 +10,7 @@ import { join } from "node:path";
 import type { DashboardDeps } from "./types.js";
 import type { EventBridge } from "./event-bridge.js";
 import type { CodeActExecutor } from "../subagent/code-act-executor.js";
+import { refreshModuleRegistryCache } from "../subagent/code-act-executor.js";
 import { createLogger } from "../core/logger.js";
 import { loadConfig, validateConfig, saveConfig } from "../core/config.js";
 import { rateLimiter } from "../core/llm-rate-limiter.js";
@@ -222,6 +223,7 @@ export function createApiRouter(deps: DashboardDeps, bridge: EventBridge): Route
                     return { chatId, ok: false, error: String(err) };
                 }
             }));
+            refreshModuleRegistryCache();
 
             res.json({
                 ok: true,

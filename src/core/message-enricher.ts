@@ -60,6 +60,11 @@ export interface OGPreview {
     imageMimeType?: string;
 }
 
+/** 只读 Sticker 描述缓存接口，用于不触发 Vision 的上下文富化 */
+export interface StickerDescriptionLookup {
+    getStickerDescription(uniqueFileId: string): { description: string; emoji?: string; emojis?: string[] } | null;
+}
+
 /** 富化选项 */
 export interface EnrichOptions {
     /** Vision 配置 */
@@ -168,24 +173,61 @@ export async function enrichMessages(
  *
  * 用于 attend-handler 等不做图片识别的场景，让 LLM 知道消息附带了什么类型的媒体。
  */
-function mediaTagFromType(mediaType?: string, mediaInfo?: string): string {
+function mediaTagFromType(
+    mediaType?: string,
+    mediaInfo?: string,
+    options?: { stickerDescriptionLookup?: StickerDescriptionLookup },
+): string {
     if (!mediaType) return "";
     let emoji = "";
+    let uniqueFileId = "";
     try {
         if (mediaInfo) {
             const info = JSON.parse(mediaInfo);
             emoji = info.emoji ?? "";
+            uniqueFileId = info.uniqueFileId ?? info.fileId ?? "";
         }
     } catch { /* ignore */ }
     switch (mediaType) {
         case "photo": return "[📷 图片]";
-        case "sticker": return emoji ? `[🎭 贴纸: ${emoji}]` : "[🎭 贴纸]";
+        case "sticker": {
+            if (uniqueFileId && options?.stickerDescriptionLookup) {
+                const cached = options.stickerDescriptionLookup.getStickerDescription(uniqueFileId);
+                if (cached) {
+                    const emojiTag = formatCachedEmojiTag(cached.emojis?.length ? cached.emojis : (cached.emoji ?? emoji));
+                    return `[🎭 贴纸${emojiTag}: ${cached.description}]`;
+                }
+            }
+            return emoji ? `[🎭 贴纸: ${emoji}]` : "[🎭 贴纸]";
+        }
         case "video": return "[📹 视频]";
         case "animation": return "[🎬 GIF]";
         case "audio": return "[🎙 语音/音频]";
         case "document": return "[📎 文件]";
         case "other": return "[📎 媒体]";
         default: return `[📎 ${mediaType}]`;
+    }
+}
+
+function formatCachedEmojiTag(value?: string | string[]): string {
+    const emojis = Array.isArray(value)
+        ? value.map((item) => item.trim()).filter(Boolean)
+        : value?.trim()
+            ? [value.trim()]
+            : [];
+    return emojis.length > 0 ? ` ${emojis.join(" ")}` : "";
+}
+
+function existingMediaTagPattern(mediaType?: string): RegExp | undefined {
+    switch (mediaType) {
+        case "photo": return /\[📷 图片\]\s*/;
+        case "sticker": return /\[🎭 贴纸[^\]]*\]\s*/;
+        case "video": return /\[📹 视频\]\s*/;
+        case "animation": return /\[(?:🎬|🎞) (?:视频|GIF)\]\s*/;
+        case "audio": return /\[🎙 语音\/音频\]\s*/;
+        case "document": return /\[📎 文件\]\s*/;
+        case "other": return /\[📎 媒体\]\s*/;
+        default: return undefined;
     }
 }
 
@@ -201,7 +243,7 @@ function mediaTagFromType(mediaType?: string, mediaInfo?: string): string {
  */
 export function formatMessageLine(
     m: RawMessage,
-    options?: { includeMediaTags?: boolean },
+    options?: { includeMediaTags?: boolean; stickerDescriptionLookup?: StickerDescriptionLookup },
 ): string {
     const replyTag = buildReplyTag(m);
     let textPart = m.text ?? "";
@@ -210,9 +252,16 @@ export function formatMessageLine(
     // 注意：Telegram adapter 可能已在 event.text 中设置了媒体标签（如 "[🎭 贴纸: 👀]"），
     // 此时不再重复追加
     if (options?.includeMediaTags && (!m.processedMedia || m.processedMedia.length === 0) && m.mediaType) {
-        const tag = mediaTagFromType(m.mediaType, m.mediaInfo);
+        const tag = mediaTagFromType(m.mediaType, m.mediaInfo, {
+            stickerDescriptionLookup: options.stickerDescriptionLookup,
+        });
         if (tag && !textPart.includes(tag)) {
-            textPart = textPart ? `${textPart} ${tag}` : tag;
+            const existingPattern = existingMediaTagPattern(m.mediaType);
+            if (existingPattern?.test(textPart)) {
+                textPart = textPart.replace(existingPattern, `${tag} `).trim();
+            } else {
+                textPart = textPart ? `${textPart} ${tag}` : tag;
+            }
         }
     }
 

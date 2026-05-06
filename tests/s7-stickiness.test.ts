@@ -27,33 +27,48 @@ describe("S7: GroupStickiness", () => {
         assert.equal(evaluateStickiness(null, 0, "ACQUAINTANCE"), "STRANGER");
     });
 
-    it("#4 evaluateStickiness: 高 avgMsgs → 升级", () => {
-        const gm = { chatId: "c1", avgMessagesPerDay: 25 } as GroupModel;
-        const result = evaluateStickiness(gm, 0, "ACQUAINTANCE");
-        assert.equal(result, "FAMILIAR", "25 msgs/day 应升至 FAMILIAR");
-    });
-
-    it("#5 evaluateStickiness: STRANGER → ACQUAINTANCE 升级", () => {
-        const gm = { chatId: "c1", avgMessagesPerDay: 10 } as GroupModel;
-        const result = evaluateStickiness(gm, 0, "STRANGER");
-        assert.equal(result, "ACQUAINTANCE");
-    });
-
-    it("#6 evaluateStickiness: FAMILIAR → CORE 升级", () => {
-        const gm = { chatId: "c1", avgMessagesPerDay: 60 } as GroupModel;
-        const result = evaluateStickiness(gm, 0, "FAMILIAR");
+    it("#4 evaluateStickiness: 互动排名 top 15% → CORE", () => {
+        const gm = { chatId: "c1", avgMessagesPerDay: 0 } as GroupModel;
+        const result = evaluateStickiness(gm, 0, "ACQUAINTANCE", [
+            { chatId: "c1", interactionCount: 100 },
+            { chatId: "c2", interactionCount: 50 },
+            { chatId: "c3", interactionCount: 20 },
+            { chatId: "c4", interactionCount: 10 },
+        ]);
         assert.equal(result, "CORE");
+    });
+
+    it("#5 evaluateStickiness: 互动排名 top 50% → FAMILIAR", () => {
+        const gm = { chatId: "c2", avgMessagesPerDay: 0 } as GroupModel;
+        const result = evaluateStickiness(gm, 0, "STRANGER", [
+            { chatId: "c1", interactionCount: 100 },
+            { chatId: "c2", interactionCount: 50 },
+            { chatId: "c3", interactionCount: 20 },
+            { chatId: "c4", interactionCount: 10 },
+        ]);
+        assert.equal(result, "FAMILIAR");
+    });
+
+    it("#6 evaluateStickiness: 有互动记录但非 top 50% → ACQUAINTANCE", () => {
+        const gm = { chatId: "c3", avgMessagesPerDay: 999 } as GroupModel;
+        const result = evaluateStickiness(gm, 0, "FAMILIAR", [
+            { chatId: "c1", interactionCount: 100 },
+            { chatId: "c2", interactionCount: 50 },
+            { chatId: "c3", interactionCount: 20 },
+            { chatId: "c4", interactionCount: 10 },
+        ]);
+        assert.equal(result, "ACQUAINTANCE");
     });
 
     it("#7 evaluateStickiness: 久无交互 → 降级", () => {
         const gm = { chatId: "c1", avgMessagesPerDay: 1 } as GroupModel;
-        const result = evaluateStickiness(gm, 15, "CORE");
+        const result = evaluateStickiness(gm, 15, "CORE", []);
         assert.equal(result, "FAMILIAR", "14天+ 无交互应从 CORE 降至 FAMILIAR");
     });
 
     it("#8 evaluateStickiness: FAMILIAR → ACQUAINTANCE 降级", () => {
         const gm = { chatId: "c1", avgMessagesPerDay: 1 } as GroupModel;
-        const result = evaluateStickiness(gm, 31, "FAMILIAR");
+        const result = evaluateStickiness(gm, 31, "FAMILIAR", []);
         assert.equal(result, "ACQUAINTANCE");
     });
 
@@ -72,25 +87,41 @@ describe("S7: GroupStickiness", () => {
 
     // ─── Edge cases (from audit) ───
 
-    it("#11 Full upgrade path STRANGER→ACQUAINTANCE→FAMILIAR→CORE", () => {
-        let level = evaluateStickiness({ chatId: "c1", avgMessagesPerDay: 10 } as GroupModel, 0, "STRANGER");
+    it("#11 Ranking path STRANGER→ACQUAINTANCE→FAMILIAR→CORE", () => {
+        const activity = [
+            { chatId: "c1", interactionCount: 100 },
+            { chatId: "c2", interactionCount: 50 },
+            { chatId: "c3", interactionCount: 20 },
+            { chatId: "c4", interactionCount: 10 },
+        ];
+        let level = evaluateStickiness({ chatId: "c3", avgMessagesPerDay: 0 } as GroupModel, 0, "STRANGER", activity);
         assert.equal(level, "ACQUAINTANCE");
-        level = evaluateStickiness({ chatId: "c1", avgMessagesPerDay: 25 } as GroupModel, 0, "ACQUAINTANCE");
+        level = evaluateStickiness({ chatId: "c2", avgMessagesPerDay: 0 } as GroupModel, 0, "ACQUAINTANCE", activity);
         assert.equal(level, "FAMILIAR");
-        level = evaluateStickiness({ chatId: "c1", avgMessagesPerDay: 55 } as GroupModel, 0, "FAMILIAR");
+        level = evaluateStickiness({ chatId: "c1", avgMessagesPerDay: 0 } as GroupModel, 0, "FAMILIAR", activity);
         assert.equal(level, "CORE");
     });
 
-    it("#12 evaluateStickiness with 0 avgMsgsPerDay stays same", () => {
-        const gm = { chatId: "c1", avgMessagesPerDay: 0 } as GroupModel;
-        const result = evaluateStickiness(gm, 0, "ACQUAINTANCE");
-        assert.equal(result, "ACQUAINTANCE", "0 messages should not trigger upgrade");
+    it("#12 evaluateStickiness without recent interactions stays same", () => {
+        const gm = { chatId: "c1", avgMessagesPerDay: 100 } as GroupModel;
+        const result = evaluateStickiness(gm, 0, "ACQUAINTANCE", []);
+        assert.equal(result, "ACQUAINTANCE", "群总消息量不应触发升级");
     });
 
-    it("#13 CORE stays CORE with high activity", () => {
+    it("#13 CORE stays CORE without downgrade", () => {
         const gm = { chatId: "c1", avgMessagesPerDay: 100 } as GroupModel;
-        const result = evaluateStickiness(gm, 0, "CORE");
+        const result = evaluateStickiness(gm, 0, "CORE", []);
         assert.equal(result, "CORE");
+    });
+
+    it("#13b recent interactions use ranking before inactivity downgrade", () => {
+        const gm = { chatId: "c3", avgMessagesPerDay: 0 } as GroupModel;
+        const result = evaluateStickiness(gm, 99, "CORE", [
+            { chatId: "c1", interactionCount: 100 },
+            { chatId: "c2", interactionCount: 50 },
+            { chatId: "c3", interactionCount: 20 },
+        ]);
+        assert.equal(result, "ACQUAINTANCE");
     });
 
     it("#14 createStickiness all levels", () => {
@@ -103,7 +134,7 @@ describe("S7: GroupStickiness", () => {
 
     it("#15 ACQUAINTANCE → STRANGER downgrade after long inactivity", () => {
         const gm = { chatId: "c1", avgMessagesPerDay: 0 } as GroupModel;
-        const result = evaluateStickiness(gm, 61, "ACQUAINTANCE");
+        const result = evaluateStickiness(gm, 61, "ACQUAINTANCE", []);
         assert.equal(result, "STRANGER");
     });
 

@@ -121,6 +121,17 @@ export function extractApiCalls(code: string, prefixMap: Record<string, string>)
 }
 
 /**
+ * 过滤出真正需要查阅完整文档的 API 调用。
+ *
+ * Two-pass 的触发和文档注入必须使用同一批 filtered calls；
+ * 否则当代码同时包含 trivial 与 non-trivial API 时，non-trivial API
+ * 会触发 Two-pass，而 trivial API 也会被当成 missing doc 一起注入。
+ */
+export function getDocLookupMethods(calls: string[]): string[] {
+    return [...new Set(calls.filter(c => !TRIVIAL_CALLS.has(c)))];
+}
+
+/**
  * 判断代码是否调用了需要查阅完整文档的 API
  *
  * 简单的调用（如 console.log、基本变量操作）不需要触发 Pass 2。
@@ -130,6 +141,5 @@ export function extractApiCalls(code: string, prefixMap: Record<string, string>)
  * @returns 是否需要触发 Pass 2
  */
 export function needsDocLookup(calls: string[]): boolean {
-    const significantCalls = calls.filter(c => !TRIVIAL_CALLS.has(c));
-    return significantCalls.length > 0;
+    return getDocLookupMethods(calls).length > 0;
 }

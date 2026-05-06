@@ -36,6 +36,7 @@ import { TelegramAdapter } from "./adapter/telegram-adapter.js";
 import { DiscordAdapter } from "./adapter/discord-adapter.js";
 import { OneBotAdapter } from "./adapter/onebot-adapter.js";
 import type { PlatformAdapter } from "./adapter/platform-adapter.js";
+import { markChatAsRead } from "./adapter/read-receipts.js";
 
 import { SubagentManager } from "./subagent/subagent-manager.js";
 import { CallbackQueue } from "./subagent/callback-queue.js";
@@ -52,12 +53,46 @@ import { evaluateStickiness, createStickiness, updateStickiness } from "./subage
 import { matchesCron } from "./core/cron-matcher.js";
 import { autoReconnect as autoReconnectMcp, initMcpBridge, mcpBridge } from "./sandbox/modules/mcp-bridge/index.js";
 import { CodeActExecutor, refreshModuleRegistryCache } from "./subagent/code-act-executor.js";
+import { PostTaskWindowManager, buildDispatchedRecordForPostTaskDirect } from "./subagent/post-task-window.js";
 import { MetaSandbox } from "./meta-sandbox/meta-sandbox.js";
 import { buildMetaApiContext } from "./meta-sandbox/meta-api/index.js";
 
 const log = createLogger("main");
 
 let _metricsStopFn: (() => void) | null = null;
+
+interface StickinessInteractionStats {
+    chatId: string;
+    interactionCount: number;
+    lastInteractionAt: string | null;
+}
+
+function getStickinessInteractionStats(memory: MemoryStoreV2, days: number): StickinessInteractionStats[] {
+    const grouped = new Map<string, StickinessInteractionStats>();
+    for (const [chatId, stats] of memory.countInteractionsPerChat(days)) {
+        const groupKey = getGroupModelKey(chatId);
+        const current = grouped.get(groupKey);
+        if (!current) {
+            grouped.set(groupKey, {
+                chatId: groupKey,
+                interactionCount: stats.interactionCount,
+                lastInteractionAt: stats.lastInteractionAt,
+            });
+            continue;
+        }
+        current.interactionCount += stats.interactionCount;
+        if (stats.lastInteractionAt && (!current.lastInteractionAt || stats.lastInteractionAt > current.lastInteractionAt)) {
+            current.lastInteractionAt = stats.lastInteractionAt;
+        }
+    }
+    return [...grouped.values()];
+}
+
+function daysSinceInteraction(chatId: string, stats: StickinessInteractionStats[]): number {
+    const lastInteractionAt = stats.find(item => item.chatId === chatId)?.lastInteractionAt;
+    if (!lastInteractionAt) return Number.POSITIVE_INFINITY;
+    return (Date.now() - new Date(lastInteractionAt).getTime()) / 86400_000;
+}
 let _gracefulShutdown: ((signal: string) => Promise<void>) | null = null;
 let _shutdownStarted = false;
 
@@ -402,9 +437,14 @@ async function main(): Promise<void> {
         }
     }
 
+    function markDirectSubagentDeliveryAsRead(chatId: string, reason: string): void {
+        markChatAsRead(adapters, chatId, reason);
+    }
+
     // ─── Subagent 架构组件初始化 ───
     // 注意: message_log 落盘由 RecordingPipeline Step 4 负责，不再需要独立的 MessageLogWriter hook
     let accumulator: AttentionAccumulator;
+    let postTaskWindows: PostTaskWindowManager | null = null;
     const subagentManager = new SubagentManager({
         observerConfig: {
             engagementWindowMs: 5 * 60 * 1000,
@@ -417,7 +457,9 @@ async function main(): Promise<void> {
             memory,
             pipelineConfig: appConfig.recordingPipeline,
             publishTopicSignals: (signals) => {
-                for (const signal of signals) {
+                const deliverableSignals = signals.filter((signal) => !postTaskWindows?.hasActiveWindow(signal.chatId));
+                const suppressedCount = signals.length - deliverableSignals.length;
+                for (const signal of deliverableSignals) {
                     accumulator.ingest(2, {
                         chatId: signal.chatId,
                         source: "TOPIC_SIGNAL",
@@ -427,11 +469,20 @@ async function main(): Promise<void> {
                     });
                 }
 
-                if (signals.length > 0) {
+                if (suppressedCount > 0) {
+                    log.info("topic-signals suppressed by post-task window", {
+                        count: suppressedCount,
+                        chatIds: [...new Set(signals
+                            .filter((signal) => postTaskWindows?.hasActiveWindow(signal.chatId))
+                            .map((signal) => signal.chatId))],
+                    });
+                }
+
+                if (deliverableSignals.length > 0) {
                     log.info("topic-signals → Accumulator", {
-                        chatId: signals[0]?.chatId,
-                        count: signals.length,
-                        topics: signals.map((signal) => ({
+                        chatId: deliverableSignals[0]?.chatId,
+                        count: deliverableSignals.length,
+                        topics: deliverableSignals.map((signal) => ({
                             topicId: signal.topicId,
                             pressure: signal.pressure,
                             callbackPotential: signal.callbackPotential,
@@ -443,13 +494,21 @@ async function main(): Promise<void> {
         memory,  // 用于启动时恢复 TopicRegistry
         sessionsDir: SESSIONS_DIR,
 
-        // Stickiness 恢复：从 GroupModel 查询 avgMessagesPerDay 推断级别（architecture_v2.md §2.2）
+        // Stickiness 恢复：按近 7 天 agent 互动量在活跃群中的排名推断级别
         stickinessProvider: (chatId: string) => {
-            const gm = memory.getGroupModel(getGroupModelKey(chatId));
+            const groupKey = getGroupModelKey(chatId);
+            const gm = memory.getGroupModel(groupKey);
             if (!gm) return undefined;
-            const level = evaluateStickiness(gm, 0, "STRANGER");
+            const recentInteractionStats = getStickinessInteractionStats(memory, 7);
+            const lastInteractionStats = getStickinessInteractionStats(memory, 3650);
+            const level = evaluateStickiness(
+                gm,
+                daysSinceInteraction(groupKey, lastInteractionStats),
+                "STRANGER",
+                recentInteractionStats,
+            );
             if (level !== "STRANGER") {
-                log.info("stickinessProvider: 从 GroupModel 恢复", { chatId, level, avgMsgs: gm.avgMessagesPerDay });
+                log.info("stickinessProvider: 从互动排名恢复", { chatId, level });
                 return createStickiness(level);
             }
             return undefined;
@@ -469,6 +528,19 @@ async function main(): Promise<void> {
         windowMs: appConfig.subagent?.pollInterval ?? 5000,
     });
     accumulator.restoreSignalPool();
+    postTaskWindows = new PostTaskWindowManager({
+        windowMs: appConfig.subagent?.postTaskWindowMs,
+        callbackQueue: q5,
+        accumulator,
+        subagentManager,
+        onDirectTaskEnqueued: (task) => {
+            try {
+                globalState.recordDispatchedSubagentTask(buildDispatchedRecordForPostTaskDirect(task));
+            } finally {
+                markDirectSubagentDeliveryAsRead(task.chatId, "post-task-direct");
+            }
+        },
+    });
 
     log.info("Subagent 组件初始化完成", {
         restoredSignalPoolSize: accumulator.getSignalPoolSize(),
@@ -495,16 +567,32 @@ async function main(): Promise<void> {
             // 未来 discord.ts → "discord"），用 ensureCompositeId 补全前缀。
             const platform = String(event.scene ?? "") as import("./core/chat-id.js").PlatformName;
             const compositeChatId = ensureCompositeId(platform, chatId);
+            const messageId = String(event.messageId ?? `agent-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
+            const timestamp = typeof event.timestamp === "string"
+                ? event.timestamp
+                : new Date(typeof event.timestamp === "number" ? event.timestamp : Date.now()).toISOString();
+            const agentName = appConfig.persona?.name ?? "agent";
+            const text = String(event.text ?? "");
             try {
                 memory.storeMessageBatch([{
-                    messageId: String(event.messageId ?? `agent-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`),
+                    messageId,
                     chatId: compositeChatId,
-                    userId: appConfig.persona?.name ?? "agent",
+                    userId: agentName,
                     displayName: appConfig.persona?.name ?? "赛博群友",
-                    text: String(event.text ?? ""),
+                    text,
                     replyToMessageId: event.replyToMessageId ? String(event.replyToMessageId) : undefined,
-                    timestamp: String(event.timestamp ?? new Date().toISOString()),
+                    timestamp,
                 }]);
+                memory.storeInteraction({
+                    chatId: compositeChatId,
+                    userId: agentName,
+                    topicId: null,
+                    type: "agent_replied",
+                    summary: text.slice(0, 200),
+                    sentiment: "neutral",
+                    significance: 0.7,
+                    date: timestamp,
+                });
             } catch (err) {
                 log.warn("Agent 消息落盘失败", { chatId: compositeChatId, error: String(err) });
             }
@@ -514,16 +602,17 @@ async function main(): Promise<void> {
             const agentSub = subagentManager.get(compositeChatId);
             if (agentSub?.recordingPipeline) {
                 const agentMsg: import("./pipeline/types.js").Message = {
-                    id: String(event.messageId ?? `agent-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`),
+                    id: messageId,
                     chatId: compositeChatId,
-                    senderId: appConfig.persona?.name ?? "agent",
+                    senderId: agentName,
                     senderName: appConfig.persona?.name ?? "赛博群友",
-                    text: String(event.text ?? ""),
+                    text,
                     timestamp: Date.now(),
                     replyToMessageId: event.replyToMessageId ? String(event.replyToMessageId) : undefined,
                 };
                 agentSub.recordingPipeline.onMessage(agentMsg);
             }
+            postTaskWindows.handleSentMessage(compositeChatId, event);
 
             return; // agent 消息不走后续 Observer/Accumulator 逻辑
         }
@@ -597,20 +686,41 @@ async function main(): Promise<void> {
         const mentionKeywords = (loadConfig().notification?.mentionKeywords ?? []).map(k => k.toLowerCase()).filter(k => k.length > 0);
         const messageText = String(event.text ?? event.message ?? "").toLowerCase();
         const hasNameMention = mentionKeywords.length > 0 && mentionKeywords.some(kw => messageText.includes(kw));
+        const isReplyToAgentInPostTaskWindow = postTaskWindows.isReplyToWindowSentMessage(chatId, event);
+        const directReason = isDM
+            ? "DM"
+            : isMention
+                ? "@mention"
+                : hasNameMention
+                    ? "name-mention"
+                    : isReplyToAgentInPostTaskWindow
+                        ? "reply-to-agent"
+                        : "";
+        const isDirectAttention = directReason.length > 0;
+        const inPostTaskWindow = postTaskWindows.hasActiveWindow(chatId);
 
-        if (isDM || isMention || hasNameMention) {
-            const entry = sub.buildQueueEntry("DIRECT_ADDRESS");
-            accumulator.ingest(0, createDirectAddressItem(chatId, {
-                reason: isDM ? "DM" : isMention ? "@mention" : "name-mention",
-                queueEntry: entry,
-                event: {
-                    messageId: event.messageId ?? event.id,
-                    userId: event.userId ?? event.senderId,
-                },
-            }));
+        postTaskWindows.recordMessage(chatId, event, {
+            isDirectAttention,
+            directReason: directReason || undefined,
+        });
+
+        if (isDirectAttention) {
+            const handledByPostTaskWindow = postTaskWindows.tryForwardDirectMessage(chatId, event, directReason);
+            if (!handledByPostTaskWindow) {
+                const entry = sub.buildQueueEntry("DIRECT_ADDRESS");
+                accumulator.ingest(0, createDirectAddressItem(chatId, {
+                    reason: directReason,
+                    queueEntry: entry,
+                    event: {
+                        messageId: event.messageId ?? event.id,
+                        userId: event.userId ?? event.senderId,
+                    },
+                }));
+            }
             log.info("即时 → Layer0", {
                 chatId,
-                reason: isDM ? "DM" : isMention ? "@mention" : "文本提及",
+                reason: directReason,
+                handledByPostTaskWindow,
                 engagement: sub.observer.getEngagementScore(),
             });
 
@@ -642,7 +752,7 @@ async function main(): Promise<void> {
 
         // 层 2 消息前送：如果该 chatId 的 CodeActExecutor 正在执行，推入 pending buffer
         const executor = sub.codeActExecutor as import("./subagent/code-act-executor.js").CodeActExecutor | null;
-        if (executor?.isProcessing()) {
+        if (executor?.isProcessing() && !inPostTaskWindow) {
             executor.pushPendingMessage({
                 id: String(event.messageId ?? event.id ?? `msg_${Date.now()}`),
                 sender: String(event.displayName ?? event.senderName ?? event.userName ?? "?"),
@@ -651,6 +761,7 @@ async function main(): Promise<void> {
                 mediaType: (event as any).mediaInfo?.type ?? undefined,
                 mediaInfo: (event as any).mediaInfo ? JSON.stringify((event as any).mediaInfo) : undefined,
             });
+            markDirectSubagentDeliveryAsRead(chatId, "pending-message-forward");
         }
 
     });
@@ -760,16 +871,21 @@ async function main(): Promise<void> {
                     // Stickiness 重评估（architecture_v2.md §2.2）
                     const sub = subagentManager.get(chatId);
                     if (sub) {
-                        const gm = memory.getGroupModel(getGroupModelKey(chatId));
+                        const groupKey = getGroupModelKey(chatId);
+                        const gm = memory.getGroupModel(groupKey);
                         if (gm) {
-                            const daysSinceLastInteraction = gm.lastReflectedAt
-                                ? (Date.now() - new Date(gm.lastReflectedAt).getTime()) / 86400_000
-                                : 0;
-                            const newLevel = evaluateStickiness(gm, daysSinceLastInteraction, sub.stickiness.level);
+                            const recentInteractionStats = getStickinessInteractionStats(memory, 7);
+                            const lastInteractionStats = getStickinessInteractionStats(memory, 3650);
+                            const newLevel = evaluateStickiness(
+                                gm,
+                                daysSinceInteraction(groupKey, lastInteractionStats),
+                                sub.stickiness.level,
+                                recentInteractionStats,
+                            );
                             if (newLevel !== sub.stickiness.level) {
                                 const oldLevel = sub.stickiness.level;
                                 sub.stickiness = updateStickiness(sub.stickiness, newLevel);
-                                log.info("Stickiness 变更", { chatId, from: oldLevel, to: newLevel, avgMsgs: gm.avgMessagesPerDay });
+                                log.info("Stickiness 变更", { chatId, from: oldLevel, to: newLevel });
                             }
                         }
                     }
@@ -850,8 +966,7 @@ async function main(): Promise<void> {
                 : undefined;
 
             realExecutor.setCallbackHandler((cb) => {
-                q5.enqueue(cb);
-                accumulator.unblock(cb.chatId);
+                postTaskWindows.handleCallback(cb);
 
                 setTimeout(() => {
                     try {
@@ -1278,6 +1393,8 @@ async function main(): Promise<void> {
                 total: flushResults.length,
             });
         }
+
+        postTaskWindows.dispose();
 
         // 释放 subagent（含 pipeline 计时器）
         subagentManager.dispose();

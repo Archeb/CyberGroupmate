@@ -11,8 +11,35 @@ import type { DiscordConfig } from "../core/config.js";
 import type { PlatformAdapter } from "./platform-adapter.js";
 import { composeChatId } from "../core/chat-id.js";
 import { createLogger } from "../core/logger.js";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { basename, isAbsolute, resolve as pathResolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const log = createLogger("discord-adapter");
+
+const MEDIA_DOWNLOAD_TIMEOUT_MS = 15_000;
+const MEDIA_SEND_TIMEOUT_MS = 25_000;
+const DISCORD_API_BASE = "https://discord.com/api/v10";
+
+type ParsedDiscordTarget = {
+    raw: string;
+    channelId: string;
+    canFallbackToUser: boolean;
+};
+
+type NormalizedDiscordMedia = {
+    caption?: string;
+    file?: unknown;
+    url?: unknown;
+    fileName?: string;
+};
+
+type PreparedDiscordAttachment = {
+    data: Buffer;
+    name: string;
+    contentType?: string;
+    sizeBytes: number;
+};
 
 /** 结构化媒体元数据 */
 export interface DiscordMediaInfo {
@@ -197,12 +224,10 @@ export class DiscordAdapter implements PlatformAdapter {
             switch (method) {
             case "discord.sendText": {
                 // args: [chatId, text, opts?]
-                const channelId = this.extractChannelId(String(args[0] ?? ""));
-                log.info("discord.sendText:start", { requestId, channelId });
-                const channel = await this.client.channels.fetch(channelId);
-                if (!channel?.isTextBased?.()) {
-                    throw new Error(`sendText: channel ${channelId} is not text-based`);
-                }
+                const target = this.parseTarget(String(args[0] ?? ""));
+                log.info("discord.sendText:start", { requestId, target: target.raw, channelId: target.channelId });
+                const channel = await this.resolveTextChannel(target, "sendText", requestId);
+                const channelId = channel.id ?? target.channelId;
                 const text = String(args[1] ?? "");
                 const opts = (args[2] ?? {}) as Record<string, unknown>;
 
@@ -226,20 +251,18 @@ export class DiscordAdapter implements PlatformAdapter {
             }
             case "discord.sendMedia": {
                 // args: [chatId, media, opts?]
-                const channelId = this.extractChannelId(String(args[0] ?? ""));
-                log.info("discord.sendMedia:start", { requestId, channelId });
+                const target = this.parseTarget(String(args[0] ?? ""));
+                log.info("discord.sendMedia:start", { requestId, target: target.raw, channelId: target.channelId });
 
                 const fetchChannelStart = Date.now();
-                const channel = await this.client.channels.fetch(channelId);
+                const channel = await this.resolveTextChannel(target, "sendMedia", requestId);
+                const channelId = channel.id ?? target.channelId;
                 log.info("discord.sendMedia:channelReady", {
                     requestId,
                     channelId,
                     durationMs: Date.now() - fetchChannelStart,
                 });
-                if (!channel?.isTextBased?.()) {
-                    throw new Error(`sendMedia: channel ${channelId} is not text-based`);
-                }
-                const media = (args[1] ?? {}) as Record<string, unknown>;
+                const media = this.normalizeMediaArg(args[1]);
                 const opts = (args[2] ?? {}) as Record<string, unknown>;
 
                 const sendOpts: Record<string, unknown> = {};
@@ -253,70 +276,20 @@ export class DiscordAdapter implements PlatformAdapter {
                 }
 
                 // Attach file
-                const files: Array<Record<string, unknown>> = [];
-                if (media.file) {
-                    const attachment: Record<string, unknown> = {};
-                    if (Buffer.isBuffer(media.file) || media.file instanceof Uint8Array) {
-                        attachment.attachment = Buffer.from(media.file as Buffer);
-                        log.info("discord.sendMedia:usingBuffer", {
-                            requestId,
-                            channelId,
-                            sizeBytes: (media.file as Buffer | Uint8Array).byteLength,
-                        });
-                    } else if (typeof media.file === "string") {
-                        if (media.file.startsWith("http://") || media.file.startsWith("https://")) {
-                            const downloadStart = Date.now();
-                            attachment.attachment = await this.downloadMediaWithTimeout(media.file, 15_000);
-                            log.info("discord.sendMedia:downloadedMediaFile", {
-                                requestId,
-                                channelId,
-                                url: media.file,
-                                durationMs: Date.now() - downloadStart,
-                                sizeBytes: (attachment.attachment as Buffer).byteLength,
-                            });
-                        } else {
-                            attachment.attachment = media.file;
-                            log.info("discord.sendMedia:usingLocalPath", {
-                                requestId,
-                                channelId,
-                                file: media.file,
-                            });
-                        }
-                    }
-                    if (typeof media.fileName === "string") {
-                        attachment.name = media.fileName;
-                    }
-                    files.push(attachment);
-                } else if (typeof media.url === "string") {
-                    if (media.url.startsWith("http://") || media.url.startsWith("https://")) {
-                        const downloadStart = Date.now();
-                        const downloaded = await this.downloadMediaWithTimeout(media.url, 15_000);
-                        log.info("discord.sendMedia:downloadedMediaUrl", {
-                            requestId,
-                            channelId,
-                            url: media.url,
-                            durationMs: Date.now() - downloadStart,
-                            sizeBytes: downloaded.byteLength,
-                        });
-                        files.push({
-                            attachment: downloaded,
-                            ...(typeof media.fileName === "string" ? { name: media.fileName } : {}),
-                        });
-                    } else {
-                        files.push({ attachment: media.url });
-                        log.info("discord.sendMedia:usingMediaUrlAsAttachment", {
-                            requestId,
-                            channelId,
-                            url: media.url,
-                        });
-                    }
+                const files: PreparedDiscordAttachment[] = [];
+                const source = media.file ?? media.url;
+                if (source != null) {
+                    files.push(await this.buildAttachment(source, media.fileName, requestId, channelId));
+                }
+                if (!sendOpts.content && files.length === 0) {
+                    throw new Error("sendMedia: media.file or media.url is required when caption is empty");
                 }
                 if (files.length > 0) {
                     sendOpts.files = files;
                 }
 
                 const sendStart = Date.now();
-                const sent = await channel.send(sendOpts);
+                const sent = await this.sendDiscordMediaMessage(channelId, sendOpts, files, requestId);
                 log.info("discord.sendMedia:success", {
                     requestId,
                     channelId,
@@ -329,9 +302,10 @@ export class DiscordAdapter implements PlatformAdapter {
                 return this.normalizeOutgoingMessage(sent);
             }
             case "discord.sendTyping": {
-                const channelId = this.extractChannelId(String(args[0] ?? ""));
-                log.info("discord.sendTyping:start", { requestId, channelId });
-                const channel = await this.client.channels.fetch(channelId);
+                const target = this.parseTarget(String(args[0] ?? ""));
+                log.info("discord.sendTyping:start", { requestId, target: target.raw, channelId: target.channelId });
+                const channel = await this.resolveTextChannel(target, "sendTyping", requestId);
+                const channelId = channel.id ?? target.channelId;
                 if (channel?.isTextBased?.() && typeof channel.sendTyping === "function") {
                     await channel.sendTyping();
                 }
@@ -380,36 +354,412 @@ export class DiscordAdapter implements PlatformAdapter {
         return Buffer.from(arrayBuffer);
     }
 
-    private async downloadMediaWithTimeout(url: string, timeoutMs: number): Promise<Buffer> {
+    private async downloadMediaWithTimeout(url: string, timeoutMs: number): Promise<{ buffer: Buffer; contentType?: string }> {
         const signal = AbortSignal.timeout(timeoutMs);
         const response = await fetch(url, { signal });
         if (!response.ok) {
             throw new Error(`sendMedia download failed: HTTP ${response.status} for ${url}`);
         }
         const arrayBuffer = await response.arrayBuffer();
-        return Buffer.from(arrayBuffer);
+        return {
+            buffer: Buffer.from(arrayBuffer),
+            contentType: response.headers.get("content-type") ?? undefined,
+        };
     }
 
     // ─── Internal ───
 
     /**
-     * Extract the Discord channel ID from a composite chatId.
-     * For guild channels: discord:guildId:channelId → channelId
-     * For DMs: discord:channelId → channelId
+     * Parse a Discord target from raw/composite IDs.
+     * Guild channels: discord:guildId:channelId → channelId, no DM fallback.
+     * DMs/users: discord:id or raw id → first try channel id, then user id DM.
      */
-    private extractChannelId(chatId: string): string {
-        // Strip "discord:" prefix
-        let rest = chatId;
-        if (rest.startsWith("discord:")) {
-            rest = rest.slice("discord:".length);
+    private parseTarget(chatId: string): ParsedDiscordTarget {
+        const raw = chatId.trim();
+        const mentionMatch = raw.match(/^<@!?(\d+)>$/);
+        if (mentionMatch) {
+            return { raw, channelId: mentionMatch[1], canFallbackToUser: true };
         }
+
+        let rest = raw;
+        if (rest.startsWith("discord:")) rest = rest.slice("discord:".length);
+        const directTargetMatch = rest.match(/^(?:dm|private|user):(.+)$/);
+        if (directTargetMatch) {
+            return { raw, channelId: directTargetMatch[1], canFallbackToUser: true };
+        }
+
         // Three-part: guildId:channelId → channelId
         const colonIdx = rest.indexOf(":");
         if (colonIdx !== -1) {
-            return rest.slice(colonIdx + 1);
+            return { raw, channelId: rest.slice(colonIdx + 1), canFallbackToUser: false };
         }
         // Two-part (DM): just the channelId
-        return rest;
+        return { raw, channelId: rest, canFallbackToUser: true };
+    }
+
+    private async resolveTextChannel(target: ParsedDiscordTarget, operation: string, requestId: string): Promise<any> {
+        if (!target.channelId) {
+            throw new Error(`${operation}: target channel/user id is required`);
+        }
+
+        let channelError: unknown;
+        try {
+            const channel = await this.client.channels.fetch(target.channelId);
+            if (channel?.isTextBased?.()) {
+                return channel;
+            }
+            channelError = new Error(`channel ${target.channelId} is not text-based`);
+        } catch (err) {
+            channelError = err;
+        }
+
+        if (!target.canFallbackToUser) {
+            const detail = channelError instanceof Error ? channelError.message : String(channelError);
+            throw new Error(`${operation}: channel ${target.channelId} is not available (${detail})`);
+        }
+
+        if (!/^\d{15,25}$/.test(target.channelId)) {
+            const detail = channelError instanceof Error ? channelError.message : String(channelError);
+            throw new Error(`${operation}: target ${target.raw} is neither a text channel nor a valid Discord user id (${detail})`);
+        }
+
+        try {
+            log.info("discord.resolveTextChannel:fallingBackToDm", {
+                requestId,
+                operation,
+                target: target.raw,
+                userId: target.channelId,
+            });
+            const user = await this.client.users.fetch(target.channelId);
+            if (typeof user?.createDM !== "function") {
+                throw new Error("Discord user object does not support createDM()");
+            }
+            const dmChannel = await user.createDM();
+            if (dmChannel?.isTextBased?.()) {
+                log.info("discord.resolveTextChannel:dmReady", {
+                    requestId,
+                    operation,
+                    target: target.raw,
+                    channelId: dmChannel.id,
+                });
+                return dmChannel;
+            }
+            throw new Error("created DM channel is not text-based");
+        } catch (dmErr) {
+            const channelDetail = channelError instanceof Error ? channelError.message : String(channelError);
+            const dmDetail = dmErr instanceof Error ? dmErr.message : String(dmErr);
+            throw new Error(`${operation}: cannot resolve ${target.raw} as channel or DM user (channel: ${channelDetail}; dm: ${dmDetail})`);
+        }
+    }
+
+    private normalizeMediaArg(mediaArg: unknown): NormalizedDiscordMedia {
+        if (typeof mediaArg === "string" || Buffer.isBuffer(mediaArg) || mediaArg instanceof Uint8Array) {
+            return { file: mediaArg };
+        }
+        if (mediaArg && typeof mediaArg === "object") {
+            const record = mediaArg as Record<string, unknown>;
+            return {
+                caption: typeof record.caption === "string" ? record.caption : undefined,
+                file: record.file,
+                url: record.url,
+                fileName: typeof record.fileName === "string" ? record.fileName : undefined,
+            };
+        }
+        return {};
+    }
+
+    private async buildAttachment(source: unknown, fileName: string | undefined, requestId: string, channelId: string): Promise<PreparedDiscordAttachment> {
+        if (Buffer.isBuffer(source) || source instanceof Uint8Array) {
+            const buffer = Buffer.from(source as Buffer | Uint8Array);
+            log.info("discord.sendMedia:usingBuffer", {
+                requestId,
+                channelId,
+                sizeBytes: buffer.byteLength,
+            });
+            return {
+                data: buffer,
+                name: fileName ?? "attachment.bin",
+                sizeBytes: buffer.byteLength,
+            };
+        }
+
+        if (typeof source !== "string") {
+            throw new Error(`sendMedia: unsupported media source type ${typeof source}`);
+        }
+
+        if (source.startsWith("http://") || source.startsWith("https://")) {
+            const downloadStart = Date.now();
+            const downloaded = await this.downloadMediaWithTimeout(source, MEDIA_DOWNLOAD_TIMEOUT_MS);
+            log.info("discord.sendMedia:downloadedMedia", {
+                requestId,
+                channelId,
+                url: source,
+                durationMs: Date.now() - downloadStart,
+                sizeBytes: downloaded.buffer.byteLength,
+            });
+            const inferredName = this.fileNameFromUrl(source);
+            return {
+                data: downloaded.buffer,
+                name: fileName ?? inferredName ?? "attachment.bin",
+                contentType: downloaded.contentType,
+                sizeBytes: downloaded.buffer.byteLength,
+            };
+        }
+
+        if (source.startsWith("data:")) {
+            const parsed = this.parseDataUrl(source);
+            log.info("discord.sendMedia:usingDataUrl", {
+                requestId,
+                channelId,
+                mimeType: parsed.mimeType,
+                sizeBytes: parsed.buffer.byteLength,
+            });
+            return {
+                data: parsed.buffer,
+                name: fileName ?? this.defaultFileNameForMimeType(parsed.mimeType),
+                contentType: parsed.mimeType,
+                sizeBytes: parsed.buffer.byteLength,
+            };
+        }
+
+        const resolved = this.resolveLocalFilePath(source);
+        if (!resolved) {
+            throw new Error(`sendMedia: file does not exist: ${source}`);
+        }
+        const stat = statSync(resolved);
+        if (!stat.isFile()) {
+            throw new Error(`sendMedia: not a file: ${resolved}`);
+        }
+        const buffer = readFileSync(resolved);
+        log.info("discord.sendMedia:usingLocalFile", {
+            requestId,
+            channelId,
+            file: resolved,
+            sizeBytes: buffer.byteLength,
+        });
+        return {
+            data: buffer,
+            name: fileName ?? basename(resolved),
+            sizeBytes: buffer.byteLength,
+        };
+    }
+
+    private async sendDiscordMediaMessage(
+        channelId: string,
+        sendOpts: Record<string, unknown>,
+        files: PreparedDiscordAttachment[],
+        requestId: string,
+    ): Promise<Record<string, unknown>> {
+        const payload: Record<string, unknown> = {};
+        if (typeof sendOpts.content === "string" && sendOpts.content.length > 0) {
+            payload.content = sendOpts.content;
+        }
+
+        const reply = sendOpts.reply as { messageReference?: unknown } | undefined;
+        if (reply?.messageReference) {
+            payload.message_reference = {
+                message_id: String(reply.messageReference),
+                fail_if_not_exists: false,
+            };
+        }
+
+        if (files.length > 0) {
+            payload.attachments = files.map((file, index) => ({
+                id: String(index),
+                filename: file.name,
+            }));
+        }
+
+        log.info("discord.sendMedia:uploadStart", {
+            requestId,
+            channelId,
+            fileCount: files.length,
+            totalSizeBytes: files.reduce((sum, file) => sum + file.sizeBytes, 0),
+            timeoutMs: MEDIA_SEND_TIMEOUT_MS,
+        });
+
+        const sent = await this.postDiscordMessage(channelId, payload, files, requestId);
+        log.info("discord.sendMedia:uploadResponse", {
+            requestId,
+            channelId,
+            messageId: sent.id,
+        });
+        return sent;
+    }
+
+    private async postDiscordMessage(
+        channelId: string,
+        payload: Record<string, unknown>,
+        files: PreparedDiscordAttachment[],
+        requestId: string,
+    ): Promise<Record<string, unknown>> {
+        const url = `${DISCORD_API_BASE}/channels/${encodeURIComponent(channelId)}/messages`;
+        const maxAttempts = 2;
+
+        for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+            const signal = AbortSignal.timeout(MEDIA_SEND_TIMEOUT_MS);
+            const startedAt = Date.now();
+            let response: Response;
+            try {
+                response = await fetch(url, {
+                    method: "POST",
+                    headers: this.buildDiscordRequestHeaders(files.length === 0),
+                    body: files.length > 0 ? this.buildDiscordMultipartBody(payload, files) : JSON.stringify(payload),
+                    signal,
+                });
+            } catch (err) {
+                if (this.isAbortLikeError(err)) {
+                    throw new Error(`sendMedia upload timeout after ${MEDIA_SEND_TIMEOUT_MS}ms`);
+                }
+                throw err;
+            }
+
+            const bodyText = await response.text();
+            if (response.status === 429 && attempt < maxAttempts) {
+                const retryAfterMs = this.parseRetryAfterMs(response, bodyText);
+                if (retryAfterMs > 0 && retryAfterMs < MEDIA_SEND_TIMEOUT_MS) {
+                    log.warn("discord.sendMedia:rateLimited", {
+                        requestId,
+                        channelId,
+                        attempt,
+                        retryAfterMs,
+                    });
+                    await this.sleep(retryAfterMs);
+                    continue;
+                }
+            }
+
+            if (!response.ok) {
+                throw new Error(`sendMedia upload failed: HTTP ${response.status} ${this.describeDiscordErrorBody(bodyText)}`);
+            }
+
+            log.debug("discord.sendMedia:uploadHttpOk", {
+                requestId,
+                channelId,
+                attempt,
+                durationMs: Date.now() - startedAt,
+                status: response.status,
+            });
+            return bodyText ? JSON.parse(bodyText) as Record<string, unknown> : {};
+        }
+
+        throw new Error("sendMedia upload failed after retry");
+    }
+
+    private buildDiscordRequestHeaders(isJson: boolean): HeadersInit {
+        return {
+            Authorization: `Bot ${this.config.botToken}`,
+            "User-Agent": "CyberGroupmate DiscordAdapter",
+            ...(isJson ? { "Content-Type": "application/json" } : {}),
+        };
+    }
+
+    private buildDiscordMultipartBody(payload: Record<string, unknown>, files: PreparedDiscordAttachment[]): FormData {
+        const body = new FormData();
+        for (const [index, file] of files.entries()) {
+            const bytes = Uint8Array.from(file.data);
+            body.append(
+                `files[${index}]`,
+                new Blob([bytes], { type: file.contentType ?? "application/octet-stream" }),
+                file.name,
+            );
+        }
+        body.append("payload_json", JSON.stringify(payload));
+        return body;
+    }
+
+    private parseRetryAfterMs(response: Response, bodyText: string): number {
+        const headerValue = response.headers.get("retry-after");
+        if (headerValue) {
+            const seconds = Number(headerValue);
+            if (Number.isFinite(seconds) && seconds > 0) return Math.ceil(seconds * 1000);
+        }
+
+        try {
+            const parsed = JSON.parse(bodyText) as { retry_after?: unknown };
+            const seconds = Number(parsed.retry_after);
+            if (Number.isFinite(seconds) && seconds > 0) return Math.ceil(seconds * 1000);
+        } catch {
+            // Ignore malformed rate-limit bodies; the caller will surface the HTTP error.
+        }
+        return 0;
+    }
+
+    private describeDiscordErrorBody(bodyText: string): string {
+        if (!bodyText) return "(empty response body)";
+        try {
+            const parsed = JSON.parse(bodyText) as { message?: unknown; code?: unknown };
+            const message = typeof parsed.message === "string" ? parsed.message : bodyText;
+            return parsed.code != null ? `${message} (code ${String(parsed.code)})` : message;
+        } catch {
+            return bodyText.slice(0, 500);
+        }
+    }
+
+    private isAbortLikeError(err: unknown): boolean {
+        return err instanceof Error && (err.name === "AbortError" || err.name === "TimeoutError");
+    }
+
+    private async sleep(ms: number): Promise<void> {
+        await new Promise<void>(resolve => setTimeout(resolve, ms));
+    }
+
+    private resolveLocalFilePath(file: string): string | null {
+        let raw = file;
+        if (raw.startsWith("file://")) {
+            try {
+                raw = fileURLToPath(raw);
+            } catch {
+                return null;
+            }
+        }
+
+        const candidates = isAbsolute(raw)
+            ? [pathResolve(raw)]
+            : [
+                pathResolve(process.cwd(), raw),
+                pathResolve(process.cwd(), "workspace", raw),
+            ];
+
+        for (const candidate of candidates) {
+            if (existsSync(candidate)) return candidate;
+        }
+        return null;
+    }
+
+    private parseDataUrl(dataUrl: string): { buffer: Buffer; mimeType: string } {
+        const match = dataUrl.match(/^data:([^;,]+)?(;base64)?,([\s\S]*)$/);
+        if (!match) {
+            throw new Error("sendMedia: invalid data URL");
+        }
+        const mimeType = match[1] || "application/octet-stream";
+        const isBase64 = !!match[2];
+        const payload = match[3] ?? "";
+        const buffer = isBase64
+            ? Buffer.from(payload, "base64")
+            : Buffer.from(decodeURIComponent(payload), "utf-8");
+        return { buffer, mimeType };
+    }
+
+    private defaultFileNameForMimeType(mimeType: string): string {
+        switch (mimeType) {
+            case "image/jpeg": return "image.jpg";
+            case "image/png": return "image.png";
+            case "image/webp": return "image.webp";
+            case "image/gif": return "image.gif";
+            case "video/mp4": return "video.mp4";
+            case "audio/mpeg": return "audio.mp3";
+            default: return "attachment.bin";
+        }
+    }
+
+    private fileNameFromUrl(url: string): string | undefined {
+        try {
+            const name = basename(new URL(url).pathname);
+            return name || undefined;
+        } catch {
+            return undefined;
+        }
     }
 
     /**
@@ -541,9 +891,9 @@ export class DiscordAdapter implements PlatformAdapter {
         return {
             id: message.id,
             text: message.content ?? "",
-            channelId: message.channel?.id,
-            guildId: message.guild?.id,
-            timestamp: message.createdAt?.toISOString?.() ?? new Date().toISOString(),
+            channelId: message.channel?.id ?? message.channel_id,
+            guildId: message.guild?.id ?? message.guild_id,
+            timestamp: message.createdAt?.toISOString?.() ?? message.timestamp ?? new Date().toISOString(),
         };
     }
 }

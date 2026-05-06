@@ -34,6 +34,18 @@ export interface LLMLogEntry {
     retries: LLMRetryEvent[];
 }
 
+function getUsageTotalTokens(usage: LLMResponseEvent["usage"], provider: string): number {
+    if (!usage) return 0;
+    const prompt = usage.promptTokens ?? 0;
+    const completion = usage.completionTokens ?? 0;
+    const cached = usage.cachedTokens ?? 0;
+    const cacheCreation = usage.cacheCreationTokens ?? 0;
+    const rawTotal = usage.totalTokens ?? (prompt + completion);
+    return provider === "anthropic"
+        ? rawTotal + cached + cacheCreation
+        : rawTotal;
+}
+
 export class LLMLogBuffer {
     private buffer: LLMLogEntry[] = [];
     private readonly maxSize: number;
@@ -140,7 +152,7 @@ export class LLMLogBuffer {
             if (e.response) {
                 if (e.response.error) error++;
                 else success++;
-                if (e.response.usage?.totalTokens) totalTokens += e.response.usage.totalTokens;
+                if (e.response.usage) totalTokens += getUsageTotalTokens(e.response.usage, e.provider);
                 if (e.response.usage?.cachedTokens) totalCachedTokens += e.response.usage.cachedTokens;
             }
         }
@@ -231,9 +243,12 @@ export class EventBridge {
     private hookLLMEvents(): void {
         /** callId → model 映射（用于在 response 中还原 model） */
         const callIdToModel = new Map<string, string>();
+        /** callId → provider 映射（用于在 response 中还原 token 语义） */
+        const callIdToProvider = new Map<string, string>();
 
         llmEvents.on("llm:call", (data: LLMCallEvent) => {
             callIdToModel.set(data.callId, data.model);
+            callIdToProvider.set(data.callId, data.provider);
             // 存入专用缓冲
             this.llmLogBuffer.addCall(data);
             this.broadcast({
@@ -254,9 +269,11 @@ export class EventBridge {
 
             // 持久化 token 统计
             const model = callIdToModel.get(data.callId) ?? "unknown";
+            const provider = callIdToProvider.get(data.callId) ?? "";
             callIdToModel.delete(data.callId);
+            callIdToProvider.delete(data.callId);
             if (data.usage && !data.error) {
-                this.deps.tokenStats.record(model, data.caller ?? "unknown", data.usage);
+                this.deps.tokenStats.record(model, data.caller ?? "unknown", data.usage, provider);
             }
         });
 

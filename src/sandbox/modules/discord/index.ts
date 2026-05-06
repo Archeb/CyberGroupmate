@@ -44,6 +44,37 @@ export function createDiscordClientProxy(env: CapabilityRegistryEnv, sentHistory
         return file;
     }
 
+    function buildDiscordMediaDedupKey(media: unknown, captionOverride?: string): string {
+        const parts: string[] = [];
+
+        if (typeof captionOverride === "string" && captionOverride.trim()) {
+            parts.push(`caption=${captionOverride.trim()}`);
+        }
+
+        if (typeof media === "string") {
+            parts.push(`file=${String(resolveLocalFile(media))}`);
+            return `[media:${parts.join("|")}]`;
+        }
+
+        if (media && typeof media === "object") {
+            const record = media as Record<string, unknown>;
+            const type = typeof record.type === "string" ? record.type : "unknown";
+            parts.push(`type=${type}`);
+
+            const resolvedFile = resolveLocalFile(record.file);
+            if (typeof resolvedFile === "string" && resolvedFile) parts.push(`file=${resolvedFile}`);
+            if (typeof record.url === "string" && record.url) parts.push(`url=${record.url}`);
+            if (typeof record.fileName === "string" && record.fileName) parts.push(`fileName=${record.fileName}`);
+            if (!captionOverride && typeof record.caption === "string" && record.caption.trim()) {
+                parts.push(`caption=${record.caption.trim()}`);
+            }
+
+            return `[media:${parts.join("|")}]`;
+        }
+
+        return "[media:unknown]";
+    }
+
     /**
      * 检查消息是否是重复发送。
      * 如果是新消息则记录并返回 false；如果已发送过则返回 true。
@@ -93,14 +124,7 @@ export function createDiscordClientProxy(env: CapabilityRegistryEnv, sentHistory
         },
         sendMedia: async (channelId: string, media: unknown, opts?: { replyTo?: string; caption?: string }) => {
             // ── 重复消息拦截（基于 caption + 媒体标识）──
-            let mediaIdentifier = "[media]";
-            if (media && typeof media === "object") {
-                const m = media as Record<string, unknown>;
-                if (typeof m.file === "string") mediaIdentifier = `[media:file=${m.file}]`;
-                else if (typeof m.url === "string") mediaIdentifier = `[media:url=${m.url}]`;
-                else if (typeof m.type === "string") mediaIdentifier = `[media:type=${m.type}]`;
-            }
-            const mediaText = opts?.caption ? `${opts.caption}|${mediaIdentifier}` : mediaIdentifier;
+            const mediaText = buildDiscordMediaDedupKey(media, opts?.caption);
             if (isDuplicate(channelId, mediaText)) {
                 const preview = mediaText.length > 80 ? mediaText.slice(0, 80) + '...' : mediaText;
                 const warning = `[⚠ 运行时警告: 重复消息已拦截] 目标 channel=${channelId} 的媒体消息 "${preview}" 与本次 session 中已发送的消息内容完全一致，已自动拦截，不会重复发送。`;
