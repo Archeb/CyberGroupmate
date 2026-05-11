@@ -35,13 +35,3 @@ data/
 # Agent instructions (local only)
 AGENTS.md
 CLAUDE.md
-
-# Screenshots & media (prevent accidental commit)
-*.png
-*.jpg
-*.jpeg
-*.gif
-*.webp
-*.mp4
-*.mov
-!docs/images/

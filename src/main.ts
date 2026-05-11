@@ -812,34 +812,6 @@ async function main(): Promise<void> {
         const chatId = String(event.chatId ?? "");
         if (chatId) lastActivityPerChat.set(chatId, Date.now());
     });
-    // ─── NC.onPush: 群名变更实时同步到 group_models ───
-    nc.onPush(event => {
-        if (shuttingDown) return;
-        const eventType = String(event.type ?? "");
-        // 支持 OneBot 群名变更通知和 Telegram 群名刷新事件
-        if (eventType !== "onebot.group_name_change" && eventType !== "telegram.chat_title_refresh") return;
-        const chatId = String(event.chatId ?? "");
-        const newTitle = String(event.newName ?? event.chatTitle ?? "");
-        if (!chatId || !newTitle) return;
-        try {
-            const existing = memory.getGroupModel(getGroupModelKey(chatId));
-            if (!existing || existing.chatTitle !== newTitle) {
-                const isDM = eventType === "onebot.group_name_change" ? false : !!existing?.isDirectMessage;
-                memory.upsertGroupModel(getGroupModelKey(chatId), { chatTitle: newTitle, isDirectMessage: isDM });
-                log.info("群名变更已同步到 GroupModel", { chatId, chatTitle: newTitle, source: eventType });
-                // 通知 subagent-manager 刷新活跃 session 的 chatTitle
-                const sub = subagentManager.get(chatId);
-                if (sub) {
-                    const executor = sub.codeActExecutor as import("./subagent/code-act-executor.js").CodeActExecutor | null;
-                    if (executor) {
-                        executor.updateChatTitle(newTitle);
-                    }
-                }
-            }
-        } catch (err) {
-            log.warn("群名变更同步 GroupModel 失败", { chatId, error: String(err) });
-        }
-    });
 
     const reflectionInterval = setInterval(async () => {
         if (shuttingDown) return;
@@ -1300,39 +1272,6 @@ async function main(): Promise<void> {
 
     // 广播 adapter 状态到 dashboard
     nc.push({ type: "system.adapter_status", adapters: adapterStatuses });
-
-    // ─── 延迟刷新 OneBot 预加载的群名/昵称到 GroupModel ───
-    // prefetchWhitelistedGroups 是异步的，等 5 秒后从缓存读取并更新 GroupModel
-    const onebotAdapterInstance = adapters.find(a => a.platform === "onebot") as OneBotAdapter | undefined;
-    if (onebotAdapterInstance) {
-        setTimeout(() => {
-            try {
-                const { groupNames, userNicks } = onebotAdapterInstance.getCachedNames();
-                let updatedCount = 0;
-                for (const [groupId, groupName] of groupNames.entries()) {
-                    const chatId = `onebot:group:${groupId}`;
-                    const existing = memory.getGroupModel(getGroupModelKey(chatId));
-                    if (!existing || existing.chatTitle !== groupName) {
-                        memory.upsertGroupModel(getGroupModelKey(chatId), { chatTitle: groupName, isDirectMessage: false });
-                        updatedCount++;
-                    }
-                }
-                for (const [userId, nickname] of userNicks.entries()) {
-                    const chatId = `onebot:private:${userId}`;
-                    const existing = memory.getGroupModel(getGroupModelKey(chatId));
-                    if (!existing || existing.chatTitle !== nickname) {
-                        memory.upsertGroupModel(getGroupModelKey(chatId), { chatTitle: nickname, isDirectMessage: true });
-                        updatedCount++;
-                    }
-                }
-                if (updatedCount > 0) {
-                    log.info("OneBot 预加载 chatTitle 已同步到 GroupModel", { updatedCount });
-                }
-            } catch (err) {
-                log.warn("OneBot 预加载 chatTitle 同步失败", { error: String(err) });
-            }
-        }, 5000);
-    }
     const failedAdapters = adapterStatuses.filter(a => a.status !== "ok");
     if (failedAdapters.length > 0) {
         log.warn("部分 adapter 未就绪", { failed: failedAdapters.map(a => `${a.platform}: ${a.error}`) });

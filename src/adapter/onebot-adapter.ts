@@ -883,13 +883,6 @@ export class OneBotAdapter implements PlatformAdapter {
                 const oldName = this.groupNameCache.get(groupId);
                 this.groupNameCache.set(groupId, newName);
                 log.info("群名变更", { groupId, oldName, newName });
-                this.nc.push({
-                    type: "onebot.group_name_change",
-                    chatId: `onebot:group:${groupId}`,
-                    groupId,
-                    oldName: oldName ?? "",
-                    newName,
-                });
             }
             return;
         }

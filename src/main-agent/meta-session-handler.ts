@@ -283,6 +283,9 @@ function normalizeMetaSessionHistoryContent(message: Pick<ChatMessage, "role" | 
     if (!content || isMetaRunnerNotice(content)) {
         return "";
     }
+    if (message.role === "assistant" && content === META_END_TURN_MARKER) {
+        return "";
+    }
     if (
         message.role === "assistant"
         && content.includes("[SESSION_DIGEST]")

@@ -107,36 +107,6 @@ function buildFtsOrQuery(query: string): string {
     return terms.map(term => `"${term}"`).join(" OR ");
 }
 
-function expandLegacyMessageRange(messageRange: unknown): string[] {
-    if (!messageRange || typeof messageRange !== "object") return [];
-
-    const range = messageRange as {
-        messageIds?: unknown;
-        firstMessageId?: unknown;
-        lastMessageId?: unknown;
-    };
-
-    if (Array.isArray(range.messageIds)) {
-        return range.messageIds
-            .map((id) => String(id).trim())
-            .filter(Boolean);
-    }
-
-    const firstRaw = range.firstMessageId;
-    const lastRaw = range.lastMessageId;
-    if (firstRaw === undefined || lastRaw === undefined) return [];
-
-    const first = Number(firstRaw);
-    const last = Number(lastRaw);
-    if (!Number.isInteger(first) || !Number.isInteger(last) || last < first) return [];
-
-    const messageIds: string[] = [];
-    for (let id = first; id <= last; id += 1) {
-        messageIds.push(String(id));
-    }
-    return messageIds;
-}
-
 // ─── System Prompt 加载（统一使用 prompt-loader 支持 override）───
 
 let _recallDeepSummaryPrompt: string | null = null;
@@ -548,8 +518,7 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
             if (data.participants !== undefined) builder.set("participants", toJSON(data.participants));
             if (data.keywords !== undefined) builder.set("keywords", toJSON(data.keywords));
             if (data.messageRange !== undefined) {
-                const normalizedMessageIds = expandLegacyMessageRange(data.messageRange);
-                builder.set("message_ids", toJSON(normalizedMessageIds));
+                builder.set("message_ids", toJSON(data.messageRange.messageIds));
                 builder.set("message_count", data.messageRange.count);
             }
             if (data.startedAt !== undefined) builder.set("started_at", data.startedAt);
@@ -602,7 +571,7 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
                 toJSON(data.keyPoints),
                 toJSON(data.participants),
                 toJSON(data.keywords),
-                toJSON(expandLegacyMessageRange(data.messageRange)),
+                toJSON(data.messageRange?.messageIds),
                 data.messageRange?.count ?? 0,
                 data.startedAt ?? ts,
                 data.endedAt ?? null,
@@ -643,8 +612,7 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
         if (data.participants !== undefined) builder.set("participants", toJSON(data.participants));
         if (data.keywords !== undefined) builder.set("keywords", toJSON(data.keywords));
         if (data.messageRange !== undefined) {
-            const normalizedMessageIds = expandLegacyMessageRange(data.messageRange);
-            builder.set("message_ids", toJSON(normalizedMessageIds));
+            builder.set("message_ids", toJSON(data.messageRange.messageIds));
             builder.set("message_count", data.messageRange.count);
         }
         if (data.startedAt !== undefined) builder.set("started_at", data.startedAt);

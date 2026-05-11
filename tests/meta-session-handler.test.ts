@@ -16,6 +16,10 @@ const TEST_LLM_CONFIG: LLMConfig = {
     maxTokens: 1024,
 };
 
+function isFirstNoCodeConfirmationCall(messages: ChatMessage[]): boolean {
+    return String(messages.at(-1)?.content ?? "").includes("你本次未写代码分配任务");
+}
+
 function createEntry(): AttentionQueueEntry {
     return {
         chatId: "telegram:g1",
@@ -163,6 +167,9 @@ describe("createMetaSessionHandler", () => {
             sandbox,
             getLlmConfigs: () => [TEST_LLM_CONFIG],
             llmCaller: async (messages): Promise<LLMResponse> => {
+                if (isFirstNoCodeConfirmationCall(messages)) {
+                    return { content: "<end_turn>" };
+                }
                 llmCalls.push(messages.map((message) => ({ ...message })));
                 return {
                     content: "[SESSION_DIGEST]noop[/SESSION_DIGEST]\n<end_turn>",
@@ -228,6 +235,9 @@ describe("createMetaSessionHandler", () => {
             sandbox,
             getLlmConfigs: () => [TEST_LLM_CONFIG],
             llmCaller: async (messages): Promise<LLMResponse> => {
+                if (isFirstNoCodeConfirmationCall(messages)) {
+                    return { content: "<end_turn>" };
+                }
                 llmCalls.push(messages.map((message) => ({ ...message })));
                 return {
                     content: "[SESSION_DIGEST]ordered[/SESSION_DIGEST]\n<end_turn>",
@@ -301,6 +311,9 @@ describe("createMetaSessionHandler", () => {
             sandbox,
             getLlmConfigs: () => [TEST_LLM_CONFIG],
             llmCaller: async (messages): Promise<LLMResponse> => {
+                if (isFirstNoCodeConfirmationCall(messages)) {
+                    return { content: "<end_turn>" };
+                }
                 llmCalls.push(messages.map((message) => ({ ...message })));
                 return {
                     content: "[SESSION_DIGEST]fallback[/SESSION_DIGEST]\n<end_turn>",
@@ -379,6 +392,9 @@ describe("createMetaSessionHandler", () => {
             sandbox,
             getLlmConfigs: () => [TEST_LLM_CONFIG],
             llmCaller: async (messages, _configs, options): Promise<LLMResponse> => {
+                if (isFirstNoCodeConfirmationCall(messages)) {
+                    return { content: "<end_turn>" };
+                }
                 llmCalls.push({
                     messages: messages.map((message) => ({ ...message })),
                     options,
@@ -457,6 +473,11 @@ describe("createMetaSessionHandler", () => {
                 ].join("\n"),
                 timestamp: "2026-05-01T00:00:01.000Z",
             },
+            {
+                role: "assistant",
+                content: "<end_turn>",
+                timestamp: "2026-05-01T00:00:02.000Z",
+            },
         ];
 
         const handler = createMetaSessionHandler({
@@ -470,6 +491,9 @@ describe("createMetaSessionHandler", () => {
             sandbox,
             getLlmConfigs: () => [TEST_LLM_CONFIG],
             llmCaller: async (messages): Promise<LLMResponse> => {
+                if (isFirstNoCodeConfirmationCall(messages)) {
+                    return { content: "<end_turn>" };
+                }
                 llmCalls.push(messages.map((message) => ({ ...message })));
                 return {
                     content: "[SESSION_DIGEST]noop[/SESSION_DIGEST]\n<end_turn>",
@@ -487,6 +511,10 @@ describe("createMetaSessionHandler", () => {
         assert.match(priorAssistant.content, /<end_turn>/);
         assert.equal(
             replayedMessages.some((message) => message.content.includes("[Meta runner notice]")),
+            false,
+        );
+        assert.equal(
+            replayedMessages.some((message) => message.role === "assistant" && message.content.trim() === "<end_turn>"),
             false,
         );
     });
@@ -516,6 +544,9 @@ describe("createMetaSessionHandler", () => {
             sandbox,
             getLlmConfigs: () => [TEST_LLM_CONFIG],
             llmCaller: async (messages): Promise<LLMResponse> => {
+                if (isFirstNoCodeConfirmationCall(messages)) {
+                    return { content: "<end_turn>" };
+                }
                 llmCalls.push(messages.map((message) => ({ ...message })));
                 return {
                     content: "[SESSION_DIGEST]noop[/SESSION_DIGEST]\n<end_turn>",
@@ -557,6 +588,9 @@ describe("createMetaSessionHandler", () => {
             sandbox,
             getLlmConfigs: () => [TEST_LLM_CONFIG],
             llmCaller: async (messages): Promise<LLMResponse> => {
+                if (isFirstNoCodeConfirmationCall(messages)) {
+                    return { content: "<end_turn>" };
+                }
                 llmCalls.push(messages.map((message) => ({ ...message })));
                 return {
                     content: "[SESSION_DIGEST]proactive noop[/SESSION_DIGEST]\n<end_turn>",
@@ -610,6 +644,9 @@ describe("createMetaSessionHandler", () => {
             sandbox,
             getLlmConfigs: () => [TEST_LLM_CONFIG],
             llmCaller: async (messages): Promise<LLMResponse> => {
+                if (isFirstNoCodeConfirmationCall(messages)) {
+                    return { content: "<end_turn>" };
+                }
                 llmCalls.push(messages.map((message) => ({ ...message })));
                 return {
                     content: "[SESSION_DIGEST]todo scoped[/SESSION_DIGEST]\n<end_turn>",
@@ -683,6 +720,9 @@ describe("createMetaSessionHandler", () => {
             getLlmConfigs: () => [TEST_LLM_CONFIG],
             getVisionConfig: () => ({ attendMode: "enrich" }),
             llmCaller: async (messages): Promise<LLMResponse> => {
+                if (isFirstNoCodeConfirmationCall(messages)) {
+                    return { content: "<end_turn>" };
+                }
                 llmCalls.push(messages.map((message) => ({ ...message })));
                 return {
                     content: "[SESSION_DIGEST]sticker enrich[/SESSION_DIGEST]\n<end_turn>",

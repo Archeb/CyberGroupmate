@@ -254,21 +254,6 @@ export class CodeActExecutor {
     }
 
     /**
-     * 更新所有 pending tasks 的 chatTitle（群名变更时调用）
-     */
-    updateChatTitle(newTitle: string): void {
-        for (const task of this.taskQueue) {
-            if (task.contextSnapshot) {
-                task.contextSnapshot.chatTitle = newTitle;
-                if (task.contextSnapshot.groupModel) {
-                    task.contextSnapshot.groupModel.chatTitle = newTitle;
-                }
-            }
-        }
-        log.info("updateChatTitle: 已更新 pending tasks", { chatId: this.chatId, newTitle, taskCount: this.taskQueue.length });
-    }
-
-    /**
      * 注入运行时依赖（Sandbox + NC + LLM）
      *
      * Fix 9: 完整的 Sandbox 集成。调用后 execute() 将使用

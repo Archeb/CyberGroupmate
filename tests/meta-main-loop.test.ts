@@ -616,6 +616,9 @@ describe("MainAgentLoop meta session path", () => {
             sandbox,
             getLlmConfigs: () => [TEST_LLM_CONFIG],
             llmCaller: async (messages) => {
+                if (String(messages.at(-1)?.content ?? "").includes("你本次未写代码分配任务")) {
+                    return { content: "<end_turn>" };
+                }
                 lastUserPrompt = messages
                     .filter((message) => message.role === "user")
                     .map((message) => message.content)

@@ -118,21 +118,43 @@ export function extractSessionDigest(thinking?: string, maxChars: number = 500):
         return undefined;
     }
 
-    const match = trimmed.match(/\[SESSION_DIGEST\]([\s\S]*?)(?:\[\/SESSION_DIGEST\]|$)/);
-    if (match?.[1]?.trim()) {
-        return match[1].trim();
+    const explicitDigest = extractExplicitSessionDigest(trimmed);
+    if (explicitDigest) {
+        return explicitDigest;
     }
 
     return compactThinking(trimmed, maxChars);
 }
 
-function hasSessionDigest(thinking?: string): boolean {
+function extractExplicitSessionDigest(thinking?: string): string | undefined {
     const trimmed = thinking?.trim();
     if (!trimmed) {
-        return false;
+        return undefined;
     }
     const match = trimmed.match(/\[SESSION_DIGEST\]([\s\S]*?)(?:\[\/SESSION_DIGEST\]|$)/);
-    return Boolean(match?.[1]?.trim());
+    return match?.[1]?.trim() || undefined;
+}
+
+function extractLatestSessionDigest(turns: MetaSessionTurn[]): string | undefined {
+    for (let index = turns.length - 1; index >= 0; index--) {
+        const digest = extractExplicitSessionDigest(turns[index]?.thinking);
+        if (digest) {
+            return digest;
+        }
+    }
+
+    for (let index = turns.length - 1; index >= 0; index--) {
+        const digest = extractSessionDigest(turns[index]?.thinking);
+        if (digest) {
+            return digest;
+        }
+    }
+
+    return undefined;
+}
+
+function hasSessionDigest(thinking?: string): boolean {
+    return Boolean(extractExplicitSessionDigest(thinking));
 }
 
 export function compactThinking(thinking: string, maxChars: number = 500): string {
@@ -161,6 +183,15 @@ function buildMissingEndTurnObservation(): string {
     ].join("\n");
 }
 
+function buildFirstNoCodeConfirmationObservation(): string {
+    return [
+        "[Meta runner notice]",
+        `你本次未写代码分配任务，如果这是你的本意，请再次只输出${END_TURN_MARKER}即可。`,
+        "如果仍需行动，请输出一个 JS 代码块。",
+        "不要输出历史占位符或伪造执行结果。",
+    ].join("\n");
+}
+
 export async function runMetaSession(
     initialMessages: ChatMessage[],
     sandbox: MetaSandbox,
@@ -173,6 +204,7 @@ export async function runMetaSession(
     const maxTurns = config.maxTurns ?? DEFAULT_MAX_TURNS;
     const codeTimeout = config.codeTimeout ?? DEFAULT_CODE_TIMEOUT_MS;
     const llmCaller = config.llmCaller ?? callLLMWithFallback;
+    let firstNoCodeConfirmationPending = false;
     metaCancelRequested = false;
     sandbox.beginSession(sessionId);
     syncMetaCodeActState(sessionId, messages, turns, true);
@@ -187,7 +219,7 @@ export async function runMetaSession(
             messages,
             endReason,
             error,
-            sessionDigest: extractSessionDigest(turns.at(-1)?.thinking),
+            sessionDigest: extractLatestSessionDigest(turns),
         };
 
         syncMetaCodeActState(sessionId, messages, turns, false);
@@ -260,7 +292,26 @@ export async function runMetaSession(
             });
 
             if (!parsed.code) {
+                if (turn === 1) {
+                    const observation = buildFirstNoCodeConfirmationObservation();
+                    firstNoCodeConfirmationPending = true;
+                    turnRecord.observation = observation;
+                    messages.push({ role: "user", content: observation });
+                    syncMetaCodeActState(sessionId, messages, turns, true);
+                    emitMetaProgress(sessionId, {
+                        turn,
+                        phase: "observation",
+                        executionOutput: observation,
+                        isProcessing: true,
+                    });
+                    continue;
+                }
+
                 if (hasEndTurn) {
+                    if (firstNoCodeConfirmationPending) {
+                        firstNoCodeConfirmationPending = false;
+                        return finalize("end_turn");
+                    }
                     if (!hasSessionDigest(parsed.thinking)) {
                         const observation = buildMissingDigestObservation();
                         turnRecord.observation = observation;
@@ -294,6 +345,7 @@ export async function runMetaSession(
                 return finalize("interrupted", "Meta session cancelled by user");
             }
 
+            firstNoCodeConfirmationPending = false;
             emitMetaProgress(sessionId, {
                 turn,
                 phase: "executing",

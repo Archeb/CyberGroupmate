@@ -345,9 +345,50 @@ describe("runMetaSession", () => {
         assert.match(result.messages.at(-1)?.content ?? "", /Meta runner notice/);
     });
 
-    it("requires SESSION_DIGEST before accepting a pure-text end_turn", async () => {
+    it("requires confirmation before accepting first-turn no-code end_turn", async () => {
         const sandbox = new MetaSandbox({});
         const responses: LLMResponse[] = [
+            { content: "[SESSION_DIGEST]no dispatch needed[/SESSION_DIGEST]\n<end_turn>" },
+            { content: "<end_turn>" },
+        ];
+        const llmCalls: ChatMessage[][] = [];
+
+        const result = await runMetaSession(
+            [{ role: "system", content: "system" }],
+            sandbox,
+            [TEST_LLM_CONFIG],
+            {
+                llmCaller: async (messages) => {
+                    llmCalls.push(messages.map((message) => ({ ...message })));
+                    const next = responses.shift();
+                    assert.ok(next);
+                    return next;
+                },
+            },
+        );
+
+        assert.equal(result.endReason, "end_turn");
+        assert.equal(result.sessionDigest, "no dispatch needed");
+        assert.equal(result.turns.length, 2);
+        assert.match(llmCalls[1]?.at(-1)?.content ?? "", /你本次未写代码分配任务/);
+    });
+
+    it("requires SESSION_DIGEST before accepting a pure-text end_turn after code ran", async () => {
+        const sandbox = new MetaSandbox({
+            tools: {
+                noop: async () => "ok",
+            },
+        });
+        const responses: LLMResponse[] = [
+            {
+                content: [
+                    "Need one action.",
+                    "",
+                    "```ts",
+                    "await tools.noop();",
+                    "```",
+                ].join("\n"),
+            },
             { content: "Done.\n<end_turn>" },
             { content: "[SESSION_DIGEST]finished after digest reminder[/SESSION_DIGEST]\n<end_turn>" },
         ];
@@ -367,7 +408,7 @@ describe("runMetaSession", () => {
 
         assert.equal(result.endReason, "end_turn");
         assert.equal(result.sessionDigest, "finished after digest reminder");
-        assert.match(result.messages[2]?.content ?? "", /没有输出 \[SESSION_DIGEST\]/);
+        assert.match(result.messages[4]?.content ?? "", /没有输出 \[SESSION_DIGEST\]/);
     });
 
     it("feeds sandbox errors back to the model and allows a repair turn", async () => {

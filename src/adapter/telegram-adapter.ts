@@ -27,13 +27,6 @@ function normalizeWhitelistId(raw: string): string {
     return s;
 }
 
-function normalizeTelegramStateId(raw: string): string {
-    const trimmed = raw.trim();
-    if (!trimmed) return trimmed;
-    if (trimmed.startsWith("telegram:")) return trimmed;
-    return `telegram:${trimmed}`;
-}
-
 // ─── 常量 ───
 
 const DEFAULT_MEDIA_CACHE_DIR = "workspace/media-cache";
@@ -106,10 +99,6 @@ interface TelegramClientLike {
     onNewMessage: {
         add(handler: (msg: unknown) => void | Promise<void>): void;
         remove(handler: (msg: unknown) => void | Promise<void>): void;
-    };
-    onRawUpdate?: {
-        add(handler: (update: unknown) => void | Promise<void>): void;
-        remove(handler: (update: unknown) => void | Promise<void>): void;
     };
     destroy?(): Promise<void>;
     getMe?(): Promise<unknown>;
@@ -230,7 +219,6 @@ export class TelegramAdapter implements PlatformAdapter {
     private client: any | null = null;
     private selfUser: PlainUser | null = null;
     private messageHandler: ((msg: any) => Promise<void>) | null = null;
-    private rawUpdateHandler: ((updateInfo: unknown) => void | Promise<void>) | null = null;
     private mediaCache = new MediaFileCache();
 
     // ─── 拟人化延迟状态 ───
@@ -371,13 +359,6 @@ export class TelegramAdapter implements PlatformAdapter {
         };
 
         client.onNewMessage.add(this.messageHandler);
-        // 监听 raw updates 以检测群名变更
-        if (client.onRawUpdate) {
-            this.rawUpdateHandler = (updateInfo: unknown) => {
-                this.handleRawUpdate(updateInfo);
-            };
-            client.onRawUpdate.add(this.rawUpdateHandler);
-        }
         this.print(`✅ TelegramAdapter 已启动: ${this.selfUser.displayName ?? this.selfUser.firstName ?? this.selfUser.id} (${this.selfUser.id})`);
     }
 
@@ -387,10 +368,6 @@ export class TelegramAdapter implements PlatformAdapter {
         if (this.messageHandler) {
             this.client.onNewMessage.remove(this.messageHandler);
             this.messageHandler = null;
-        }
-        if (this.rawUpdateHandler && this.client.onRawUpdate) {
-            this.client.onRawUpdate.remove(this.rawUpdateHandler);
-            this.rawUpdateHandler = null;
         }
 
         if (typeof this.client.destroy === "function") {
@@ -1137,16 +1114,15 @@ export class TelegramAdapter implements PlatformAdapter {
 
     /** 检查用户是否处于 invisible 状态 */
     isUserInvisible(userId: string): boolean {
-        return this.invisibleUsers.has(normalizeTelegramStateId(userId));
+        return this.invisibleUsers.has(userId);
     }
 
     /** 检查聊天是否被 mute（未过期） */
     isChatMuted(chatId: string): boolean {
-        const normalizedChatId = normalizeTelegramStateId(chatId);
-        const expiry = this.mutedChats.get(normalizedChatId);
+        const expiry = this.mutedChats.get(chatId);
         if (expiry === undefined) return false;
         if (Date.now() >= expiry) {
-            this.mutedChats.delete(normalizedChatId);
+            this.mutedChats.delete(chatId);
             return false;
         }
         return true;
@@ -1154,7 +1130,7 @@ export class TelegramAdapter implements PlatformAdapter {
 
     /** 获取 mute 剩余时间的可读字符串 */
     private getMuteRemainingHours(chatId: string): string {
-        const expiry = this.mutedChats.get(normalizeTelegramStateId(chatId));
+        const expiry = this.mutedChats.get(chatId);
         if (!expiry) return "0 小时";
         const remainMs = Math.max(0, expiry - Date.now());
         const remainMin = Math.ceil(remainMs / 60_000);
@@ -1165,18 +1141,16 @@ export class TelegramAdapter implements PlatformAdapter {
 
     /** 外部设置 mute（Dashboard 用） */
     muteChat(chatId: string, hours: number): void {
-        const normalizedChatId = normalizeTelegramStateId(chatId);
         const h = Math.max(0.1, Math.min(24, hours));
         const expiryMs = Date.now() + h * 3_600_000;
-        this.mutedChats.set(normalizedChatId, expiryMs);
-        log.info("muteChat (external)", { chatId: normalizedChatId, hours: h, expiryMs });
+        this.mutedChats.set(chatId, expiryMs);
+        log.info("muteChat (external)", { chatId, hours: h, expiryMs });
     }
 
     /** 外部解除 mute（Dashboard 用） */
     unmuteChat(chatId: string): void {
-        const normalizedChatId = normalizeTelegramStateId(chatId);
-        this.mutedChats.delete(normalizedChatId);
-        log.info("unmuteChat (external)", { chatId: normalizedChatId });
+        this.mutedChats.delete(chatId);
+        log.info("unmuteChat (external)", { chatId });
     }
 
     /** 获取所有被禁言的聊天 */
@@ -1236,7 +1210,7 @@ export class TelegramAdapter implements PlatformAdapter {
 
         // ── /invisible ──
         if (/^\/invisible(?:@\S+)?$/i.test(text)) {
-            const userId = normalizeTelegramStateId(normalized.userId);
+            const userId = normalized.userId;
             if (this.invisibleUsers.has(userId)) {
                 this.invisibleUsers.delete(userId);
                 saveInvisibleUsers(this.invisibleUsers);
@@ -1255,28 +1229,26 @@ export class TelegramAdapter implements PlatformAdapter {
         const muteMatch = text.match(/^\/mute(?:@\S+)?(?:\s+(\d+(?:\.\d+)?))?$/i);
         if (muteMatch) {
             // 无参数 + 已在 mute 中 → 解除禁言（toggle）
-            const normalizedChatId = normalizeTelegramStateId(normalized.chatId);
-            if (!muteMatch[1] && this.isChatMuted(normalizedChatId)) {
-                this.mutedChats.delete(normalizedChatId);
-                log.info("/mute OFF (toggle)", { chatId: normalizedChatId });
+            if (!muteMatch[1] && this.isChatMuted(normalized.chatId)) {
+                this.mutedChats.delete(normalized.chatId);
+                log.info("/mute OFF (toggle)", { chatId: normalized.chatId });
                 await this.replySafe(normalized.chatId, `🔊 Bot 禁言已解除。`);
                 return true;
             }
             let hours = muteMatch[1] ? parseFloat(muteMatch[1]) : 1;
             hours = Math.max(1, Math.min(24, hours));  // clamp [1, 24]
             const expiryMs = Date.now() + hours * 3_600_000;
-            this.mutedChats.set(normalizedChatId, expiryMs);
-            log.info("/mute ON", { chatId: normalizedChatId, hours, expiryMs });
+            this.mutedChats.set(normalized.chatId, expiryMs);
+            log.info("/mute ON", { chatId: normalized.chatId, hours, expiryMs });
             await this.replySafe(normalized.chatId, `🔇 Bot 已在本聊天禁言 ${hours} 小时。期间消息仍会被记录和处理，但 Bot 不会发送任何消息。再次发送 /mute 可解除。`);
             return true;
         }
 
         // ── /unmute ──
         if (/^\/unmute(?:@\S+)?$/i.test(text)) {
-            const normalizedChatId = normalizeTelegramStateId(normalized.chatId);
-            if (this.mutedChats.has(normalizedChatId)) {
-                this.mutedChats.delete(normalizedChatId);
-                log.info("/unmute", { chatId: normalizedChatId });
+            if (this.mutedChats.has(normalized.chatId)) {
+                this.mutedChats.delete(normalized.chatId);
+                log.info("/unmute", { chatId: normalized.chatId });
                 await this.replySafe(normalized.chatId, `🔊 Bot 禁言已解除。`);
             } else {
                 await this.replySafe(normalized.chatId, `ℹ️ Bot 当前未被禁言。`);
@@ -1632,53 +1604,6 @@ export class TelegramAdapter implements PlatformAdapter {
         };
     }
 
-
-    /**
-     * 处理 Telegram raw updates，检测群名变更。
-     * mtcute 的 onRawUpdate 提供 RawUpdateInfo，其中 update._ 包含 TL 类型名。
-     * 群名变更对应的 TL 类型: updateChannel (supergroup/channel), updateChat (basic group)
-     */
-    private async handleRawUpdate(updateInfo: unknown): Promise<void> {
-        try {
-            const raw = updateInfo as { update?: { _: string; channelId?: number; chatId?: number }; peers?: unknown };
-            const update = raw.update;
-            if (!update) return;
-
-            const updateType = update._;
-            // 检测可能涉及群名变更的更新类型
-            if (updateType !== "updateChannel" && updateType !== "updateChat") return;
-
-            // 从 peers 中提取 chat 信息，或通过 getChat API 刷新
-            let chatId: string | undefined;
-            if (updateType === "updateChannel" && typeof update.channelId === "number") {
-                chatId = composeChatId("telegram", String(update.channelId));
-            } else if (updateType === "updateChat" && typeof update.chatId === "number") {
-                chatId = composeChatId("telegram", String(update.chatId));
-            }
-            if (!chatId || !this.client) return;
-
-            // 通过 getChat 获取最新群信息
-            if (typeof this.client.getChat !== "function") return;
-            const peer = await this.ensurePeerCached(chatId);
-            const chat = await this.client.getChat(peer);
-            if (!chat) return;
-
-            const newTitle = typeof chat.title === "string" ? chat.title : undefined;
-            if (!newTitle) return;
-
-            // 广播群名刷新事件（main.ts 中的 onPush hook 会同步到 group_models 和 session）
-            this.nc.push({
-                type: "telegram.chat_title_refresh",
-                chatId,
-                chatTitle: newTitle,
-                platform: "telegram",
-            });
-            log.info("Telegram 群名刷新", { chatId, chatTitle: newTitle });
-        } catch (err) {
-            // 非关键路径，静默失败
-            log.debug("handleRawUpdate: 处理失败", { error: String(err) });
-        }
-    }
     private normalizeMessage(message: any): PlainMessage {
         let forwardFrom: string | undefined;
         let forwardFromUrl: string | undefined;
