@@ -65,6 +65,9 @@ type OneBotMediaInfo = {
     width?: number;
     height?: number;
     emoji?: string;
+    filePath?: string;
+    downloadStatus?: "cached" | "downloaded" | "too_large" | "failed" | "skipped";
+    downloadError?: string;
 };
 
 export class OneBotAdapter implements PlatformAdapter {
@@ -88,6 +91,8 @@ export class OneBotAdapter implements PlatformAdapter {
     * OneBot get_stranger_info / get_friend_list 返回 nickname 字段
     */
     private readonly userNickCache = new Map<string, string>();
+    /** 扩展 action 失败后的 warn-once 集合，避免日志被刷屏 */
+    private readonly warnedExtensionActions = new Set<string>();
 
     constructor(
         private config: OneBotConfig,
@@ -278,8 +283,27 @@ export class OneBotAdapter implements PlatformAdapter {
         return `[CQ:at,qq=${rawUserId}]`;
     }
 
-    async markAsRead(_chatId: string): Promise<void> {
-        // OneBot v11 / NapCat 通常没有统一的标记已读接口，静默忽略。
+    async markAsRead(chatId: string): Promise<void> {
+        if (!this.config.enableReadReceipts) return;
+        if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+
+        const parsed = parseChatId(chatId);
+        try {
+            if (parsed.groupId != null) {
+                await this.callAction("mark_group_msg_as_read", { group_id: Number(parsed.groupId) });
+            } else if (parsed.rawId.startsWith("private:")) {
+                const userId = parsed.rawId.slice("private:".length);
+                await this.callAction("mark_private_msg_as_read", { user_id: Number(userId) });
+            }
+        } catch (err) {
+            this.warnOnceExtension("mark_*_msg_as_read", err);
+        }
+    }
+
+    private warnOnceExtension(action: string, err: unknown): void {
+        if (this.warnedExtensionActions.has(action)) return;
+        this.warnedExtensionActions.add(action);
+        log.warn("OneBot 扩展 action 调用失败，已降级 no-op", { action, error: String(err) });
     }
 
     muteChat(chatId: string, hours: number): void {
@@ -383,6 +407,21 @@ export class OneBotAdapter implements PlatformAdapter {
             }
             case "onebot.sendTyping":
             case "qq.sendTyping": {
+                const chatId = ensureCompositeId("onebot", String(args[0] ?? ""));
+                if (!this.config.enableTyping) return null;
+                const parsed = parseChatId(chatId);
+                // NapCat 仅提供私聊输入状态扩展 (`set_input_status`)，群聊保持 no-op
+                if (parsed.groupId != null) return null;
+                if (!parsed.rawId.startsWith("private:")) return null;
+                const userId = parsed.rawId.slice("private:".length);
+                try {
+                    await this.callAction("set_input_status", {
+                        user_id: userId,
+                        event_type: 1,
+                    });
+                } catch (err) {
+                    this.warnOnceExtension("set_input_status", err);
+                }
                 return null;
             }
             case "onebot.downloadMedia":
@@ -393,6 +432,62 @@ export class OneBotAdapter implements PlatformAdapter {
             }
             default:
                 throw new Error(`Unsupported OneBot method: ${method}`);
+        }
+    }
+
+    private async downloadIncomingMedia(mediaInfo: OneBotMediaInfo, chatId: string, messageId: string): Promise<void> {
+        if (this.config.autoDownloadIncoming === false) return;
+        if (!this.mediaDownloader) return;
+
+        // QQ 内置表情 / 商城贴纸：fileId 是 face:/mface: 前缀，downloadMedia 会显式抛错；这里直接跳过
+        const fileId = mediaInfo.fileId;
+        if (!fileId || fileId.startsWith("face:") || fileId.startsWith("mface:")) {
+            mediaInfo.downloadStatus = "skipped";
+            return;
+        }
+
+        const uniqueFileId = mediaInfo.uniqueFileId || fileId;
+        const existing = this.mediaDownloader.getExistingPath(uniqueFileId);
+        if (existing) {
+            mediaInfo.uniqueFileId = uniqueFileId;
+            mediaInfo.filePath = existing;
+            mediaInfo.downloadStatus = "cached";
+            return;
+        }
+
+        if (!this.mediaDownloader.isWithinSizeLimit(mediaInfo.fileSize)) {
+            mediaInfo.downloadStatus = "too_large";
+            return;
+        }
+
+        try {
+            const buffer = await this.downloadMedia(null, fileId);
+            const saved = this.mediaDownloader.saveMedia(buffer, {
+                chatId,
+                messageId,
+                uniqueFileId,
+                mediaType: mediaInfo.type,
+                mimeType: mediaInfo.mimeType,
+                fileName: mediaInfo.fileName,
+            });
+            mediaInfo.uniqueFileId = uniqueFileId;
+            mediaInfo.fileSize = mediaInfo.fileSize ?? buffer.length;
+            if (saved) {
+                mediaInfo.filePath = saved.path;
+                mediaInfo.downloadStatus = "downloaded";
+            } else {
+                mediaInfo.downloadStatus = "too_large";
+            }
+        } catch (err) {
+            mediaInfo.downloadStatus = "failed";
+            mediaInfo.downloadError = String(err).slice(0, 300);
+            log.warn("OneBot 入站媒体自动下载失败", {
+                chatId,
+                messageId,
+                type: mediaInfo.type,
+                fileId: fileId.slice(0, 60),
+                error: String(err),
+            });
         }
     }
 
@@ -495,8 +590,22 @@ export class OneBotAdapter implements PlatformAdapter {
                     file = cachedPath;
                 }
             }
+            // Fallback: if it looks like a direct file but doesn't exist locally,
+            // try mediaDownloader lookup (handles QQ file hashes like "ABC123.jpg")
+            if (looksLikeDirectFile && this.mediaDownloader && typeof file === "string") {
+                const resolved = this.resolveFileReferenceToPath(file as string);
+                if (!resolved) {
+                    // Strip extension and try as uniqueFileId
+                    const withoutExt = trimmed.replace(/\.[a-zA-Z0-9]+$/, "");
+                    const cachedPath = this.mediaDownloader.getExistingPath(trimmed)
+                        ?? this.mediaDownloader.getExistingPath(withoutExt);
+                    if (cachedPath) {
+                        file = cachedPath;
+                    }
+                }
+            }
             file = await this.normalizeOutgoingImageFile(file, {
-                rejectAnimatedSticker: true,
+                preserveAnimation: true,
                 resizeForQqSticker: true,
             });
         } else if (sticker && typeof sticker === "object") {
@@ -511,7 +620,7 @@ export class OneBotAdapter implements PlatformAdapter {
                 resolvedFile = this.mediaDownloader?.getExistingPath(resolvedFile) ?? resolvedFile;
             }
             resolvedFile = await this.normalizeOutgoingImageFile(resolvedFile, {
-                rejectAnimatedSticker: true,
+                preserveAnimation: true,
                 resizeForQqSticker: true,
             });
             file = { ...rec, file: resolvedFile };
@@ -521,26 +630,57 @@ export class OneBotAdapter implements PlatformAdapter {
             ? {
                 type: "photo",
                 file,
+                isSticker: true,
                 caption: typeof opts.caption === "string" ? opts.caption : undefined,
             }
             : {
                 ...(file as Record<string, unknown>),
                 type: "photo",
+                isSticker: true,
             };
         return this.sendMedia(chatId, payload, opts);
     }
 
-    private async normalizeOutgoingImageFile(file: unknown, options?: { rejectAnimatedSticker?: boolean; resizeForQqSticker?: boolean }): Promise<unknown> {
+    private async normalizeOutgoingImageFile(file: unknown, options?: { preserveAnimation?: boolean; resizeForQqSticker?: boolean }): Promise<unknown> {
         if (typeof file !== "string") return file;
 
         const resolvedPath = this.resolveFileReferenceToPath(file);
         if (!resolvedPath) return file;
 
         const lowerPath = resolvedPath.toLowerCase();
-        if (options?.rejectAnimatedSticker && (lowerPath.endsWith(".webm") || lowerPath.endsWith(".tgs"))) {
-            throw new Error(`sendSticker: 暂不支持将动态 TG 贴纸转发到 QQ (${path.basename(resolvedPath)})`);
+        const isAnimated = this.isAnimatedImagePath(resolvedPath);
+
+        if (options?.preserveAnimation && isAnimated) {
+            // 动图路径：webm/tgs → GIF，GIF 直接保留
+            let normalizedPath = resolvedPath;
+            if (lowerPath.endsWith(".webm") || lowerPath.endsWith(".tgs")) {
+                normalizedPath = this.convertToAnimatedGif(resolvedPath);
+            } else if (lowerPath.endsWith(".webp")) {
+                // .webp 后缀但实际是 GIF 的文件，重命名为 .gif 确保 NapCat 正确识别
+                const head = readFileSync(resolvedPath, { encoding: null }).subarray(0, 4);
+                if (head[0] === 0x47 && head[1] === 0x49 && head[2] === 0x46) {
+                    // 实际是 GIF，复制为 .gif 扩展名
+                    const stat = statSync(resolvedPath);
+                    const hash = createHash("sha1").update(`${resolvedPath}:${stat.size}:${stat.mtimeMs}:rename-gif`).digest("hex").slice(0, 16);
+                    const outDir = path.resolve(process.cwd(), "workspace", "Downloads", "other", "qq-converted");
+                    mkdirSync(outDir, { recursive: true });
+                    const outPath = path.join(outDir, `${path.basename(resolvedPath, path.extname(resolvedPath))}_${hash}.gif`);
+                    if (!existsSync(outPath)) {
+                        writeFileSync(outPath, readFileSync(resolvedPath));
+                    }
+                    normalizedPath = outPath;
+                } else {
+                    // 真正的 animated webp，转 GIF
+                    normalizedPath = this.convertToAnimatedGif(resolvedPath);
+                }
+            }
+            if (options?.resizeForQqSticker) {
+                normalizedPath = this.resizeStickerImageForQq(normalizedPath);
+            }
+            return normalizedPath;
         }
 
+        // 非动图路径（或未请求保留动画）：原逻辑
         const mimeType = this.inferImageMimeType(resolvedPath);
         let normalizedPath = resolvedPath;
         if (mimeType && mimeType !== "image/jpeg" && mimeType !== "image/png") {
@@ -630,16 +770,36 @@ export class OneBotAdapter implements PlatformAdapter {
         }
         return outPath;
     }
+    /** 判断文件路径是否为动图格式（GIF / webm / tgs / animated webp） */
+    private isAnimatedImagePath(filePath: string): boolean {
+        const ext = path.extname(filePath).toLowerCase();
+        if (ext === ".gif" || ext === ".webm" || ext === ".tgs") return true;
+        // .webp 文件可能实际是 GIF（QQ/NapCat 有时用 .webp 扩展名存 GIF）
+        // 或者是 animated webp（含 ANIM chunk）
+        if (ext === ".webp" && existsSync(filePath)) {
+            try {
+                const buf = readFileSync(filePath);
+                // 实际内容是 GIF？
+                if (buf[0] === 0x47 && buf[1] === 0x49 && buf[2] === 0x46) return true; // "GIF"
+                // Animated WebP: RIFF header + WEBP + 检查 ANMF chunk
+                if (buf.length >= 12 && buf.toString("ascii", 0, 4) === "RIFF" && buf.toString("ascii", 8, 12) === "WEBP") {
+                    return buf.includes(Buffer.from("ANMF"));
+                }
+            } catch { /* ignore */ }
+        }
+        return false;
+    }
 
-    private resizeStickerImageForQq(sourcePath: string): string {
+    /** 将 webm/tgs 动图转为 GIF（带调色板优化），返回 GIF 文件路径 */
+    private convertToAnimatedGif(sourcePath: string): string {
         const stat = statSync(sourcePath);
         const hash = createHash("sha1")
-            .update(`${sourcePath}:${stat.size}:${stat.mtimeMs}:sticker-w200`)
+            .update(`${sourcePath}:${stat.size}:${stat.mtimeMs}:anim-gif`)
             .digest("hex")
             .slice(0, 16);
         const outDir = path.resolve(process.cwd(), "workspace", "Downloads", "other", "qq-converted");
         mkdirSync(outDir, { recursive: true });
-        const outPath = path.join(outDir, `${path.basename(sourcePath, path.extname(sourcePath))}_${hash}_w200.png`);
+        const outPath = path.join(outDir, `${path.basename(sourcePath, path.extname(sourcePath))}_${hash}.gif`);
         if (existsSync(outPath)) {
             return outPath;
         }
@@ -647,13 +807,62 @@ export class OneBotAdapter implements PlatformAdapter {
             execFileSync("ffmpeg", [
                 "-hide_banner", "-loglevel", "error",
                 "-i", sourcePath,
-                "-vf", "scale=200:-2",
-                "-frames:v", "1",
+                "-vf", "scale=200:-2:flags=lanczos,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse",
                 outPath,
             ], {
-                timeout: 10000,
-                maxBuffer: 20 * 1024 * 1024,
+                timeout: 15000,
+                maxBuffer: 30 * 1024 * 1024,
             });
+            return outPath;
+        } catch (err) {
+            log.warn("动图转 GIF 失败，回退原图", {
+                sourcePath,
+                error: String(err).slice(0, 200),
+            });
+            return sourcePath;
+        }
+    }
+
+    private resizeStickerImageForQq(sourcePath: string): string {
+        const stat = statSync(sourcePath);
+        const isGif = sourcePath.toLowerCase().endsWith(".gif");
+        const suffix = isGif ? "sticker-anim-w200" : "sticker-w200";
+        const hash = createHash("sha1")
+            .update(`${sourcePath}:${stat.size}:${stat.mtimeMs}:${suffix}`)
+            .digest("hex")
+            .slice(0, 16);
+        const outDir = path.resolve(process.cwd(), "workspace", "Downloads", "other", "qq-converted");
+        mkdirSync(outDir, { recursive: true });
+        const outExt = isGif ? ".gif" : ".png";
+        const outPath = path.join(outDir, `${path.basename(sourcePath, path.extname(sourcePath))}_${hash}_w200${outExt}`);
+        if (existsSync(outPath)) {
+            return outPath;
+        }
+        try {
+            if (isGif) {
+                // 动画 GIF 缩放：保持帧，使用调色板优化
+                execFileSync("ffmpeg", [
+                    "-hide_banner", "-loglevel", "error",
+                    "-i", sourcePath,
+                    "-vf", "scale=200:-2:flags=lanczos,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse",
+                    outPath,
+                ], {
+                    timeout: 15000,
+                    maxBuffer: 30 * 1024 * 1024,
+                });
+            } else {
+                // 静态图片缩放：只取第一帧
+                execFileSync("ffmpeg", [
+                    "-hide_banner", "-loglevel", "error",
+                    "-i", sourcePath,
+                    "-vf", "scale=200:-2",
+                    "-frames:v", "1",
+                    outPath,
+                ], {
+                    timeout: 10000,
+                    maxBuffer: 20 * 1024 * 1024,
+                });
+            }
             return outPath;
         } catch (err) {
             log.warn("贴纸缩放失败，回退原图", {
@@ -711,7 +920,11 @@ export class OneBotAdapter implements PlatformAdapter {
         const type = String(media.type ?? "");
         let file = media.file;
         if ((type === "photo" || type === "image") && typeof file === "string") {
-            file = await this.normalizeOutgoingImageFile(file);
+            // isSticker 时 sendSticker 已做过 normalize（含 preserveAnimation），跳过二次处理
+            // 非 sticker 发送也保留动图（QQ 原生支持 GIF）
+            if (!media.isSticker) {
+                file = await this.normalizeOutgoingImageFile(file, { preserveAnimation: true });
+            }
         }
         if (this.config.sendFileAsDataUrl === true && typeof file === "string") {
             const dataUrl = this.toDataUrlIfLocalFile(file);
@@ -727,9 +940,14 @@ export class OneBotAdapter implements PlatformAdapter {
 
         switch (type) {
             case "photo":
-            case "image":
-                segments.push({ type: "image", data: { file: String(file ?? "") } });
+            case "image": {
+                const imageData: Record<string, unknown> = { file: String(file ?? "") };
+                if (media.isSticker === true) {
+                    imageData.sub_type = 1;
+                }
+                segments.push({ type: "image", data: imageData });
                 break;
+            }
             case "video":
                 segments.push({ type: "video", data: { file: String(file ?? "") } });
                 break;
@@ -967,6 +1185,10 @@ export class OneBotAdapter implements PlatformAdapter {
         const replyToMessageId = this.extractReplyTo(normalizedMessage) ?? (event.reply?.message_id != null ? String(event.reply.message_id) : undefined);
         const normalizedText = text || (mediaInfo ? this.mediaPlaceholder(mediaInfo.type) : "");
 
+        if (mediaInfo) {
+            await this.downloadIncomingMedia(mediaInfo, chatId, messageId);
+        }
+
         // 异步获取群名或用户昵称作为 chatTitle
         let chatTitle: string | undefined;
         if (messageType === "group") {
@@ -1067,6 +1289,17 @@ export class OneBotAdapter implements PlatformAdapter {
     }
 
     private extractMediaInfo(message: OneBotMessageSegment[]): OneBotMediaInfo | undefined {
+        // 多媒体观测：当前 schema 只承载首段，多图/多视频场景下记录 debug，便于后续评估扩展 schema
+        const mediaSegs = message.filter(seg =>
+            seg.type === "image" || seg.type === "video" || seg.type === "record" || seg.type === "file"
+        );
+        if (mediaSegs.length > 1) {
+            log.debug("OneBot 多媒体消息只保留首段", {
+                count: mediaSegs.length,
+                types: mediaSegs.map(s => s.type),
+            });
+        }
+
         for (const seg of message) {
             const data = seg.data ?? {};
             if (seg.type === "image") {
