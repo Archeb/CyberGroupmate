@@ -6,7 +6,56 @@
  * 平台连接与消息监听由宿主侧官方 adapter 管理。
  */
 
+type TelegramMessage = {
+    id: number;
+    text: string;
+    date: Date;
+    chat: { id: number; title?: string; username?: string; type: "private" | "group" | "supergroup" | "channel"; };
+    sender: { id: number; displayName?: string; title?: string; username?: string; } | null;
+    isMention: boolean;
+    replyToMessage?: { id: number } | null;
+    media?: unknown;
+    mediaInfo?: {
+        type: "photo" | "sticker" | "video" | "document" | "animation" | "audio" | "other";
+        rawType?: string;
+        fileId?: string;
+        uniqueFileId?: string;
+        emoji?: string;
+        mimeType?: string;
+        fileName?: string;
+        width?: number;
+        height?: number;
+        fileSize?: number;
+        filePath?: string;
+        downloadStatus?: "downloaded" | "cached" | "too_large" | "failed";
+        downloadError?: string;
+    };
+    forwardFrom?: string;
+    forwardFromUrl?: string;
+};
+
 declare const telegram: {
+    // ─── 按需能力指南 ───
+    /** 加载 inline bot 使用指南。用于像 Telegram 客户端输入 `@bot query` 一样查询 inline bot 并发送某个结果；调用本方法只披露指南，不会执行实际发送。 */
+    useInlineBot(): Promise<string>;
+    /** 加载 Stories 使用指南。用于读取、发布、编辑、删除、置顶 Story，以及查看互动和观看者；调用本方法只披露指南，不会执行实际 Story 操作。 */
+    useStories(): Promise<string>;
+    /** 加载投票流程指南。用于创建投票/测验、读取投票结果等成组流程；调用本方法只披露相关 API，不会发起投票。 */
+    usePolls(): Promise<string>;
+    /** 加载 peer 解析指南。用于处理 PEER_ID_INVALID、access hash 缺失、裸数字 user id 无法发送等问题；调用本方法只披露排障流程。 */
+    usePeerResolution(): Promise<string>;
+    /** 加载历史消息检索指南。用于主动爬楼、搜索视野外上下文或流式遍历历史；调用本方法只披露检索 API 和使用流程。 */
+    useMessageSearch(): Promise<string>;
+    /** 加载账号资料指南。用于修改 bio、姓名、用户名、头像、生日、emoji status、close friends 等个人资料；调用本方法只披露指南，不直接修改账号。 */
+    useAccountProfile(): Promise<string>;
+    /** 加载高级消息指南。用于复制、评论、引用、定时消息、网页预览、reaction 用户和消息关联查询等成组能力；调用本方法只披露指南。 */
+    useAdvancedMessages(): Promise<string>;
+    /** 加载群组/频道管理指南。用于建群建频道、成员权限、管理员、标题描述头像、慢速模式和内容保护等管理操作；调用本方法只披露指南。 */
+    useChatAdministration(): Promise<string>;
+    /** 加载邀请链接与入群请求指南。用于创建/编辑/撤销邀请链接、查看邀请成员、处理 join request 或预览邀请链接；调用本方法只披露指南。 */
+    useInvites(): Promise<string>;
+    /** 加载论坛话题指南。用于确认群是否开启 Forum、列出话题或定位 topic id；调用本方法只披露相关 API。 */
+    useForumTopics(): Promise<string>;
     // ─── 发送与交互 ───
     /** 发送普通文本消息 */
     sendText(chatId: number | string, text: string, opts?: { replyTo?: number; silent?: boolean; }): Promise<{ id: number; text: string; date: Date; chat: { id: number; title?: string; username?: string; type: "private" | "group" | "supergroup" | "channel"; }; sender: { id: number; displayName?: string; title?: string; username?: string; }; isMention: boolean; replyToMessage?: { id: number } | null; media?: unknown; mediaInfo?: { type: "photo" | "sticker" | "video" | "document" | "animation" | "audio" | "other"; rawType?: string; fileId?: string; uniqueFileId?: string; emoji?: string; mimeType?: string; fileName?: string; width?: number; height?: number; fileSize?: number; filePath?: string; downloadStatus?: "downloaded" | "cached" | "too_large" | "failed"; downloadError?: string; }; }>;
@@ -33,13 +82,15 @@ declare const telegram: {
      */
     sendMediaGroup(chatId: number | string, medias: Array<{ type: 'photo' | 'video' | 'document' | 'audio'; file: string; caption?: string; fileName?: string }>, opts?: { replyTo?: number; silent?: boolean; }): Promise<Array<{ id: number; text: string; date: Date; chat: { id: number; title?: string; username?: string; type: "private" | "group" | "supergroup" | "channel"; }; sender: { id: number; displayName?: string; title?: string; username?: string; }; isMention: boolean; replyToMessage?: { id: number } | null; media?: unknown; mediaInfo?: { type: "photo" | "sticker" | "video" | "document" | "animation" | "audio" | "other"; rawType?: string; fileId?: string; uniqueFileId?: string; emoji?: string; mimeType?: string; fileName?: string; width?: number; height?: number; fileSize?: number; filePath?: string; downloadStatus?: "downloaded" | "cached" | "too_large" | "failed"; downloadError?: string; }; }>>;
     /**
-     * 发起投票或测验。
-     * @param question 投票标题
-     * @param options 候选选项文本列表（2-10 个）
-     * @example sendPoll(chatId, '今晚吃什么？', ['火锅', '烧烤', '外卖'], { isAnonymous: false })
-     * @example sendPoll(chatId, 'JS 中 typeof null 是？', ['object', 'null', 'undefined'], { type: 'quiz', correctOptionId: 0 })
+     * 转发一条或多条已有消息到目标聊天，用于复读、搬运或保留原消息来源。
+     * 支持隐藏原作者/原 caption；目标聊天放第一个参数，便于遵守绑定聊天写限制。
+     * @param toChatId 目标聊天 ID、username、"me" 或 "self"
+     * @param fromChatId 原消息所在聊天 ID、username、"me" 或 "self"
+     * @param messageIds 要转发的消息 ID；数组最多 100 条
+     * @example const sent = await telegram.forwardMessage(chatId, chatId, msg.id);
+     * @example await telegram.forwardMessage(targetChatId, sourceChatId, [101, 102], { silent: true, noAuthor: true });
      */
-    sendPoll(chatId: number | string, question: string, options: string[], opts?: { replyTo?: number; silent?: boolean; isAnonymous?: boolean; type?: "regular" | "quiz"; allowsMultipleAnswers?: boolean; correctOptionId?: number; explanation?: string; }): Promise<{ id: number; text: string; date: Date; chat: { id: number; title?: string; username?: string; type: "private" | "group" | "supergroup" | "channel"; }; sender: { id: number; displayName?: string; title?: string; username?: string; }; isMention: boolean; replyToMessage?: { id: number } | null; media?: unknown; mediaInfo?: { type: "photo" | "sticker" | "video" | "document" | "animation" | "audio" | "other"; rawType?: string; fileId?: string; uniqueFileId?: string; emoji?: string; mimeType?: string; fileName?: string; width?: number; height?: number; fileSize?: number; filePath?: string; downloadStatus?: "downloaded" | "cached" | "too_large" | "failed"; downloadError?: string; }; }>;
+    forwardMessage(toChatId: number | string, fromChatId: number | string, messageIds: number | number[], opts?: { silent?: boolean; schedule?: Date | number | string; clearDraft?: boolean; noAuthor?: boolean; noCaption?: boolean; forbidForwards?: boolean; toThreadId?: number; sendAs?: number | string; videoTimestamp?: number; }): Promise<TelegramMessage | TelegramMessage[]>;
     /**
      * 对消息发送表情表态。传 null 以撤销表态。
      * @example sendReaction(chatId, msgId, '👍')
@@ -68,8 +119,6 @@ declare const telegram: {
     getChat(chatId: number | string): Promise<{ id: number; title?: string; username?: string; type: "private" | "group" | "supergroup" | "channel"; }>;
     /** 精确获取指定用户的基础信息 */
     getUser(userId: number | string): Promise<{ id: number; displayName?: string; title?: string; username?: string; firstName: string; lastName?: string; isBot: boolean; }>;
-    /** 获取最近的对话列表（包含 peer、最后一条消息、未读数） */
-    getDialogs(opts?: { limit?: number }): Promise<Array<{ peer: { id: number; displayName?: string; title?: string; username?: string; }; lastMessage?: { id: number; text: string; date: Date; chat: { id: number; title?: string; username?: string; type: "private" | "group" | "supergroup" | "channel"; }; sender: { id: number; displayName?: string; title?: string; username?: string; }; isMention: boolean; replyToMessage?: { id: number } | null; media?: unknown; mediaInfo?: { type: "photo" | "sticker" | "video" | "document" | "animation" | "audio" | "other"; rawType?: string; fileId?: string; uniqueFileId?: string; emoji?: string; mimeType?: string; fileName?: string; width?: number; height?: number; fileSize?: number; filePath?: string; downloadStatus?: "downloaded" | "cached" | "too_large" | "failed"; downloadError?: string; }; }; unreadCount: number; }>>;
     /**
      * 获取用户的完整资料（包含个人简介 bio 等）。
      * @example const full = await telegram.getFullUser(userId); console.log(full.bio);
@@ -83,28 +132,11 @@ declare const telegram: {
     // [USERBOT_ONLY_BEGIN]
     /** 分页拉取群组成员列表 */
     getChatMembers(chatId: number | string, opts?: { limit?: number }): Promise<Array<{ id: number; displayName?: string; title?: string; username?: string; }>>;
-    /** 拉取指定会话的历史消息（一次性返回列表） */
-    getHistory(chatId: number | string, opts?: { limit?: number }): Promise<Array<{ id: number; text: string; date: Date; chat: { id: number; title?: string; username?: string; type: "private" | "group" | "supergroup" | "channel"; }; sender: { id: number; displayName?: string; title?: string; username?: string; }; isMention: boolean; replyToMessage?: { id: number } | null; media?: unknown; mediaInfo?: { type: "photo" | "sticker" | "video" | "document" | "animation" | "audio" | "other"; rawType?: string; fileId?: string; uniqueFileId?: string; emoji?: string; mimeType?: string; fileName?: string; width?: number; height?: number; fileSize?: number; filePath?: string; downloadStatus?: "downloaded" | "cached" | "too_large" | "failed"; downloadError?: string; }; }>>;
     /**
      * 按消息 ID 精确获取一条或多条消息。（在别人回复或者提及某消息但是你看不见的时候，善用该函数爬楼获取上下文）
      * @example const msgs = await telegram.getMessages(chatId, [100, 101, 102]);
      */
     getMessages(chatId: number | string, messageIds: number[]): Promise<Array<{ id: number; text: string; date: Date; chat: { id: number; title?: string; username?: string; type: "private" | "group" | "supergroup" | "channel"; }; sender: { id: number; displayName?: string; title?: string; username?: string; }; isMention: boolean; replyToMessage?: { id: number } | null; media?: unknown; mediaInfo?: { type: "photo" | "sticker" | "video" | "document" | "animation" | "audio" | "other"; rawType?: string; fileId?: string; uniqueFileId?: string; emoji?: string; mimeType?: string; fileName?: string; width?: number; height?: number; fileSize?: number; filePath?: string; downloadStatus?: "downloaded" | "cached" | "too_large" | "failed"; downloadError?: string; }; } | null>>;
-    /**
-     * 在群组内搜索消息。（可主动利用该函数获取视野外上下文信息）
-     * @example const results = await telegram.searchMessages(chatId, '关键词', { limit: 20 });
-     */
-    searchMessages(chatId: number | string, query: string, opts?: { limit?: number }): Promise<Array<{ id: number; text: string; date: Date; chat: { id: number; title?: string; username?: string; type: "private" | "group" | "supergroup" | "channel"; }; sender: { id: number; displayName?: string; title?: string; username?: string; }; isMention: boolean; replyToMessage?: { id: number } | null; media?: unknown; mediaInfo?: { type: "photo" | "sticker" | "video" | "document" | "animation" | "audio" | "other"; rawType?: string; fileId?: string; uniqueFileId?: string; emoji?: string; mimeType?: string; fileName?: string; width?: number; height?: number; fileSize?: number; filePath?: string; downloadStatus?: "downloaded" | "cached" | "too_large" | "failed"; downloadError?: string; }; }>>;
-    /**
-     * 获取指定群组的论坛板块（话题）列表。要求该群组已开启 Forum 模式。
-     * @example const topics = await telegram.getForumTopics(chatId);
-     */
-    getForumTopics(chatId: number | string, opts?: { limit?: number }): Promise<Array<{ id: number; title: string; isClosed: boolean; isPinned: boolean; creatorId: number; unreadCount: number; }>>;
-    /**
-     * 主动拉取某条投票消息的最新计票结果。
-     * @example const poll = await telegram.getPollResults(chatId, pollMsgId);
-     */
-    getPollResults(chatId: number | string, messageId: number): Promise<{ type: "poll"; id: string; question: string; answers: Array<{ text: string; voterCount: number; chosen: boolean; correct: boolean; }>; totalVoters: number; isClosed: boolean; isPublic: boolean; isQuiz: boolean; isMultiple: boolean; solution?: string; } | null>;
     /**
      * 主动拉取某条消息的表态（Reaction）汇总数据。
      * @example const reactions = await telegram.getMessageReactions(chatId, [msgId]);
@@ -125,12 +157,6 @@ declare const telegram: {
      * }
      */
     downloadMedia(fileId: string, chatId?: number | string, messageId?: number, uniqueFileId?: string): Promise<{ buffer: string; size: number; }>;
-
-    // ─── 迭代器 (for await) ───
-    /** 以异步迭代器方式遍历历史消息，用于深入流式检索 */
-    iterHistory(chatId: number | string, opts?: { limit?: number }): AsyncIterable<{ id: number; text: string; date: Date; chat: { id: number; title?: string; username?: string; type: "private" | "group" | "supergroup" | "channel"; }; sender: { id: number; displayName?: string; title?: string; username?: string; }; isMention: boolean; replyToMessage?: { id: number } | null; media?: unknown; mediaInfo?: { type: "photo" | "sticker" | "video" | "document" | "animation" | "audio" | "other"; rawType?: string; fileId?: string; uniqueFileId?: string; emoji?: string; mimeType?: string; fileName?: string; width?: number; height?: number; fileSize?: number; filePath?: string; downloadStatus?: "downloaded" | "cached" | "too_large" | "failed"; downloadError?: string; }; }>;
-    /** 以异步迭代器方式遍历最近的对话列表 */
-    iterDialogs(opts?: { limit?: number }): AsyncIterable<{ peer: { id: number; displayName?: string; title?: string; username?: string; }; lastMessage?: { id: number; text: string; date: Date; chat: { id: number; title?: string; username?: string; type: "private" | "group" | "supergroup" | "channel"; }; sender: { id: number; displayName?: string; title?: string; username?: string; }; isMention: boolean; replyToMessage?: { id: number } | null; media?: unknown; mediaInfo?: { type: "photo" | "sticker" | "video" | "document" | "animation" | "audio" | "other"; rawType?: string; fileId?: string; uniqueFileId?: string; emoji?: string; mimeType?: string; fileName?: string; width?: number; height?: number; fileSize?: number; filePath?: string; downloadStatus?: "downloaded" | "cached" | "too_large" | "failed"; downloadError?: string; }; }; unreadCount: number; }>;
 
     // ─── 群组管理 ───
     /** 加入一个群聊或频道 */

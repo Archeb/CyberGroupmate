@@ -3,22 +3,19 @@
  */
 
 import OpenAI from "openai";
+import type { ReasoningEffort } from "openai/resources/shared.js";
+import type {
+    Response,
+    ResponseInput,
+    ResponseInputItem,
+    ResponseInputMessageContentList,
+    ResponseStreamEvent,
+} from "openai/resources/responses/responses.js";
 import type { LLMConfig } from "../config.js";
 import type { ChatMessage, LLMResponse } from "./types.js";
 
-type ResponsesUsage = {
-    input_tokens?: number;
-    output_tokens?: number;
-    total_tokens?: number;
-    input_tokens_details?: {
-        cached_tokens?: number;
-    };
-};
-
-type ResponsesResult = {
-    output_text?: string;
-    usage?: ResponsesUsage;
-};
+type ResponsesUsage = NonNullable<Response["usage"]>;
+type ResponsesResult = Pick<Response, "output_text" | "usage">;
 
 export async function callOpenAIResponses(
     messages: ChatMessage[],
@@ -42,25 +39,22 @@ export async function callOpenAIResponses(
         .map(m => m.content.trim())
         .filter(Boolean);
 
-    const input: Array<Record<string, unknown>> = messages
+    const input: ResponseInput = messages
         .filter(m => m.role !== "system")
-        .map(m => {
+        .map((m): ResponseInputItem => {
         if (m.imageParts && m.imageParts.length > 0 && m.role === "user") {
-            const content: Array<Record<string, unknown>> = [{ type: "input_text", text: m.content }];
+            const content: ResponseInputMessageContentList = [{ type: "input_text", text: m.content }];
             for (const img of m.imageParts) {
                 content.push({
                     type: "input_image",
                     image_url: img.url,
-                    ...(img.detail ? { detail: img.detail } : {}),
+                    detail: img.detail ?? "auto",
                 });
             }
             return { role: m.role, content };
         }
         if (m.role === "assistant") {
-            return {
-                role: m.role,
-                content: [{ type: "output_text", text: m.content }],
-            };
+            return { role: m.role, content: m.content };
         }
         return {
             role: m.role,
@@ -71,10 +65,11 @@ export async function callOpenAIResponses(
     if (prefill) {
         input.push({
             role: "assistant",
-            content: [{ type: "output_text", text: prefill }],
+            content: prefill,
         });
     }
 
+    const reasoningEffort = toReasoningEffort(thinkingLevel);
     const requestBody = {
         model,
         store: false,
@@ -82,7 +77,7 @@ export async function callOpenAIResponses(
         input,
         temperature,
         max_output_tokens: maxTokens,
-        ...(thinkingLevel && thinkingLevel !== "none" ? { reasoning: { effort: thinkingLevel } } : {}),
+        ...(reasoningEffort ? { reasoning: { effort: reasoningEffort } } : {}),
         ...(stop && stop.length > 0 ? { stop } : {}),
         ...(config.extraBody ?? {}),
     };
@@ -112,24 +107,30 @@ export async function callOpenAIResponses(
     };
 }
 
-async function collectResponseFromStream(stream: unknown): Promise<ResponsesResult> {
-    const asyncIterator = (stream as AsyncIterable<unknown>)?.[Symbol.asyncIterator];
+function toReasoningEffort(value?: string): ReasoningEffort | undefined {
+    if (value === "low" || value === "medium" || value === "high") {
+        return value;
+    }
+    return undefined;
+}
+
+async function collectResponseFromStream(stream: AsyncIterable<ResponseStreamEvent>): Promise<ResponsesResult> {
+    const asyncIterator = stream[Symbol.asyncIterator];
     if (!asyncIterator) {
         throw new Error("OpenAI Responses stream mode did not return an async iterable");
     }
 
     let outputText = "";
     let usage: ResponsesUsage | undefined;
-    for await (const event of stream as AsyncIterable<Record<string, unknown>>) {
+    for await (const event of stream) {
         if (event.type === "response.output_text.delta") {
-            outputText += typeof event.delta === "string" ? event.delta : "";
+            outputText += event.delta;
         }
         if (event.type === "response.completed") {
-            const completed = event.response as ResponsesResult | undefined;
-            if (completed?.output_text) {
-                outputText = completed.output_text;
+            if (event.response.output_text) {
+                outputText = event.response.output_text;
             }
-            usage = completed?.usage ?? usage;
+            usage = event.response.usage ?? usage;
         }
     }
 

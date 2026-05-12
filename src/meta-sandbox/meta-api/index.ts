@@ -3,6 +3,7 @@ import type { AttentionAccumulator } from "../../accumulator/attention-accumulat
 import type { MemoryStoreV2 } from "../../memory-v2/index.js";
 import type { GlobalState } from "../../main-agent/global-state.js";
 import type { SubagentManager } from "../../subagent/subagent-manager.js";
+import type { ActiveUserProfile } from "../../subagent/types.js";
 import { createAgentsApi } from "./agents.js";
 import { createConversationsApi } from "./conversations.js";
 import { createDispatchApi, type DispatchApiDeps } from "./dispatch.js";
@@ -23,11 +24,12 @@ export interface BuildMetaApiContextDeps extends Omit<DispatchApiDeps, "subagent
     globalState: GlobalState;
     accumulator: AttentionAccumulator;
     groundingConfig?: GroundingConfig;
+    getActiveUserProfilesForChat?: (chatId: string) => ActiveUserProfile[] | undefined;
 }
 
 export function buildMetaApiContext(deps: BuildMetaApiContextDeps) {
     return {
-        conversations: createConversationsApi(deps.memory),
+        conversations: createConversationsApi(deps.memory, deps.subagentManager),
         memory: createMemoryApi(deps.memory, deps.globalState),
         agents: createAgentsApi(deps.subagentManager, deps.memory),
         dispatch: createDispatchApi({
@@ -41,6 +43,7 @@ export function buildMetaApiContext(deps: BuildMetaApiContextDeps) {
             executorFactory: deps.executorFactory,
             initializeExecutor: deps.initializeExecutor,
             taskIdFactory: deps.taskIdFactory,
+            getActiveUserProfilesForChat: deps.getActiveUserProfilesForChat,
         }),
         todo: createTodoApi(deps.memory),
         remind: createReminderApi(deps.globalState),

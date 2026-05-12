@@ -137,4 +137,71 @@ describe("createConversationsApi", () => {
         assert.equal(result.topics[0].topicId.length > 0, true);
         assert.equal(result.topics[0].label, "团建后技术闲聊");
     });
+
+    it("lists chat messages with cursor pagination", async () => {
+        const api = createConversationsApi(memory);
+
+        const firstPage = await api.messages("g1", { limit: 1 });
+        assert.deepEqual(firstPage.messages.map((row) => row.messageId), ["g1-2"]);
+        assert.equal(firstPage.chatLabel, "[一号群(g1)]");
+        assert.ok(firstPage.nextCursor);
+
+        const secondPage = await api.messages("g1", {
+            limit: 1,
+            cursor: firstPage.nextCursor,
+        });
+        assert.deepEqual(secondPage.messages.map((row) => row.messageId), ["g1-1"]);
+        assert.equal(secondPage.nextCursor, undefined);
+    });
+
+    it("lists inbox chats with unread chats first by default", async () => {
+        const api = createConversationsApi(memory, {
+            getAllSubagents: () => [
+                {
+                    chatId: "g1",
+                    lastActivityAt: Date.parse("2026-01-03T10:00:00Z"),
+                    lastAttendedAt: "2026-01-02T10:30:00Z",
+                    stickiness: { level: "CORE" },
+                    observer: { getBufferSize: () => 0 },
+                    codeActExecutor: { getQueueSize: () => 2, isProcessing: () => false },
+                },
+                {
+                    chatId: "g2",
+                    lastActivityAt: Date.parse("2026-01-03T11:00:00Z"),
+                    lastAttendedAt: "2026-01-03T11:30:00Z",
+                    stickiness: { level: "FAMILIAR" },
+                    observer: { getBufferSize: () => 0 },
+                    codeActExecutor: { getQueueSize: () => 0, isProcessing: () => true },
+                },
+            ],
+        });
+
+        const result = await api.inbox({ limit: 10 });
+
+        assert.deepEqual(result.items.map((item) => item.chatId), ["g1", "g2"]);
+        assert.equal(result.unreadTotal, 1);
+        assert.equal(result.items[0].unread, true);
+        assert.equal(result.items[0].unreadCount, 1);
+        assert.equal(result.items[0].latestMessage?.messageId, "g1-2");
+        assert.equal(result.items[0].queueSize, 2);
+        assert.equal(result.items[1].unread, false);
+        assert.equal(result.items[1].isProcessing, true);
+    });
+
+    it("can page through inbox results with a cursor", async () => {
+        const api = createConversationsApi(memory, {
+            getAllSubagents: () => [
+                { chatId: "g1", lastAttendedAt: "2026-01-03T10:30:00Z" },
+                { chatId: "g2", lastAttendedAt: "2026-01-03T11:30:00Z" },
+            ],
+        });
+
+        const firstPage = await api.inbox({ limit: 1, unreadFirst: false });
+        assert.equal(firstPage.items[0].chatId, "g2");
+        assert.equal(firstPage.nextCursor, "1");
+
+        const secondPage = await api.inbox({ limit: 1, cursor: firstPage.nextCursor, unreadFirst: false });
+        assert.equal(secondPage.items[0].chatId, "g1");
+        assert.equal(secondPage.nextCursor, undefined);
+    });
 });

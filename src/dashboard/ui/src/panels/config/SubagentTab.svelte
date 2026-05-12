@@ -71,6 +71,15 @@
       />
       <span class="text-xs opacity-50 mt-1">开启后，Sandbox 只能通过 adapter 向当前绑定的 chatId 发送消息。</span></label
     >
+    <label class="cfg-field"
+      ><span class="cfg-label">重复消息拦截</span>
+      <input
+        type="checkbox"
+        class="toggle toggle-xs"
+        bind:checked={config.subagent.deduplicateSentMessages}
+      />
+      <span class="text-xs opacity-50 mt-1">开启后，同一 session 内已真正发送成功的相同内容会被拦截。默认开启。</span></label
+    >
   </div>
   <div class="divider text-xs opacity-50 my-3">CodeAct</div>
   <div class="cfg-grid-3">

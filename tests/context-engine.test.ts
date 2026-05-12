@@ -674,7 +674,7 @@ describe("Executor Providers", () => {
         assert.ok(rendered.includes("Alice"));
     });
 
-    it("personContext provider 使用 delta-only history 且渲染为紧凑 JSON", () => {
+    it("personContext provider 使用 delta-only history 且渲染为 Markdown", () => {
         assert.equal(executorPersonContextProvider.schema.history, "delta-only");
         assert.equal(executorPersonContextProvider.schema.cache, "delta");
 
@@ -687,8 +687,27 @@ describe("Executor Providers", () => {
         const data = executorPersonContextProvider.resolve(ctx);
         assert.ok(data);
         const rendered = executorPersonContextProvider.render(data);
-        assert.ok(rendered.includes('[{"userId":"u1","displayName":"Alice","traits":["冷静","直接"]}]'));
-        assert.ok(!rendered.includes("\n  {"), "人物背景应改为紧凑 JSON");
+        assert.ok(rendered.includes("### Alice(u1)"));
+        assert.ok(rendered.includes("- 稳定特征: 冷静、直接"));
+        assert.ok(!rendered.includes('{"userId"'), "人物背景不应直接暴露 JSON");
+    });
+
+    it("personContext provider 跳过空 profile 和普通 JSON 上下文", () => {
+        const emptyProfile = executorPersonContextProvider.resolve({
+            chatId: "test",
+            taskId: "t-empty",
+            decisions: [],
+            personContext: "[{}]",
+        });
+        assert.equal(emptyProfile, null);
+
+        const dispatchContext = executorPersonContextProvider.resolve({
+            chatId: "test",
+            taskId: "t-dispatch",
+            decisions: [],
+            personContext: JSON.stringify({ topic: "只是一段派发上下文", avoid: "不要误当人物" }),
+        });
+        assert.equal(dispatchContext, null);
     });
 
     it("topicSummary provider 使用 ephemeral history", () => {
@@ -778,6 +797,28 @@ describe("Executor Providers", () => {
             decisions: [],
             personContext: '[{"displayName":"Bob","userId":"u2","aliases":["Bob","Bobby"]},{"traits":["直接","冷静"],"displayName":"Alice","userId":"u1"}]',
         });
+        assert.equal(second.historicalContent, "");
+    });
+
+    it("ContextLedger 快照保留结构化数据，恢复后 delta 不重复输出", () => {
+        const firstEngine = new ContextEngine("exec-person-ledger-save");
+        firstEngine.register(executorPersonContextProvider);
+        const ctx: ExecutorResolveContext = {
+            chatId: "test",
+            taskId: "t1",
+            decisions: [],
+            personContext: '[{"userId":"u1","displayName":"Alice","traits":["冷静"]}]',
+        };
+
+        const first = firstEngine.render(ctx);
+        assert.ok(first.historicalContent.includes("Alice"));
+        firstEngine.commit(first.tree);
+
+        const secondEngine = new ContextEngine("exec-person-ledger-load");
+        secondEngine.register(executorPersonContextProvider);
+        secondEngine.ledger.loadSnapshot(firstEngine.ledger.toSnapshot());
+        const second = secondEngine.render({ ...ctx, taskId: "t2" });
+
         assert.equal(second.historicalContent, "");
     });
 

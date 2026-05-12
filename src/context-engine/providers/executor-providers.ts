@@ -14,7 +14,6 @@
 
 import type { SectionProvider, ResolveContext, DiffResult } from "../types.js";
 import { deriveChatType } from "../prompt-renderer-utils.js";
-import { getRawId } from "../../core/chat-id.js";
 
 // ─── ResolveContext 扩展（executor 专用字段） ───
 
@@ -96,20 +95,33 @@ function parsePersonContext(text: string): ExecutorPersonContextData {
     try {
         const parsed = JSON.parse(trimmed);
         if (Array.isArray(parsed)) {
-            const profiles = parsed.filter(
+            const objectProfiles = parsed.filter(
                 (item): item is Record<string, unknown> => !!item && typeof item === "object" && !Array.isArray(item)
             );
-            if (profiles.length === parsed.length) {
+            if (objectProfiles.length === parsed.length) {
+                const profiles = objectProfiles.filter(isRenderablePersonProfile);
                 return { mode: "profiles", profiles, rawText: trimmed };
             }
         } else if (parsed && typeof parsed === "object") {
-            return { mode: "profiles", profiles: [parsed as Record<string, unknown>], rawText: trimmed };
+            const profile = parsed as Record<string, unknown>;
+            if (isRenderablePersonProfile(profile)) {
+                return { mode: "profiles", profiles: [profile], rawText: trimmed };
+            }
+            return { mode: "profiles", profiles: [], rawText: trimmed };
         }
     } catch {
         // 非 JSON 背景文本仍保留原样渲染，并退化为整块比较。
     }
 
     return { mode: "raw", profiles: [], rawText: trimmed };
+}
+
+function isRenderablePersonProfile(profile: Record<string, unknown>): boolean {
+    return [
+        profile.userLabel,
+        profile.displayName,
+        profile.userId,
+    ].some(value => typeof value === "string" && value.trim().length > 0);
 }
 
 function getPersonContextKey(profile: Record<string, unknown>, index: number): string {
@@ -122,10 +134,100 @@ function getPersonContextSignature(profile: Record<string, unknown>): string {
     return JSON.stringify(normalizeJsonValue(profile));
 }
 
+function stringValue(value: unknown): string {
+    return typeof value === "string" ? value.trim() : "";
+}
+
+function numberValue(value: unknown): number | undefined {
+    return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function stringList(value: unknown, limit = 6): string[] {
+    return Array.isArray(value)
+        ? value.filter((item): item is string => typeof item === "string" && item.trim().length > 0).slice(0, limit)
+        : [];
+}
+
+function pushInlineField(lines: string[], label: string, value: unknown): void {
+    const text = stringValue(value);
+    if (text) {
+        lines.push(`- ${label}: ${text}`);
+    }
+}
+
+function pushListField(lines: string[], label: string, values: string[]): void {
+    if (values.length === 0) return;
+    lines.push(`- ${label}:`);
+    for (const value of values) {
+        lines.push(`  - ${value}`);
+    }
+}
+
+function renderProfileTitle(profile: Record<string, unknown>, index: number): string {
+    const userLabel = stringValue(profile.userLabel);
+    if (userLabel) return userLabel;
+
+    const displayName = stringValue(profile.displayName);
+    const userId = stringValue(profile.userId);
+    if (displayName && userId) return `${displayName}(${userId})`;
+    return displayName || userId || `人物 ${index + 1}`;
+}
+
+function renderPersonProfileMarkdown(profile: Record<string, unknown>, index: number): string {
+    const lines = [`### ${renderProfileTitle(profile, index)}`];
+    const identityParts = [
+        stringValue(profile.currentChatLabel) ? `当前聊天: ${stringValue(profile.currentChatLabel)}` : "",
+        stringList(profile.aliases, 4).length ? `别名: ${stringList(profile.aliases, 4).join("、")}` : "",
+        numberValue(profile.dunbarTier) ? `Dunbar: ${numberValue(profile.dunbarTier)}` : "",
+        numberValue(profile.rapport) !== undefined ? `亲近度: ${numberValue(profile.rapport)}` : "",
+        numberValue(profile.messageCount) !== undefined ? `本轮相关消息数: ${numberValue(profile.messageCount)}` : "",
+    ].filter(Boolean);
+    if (identityParts.length > 0) {
+        lines.push(`- 身份线索: ${identityParts.join("；")}`);
+    }
+
+    pushInlineField(lines, "全局关系", profile.globalRelationToAgent);
+    pushInlineField(lines, "当前聊天关系", profile.currentRelationToAgent);
+    if (!stringValue(profile.globalRelationToAgent) && !stringValue(profile.currentRelationToAgent)) {
+        pushInlineField(lines, "关系摘要", profile.relationToAgent);
+    }
+    pushInlineField(lines, "沟通风格", profile.communicationStyle);
+
+    const traits = stringList(profile.traits, 6);
+    if (traits.length > 0) {
+        lines.push(`- 稳定特征: ${traits.join("、")}`);
+    }
+    const interests = stringList(profile.interests, 8);
+    if (interests.length > 0) {
+        lines.push(`- 关注主题: ${interests.join("、")}`);
+    }
+
+    pushListField(lines, "当前聊天 reflection 关系记忆", stringList(profile.relationshipMemory, 4));
+    pushListField(lines, "策略提示", stringList(profile.agentPolicyHints, 5));
+    pushListField(lines, "稳定互动模式", stringList(profile.stablePatterns, 4));
+    pushListField(lines, "可跟进事项", stringList(profile.followupCandidates, 3));
+
+    return lines.join("\n");
+}
+
 function renderPersonContextBody(data: ExecutorPersonContextData): string {
-    return data.mode === "profiles"
-        ? JSON.stringify(data.profiles)
-        : data.rawText;
+    if (data.mode !== "profiles") {
+        return data.rawText;
+    }
+    return data.profiles
+        .filter(isRenderablePersonProfile)
+        .map(renderPersonProfileMarkdown)
+        .filter(text => text.trim().length > 0)
+        .join("\n\n");
+}
+
+function renderPersonContextGuidance(): string[] {
+    return [
+        "使用原则:",
+        "- 这些人物背景只主动覆盖当前上下文里直接叫住 agent 的人；未出现的人需要时可再用 memory.* 搜索。",
+        "- 这些背景可能包含跨群全局画像和当前聊天的 reflection 关系记忆。全局画像用于调整语气、策略和关注点，当前聊天画像决定本群/本私聊里怎样表达。",
+        "- 不要把全局画像、私聊细节或其他群事实当作当前群公开说过的话直接复述；除非任务明确要求且来源可公开，否则只把它们内化为回复策略。",
+    ];
 }
 
 function makeTargetMessageEntry(content: string, index: number): ExecutorTargetMessageEntry {
@@ -243,16 +345,16 @@ export const executorHeaderProvider: SectionProvider<{
     },
     resolve(ctx: ExecutorResolveContext) {
         return {
-            chatId: getRawId(ctx.chatId),
+            chatId: ctx.chatId,
             chatType: deriveChatType(ctx.isDirectMessage),
-            chatTitle: ctx.chatTitle ?? getRawId(ctx.chatId),
+            chatTitle: ctx.chatTitle ?? ctx.chatId,
             taskId: ctx.taskId,
         };
     },
     render(data) {
         return [
             `═══ ${data.taskId} ═══`,
-            `聊天对象: ${data.chatTitle} (chatId: ${data.chatId}) [${data.chatType}]`,
+            `聊天对象: ${data.chatTitle}(${data.chatId}) [${data.chatType}]`,
         ].join("\n");
     },
 };
@@ -322,7 +424,15 @@ export const executorPersonContextProvider: SectionProvider<ExecutorPersonContex
         history: "delta-only",
     },
     resolve(ctx: ExecutorResolveContext) {
-        return ctx.personContext ? parsePersonContext(ctx.personContext) : null;
+        if (!ctx.personContext) return null;
+        const parsed = parsePersonContext(ctx.personContext);
+        if (parsed.mode === "profiles" && parsed.profiles.length === 0) {
+            return null;
+        }
+        if (parsed.mode === "raw" && !parsed.rawText.trim()) {
+            return null;
+        }
+        return parsed;
     },
     diff(current, committed): DiffResult<ExecutorPersonContextData> {
         if (!committed) {
@@ -375,11 +485,21 @@ export const executorPersonContextProvider: SectionProvider<ExecutorPersonContex
         };
     },
     render(data) {
-        return `## 相关人物背景\n${renderPersonContextBody(data)}`;
+        return [
+            "## 相关人物背景",
+            ...renderPersonContextGuidance(),
+            renderPersonContextBody(data),
+        ].join("\n");
     },
     renderDelta(delta) {
         const body = renderPersonContextBody(delta);
-        return body ? `## 相关人物背景 (更新)\n${body}` : "";
+        return body
+            ? [
+                "## 相关人物背景 (更新)",
+                ...renderPersonContextGuidance(),
+                body,
+            ].join("\n")
+            : "";
     },
 };
 
@@ -405,6 +525,8 @@ export const executorMemoryContextProvider: SectionProvider<string> = {
             "使用原则：",
             "- 把这些记忆当成候选上下文，用来帮助判断和接话，不要机械复读。",
             "- 优先引用和当前目标消息强相关的事实或旧话题。",
+            "- 如果事实带有 sourceChatId/sourceChatTitle/sourceTopicLabel/observedAt/visibility/sensitivity，把这些字段当成来源和披露边界；跨群引用时优先保留来源，不要裸说结论。",
+            "- `private` 或高敏感记忆通常只能作为内部策略；不要在群聊里直接暴露私聊细节或其他群的敏感内容。",
             "- 历史话题带有 topicId，如果某个话题高度相关且需要更详细的上下文，可以用 `memory.searchTopics()` 或 `memory.browseHistory()` 按 topicId 获取完整对话记录。",
             "- 如果提供的记忆不够用，可以调用 memory.* 工具主动检索更多信息。",
         ].join("\n");

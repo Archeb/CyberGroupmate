@@ -54,6 +54,7 @@ import { matchesCron } from "./core/cron-matcher.js";
 import { autoReconnect as autoReconnectMcp, initMcpBridge, mcpBridge } from "./sandbox/modules/mcp-bridge/index.js";
 import { CodeActExecutor, refreshModuleRegistryCache } from "./subagent/code-act-executor.js";
 import { PostTaskWindowManager, buildDispatchedRecordForPostTaskDirect } from "./subagent/post-task-window.js";
+import type { ActiveUserProfile } from "./subagent/types.js";
 import { MetaSandbox } from "./meta-sandbox/meta-sandbox.js";
 import { buildMetaApiContext } from "./meta-sandbox/meta-api/index.js";
 
@@ -915,12 +916,14 @@ async function main(): Promise<void> {
         };
     };
 
+    let activeUserProfilesForDispatch = new Map<string, ActiveUserProfile[]>();
     const metaApiContext = buildMetaApiContext({
         memory,
         subagentManager,
         globalState,
         accumulator,
         groundingConfig: appConfig.grounding,
+        getActiveUserProfilesForChat: (chatId) => activeUserProfilesForDispatch.get(chatId),
         onTaskDispatched: (task) => {
             metricsInstance?.groupCollector.onAttend(task.chatId, "REPLY");
         },
@@ -973,6 +976,9 @@ async function main(): Promise<void> {
         globalState,
         memory,
         sandbox: metaSandbox,
+        setActiveUserProfilesForDispatch: (profilesByChatId) => {
+            activeUserProfilesForDispatch = new Map(profilesByChatId);
+        },
         getLlmConfigs: () => resolveComponentProfiles("meta", loadConfig()),
         maxTurns: 10,
         codeTimeout: 30_000,
@@ -1051,6 +1057,7 @@ async function main(): Promise<void> {
                 mediaDownloader: sharedMediaDownloader,
                 imageCatalog,
                 adapters,
+                metaSandbox,
                 onConfigSaved: async (config) => {
                     tokenStats.setProfiles(config.llmProfiles ?? {});
                     if (config.rateLimiting) {

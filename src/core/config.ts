@@ -269,6 +269,8 @@ export interface SubagentExternalConfig {
     postTaskWindowMs?: number;
     /** 是否限制 sandbox 只能对其绑定的 chatId 执行 adapter 写操作。默认 false */
     restrictAdapterWritesToBoundChat?: boolean;
+    /** 是否启用 session 内重复发送拦截。默认 true */
+    deduplicateSentMessages?: boolean;
     cosineDecay?: {
         defaultCyclePeriod?: number;
     };
@@ -828,6 +830,7 @@ function parseSubagentConfig(fileConfig: Record<string, unknown>): SubagentExter
         alertEngagementThreshold: raw.alert_engagement_threshold != null ? num(raw.alert_engagement_threshold, 60) : undefined,
         postTaskWindowMs: raw.post_task_window_ms != null ? num(raw.post_task_window_ms, 120000) : undefined,
         restrictAdapterWritesToBoundChat: raw.restrict_adapter_writes_to_bound_chat != null ? Boolean(raw.restrict_adapter_writes_to_bound_chat) : undefined,
+        deduplicateSentMessages: raw.deduplicate_sent_messages != null ? Boolean(raw.deduplicate_sent_messages) : undefined,
         cosineDecay: Object.keys(rawCD).length > 0 ? {
             defaultCyclePeriod: rawCD.default_cycle_period != null ? num(rawCD.default_cycle_period, 20) : undefined,
         } : undefined,
@@ -1365,6 +1368,9 @@ export function serializeConfigToObject(config: AppConfig): Record<string, unkno
         if (sa.postTaskWindowMs != null) s.post_task_window_ms = sa.postTaskWindowMs;
         if (sa.restrictAdapterWritesToBoundChat != null) {
             s.restrict_adapter_writes_to_bound_chat = sa.restrictAdapterWritesToBoundChat;
+        }
+        if (sa.deduplicateSentMessages != null) {
+            s.deduplicate_sent_messages = sa.deduplicateSentMessages;
         }
         if (sa.cosineDecay) s.cosine_decay = { default_cycle_period: sa.cosineDecay.defaultCyclePeriod };
         if (sa.stickiness) {

@@ -3,6 +3,7 @@
   import { api } from '../lib/api.js';
   import { getGroupLabel, formatCodeActContent, isAtBottom, scrollToBottom, getPlatform, platformLabel } from '../lib/utils.js';
   import { onDestroy, tick } from 'svelte';
+  import MonacoEditor from '../components/MonacoEditor.svelte';
 
   const META_CHAT_ID = '__meta__';
   let sessionData = { session: [], queueSize: 0, sessionSize: '-', executionCount: '-', isProcessing: false };
@@ -10,11 +11,29 @@
   let sessionEl;
   let wasBottom = true;
   let showSidebar = false;
+  let debugOpen = false;
+  let debugCode = [
+    'console.log("debug target ready");',
+    'console.log({ now: new Date().toISOString() });',
+    'if (typeof ctx !== "undefined") console.log({ ctx });',
+  ].join('\n');
+  let debugTimeoutMs = 30000;
+  let debugRuns = [];
+  let debugRunning = false;
+  let debugTypeLibs = [];
+  let debugTypeLibChatId = null;
+  let debugTypesLoading = false;
+  let debugOutputEl;
 
   $: groups = $appState.groups;
   $: metaCodeAct = $appState.metaCodeAct || { chatId: META_CHAT_ID, sessionSize: 0, executionCount: 0, queueSize: 0, isProcessing: false };
   $: metaHistoryBudget = sessionData.historyBudget || metaCodeAct.historyBudget;
   $: if ($activeTab === 'codeact' && $selectedCodeActChatId) refreshSession($selectedCodeActChatId);
+  $: currentDebugLabel = $selectedCodeActChatId ? getCodeActTitle($selectedCodeActChatId) : '未选择';
+  $: latestDebugRun = debugRuns[0] || null;
+  $: if (debugOpen && $selectedCodeActChatId && debugTypeLibChatId !== $selectedCodeActChatId && !debugTypesLoading) {
+    loadDebugTypeLibs($selectedCodeActChatId);
+  }
 
   // 获取当前选中 chat 的实时进度事件
   $: progressEvents = $selectedCodeActChatId ? ($codeActProgress[$selectedCodeActChatId] || []) : [];
@@ -65,6 +84,78 @@
     await api(`/codeact/${$selectedCodeActChatId}/reset-session`, { method: 'POST' });
     clearCodeActProgress($selectedCodeActChatId);
     await refreshSession($selectedCodeActChatId, true);
+  }
+
+  async function loadDebugTypeLibs(chatId) {
+    debugTypesLoading = true;
+    debugTypeLibChatId = chatId;
+    try {
+      const data = await api(`/codeact/${encodeURIComponent(chatId)}/debug-types`);
+      if (debugTypeLibChatId === chatId) {
+        debugTypeLibs = data.libs || [];
+      }
+    } catch {
+      if (debugTypeLibChatId === chatId) debugTypeLibs = [];
+    } finally {
+      debugTypesLoading = false;
+    }
+  }
+
+  function updateDebugRun(runId, patch) {
+    debugRuns = debugRuns.map((run) => run.id === runId ? { ...run, ...patch } : run);
+  }
+
+  async function executeDebugCode() {
+    const chatId = $selectedCodeActChatId;
+    if (!chatId || debugRunning || !debugCode.trim()) return;
+
+    const runId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const startedAt = new Date().toISOString();
+    const run = {
+      id: runId,
+      chatId,
+      label: getCodeActTitle(chatId),
+      code: debugCode,
+      output: '',
+      error: false,
+      status: 'running',
+      startedAt,
+      completedAt: null,
+      durationMs: null,
+    };
+    debugRuns = [run, ...debugRuns].slice(0, 20);
+    debugRunning = true;
+
+    try {
+      const data = await api(`/codeact/${encodeURIComponent(chatId)}/debug-execute`, {
+        method: 'POST',
+        body: { code: debugCode, timeoutMs: debugTimeoutMs },
+      });
+      const failed = data.ok === false || data.error === true || (typeof data.error === 'string' && data.error.length > 0);
+      updateDebugRun(runId, {
+        output: data.output ?? data.error ?? JSON.stringify(data, null, 2),
+        error: failed,
+        status: failed ? 'error' : 'completed',
+        completedAt: data.completedAt ?? new Date().toISOString(),
+        durationMs: data.durationMs ?? null,
+        target: data.target,
+      });
+    } catch (err) {
+      updateDebugRun(runId, {
+        output: err?.stack || err?.message || String(err),
+        error: true,
+        status: 'error',
+        completedAt: new Date().toISOString(),
+      });
+    } finally {
+      debugRunning = false;
+      await tick();
+      if (debugOutputEl) scrollToBottom(debugOutputEl);
+    }
+  }
+
+  function clearDebugRuns() {
+    debugRuns = [];
   }
 
   function isMetaChat(chatId) {
@@ -285,6 +376,121 @@
       </div>
     </div>
   </div>
+
+  <!-- Live debug executor -->
+  <div class="ca-debug" class:collapsed={!debugOpen}>
+    {#if debugOpen}
+      <div class="card bg-base-100 h-full">
+        <div class="card-body p-3 min-h-0 flex flex-col">
+          <div class="debug-header">
+            <div class="min-w-0">
+              <h3 class="card-title text-sm">
+                Code Debug
+                {#if $selectedCodeActChatId}
+                  <span class="text-xs opacity-60 truncate">{currentDebugLabel}</span>
+                {/if}
+              </h3>
+            </div>
+            <div class="debug-header-actions">
+              <button
+                class="btn btn-xs btn-ghost"
+                title="收起 Debug"
+                onclick={() => debugOpen = false}
+              >
+                <i class="fa-solid fa-chevron-right"></i>
+              </button>
+            </div>
+          </div>
+
+          <div class="debug-toolbar">
+            <div class="debug-timeout">
+              <span class="text-xs opacity-60">Timeout</span>
+              <input
+                class="input input-xs input-bordered debug-timeout-input"
+                type="number"
+                min="1000"
+                max="120000"
+                step="1000"
+                bind:value={debugTimeoutMs}
+              />
+            </div>
+            <button
+              class="btn btn-xs btn-primary"
+              title="执行当前代码"
+              disabled={!$selectedCodeActChatId || debugRunning || !debugCode.trim()}
+              onclick={executeDebugCode}
+            >
+              {#if debugRunning}
+                <i class="fa-solid fa-spinner fa-pulse"></i>
+              {:else}
+                <i class="fa-solid fa-play"></i>
+              {/if}
+              执行
+            </button>
+            <button
+              class="btn btn-xs btn-ghost"
+              title="清空结果"
+              disabled={debugRuns.length === 0}
+              onclick={clearDebugRuns}
+            >
+              <i class="fa-solid fa-trash"></i>
+            </button>
+          </div>
+
+          <div class="debug-editor-wrap">
+            <MonacoEditor
+              bind:value={debugCode}
+              language="typescript"
+              height="100%"
+              minimap={false}
+              wrapperClass="debug-monaco"
+              extraLibs={debugTypeLibs}
+            />
+          </div>
+
+          <div class="debug-result-wrap">
+            <div class="debug-result-header">
+              <span>返回结果</span>
+              {#if latestDebugRun}
+                <span class:error-text={latestDebugRun.error} class:success-text={!latestDebugRun.error && latestDebugRun.status !== 'running'}>
+                  {latestDebugRun.status === 'running' ? '执行中' : latestDebugRun.error ? 'Error' : 'OK'}
+                  {#if latestDebugRun.durationMs != null}
+                    · {latestDebugRun.durationMs}ms
+                  {/if}
+                </span>
+              {/if}
+            </div>
+            <div bind:this={debugOutputEl} class="debug-output">
+              {#if latestDebugRun}
+                <pre>{latestDebugRun.output || (latestDebugRun.status === 'running' ? 'Running...' : '(no output)')}</pre>
+              {:else}
+                <pre class="debug-empty">(empty)</pre>
+              {/if}
+            </div>
+            {#if debugRuns.length > 1}
+              <div class="debug-history">
+                {#each debugRuns.slice(1, 6) as run}
+                  <button
+                    class:error-run={run.error}
+                    title={run.label}
+                    onclick={() => debugRuns = [run, ...debugRuns.filter((item) => item.id !== run.id)]}
+                  >
+                    <span>{new Date(run.startedAt).toLocaleTimeString()}</span>
+                    <span>{run.error ? 'Error' : 'OK'}</span>
+                  </button>
+                {/each}
+              </div>
+            {/if}
+          </div>
+        </div>
+      </div>
+    {:else}
+      <button class="debug-rail" title="展开 Debug" onclick={() => debugOpen = true}>
+        <i class="fa-solid fa-terminal"></i>
+        <span>Debug</span>
+      </button>
+    {/if}
+  </div>
 </div>
 
 <style>
@@ -309,6 +515,170 @@
   flex: 1;
   min-width: 0;
   min-height: 0;
+}
+
+.ca-debug {
+  width: clamp(22rem, 32vw, 30rem);
+  flex-shrink: 0;
+  min-height: 0;
+  transition: width 0.18s ease;
+}
+
+.ca-debug.collapsed {
+  width: 3.25rem;
+}
+
+.debug-rail {
+  width: 100%;
+  height: 100%;
+  min-height: 10rem;
+  border: 1px solid color-mix(in srgb, var(--color-base-content) 10%, transparent);
+  border-radius: 0.75rem;
+  background: var(--color-base-100);
+  color: var(--color-base-content);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.65rem;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.debug-rail:hover {
+  background: var(--color-base-200);
+  border-color: color-mix(in srgb, var(--color-primary) 30%, transparent);
+}
+
+.debug-rail span {
+  writing-mode: vertical-rl;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.debug-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-shrink: 0;
+  margin-bottom: 0.5rem;
+}
+
+.debug-header-actions,
+.debug-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.debug-toolbar {
+  flex-wrap: wrap;
+  flex-shrink: 0;
+  margin-bottom: 0.6rem;
+}
+
+.debug-timeout {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-right: auto;
+}
+
+.debug-timeout-input {
+  width: 6.25rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.debug-editor-wrap {
+  height: 42%;
+  min-height: 14rem;
+  flex-shrink: 0;
+}
+
+:global(.debug-monaco) {
+  height: 100%;
+  border-radius: 0.5rem;
+}
+
+.debug-result-wrap {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  margin-top: 0.65rem;
+}
+
+.debug-result-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-shrink: 0;
+  font-size: 0.72rem;
+  font-weight: 700;
+  margin-bottom: 0.35rem;
+}
+
+.debug-output {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  border: 1px solid color-mix(in srgb, var(--color-base-content) 10%, transparent);
+  border-radius: 0.5rem;
+  background: color-mix(in srgb, var(--color-base-300) 42%, transparent);
+}
+
+.debug-output pre {
+  margin: 0;
+  padding: 0.65rem;
+  min-height: 100%;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 0.72rem;
+  line-height: 1.45;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.debug-empty {
+  opacity: 0.45;
+}
+
+.debug-history {
+  display: flex;
+  gap: 0.35rem;
+  overflow-x: auto;
+  flex-shrink: 0;
+  margin-top: 0.45rem;
+  padding-bottom: 0.1rem;
+}
+
+.debug-history button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  border: 1px solid color-mix(in srgb, var(--color-success) 24%, transparent);
+  border-radius: 0.375rem;
+  padding: 0.16rem 0.4rem;
+  background: color-mix(in srgb, var(--color-success) 7%, transparent);
+  font-size: 0.68rem;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.debug-history button.error-run {
+  border-color: color-mix(in srgb, var(--color-error) 28%, transparent);
+  background: color-mix(in srgb, var(--color-error) 8%, transparent);
+}
+
+.error-text {
+  color: var(--color-error);
+}
+
+.success-text {
+  color: var(--color-success);
 }
 
 /* ── Sidebar chat items ── */
@@ -509,6 +879,26 @@
     to { transform: translateX(0); }
   }
   .ca-content { flex: 1; min-height: 0; }
+  .ca-debug,
+  .ca-debug.collapsed {
+    width: 100%;
+    flex-shrink: 0;
+  }
+  .ca-debug.collapsed {
+    height: 3rem;
+    min-height: 3rem;
+  }
+  .debug-rail {
+    min-height: 3rem;
+    flex-direction: row;
+  }
+  .debug-rail span {
+    writing-mode: horizontal-tb;
+    letter-spacing: 0;
+  }
+  .debug-editor-wrap {
+    height: 15rem;
+  }
   .ca-header { flex-wrap: wrap; gap: 0.5rem; }
 }
 </style>

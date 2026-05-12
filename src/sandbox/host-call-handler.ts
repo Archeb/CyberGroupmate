@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { relative, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
-import { ensureCompositeId, getPlatform } from "../core/chat-id.js";
+import { ensureCompositeId, getGroupModelKey, getPlatform } from "../core/chat-id.js";
 import {
     loadConfig,
     resolveComponentProfiles,
@@ -16,8 +16,10 @@ import { describeImage, ensureSupportedFormat } from "../core/vision-processor.j
 import { MemoryStoreV2 } from "../memory-v2/index.js";
 import { embed } from "../memory-v2/embedding.js";
 import { GlobalState } from "../main-agent/global-state.js";
+import { createMemoryApi } from "../meta-sandbox/meta-api/memory.js";
 import type { AttentionAccumulator } from "../accumulator/attention-accumulator.js";
 import type { PlatformAdapter } from "../adapter/platform-adapter.js";
+import { getTelegramMtcuteWriteTarget, TELEGRAM_MTCUTE_WRITE_METHODS } from "../core/telegram-mtcute-passthrough.js";
 import { SandboxPool } from "./sandbox-pool.js";
 import { type Sandbox } from "./sandbox.js";
 
@@ -73,6 +75,20 @@ function isBoundChatWriteRestrictionEnabled(): boolean {
     return loadConfig("config.yaml", true).subagent?.restrictAdapterWritesToBoundChat === true;
 }
 
+function getRestrictedWriteTarget(method: string, args: unknown[], adapter: PlatformAdapter): unknown {
+    if (adapter.getWriteMethods().includes(method)) return args[0];
+    if (method === "telegram.mtcute") {
+        const mtcuteMethod = String(args[0] ?? "");
+        if (!TELEGRAM_MTCUTE_WRITE_METHODS.has(mtcuteMethod)) return undefined;
+        return getTelegramMtcuteWriteTarget(mtcuteMethod, args.slice(1));
+    }
+    return undefined;
+}
+
+function isSelfTarget(target: unknown): boolean {
+    return typeof target === "string" && /^(me|self)$/i.test(target.trim());
+}
+
 export function createSandboxHostCallHandler(chatId: string, deps: CreateSandboxHostCallHandlerDeps) {
     const {
         appConfig,
@@ -116,15 +132,17 @@ export function createSandboxHostCallHandler(chatId: string, deps: CreateSandbox
     return async (method: string, args: unknown[]) => {
         const adapter = adapters.find((item) => item.canHandle(method));
         if (adapter) {
-            const writeMethods = adapter.getWriteMethods();
-            if (isBoundChatWriteRestrictionEnabled() && writeMethods.includes(method)) {
-                const rawTarget = String(args[0] ?? "");
-                const targetChatId = ensureCompositeId(getPlatform(chatId), rawTarget);
-                if (targetChatId !== chatId) {
-                    throw new Error(
-                        `[Sandbox 安全限制] ${method} 被拦截：当前 sandbox 绑定 chat=${chatId}，` +
-                        `不允许向 chat=${targetChatId} 发送消息。`
-                    );
+            if (isBoundChatWriteRestrictionEnabled()) {
+                const restrictedTarget = getRestrictedWriteTarget(method, args, adapter);
+                if (restrictedTarget != null && !isSelfTarget(restrictedTarget)) {
+                    const rawTarget = String(restrictedTarget);
+                    const targetChatId = ensureCompositeId(getPlatform(chatId), rawTarget);
+                    if (targetChatId !== chatId) {
+                        throw new Error(
+                            `[Sandbox 安全限制] ${method} 被拦截：当前 sandbox 绑定 chat=${chatId}，` +
+                            `不允许向 chat=${targetChatId} 发送消息。`
+                        );
+                    }
                 }
             }
             return adapter.handleCall(method, args);
@@ -400,8 +418,40 @@ export function createSandboxHostCallHandler(chatId: string, deps: CreateSandbox
             return memory.getUserProfile(userId, targetChatId ?? chatId);
         }
         if (method === "memory.getRecentInteractions") {
-            const [targetChatId, userId, limit] = args as [string | undefined, string | undefined, number | undefined];
-            return memory.getRecentInteractions(targetChatId ?? chatId, userId, limit);
+            const [targetChatId, userId, limit] = args as [string | null | undefined, string | undefined, number | undefined];
+            const effectiveChatId = typeof targetChatId === "string" && targetChatId.trim().length > 0
+                ? targetChatId
+                : undefined;
+            return memory.getRecentInteractions(effectiveChatId, userId, limit).map((interaction) => {
+                const identity = memory.getPersonIdentity(interaction.userId);
+                const displayName = identity?.displayName ?? interaction.userId;
+                const groupModel = memory.getGroupModel(getGroupModelKey(interaction.chatId));
+                const chatTitle = groupModel?.chatTitle?.trim() || interaction.chatId;
+                return {
+                    ...interaction,
+                    displayName,
+                    userLabel: `${displayName}(${interaction.userId})`,
+                    chatLabel: `${chatTitle}(${interaction.chatId})`,
+                };
+            });
+        }
+        if (method === "memory.resolvePerson") {
+            const [query, options] = args as [string, { chatId?: string; limit?: number } | undefined];
+            const api = createMemoryApi(memory);
+            return api.resolvePerson(query, { ...options, chatId: options?.chatId ?? chatId });
+        }
+        if (method === "memory.getPersonDossier") {
+            const [queryOrUserId, options] = args as [string, {
+                chatId?: string;
+                limit?: number;
+                factsLimit?: number;
+                interactionsLimit?: number;
+                topicsLimit?: number;
+                messagesLimit?: number;
+                groupProfilesLimit?: number;
+            } | undefined];
+            const api = createMemoryApi(memory);
+            return api.getPersonDossier(queryOrUserId, { ...options, chatId: options?.chatId ?? chatId });
         }
         if (method === "memory.semanticSearch") {
             const [query, options] = args as [string, { scope?: "facts" | "topics" | "all"; limit?: number } | undefined];

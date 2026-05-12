@@ -266,6 +266,118 @@ describe("TelegramAdapter", () => {
         nc.dispose();
     });
 
+    it("should warm positive private peer ids from dialogs before sending", async () => {
+        const nc = makeNC();
+        const inputPeer = { _: "inputPeerUser", userId: 682932098, accessHash: "hash" };
+        const resolvePeerCalls: unknown[] = [];
+        const findDialogsCalls: unknown[] = [];
+        const sendTextCalls: unknown[] = [];
+
+        const fakeClient = {
+            async start() {
+                return { id: 99, displayName: "Userbot", isBot: false };
+            },
+            onNewMessage: {
+                add() {},
+                remove() {},
+            },
+            async resolvePeer(peer: unknown) {
+                resolvePeerCalls.push(peer);
+                throw new Error("MtPeerNotFoundError: Peer 682932098 is not found in local cache");
+            },
+            async findDialogs(peer: unknown) {
+                findDialogsCalls.push(peer);
+                return [{
+                    peer: {
+                        id: 682932098,
+                        type: "private",
+                        firstName: "Alice",
+                        username: "alice",
+                        inputPeer,
+                    },
+                    unreadCount: 0,
+                }];
+            },
+            async sendText(chatId: unknown, text: unknown, opts?: unknown) {
+                sendTextCalls.push([chatId, text, opts]);
+                return {
+                    id: 2,
+                    text,
+                    date: new Date("2026-03-08T12:00:00.000Z"),
+                    chat: { id: 682932098, type: "private" },
+                    sender: { id: 99, displayName: "Bot", isBot: true },
+                };
+            },
+            async destroy() {},
+        };
+
+        const adapter = new TelegramAdapter(
+            makeConfig({ mode: "userbot", botToken: "", phone: "+8613800000000" }),
+            nc,
+            async () => "",
+            () => {},
+            async () => fakeClient,
+        );
+
+        await adapter.start();
+        await adapter.handleCall("telegram.sendText", ["telegram:682932098", "hi"]);
+        await adapter.handleCall("telegram.sendText", ["682932098", "again"]);
+
+        assert.deepEqual(resolvePeerCalls, [682932098]);
+        assert.deepEqual(findDialogsCalls, [682932098]);
+        assert.deepEqual(sendTextCalls[0], [inputPeer, "hi", undefined]);
+        assert.deepEqual(sendTextCalls[1], [inputPeer, "again", undefined]);
+
+        await adapter.stop();
+        nc.dispose();
+    });
+
+    it("should expose meetPeer and findDialogs host calls for agent-side recovery", async () => {
+        const nc = makeNC();
+        const inputPeer = { _: "inputPeerUser", userId: 12345, accessHash: "hash" };
+        const fakeClient = {
+            async start() {
+                return { id: 99, displayName: "Userbot", isBot: false };
+            },
+            onNewMessage: {
+                add() {},
+                remove() {},
+            },
+            async resolvePeer() {
+                throw new Error("MtPeerNotFoundError: Peer 12345 is not found in local cache");
+            },
+            async findDialogs(peer: unknown) {
+                assert.equal(peer, 12345);
+                return [{
+                    peer: { id: 12345, type: "private", firstName: "Bob", inputPeer },
+                    unreadCount: 1,
+                }];
+            },
+            async destroy() {},
+        };
+
+        const adapter = new TelegramAdapter(
+            makeConfig({ mode: "userbot", botToken: "", phone: "+8613800000000" }),
+            nc,
+            async () => "",
+            () => {},
+            async () => fakeClient,
+        );
+
+        await adapter.start();
+        const dialogs = await adapter.handleCall("telegram.findDialogs", ["12345"]) as any[];
+        const met = await adapter.handleCall("telegram.meetPeer", ["12345"]) as any;
+
+        assert.equal(dialogs[0].peer.id, "12345");
+        assert.equal(dialogs[0].peer.firstName, "Bob");
+        assert.equal(met.ok, true);
+        assert.equal(met.source.type, "inputPeerUser");
+        assert.equal(met.source.id, "12345");
+
+        await adapter.stop();
+        nc.dispose();
+    });
+
     it("should convert cached non-webp stickers to webp before sending", { skip: !hasCommand("ffmpeg") }, async () => {
         const nc = makeNC();
         const testDir = join(tmpdir(), `tg-sticker-${randomUUID()}`);

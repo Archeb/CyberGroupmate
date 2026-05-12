@@ -86,4 +86,34 @@ describe("installCapabilityRegistry", () => {
         assert.ok(hostCalls.some(call => call.method === "telegram.sendText"));
         assert.ok(hostCalls.some(call => call.method === "memory.recall") === false);
     });
+
+    it("should inject Telegram peer guidance when mtcute cannot resolve a peer", async () => {
+        const outputs: string[] = [];
+        const notifications: Array<Record<string, unknown>> = [];
+        const capabilities = installCapabilityRegistry({
+            ctx: {},
+            emitOutput: (line) => outputs.push(line),
+            notifyHost: (event) => notifications.push(event),
+            requestInput: async () => "",
+            printToHost: (message) => outputs.push(`[print] ${message}`),
+            spawnTask: () => {},
+            killTask: () => {},
+            listTasks: () => [],
+            callHost: async (method) => {
+                if (method === "telegram.sendText") {
+                    throw new Error("MtPeerNotFoundError: Peer 682932098 is not found in local cache");
+                }
+                return null;
+            },
+        }) as { telegram: { sendText: (chatId: string, text: string) => Promise<unknown>; meetPeer: unknown; findDialogs: unknown } };
+
+        assert.equal(typeof capabilities.telegram.meetPeer, "function");
+        assert.equal(typeof capabilities.telegram.findDialogs, "function");
+        await assert.rejects(
+            () => capabilities.telegram.sendText("682932098", "hello"),
+            /telegram\.meetPeer/,
+        );
+        assert.ok(outputs.some(line => line.includes("[Telegram peer guardrail]")));
+        assert.ok(notifications.some(event => event.type === "system.telegram_peer_guardrail"));
+    });
 });

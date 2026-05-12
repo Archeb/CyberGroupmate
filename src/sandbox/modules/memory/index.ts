@@ -60,6 +60,29 @@ export const memoryModule = {
         return result as Array<Record<string, unknown>>;
     },
 
+    resolvePerson: async (query: string, options?: {
+        chatId?: string;
+        limit?: number;
+    }) => {
+        if (!_callbacks) throw new Error("Memory module not initialized");
+        const result = await _callbacks.callHost("memory.resolvePerson", [query, options]);
+        return result as Record<string, unknown>;
+    },
+
+    getPersonDossier: async (queryOrUserId: string, options?: {
+        chatId?: string;
+        limit?: number;
+        factsLimit?: number;
+        interactionsLimit?: number;
+        topicsLimit?: number;
+        messagesLimit?: number;
+        groupProfilesLimit?: number;
+    }) => {
+        if (!_callbacks) throw new Error("Memory module not initialized");
+        const result = await _callbacks.callHost("memory.getPersonDossier", [queryOrUserId, options]);
+        return result as Record<string, unknown>;
+    },
+
     semanticSearch: async (query: string, options?: {
         scope?: "facts" | "topics" | "all";
         limit?: number;

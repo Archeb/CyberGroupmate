@@ -109,8 +109,19 @@ describe("mergeEpisodes 情感合并", () => {
 
     it("合并保留 significance > 0.7 的 highlights（规则路径）", async () => {
         const episodes = [
-            mockEpisode({ date: daysAgo(10), summary: "重要事件", significance: 0.9 }),
-            mockEpisode({ date: daysAgo(10), summary: "普通事件", significance: 0.3 }),
+            mockEpisode({
+                id: "ep_important",
+                date: daysAgo(10),
+                summary: "重要事件",
+                significance: 0.9,
+                type: "direct_message",
+                topicLabel: "项目协作",
+                interactionQuality: "friendly",
+                evidence: ["Alice: 这件事很重要"],
+                sourceIds: ["message:m1"],
+                confidence: 0.9,
+            }),
+            mockEpisode({ date: daysAgo(10), summary: "普通事件", significance: 0.3, type: "reaction" }),
         ];
         mem.upsertPersonGroupProfile("u_merge", "chat_merge", {
             recentEpisodes: episodes,
@@ -124,6 +135,10 @@ describe("mergeEpisodes 情感合并", () => {
         const mm = profile!.mergedMemory![0];
         assert.ok(mm.highlights.includes("重要事件"), "应保留高 significance 的 highlight");
         assert.ok(!mm.highlights.includes("普通事件"), "不应保留低 significance 的 highlight");
+        assert.equal(mm.eventTypeCounts?.direct_message, 1, "应保留事件类型分布");
+        assert.equal(mm.topicCounts?.["项目协作"], 1, "应保留话题分布");
+        assert.equal(mm.qualityDistribution?.friendly, 1, "应保留交互质量分布");
+        assert.ok(mm.salientEvents?.[0]?.sourceIds?.includes("message:m1"), "关键事件应保留证据来源");
     });
 
     it("> 30天 week 合并为 MergedMemory(month)", async () => {
@@ -254,11 +269,12 @@ describe("trimProfileByTier 邦巴裁剪", () => {
         assert.equal(p.interests.length, 3, "interests 不应被裁剪");
     });
 
-    it("episodeDays 裁剪 — Tier 4 只保留 1 天内的 episodes", () => {
-        setupProfile(4, 1, 1, 5); // 5 episodes, days 0-4
+    it("episodeDays 裁剪 — Tier 4 至少保留到合并窗口，避免进 mergedMemory 前丢失", () => {
+        setupProfile(4, 1, 1, 12); // 12 episodes, days 0-11
         trimProfileByTier("u_trim", "chat_trim", mem);
         const p = mem.getProfilesForChat("chat_trim").find(p => p.userId === "u_trim")!;
-        assert.ok((p.recentEpisodes?.length ?? 0) <= 2, "Tier 4 应只保留近 1 天的 episodes");
+        assert.ok((p.recentEpisodes?.length ?? 0) >= 7, "Tier 4 应保留足够长，让旧事件先进入渐进合并");
+        assert.ok((p.recentEpisodes?.length ?? 0) <= 9, "Tier 4 不应无限保留 recentEpisodes");
     });
 
     it("自定义 tierOverrides 生效", () => {
@@ -275,19 +291,23 @@ describe("trimProfileByTier 邦巴裁剪", () => {
 describe("parseReflectionJSON 解析", () => {
     it("合法 JSON 正确解析", () => {
         const json = JSON.stringify({
+            globalPersonUpdates: [{ userId: "u1", relationToAgent: "跨群熟人", stablePatterns: ["喜欢旅行话题"] }],
             personUpdates: [{ userId: "u1", traits: ["好奇"], dunbarTier: 2, dunbarReason: "活跃" }],
             groupUpdates: { agentRole: "助手" },
-            newFacts: [{ subject: "u1", content: "喜欢抹茶", category: "preference" }],
+            factUpdates: [{ subject: "u1", content: "喜欢抹茶", category: "preference" }],
             topicsSummary: [{ label: "旅行", summary: "讨论京都", participants: ["u1"], sentiment: "positive" }],
+            relationshipEvents: [{ userId: "u1", summary: "u1 主动分享旅行计划", confidence: 0.8 }],
             insights: "u1 对旅行很感兴趣",
         });
 
         const result = parseReflectionJSON(json);
         assert.ok(result, "应该成功解析");
+        assert.equal(result!.globalPersonUpdates?.[0].relationToAgent, "跨群熟人");
         assert.equal(result!.personUpdates.length, 1);
         assert.equal(result!.personUpdates[0].userId, "u1");
         assert.deepEqual(result!.personUpdates[0].traits, ["好奇"]);
-        assert.equal(result!.newFacts.length, 1);
+        assert.equal(result!.factUpdates.length, 1);
+        assert.equal(result!.relationshipEvents?.length, 1);
         assert.equal(result!.topicsSummary.length, 1);
         assert.equal(result!.insights, "u1 对旅行很感兴趣");
     });

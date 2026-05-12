@@ -29,9 +29,15 @@ export type AssociatedMemory =
         type: "core_fact";
         factId: string;
         subject: string;
+        subjectLabel?: string;
         category: FactCategory;
         content: string;
         confidence: number;
+        sourceChatId?: string | null;
+        sourceChatLabel?: string | null;
+        sourceTopicLabel?: string | null;
+        visibility?: "private" | "contextual" | "public";
+        sensitivity?: "low" | "medium" | "high";
     }
     | {
         type: "topic";
@@ -109,6 +115,36 @@ export interface PersonIdentity {
     updatedAt: string;
 }
 
+/** 个体全局画像（跨群共享的长期认知） */
+export interface PersonProfile {
+    /** 用户 ID（全局主键，composite userId） */
+    userId: string;
+    /** 跨群稳定性格/行为特点 */
+    traits: string[];
+    /** 跨群长期兴趣和偏好 */
+    interests: string[];
+    /** 跨群一致的沟通风格 */
+    communicationStyle: string;
+    /** 与 agent 的总体关系描述 */
+    relationToAgent: string;
+    /** 稳定互动模式 */
+    stablePatterns: string[];
+    /** 面向 agent 的长期响应策略 */
+    agentPolicyHints: string[];
+    /** 之后可自然回访的长期候选 */
+    followupCandidates: string[];
+    /** 本全局认知来自哪些 chat */
+    sourceChatIds: string[];
+    /** 置信度 0-1 */
+    confidence: number;
+    /** 上次由 reflection 更新的时间 */
+    lastReflectedAt: string | null;
+    /** 创建时间 (ISO 8601) */
+    createdAt: string;
+    /** 更新时间 (ISO 8601) */
+    updatedAt: string;
+}
+
 /** 个体群内画像（每群独立） */
 export interface PersonGroupProfile {
     /** 用户 ID（联合主键） */
@@ -165,6 +201,30 @@ export interface InteractionEpisode {
     sentiment: "positive" | "neutral" | "negative";
     /** 重要程度 0-1 */
     significance: number;
+    /** 发言人显示名（用于长期记忆可读性） */
+    displayName?: string;
+    /** 方向：谁主动触发了这段互动 */
+    direction?: "user_to_agent" | "agent_to_user" | "mixed" | "ambient";
+    /** 交互质量，来自 reflection 或规则判断 */
+    interactionQuality?: "friendly" | "dependent" | "instrumental" | "hostile";
+    /** 关联消息 ID，用于回溯证据 */
+    messageIds?: string[];
+    /** 关联源 ID（interaction/message/topic 等） */
+    sourceIds?: string[];
+    /** 关联话题名称 */
+    topicLabel?: string;
+    /** 关联话题摘要 */
+    topicSummary?: string;
+    /** 用于合并 LLM 的短证据片段 */
+    evidence?: string[];
+    /** Agent 后续反应或结果 */
+    agentOutcome?: string;
+    /** 置信度 0-1 */
+    confidence?: number;
+    /** 关联媒体类型 */
+    mediaTypes?: string[];
+    /** 回复链目标消息 ID */
+    replyToMessageIds?: string[];
 }
 
 /** 合并后的记忆（周/月/季度/年粒度） */
@@ -183,6 +243,34 @@ export interface MergedMemory {
     highlights: string[];
     /** 关系变化描述 */
     relationshipTrend: string;
+    /** 来源 InteractionEpisode ID */
+    sourceEventIds?: string[];
+    /** 来源 MergedMemory ID/时期标识 */
+    sourceMemoryIds?: string[];
+    /** 各交互类型计数 */
+    eventTypeCounts?: Record<string, number>;
+    /** 话题出现次数 */
+    topicCounts?: Record<string, number>;
+    /** 活跃天数 */
+    activeDays?: number;
+    /** 交互质量分布 */
+    qualityDistribution?: Record<string, number>;
+    /** 这个时期形成的稳定互动模式 */
+    stablePatterns?: string[];
+    /** 该用户偏好/雷点/常聊对象等可执行信息 */
+    userPreferences?: string[];
+    /** 给 agent 后续互动的提示 */
+    agentPolicyHints?: string[];
+    /** 经过筛选、带来源的关键事件 */
+    salientEvents?: Array<{
+        summary: string;
+        sourceIds?: string[];
+        confidence?: number;
+    }>;
+    /** 未来可自然接回的话题或行动 */
+    followupCandidates?: string[];
+    /** 合并摘要置信度 0-1 */
+    confidence?: number;
 }
 
 // ─── 群组画像 ───
@@ -239,6 +327,24 @@ export interface CoreFact {
     confidence: number;
     /** 来源（topic_id 或 interaction_id） */
     source: string | null;
+    /** 来源 chatId */
+    sourceChatId?: string | null;
+    /** 来源 chat 标题 */
+    sourceChatTitle?: string | null;
+    /** 来源 topicId */
+    sourceTopicId?: string | null;
+    /** 来源 topic 标签 */
+    sourceTopicLabel?: string | null;
+    /** 来源 messageId 列表 */
+    sourceMessageIds?: string[];
+    /** 来源 interactionId 列表 */
+    sourceInteractionIds?: string[];
+    /** 事实被观察到的时间 */
+    observedAt?: string | null;
+    /** 可披露/使用范围 */
+    visibility?: "private" | "contextual" | "public";
+    /** 敏感度 */
+    sensitivity?: "low" | "medium" | "high";
     /** 向量表示 */
     embedding?: Float32Array;
     /** 创建时间 (ISO 8601) */
@@ -290,6 +396,15 @@ export interface FactSearchResult {
     category: FactCategory;
     content: string;
     confidence: number;
+    sourceChatId?: string | null;
+    sourceChatTitle?: string | null;
+    sourceTopicId?: string | null;
+    sourceTopicLabel?: string | null;
+    sourceMessageIds?: string[];
+    sourceInteractionIds?: string[];
+    observedAt?: string | null;
+    visibility?: "private" | "contextual" | "public";
+    sensitivity?: "low" | "medium" | "high";
     updatedAt: string;
 }
 
@@ -338,8 +453,21 @@ export interface InteractionSearchResult {
 
 export interface UserProfileSearchResult {
     identity: PersonIdentity | null;
+    globalProfile: PersonProfile | null;
     groupProfile: PersonGroupProfile | null;
     recentFacts: FactSearchResult[];
+}
+
+export interface CoreFactProvenance {
+    sourceChatId?: string | null;
+    sourceChatTitle?: string | null;
+    sourceTopicId?: string | null;
+    sourceTopicLabel?: string | null;
+    sourceMessageIds?: string[];
+    sourceInteractionIds?: string[];
+    observedAt?: string | null;
+    visibility?: "private" | "contextual" | "public";
+    sensitivity?: "low" | "medium" | "high";
 }
 
 // ─── browseHistory() 消息档案接口 ───
@@ -471,10 +599,13 @@ export interface IMemoryStoreV2 {
     storeMessageBatch(messages: MessageLogEntry[]): void;
 
     /** 写入核心事实到 core_facts 表 */
-    storeFact(subject: string, content: string, category: FactCategory, source?: string, expiresAt?: string, embedding?: Float32Array): string;
+    storeFact(subject: string, content: string, category: FactCategory, source?: string, expiresAt?: string, embedding?: Float32Array, confidence?: number, provenance?: CoreFactProvenance): string;
 
     /** upsert 个体身份（全局，跨群） */
     upsertPersonIdentity(userId: string, data: Partial<PersonIdentity>): void;
+
+    /** upsert 个体全局画像（跨群共享） */
+    upsertPersonProfile(userId: string, data: Partial<PersonProfile>): void;
 
     /** upsert 个体群内画像（每群独立） */
     upsertPersonGroupProfile(userId: string, chatId: string, data: Partial<PersonGroupProfile>): void;
@@ -500,6 +631,9 @@ export interface IMemoryStoreV2 {
 
     /** 获取全局个体身份 */
     getPersonIdentity(userId: string): PersonIdentity | null;
+
+    /** 获取个体全局画像 */
+    getPersonProfile(userId: string): PersonProfile | null;
 
     /** 按 displayName / aliases / username 搜索个体身份 */
     searchByAlias(query: string, limit?: number): PersonIdentity[];
@@ -584,10 +718,13 @@ export interface IMemoryStoreV2 {
     getUserProfile(userId: string, chatId?: string): UserProfileSearchResult;
 
     /** 获取近期交互日志 */
-    getRecentInteractions(chatId: string, userId?: string, limit?: number): InteractionSearchResult[];
+    getRecentInteractions(chatId?: string | null, userId?: string, limit?: number): InteractionSearchResult[];
 
     /** 分页列出全部 person identities */
     listPersonIdentities(limit?: number, offset?: number): { items: PersonIdentity[]; total: number };
+
+    /** 分页列出全部全局 person profiles */
+    listPersonProfiles(limit?: number, offset?: number): { items: PersonProfile[]; total: number };
 
     /** 列出全部群组画像 */
     listGroupModels(): GroupModel[];
@@ -628,6 +765,7 @@ export interface IMemoryStoreV2 {
     /** 按 messageId 查询单条消息（用于获取不在上下文窗口中的被回复消息） */
     getMessageById(chatId: string, messageId: string): RecentMessageEntry | null;
     getMessagesByIds(chatId: string, messageIds: string[]): RecentMessageEntry[];
+    getMessagesBetweenIds(chatId: string, startMessageId: string, endMessageId: string): RecentMessageEntry[];
 
     /**
      * 对指定群组进行反思总结

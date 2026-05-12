@@ -37,6 +37,7 @@ describe("MemoryStoreV2 构造器", () => {
 
         assert.ok(tables.includes("topics"), "topics table should exist");
         assert.ok(tables.includes("person_identities"), "person_identities table should exist");
+        assert.ok(tables.includes("person_profiles"), "person_profiles table should exist");
         assert.ok(tables.includes("person_group_profiles"), "person_group_profiles table should exist");
         assert.ok(tables.includes("group_models"), "group_models table should exist");
         assert.ok(tables.includes("interactions"), "interactions table should exist");
@@ -211,6 +212,12 @@ describe("storeMessageBatch", () => {
         const row = db.prepare("SELECT reply_to_message_id FROM message_log WHERE message_id = '3' AND chat_id = ?").get("-100");
         assert.equal(row.reply_to_message_id, "2");
     });
+
+    it("getMessagesBetweenIds returns the full chronological window", () => {
+        mem.storeMessageBatch(baseMsgs);
+        const rows = mem.getMessagesBetweenIds("-100", "1", "3");
+        assert.deepEqual(rows.map(row => row.messageId), ["1", "2", "3"]);
+    });
 });
 
 // ─── 5. storeFact ───
@@ -305,6 +312,16 @@ describe("memory search extensions", () => {
             sentiment: "positive",
             significance: 0.8,
         });
+        mem.storeInteraction({
+            date: "2026-01-02T00:00:03Z",
+            chatId: "chat_other",
+            userId: "u1",
+            topicId: null,
+            type: "direct_address",
+            summary: "跨群继续提到 meme_claim",
+            sentiment: "neutral",
+            significance: 0.6,
+        });
     });
 
     after(() => { cleanupTestMemory(mem, "memory-search"); });
@@ -322,14 +339,28 @@ describe("memory search extensions", () => {
     });
 
     it("getUserProfile/getRecentInteractions combine identity, profile and activity", () => {
+        mem.upsertPersonProfile("u1", {
+            traits: ["跨群会接梗"],
+            interests: ["表情包旧梗"],
+            communicationStyle: "跨群短句吐槽",
+            relationToAgent: "全局熟人",
+            stablePatterns: ["喜欢把旧梗带到新语境"],
+            agentPolicyHints: ["可以轻量接梗"],
+            sourceChatIds: ["chat_search"],
+            confidence: 0.8,
+        });
         const profile = mem.getUserProfile("u1", "chat_search");
         const interactions = mem.getRecentInteractions("chat_search", "u1", 5);
+        const crossChatInteractions = mem.getRecentInteractions(undefined, "u1", 5);
         const topic = mem.getTopicById(mem.getRecentTopics("chat_search", 1)[0].id);
 
         assert.equal(profile.identity?.displayName, "Alice");
+        assert.equal(profile.globalProfile?.relationToAgent, "全局熟人");
         assert.equal(profile.groupProfile?.relationToAgent, "会拿旧梗调侃");
         assert.equal(profile.recentFacts[0].category, "anecdote");
         assert.equal(interactions[0].summary, "继续拿表情包旧梗接话");
+        assert.equal(crossChatInteractions[0].chatId, "chat_other");
+        assert.equal(crossChatInteractions.length, 2);
         assert.equal(topic?.callbackPotential, 82);
     });
 });

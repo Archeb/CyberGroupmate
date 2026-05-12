@@ -34,8 +34,12 @@ export function setSkillManagerCallbacks(callbacks: SkillManagerCallbacks): void
     _managerCallbacks = callbacks;
 }
 
-export function installSkills(env: CapabilityRegistryEnv, sentHistory: Map<string, Set<string>>) {
-    const tg = createTelegramClientProxy(env, sentHistory);
+export function installSkills(
+    env: CapabilityRegistryEnv,
+    sentHistory: Map<string, Set<string>>,
+    deduplicateSentMessages = true,
+) {
+    const tg = createTelegramClientProxy(env, sentHistory, deduplicateSentMessages);
     return {
         /** 获取安装/创建新 Skill 的步骤说明（无实际代码动作） */
         install: (name: string) => {

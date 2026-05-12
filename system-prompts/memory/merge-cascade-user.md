@@ -6,12 +6,21 @@
 
 以下每行是一条已合并的记忆摘要，格式为：
 ```
-- [<开始日期>~<结束日期>] 粒度:<week|month|quarter>, 情感:<positive|neutral|negative|mixed>, 交互:<N>次, 亮点:[<亮点1>; <亮点2>], 趋势:<关系趋势 或 "(无)">
+- [<开始日期>~<结束日期>] 粒度:<week|month|quarter>, 情感:<positive|neutral|negative|mixed>, 交互:<N>次, 亮点:[<亮点1>; <亮点2>], 趋势:<关系趋势 或 "(无)">, 模式:[...], 提示:[...], 话题分布:{...}, 类型分布:{...}
 ```
 
 ### 记忆摘要列表
 
 {{lines}}
+
+### 既有记忆基线
+
+以下内容是该用户在全局和当前 chat 中的既有认知，只作为参照：
+- 用来判断待合并摘要是在延续旧模式、强化旧模式、修正旧模式，还是形成新的长期变化。
+- 不要把基线里的内容当成本次合并对象重复输出；输出应主要由“记忆摘要列表”支持。
+- 如果待合并摘要与既有画像冲突，请在 relationshipTrend 中写出变化方向，而不是简单覆盖。
+
+{{existingMemoryContext}}
 
 ## 输出 JSON Schema
 
@@ -21,7 +30,19 @@
 {
   "overallSentiment": "positive|neutral|negative|mixed",
   "highlights": ["string (经过再筛选的重要事件摘要)"],
-  "relationshipTrend": "string (跨越整个时段的关系演变叙事)"
+  "relationshipTrend": "string (跨越整个时段的关系演变叙事)",
+  "stablePatterns": ["string (跨时段稳定互动模式，0-8条)"],
+  "userPreferences": ["string (长期可复用的偏好/雷点/习惯，0-8条)"],
+  "agentPolicyHints": ["string (长期互动策略提示，0-8条)"],
+  "salientEvents": [
+    {
+      "summary": "string (长期尺度仍重要的事件)",
+      "sourceIds": ["string"],
+      "confidence": 0.8
+    }
+  ],
+  "followupCandidates": ["string (长期仍可自然接回的话题或动作，0-8条)"],
+  "confidence": 0.8
 }
 ```
 
@@ -45,3 +66,10 @@
 - ✅ "上月关系升温后本月趋于稳定，形成固定的日常互动模式"
 - ❌ "上周积极，这周也积极"
 - ❌ "关系良好"
+
+### 长期化原则
+- 越往高层级合并，越要删掉短期噪声，只保留长期仍有用的关系规律、偏好、边界和里程碑。
+- agentPolicyHints 应该是未来几周/月仍然适用的互动策略。
+- 如果多个子时段互相矛盾，要在 relationshipTrend 里写出变化轨迹，而不是平均成一句空话。
+- 如果某条规律只在来源群/私聊成立，请保留场景限定；只有明显跨场景稳定的规律才写成无场景限定的长期画像。
+- 不要把私聊细节、敏感事实或跨群来源写成未来可以在任意群公开复述的内容；这类信息应转化为内部策略或保留 sourceIds 供回溯。

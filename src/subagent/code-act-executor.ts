@@ -12,15 +12,15 @@
  */
 
 import type {
+    ActiveUserProfile,
     CodeActReplyTask,
     SubagentCallback,
-    GroupContextPackage,
 } from "./types.js";
-import type { MemoryStoreV2 } from "../memory-v2/index.js";
+import type { FactSearchResult, InteractionSearchResult, MemoryStoreV2, RecentMessageEntry } from "../memory-v2/index.js";
 import { SandboxPool } from "../sandbox/sandbox-pool.js";
 import { NotificationCenter } from "../event/notification-center.js";
 import { runCodeActSession, SentMessageCollector, type SessionResult, type SentMessageRecord } from "../sandbox/session-runner.js";
-import { loadModuleRegistry, lookupFullDocs, generateBriefOverview, type ModuleEntry } from "../sandbox/modules/module-registry.js";
+import { loadModuleRegistry, lookupFullDocs, generateBriefOverview, mergeModuleRegistries, type ModuleEntry } from "../sandbox/modules/module-registry.js";
 import { getMcpModuleEntries } from "../sandbox/modules/mcp-bridge/index.js";
 import { parseAllSkillDocs } from "../sandbox/skill-loader.js";
 import { buildPrefixMap } from "../sandbox/api-intent-extractor.js";
@@ -34,15 +34,102 @@ import { enrichMessages, formatMessageLine, resolveReplyText } from "../core/mes
 import type { MediaDownloader } from "../core/media-downloader.js";
 import type { ChatMessage } from "../core/llm.js";
 import { createLogger } from "../core/logger.js";
-import { getRawId, ensureCompositeId, getPlatform } from "../core/chat-id.js";
+import { getRawId, ensureCompositeId, getPlatform, getGroupModelKey } from "../core/chat-id.js";
 import type { GlobalState } from "../main-agent/global-state.js";
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { shouldCompact, compact as contextManagerCompact } from "../memory-v2/context-manager.js";
-import { formatTsForDisplay } from "../core/timezone.js";
 
 const log = createLogger("code-act-executor");
+
+type PromptFact = FactSearchResult & {
+    displayName?: string;
+    subjectLabel?: string;
+    sourceChatLabel?: string;
+};
+
+type PromptInteraction = InteractionSearchResult & {
+    displayName?: string;
+    userLabel?: string;
+    chatLabel?: string;
+};
+
+function formatUserLabel(memory: MemoryStoreV2 | undefined, userId: string, fallbackName?: string): string {
+    const identity = memory?.getPersonIdentity(userId);
+    const name = identity?.displayName?.trim() || fallbackName?.trim() || userId;
+    return `${name}(${userId})`;
+}
+
+function formatChatLabel(memory: MemoryStoreV2 | undefined, chatId: string, fallbackTitle?: string | null): string {
+    const model = memory?.getGroupModel(getGroupModelKey(chatId));
+    const title = model?.chatTitle?.trim() || fallbackTitle?.trim() || chatId;
+    return `${title}(${chatId})`;
+}
+
+function formatFactForPrompt(fact: PromptFact, memory: MemoryStoreV2 | undefined): string {
+    const subject = fact.subjectLabel ?? formatUserLabel(memory, fact.subject, fact.displayName);
+    const source = fact.sourceChatId
+        ? formatChatLabel(memory, fact.sourceChatId, fact.sourceChatTitle)
+        : fact.sourceChatLabel ?? fact.sourceChatTitle ?? undefined;
+    const sourceParts = [
+        source ? `来源: ${source}` : "",
+        fact.sourceTopicLabel ? `话题: ${fact.sourceTopicLabel}` : "",
+        fact.observedAt ? `观察时间: ${fact.observedAt}` : "",
+        fact.visibility ? `visibility=${fact.visibility}` : "",
+        fact.sensitivity ? `sensitivity=${fact.sensitivity}` : "",
+    ].filter(Boolean).join("；");
+    return `- [${subject} · ${fact.category}] ${fact.content}${sourceParts ? ` (${sourceParts})` : ""}`;
+}
+
+function formatInteractionForPrompt(item: PromptInteraction, memory: MemoryStoreV2 | undefined): string {
+    const user = item.userLabel ?? formatUserLabel(memory, item.userId, item.displayName);
+    const source = item.chatLabel ?? formatChatLabel(memory, item.chatId);
+    return `- [${item.timestamp}] ${user} @ ${source}: ${item.summary} (${item.sentiment}, type=${item.type}, significance=${item.significance})`;
+}
+
+function formatDispatchContextForPrompt(rawContext: string): string {
+    const trimmed = rawContext.trim();
+    if (!trimmed) return "";
+    try {
+        return [
+            "## 派发附加上下文",
+            "```json",
+            JSON.stringify(JSON.parse(trimmed), null, 2),
+            "```",
+        ].join("\n");
+    } catch {
+        return `## 派发附加上下文\n${trimmed}`;
+    }
+}
+
+function hasProfileIdentity(value: unknown): value is Record<string, unknown> {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+    const profile = value as Record<string, unknown>;
+    return [profile.userLabel, profile.displayName, profile.userId]
+        .some(field => typeof field === "string" && field.trim().length > 0);
+}
+
+function sanitizeActiveUserProfiles(profiles: unknown): ActiveUserProfile[] {
+    return Array.isArray(profiles)
+        ? profiles.filter((profile): profile is ActiveUserProfile => hasProfileIdentity(profile))
+        : [];
+}
+
+function looksLikePersonProfileContext(rawContext: string | undefined): boolean {
+    const trimmed = rawContext?.trim();
+    if (!trimmed) return false;
+
+    try {
+        const parsed = JSON.parse(trimmed);
+        if (Array.isArray(parsed)) {
+            return parsed.some(hasProfileIdentity);
+        }
+        return hasProfileIdentity(parsed);
+    } catch {
+        return true;
+    }
+}
 
 // ─── API 概览缓存 ───
 const _apiBriefCache = new Map<string, string>();
@@ -58,7 +145,7 @@ export function refreshModuleRegistryCache(): void {
     const builtin = loadModuleRegistry() || [];
     const mcp = getMcpModuleEntries() || [];
     const skills = parseAllSkillDocs() || [];
-    _moduleRegistryCache = [...builtin, ...mcp, ...skills];
+    _moduleRegistryCache = mergeModuleRegistries(builtin, mcp, skills);
     _apiBriefCache.clear(); // 清除 brief 缓存，强制重新生成
 }
 
@@ -190,6 +277,35 @@ export interface SessionExecutionRecord {
     sentMessages: SentMessageRecord[];
     /** assistant 的思考摘要（去掉代码块后的文本） */
     thinkingSummary: string;
+}
+
+const SESSION_MESSAGE_ID_RE = /\[msgId:([^\]\r\n]+)\]/g;
+
+function extractSeenMessageIds(messages: SessionMessage[]): string[] {
+    const ids: string[] = [];
+    for (const msg of messages) {
+        for (const match of msg.content.matchAll(SESSION_MESSAGE_ID_RE)) {
+            const id = match[1]?.trim();
+            if (id && id !== "?") ids.push(id);
+        }
+    }
+    return ids;
+}
+
+function formatExecutionRecordForCompact(rec: SessionExecutionRecord): string | null {
+    const sentPart = rec.sentMessages.length > 0
+        ? `\n  已发消息: ${rec.sentMessages.map(m => `"${m.text.length > 80 ? m.text.slice(0, 80) + '...' : m.text}"`).join(" / ")}`
+        : "";
+    const thinkingPart = rec.thinkingSummary
+        ? `\n  思路: ${rec.thinkingSummary.slice(0, 200)}`
+        : "";
+
+    if (!sentPart && !thinkingPart && rec.endReason === "end_turn") {
+        return null;
+    }
+
+    const resultPart = rec.endReason === "end_turn" ? "" : `，结果: ${rec.endReason}`;
+    return `- ${rec.timestamp}${resultPart}${sentPart}${thinkingPart}`;
 }
 
 /**
@@ -468,62 +584,35 @@ export class CodeActExecutor {
             const topicSummary = ctx.topicSummary ?? "";
             const toneGuidance = ctx.toneGuidance ?? "";
             const memoryContext = task.memoryContext;
-            const memoryContextText = memoryContext
+            const explicitMemoryContextText = memoryContext
                 ? [
                     memoryContext.facts.length
-                        ? `## 相关事实\n${memoryContext.facts.map((fact) => `- [${fact.displayName ?? fact.subject} · ${fact.category}] ${fact.content}`).join("\n")}`
+                        ? `## 相关事实\n${memoryContext.facts.map((fact) => formatFactForPrompt(fact, this.memory ?? undefined)).join("\n")}`
                         : "",
                     memoryContext.topics.length
-                        ? `## 相关历史话题\n${memoryContext.topics.map((topic) => `- [${topic.startedAt}] ${topic.label} — ${topic.summary} (topicId: ${topic.topicId})`).join("\n")}`
+                        ? `## 相关历史话题\n${memoryContext.topics.map((topic) => `- [${topic.startedAt}] ${topic.label} — ${topic.summary} (topicId: ${topic.topicId}; 来源: ${formatChatLabel(this.memory ?? undefined, topic.chatId)})`).join("\n")}`
                         : "",
                     memoryContext.interactions.length
-                        ? `## 近期互动\n${memoryContext.interactions.map((item) => `- [${item.timestamp}] ${(item as any).displayName ?? item.userId}: ${item.summary} (${item.sentiment})`).join("\n")}`
+                        ? `## 近期互动\n${memoryContext.interactions.map((item) => formatInteractionForPrompt(item, this.memory ?? undefined)).join("\n")}`
                         : "",
                 ].filter(Boolean).join("\n\n")
                 : "";
+            const activeUserProfiles = sanitizeActiveUserProfiles(ctx.activeUserProfiles);
+            const activeProfilesContext = activeUserProfiles.length
+                ? JSON.stringify(activeUserProfiles)
+                : "";
+            const legacyPersonContext = typeof ctx.personContext === "string" ? ctx.personContext : undefined;
+            const legacyIsPersonContext = looksLikePersonProfileContext(legacyPersonContext);
+            const dispatchContextRaw = typeof ctx.dispatchContext === "string"
+                ? ctx.dispatchContext
+                : (activeProfilesContext || !legacyIsPersonContext ? legacyPersonContext : undefined);
+            const dispatchContextText = dispatchContextRaw
+                ? formatDispatchContextForPrompt(dispatchContextRaw)
+                : "";
+            const memoryContextText = [explicitMemoryContextText, dispatchContextText].filter(Boolean).join("\n\n");
 
-            // personContext: dispatch-handler 留空，此处从 recentMessages 发言者查询 memory
-            let personContext = ctx.personContext ?? "";
-            if (!personContext && ctx.activeUserProfiles?.length) {
-                personContext = JSON.stringify(ctx.activeUserProfiles);
-            }
-            if (!personContext && this.memory && ctx.recentMessages && ctx.recentMessages.length > 0) {
-                try {
-                    const senderNames = ctx.recentMessages.map(m => m.sender);
-                    const uniqueSenders = [...new Set(senderNames)].slice(0, 10);
-                    // 通过 getProfilesForChat 获取群内画像，按 displayName 匹配发言者
-                    const allProfiles = this.memory.getProfilesForChat(this.chatId);
-                    const relevantProfiles: any[] = [];
-                    for (const name of uniqueSenders) {
-                        // 先找 identity（按 displayName 匹配）
-                        const profile = allProfiles.find((p: any) =>
-                            p.userId && this.memory!.getPersonIdentity(p.userId)?.displayName === name
-                        );
-                        if (profile) {
-                            const identity = this.memory.getPersonIdentity(profile.userId);
-                            const rawId = getRawId(profile.userId);
-                            const username = identity?.username ?? undefined;
-                            const mention = this.formatMentionFn?.(rawId, username);
-                            relevantProfiles.push({
-                                displayName: identity?.displayName ?? name,
-                                aliases: identity?.aliases ?? [],
-                                userId: rawId,
-                                ...(mention ? { mention } : {}),
-                                dunbarTier: profile.dunbarTier,
-                                traits: profile.traits,
-                                interests: profile.interests,
-                                communicationStyle: profile.communicationStyle,
-                                relationToAgent: profile.relationToAgent,
-                            });
-                        }
-                    }
-                    if (relevantProfiles.length > 0) {
-                        personContext = JSON.stringify(relevantProfiles);
-                    }
-                } catch (err) {
-                    log.debug("personContext 查询失败", { chatId: this.chatId, error: String(err) });
-                }
-            }
+            // personContext: Meta 侧构造 activeUserProfiles；这里交给 provider 做 delta 与 Markdown 渲染
+            const personContext = activeProfilesContext || (legacyIsPersonContext ? legacyPersonContext : "");
 
             // 3. 消息富化：媒体处理 + 格式化（委托 message-enricher）
             const recentMessages = ctx.recentMessages ?? [];
@@ -609,9 +698,11 @@ export class CodeActExecutor {
 
         const sentCollector = new SentMessageCollector();
         const sandbox = await this.sandboxPool!.acquire(this.chatId);
+        const deduplicateSentMessages = currentConfig.subagent?.deduplicateSentMessages !== false;
 
         // 设置平台标识，供 capability-registry 和 scene.current 使用
         await sandbox.execute(`__setPlatform(${JSON.stringify(platform)})`, 5000);
+        await sandbox.execute(`__setDuplicateMessageBlocking(${JSON.stringify(deduplicateSentMessages)})`, 5000);
         // 注册 notify 监听器收集已发消息
         const rawChatId = getRawId(this.chatId);
         const notifyListener = (event: Record<string, unknown>) => {
@@ -1086,6 +1177,7 @@ export class CodeActExecutor {
                 executionCount: this.executionCount,
                 lastCompactedAt: this.lastCompactedAt,
                 lastAgentReplyAt: this.lastAgentReplyAt,
+                contextLedger: this.contextEngine.ledger.toSnapshot(),
                 savedAt: new Date().toISOString(),
             };
 
@@ -1136,6 +1228,7 @@ export class CodeActExecutor {
             this.executionCount = typeof state.executionCount === "number" ? state.executionCount : 0;
             this.lastCompactedAt = state.lastCompactedAt ?? null;
             this.lastAgentReplyAt = typeof state.lastAgentReplyAt === "number" ? state.lastAgentReplyAt : 0;
+            this.contextEngine.ledger.loadSnapshot(state.contextLedger);
 
             log.info("loadSession: 已恢复", {
                 chatId: this.chatId,
@@ -1154,6 +1247,83 @@ export class CodeActExecutor {
         }
     }
 
+    private rebuildCompactedInteractionHistory(compactedMessages: SessionMessage[]): string | null {
+        if (!this.memory || compactedMessages.length === 0) return null;
+
+        const seenMessageIds = extractSeenMessageIds(compactedMessages);
+        if (seenMessageIds.length === 0) return null;
+
+        const firstMessageId = seenMessageIds[0];
+        const lastMessageId = seenMessageIds[seenMessageIds.length - 1];
+        let messages = this.memory.getMessagesBetweenIds(this.chatId, firstMessageId, lastMessageId);
+        let source = `memory range ${firstMessageId}..${lastMessageId}`;
+
+        if (messages.length === 0) {
+            // 边界消息缺失时退化为按已见 id 批量读取；这不能补回 agent 插话，
+            // 但至少比完全丢失被 compact 的原文更好。
+            const uniqueIds = [...new Set(seenMessageIds)];
+            messages = this.memory.getMessagesByIds(this.chatId, uniqueIds);
+            source = `memory ids ${uniqueIds.length}`;
+        }
+
+        if (messages.length === 0) return null;
+
+        const formatted = this.formatMemoryMessagesForHistory(messages);
+        if (!formatted) return null;
+
+        log.info("compactSession: 已从 memory 重建交互历史", {
+            chatId: this.chatId,
+            firstMessageId,
+            lastMessageId,
+            messages: messages.length,
+            source,
+        });
+
+        return [
+            "== 被压缩的交互历史（从 memory 重建） ==",
+            `范围: msgId:${firstMessageId} → msgId:${lastMessageId}；共 ${messages.length} 条`,
+            formatted,
+        ].join("\n");
+    }
+
+    private formatMemoryMessagesForHistory(messages: RecentMessageEntry[]): string {
+        const msgIdToName = new Map<string, string>();
+        for (const msg of messages) {
+            msgIdToName.set(msg.messageId, msg.displayName || `(uid:${msg.userId})`);
+        }
+
+        return messages.map(msg => {
+            let replyTo: string | undefined;
+            let replyToText: string | undefined;
+            if (msg.replyToMessageId) {
+                replyTo = msgIdToName.get(msg.replyToMessageId);
+                if (!replyTo && this.memory) {
+                    const replied = this.memory.getMessageById(this.chatId, msg.replyToMessageId);
+                    if (replied) {
+                        replyTo = replied.displayName || `(uid:${replied.userId})`;
+                        replyToText = replied.text || undefined;
+                    }
+                }
+                replyTo ??= `msg#${msg.replyToMessageId}`;
+            }
+
+            return formatMessageLine({
+                id: msg.messageId,
+                sender: msg.displayName || `(uid:${msg.userId})`,
+                text: msg.text,
+                timestamp: msg.timestamp,
+                replyTo,
+                replyToMsgId: msg.replyToMessageId,
+                replyToText,
+                mediaType: msg.mediaType,
+                mediaInfo: msg.mediaInfo,
+            }, {
+                includeMediaTags: true,
+                stickerDescriptionLookup: this.memory ?? undefined,
+            });
+        }).join("\n");
+    }
+
     /**
      * Fix 3: 两层智能 Compact
      *
@@ -1167,30 +1337,27 @@ export class CodeActExecutor {
     private async compactSession(): Promise<void> {
         const keep = Math.max(4, Math.floor(this.config.maxSessionMessages * 0.4));
         if (this.session.length <= keep) return;
+        const compactedMessages = this.session.slice(0, -keep);
+        const recentMessages = this.session.slice(-keep);
 
         // ═══ Layer 1: 结构化快速 compact ═══
         // 从 executionRecords 构建摘要
         const recordSummaries: string[] = [];
         for (const rec of this.executionRecords) {
-            const sentPart = rec.sentMessages.length > 0
-                ? `\n  已发消息: ${rec.sentMessages.map(m => `"${m.text.length > 80 ? m.text.slice(0, 80) + '...' : m.text}"`).join(" / ")}`
-                : "";
-            const thinkingPart = rec.thinkingSummary
-                ? `\n  思路: ${rec.thinkingSummary.slice(0, 200)}`
-                : "";
-            recordSummaries.push(
-                `- Task ${rec.taskId} (${rec.timestamp}): ${rec.endReason}, ${rec.turns} turns${sentPart}${thinkingPart}`
-            );
+            const summary = formatExecutionRecordForCompact(rec);
+            if (summary) recordSummaries.push(summary);
         }
 
         // 从 session 中提取所有 [📤 已发送消息确认] 段落（fallback，兜底 executionRecords 之外的）
         const sentConfirmations: string[] = [];
-        for (const msg of this.session) {
+        for (const msg of compactedMessages) {
             if (msg.role === "user" && msg.content.includes("[📤 已发送消息确认]")) {
                 const lines = msg.content.split("\n").filter(l => l.startsWith("- 发送到"));
                 sentConfirmations.push(...lines);
             }
         }
+
+        const rebuiltInteractionHistory = this.rebuildCompactedInteractionHistory(compactedMessages);
 
         // 构建 compact 摘要
         let compactContent = `[SESSION_HISTORY_COMPACT]\n== 之前执行了 ${this.executionCount} 次任务 ==`;
@@ -1201,6 +1368,9 @@ export class CodeActExecutor {
             // 如果没有 executionRecords（旧数据），用 session 中提取的兜底
             compactContent += `\n\n== 历史已发消息 ==\n${sentConfirmations.join("\n")}`;
         }
+        if (rebuiltInteractionHistory) {
+            compactContent += `\n\n${rebuiltInteractionHistory}`;
+        }
 
         const compactMsg: SessionMessage = {
             role: "user",
@@ -1209,7 +1379,7 @@ export class CodeActExecutor {
         };
 
         // 保留最近 keep 条消息 + compact 摘要
-        this.session = [compactMsg, ...this.session.slice(-keep)];
+        this.session = [compactMsg, ...recentMessages];
         // 清理已被 compact 的 executionRecords（保留最近 3 条）
         if (this.executionRecords.length > 3) {
             this.executionRecords = this.executionRecords.slice(-3);

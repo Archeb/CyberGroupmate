@@ -33,9 +33,17 @@ let sentHistory: Map<string, Set<string>> | null = null;
 /** 当前平台标识（由 host 在执行前设置） */
 let currentPlatform: string = "telegram";
 
+/** 当前 worker 是否启用重复发送拦截。默认开启。 */
+let currentDeduplicateSentMessages = true;
+
 /** 设置当前平台（由 sandbox-worker 调用） */
 export function setPlatform(platform: string): void {
     currentPlatform = platform;
+}
+
+/** 设置重复发送拦截开关（由 sandbox-worker 调用）。 */
+export function setDuplicateMessageBlocking(enabled: boolean): void {
+    currentDeduplicateSentMessages = enabled !== false;
 }
 
 /** 获取当前平台（供 scene.ts 等内部模块使用） */
@@ -63,17 +71,17 @@ export function installCapabilityRegistry(env: CapabilityRegistryEnv): Record<st
     let onebot: unknown = undefined;
 
     if (platform === "discord") {
-        discord = createDiscordClientProxy(env, sentHistory);
+        discord = createDiscordClientProxy(env, sentHistory, currentDeduplicateSentMessages);
     } else if (platform === "onebot") {
-        onebot = createOneBotClientProxy(env, sentHistory);
+        onebot = createOneBotClientProxy(env, sentHistory, currentDeduplicateSentMessages);
     } else {
         // 默认 telegram（向后兼容）
-        telegram = createTelegramClientProxy(env, sentHistory);
+        telegram = createTelegramClientProxy(env, sentHistory, currentDeduplicateSentMessages);
     }
 
     return {
         runtime: installRuntime(env),
-        skills: installSkills(env, sentHistory),
+        skills: installSkills(env, sentHistory, currentDeduplicateSentMessages),
         telegram,
         discord,
         onebot,

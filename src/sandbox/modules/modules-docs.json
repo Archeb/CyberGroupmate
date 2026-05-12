@@ -157,7 +157,7 @@
       {
         "name": "searchFacts",
         "brief": "searchFacts(query, options?)",
-        "fullDoc": "```typescript\nsearchFacts(query: string, options?: {\n        subject?: string;\n        categories?: string[];\n        limit?: number;\n    }): Promise<Array<{\n        factId: string;\n        subject: string;\n        category: string;\n        content: string;\n        confidence: number;\n        updatedAt: string;\n    }>>\n```"
+        "fullDoc": "```typescript\nsearchFacts(query: string, options?: {\n        subject?: string;\n        categories?: string[];\n        limit?: number;\n    }): Promise<Array<{\n        factId: string;\n        subject: string;\n        category: string;\n        content: string;\n        confidence: number;\n        sourceChatId?: string | null;\n        sourceChatTitle?: string | null;\n        sourceTopicId?: string | null;\n        sourceTopicLabel?: string | null;\n        sourceMessageIds?: string[];\n        sourceInteractionIds?: string[];\n        observedAt?: string | null;\n        visibility?: \"private\" | \"contextual\" | \"public\";\n        sensitivity?: \"low\" | \"medium\" | \"high\";\n        updatedAt: string;\n    }>>\n```"
       },
       {
         "name": "searchTopics",
@@ -172,12 +172,22 @@
       {
         "name": "getUserProfile",
         "brief": "getUserProfile(userId, chatId?)",
-        "fullDoc": "```typescript\ngetUserProfile(userId: string, chatId?: string): Promise<{\n        identity: {\n            userId: string;\n            displayName: string;\n            username?: string;\n            aliases: string[];\n        } | null;\n        groupProfile: {\n            dunbarTier: number;\n            affinityScore: number;\n            traits: string[];\n            communicationStyle: string;\n            relationToAgent: string;\n        } | null;\n        recentFacts: Array<{\n            factId: string;\n            category: string;\n            content: string;\n        }>;\n    }>\n```"
+        "fullDoc": "```typescript\ngetUserProfile(userId: string, chatId?: string): Promise<{\n        identity: {\n            userId: string;\n            displayName: string;\n            username?: string;\n            aliases: string[];\n        } | null;\n        globalProfile: {\n            traits: string[];\n            interests: string[];\n            communicationStyle: string;\n            relationToAgent: string;\n            stablePatterns: string[];\n            agentPolicyHints: string[];\n            followupCandidates: string[];\n            sourceChatIds: string[];\n            confidence: number;\n        } | null;\n        groupProfile: {\n            dunbarTier: number;\n            affinityScore: number;\n            traits: string[];\n            interests: string[];\n            communicationStyle: string;\n            relationToAgent: string;\n            recentEpisodes: Array<{\n                date: string;\n                type: string;\n                summary: string;\n                topicLabel?: string;\n                evidence?: string[];\n                agentOutcome?: string;\n                confidence?: number;\n            }>;\n            mergedMemory: Array<{\n                periodStart: string;\n                periodEnd: string;\n                granularity: string;\n                relationshipTrend: string;\n                highlights: string[];\n                stablePatterns?: string[];\n                agentPolicyHints?: string[];\n                followupCandidates?: string[];\n            }>;\n        } | null;\n        recentFacts: Array<{\n            factId: string;\n            category: string;\n            content: string;\n            sourceChatId?: string | null;\n            sourceChatTitle?: string | null;\n            sourceTopicLabel?: string | null;\n            observedAt?: string | null;\n            visibility?: \"private\" | \"contextual\" | \"public\";\n            sensitivity?: \"low\" | \"medium\" | \"high\";\n        }>;\n    }>\n```"
       },
       {
         "name": "getRecentInteractions",
         "brief": "getRecentInteractions(chatId?, userId?, limit?)",
-        "fullDoc": "```typescript\ngetRecentInteractions(chatId?: string, userId?: string, limit?: number): Promise<Array<{\n        timestamp: string;\n        chatId: string;\n        userId: string;\n        type: string;\n        summary: string;\n        sentiment: string;\n        significance: number;\n    }>>\n```"
+        "fullDoc": "```typescript\ngetRecentInteractions(chatId?: string, userId?: string, limit?: number): Promise<Array<{\n        timestamp: string;\n        chatId: string;\n        chatLabel?: string;\n        userId: string;\n        displayName?: string;\n        userLabel?: string;\n        type: string;\n        summary: string;\n        sentiment: string;\n        significance: number;\n    }>>\n```"
+      },
+      {
+        "name": "resolvePerson",
+        "brief": "resolvePerson(query, options?)",
+        "fullDoc": "```typescript\nresolvePerson(query: string, options?: {\n        chatId?: string;\n        limit?: number;\n    }): Promise<{\n        matches: MemoryPersonMatch[];\n    }>\n```"
+      },
+      {
+        "name": "getPersonDossier",
+        "brief": "getPersonDossier(queryOrUserId, options?)",
+        "fullDoc": "```typescript\ngetPersonDossier(queryOrUserId: string, options?: {\n        chatId?: string;\n        /** 默认 3，最大 10。 */\n        limit?: number;\n        factsLimit?: number;\n        interactionsLimit?: number;\n        topicsLimit?: number;\n        messagesLimit?: number;\n        groupProfilesLimit?: number;\n    }): Promise<{\n        dossiers: Array<{\n            match: MemoryPersonMatch;\n            groupProfiles: Array<{\n                userId: string;\n                chatId: string;\n                chatTitle?: string;\n                isDirectMessage?: boolean;\n                dunbarTier: number;\n                affinityScore: number;\n                traits: string[];\n                interests: string[];\n                communicationStyle: string;\n                relationToAgent: string;\n                messageCount: number;\n                lastSeenAt: string;\n            }>;\n            facts: Array<{\n                id: string;\n                subject: string;\n                category: string;\n                content: string;\n                confidence: number;\n                sourceChatId?: string | null;\n                sourceChatTitle?: string | null;\n                sourceTopicLabel?: string | null;\n                observedAt?: string | null;\n                visibility?: \"private\" | \"contextual\" | \"public\";\n                sensitivity?: \"low\" | \"medium\" | \"high\";\n                updatedAt: string;\n            }>;\n            recentInteractions: Array<{\n                timestamp: string;\n                chatId: string;\n                userId: string;\n                type: string;\n                summary: string;\n                sentiment: string;\n                significance: number;\n            }>;\n            recentTopics: Array<{\n                topicId: string;\n                chatId: string;\n                label: string;\n                summary: string;\n                keywords: string[];\n                participants: string[];\n                startedAt: string;\n                endedAt: string | null;\n                callbackPotential: number;\n            }>;\n            recentMessages: Array<{\n                messageId: string;\n                chatId: string;\n                userId: string;\n                displayName: string;\n                content: string;\n                timestamp: string;\n            }>;\n        }>;\n    }>\n```"
       },
       {
         "name": "semanticSearch",
@@ -185,12 +195,42 @@
         "fullDoc": "```typescript\nsemanticSearch(query: string, options?: {\n        scope?: \"facts\" | \"topics\" | \"all\";\n        limit?: number;\n    }): Promise<Array<{\n        type: \"fact\" | \"topic\";\n        content: string;\n        score: number;\n    }>>\n```"
       }
     ],
-    "typeDefs": "interface MemoryModule {\n    searchFacts(query: string, options?: {\n        subject?: string;\n        categories?: string[];\n        limit?: number;\n    }): Promise<Array<{\n        factId: string;\n        subject: string;\n        category: string;\n        content: string;\n        confidence: number;\n        updatedAt: string;\n    }>>;\n\n    searchTopics(query: string, options?: {\n        chatId?: string;\n        after?: string;\n        before?: string;\n        limit?: number;\n    }): Promise<Array<{\n        topicId: string;\n        chatId: string;\n        label: string;\n        summary: string;\n        keywords: string[];\n        participants: string[];\n        startedAt: string;\n        endedAt: string | null;\n        callbackPotential: number;\n    }>>;\n\n    searchMessages(query: string, options?: {\n        chatId?: string;\n        userId?: string;\n        after?: string;\n        before?: string;\n        limit?: number;\n    }): Promise<Array<{\n        messageId: string;\n        chatId: string;\n        userId: string;\n        displayName: string;\n        content: string;\n        timestamp: string;\n    }>>;\n\n    getUserProfile(userId: string, chatId?: string): Promise<{\n        identity: {\n            userId: string;\n            displayName: string;\n            username?: string;\n            aliases: string[];\n        } | null;\n        groupProfile: {\n            dunbarTier: number;\n            affinityScore: number;\n            traits: string[];\n            communicationStyle: string;\n            relationToAgent: string;\n        } | null;\n        recentFacts: Array<{\n            factId: string;\n            category: string;\n            content: string;\n        }>;\n    }>;\n\n    getRecentInteractions(chatId?: string, userId?: string, limit?: number): Promise<Array<{\n        timestamp: string;\n        chatId: string;\n        userId: string;\n        type: string;\n        summary: string;\n        sentiment: string;\n        significance: number;\n    }>>;\n\n    semanticSearch(query: string, options?: {\n        scope?: \"facts\" | \"topics\" | \"all\";\n        limit?: number;\n    }): Promise<Array<{\n        type: \"fact\" | \"topic\";\n        content: string;\n        score: number;\n    }>>;\n}"
+    "typeDefs": "type MemoryPersonMatchType =\n    | \"exact_user_id\"\n    | \"exact_display_name\"\n    | \"exact_alias\"\n    | \"exact_username\"\n    | \"partial_display_name\"\n    | \"partial_alias\"\n    | \"partial_username\"\n    | \"fact_subject\"\n    | \"topic_participant\";\n\ninterface MemoryPersonMatch {\n    identity: {\n        userId: string;\n        displayName: string;\n        username?: string;\n        aliases: string[];\n        totalMessageCount: number;\n        lastSeenAt: string;\n        firstSeenAt: string;\n        updatedAt: string;\n    };\n    profile: {\n        identity: {\n            userId: string;\n            displayName: string;\n            username?: string;\n            aliases: string[];\n        } | null;\n        globalProfile: {\n            traits: string[];\n            interests: string[];\n            communicationStyle: string;\n            relationToAgent: string;\n            stablePatterns: string[];\n            agentPolicyHints: string[];\n            followupCandidates: string[];\n            sourceChatIds: string[];\n            confidence: number;\n        } | null;\n        groupProfile: unknown | null;\n        recentFacts: Array<{\n            factId: string;\n            category: string;\n            content: string;\n            sourceChatId?: string | null;\n            sourceChatTitle?: string | null;\n            sourceTopicLabel?: string | null;\n            observedAt?: string | null;\n            visibility?: \"private\" | \"contextual\" | \"public\";\n            sensitivity?: \"low\" | \"medium\" | \"high\";\n        }>;\n    };\n    matchType: MemoryPersonMatchType;\n    score: number;\n    reasons: string[];\n}\n\ninterface MemoryModule {\n    searchFacts(query: string, options?: {\n        subject?: string;\n        categories?: string[];\n        limit?: number;\n    }): Promise<Array<{\n        factId: string;\n        subject: string;\n        category: string;\n        content: string;\n        confidence: number;\n        sourceChatId?: string | null;\n        sourceChatTitle?: string | null;\n        sourceTopicId?: string | null;\n        sourceTopicLabel?: string | null;\n        sourceMessageIds?: string[];\n        sourceInteractionIds?: string[];\n        observedAt?: string | null;\n        visibility?: \"private\" | \"contextual\" | \"public\";\n        sensitivity?: \"low\" | \"medium\" | \"high\";\n        updatedAt: string;\n    }>>;\n\n    searchTopics(query: string, options?: {\n        chatId?: string;\n        after?: string;\n        before?: string;\n        limit?: number;\n    }): Promise<Array<{\n        topicId: string;\n        chatId: string;\n        label: string;\n        summary: string;\n        keywords: string[];\n        participants: string[];\n        startedAt: string;\n        endedAt: string | null;\n        callbackPotential: number;\n    }>>;\n\n    searchMessages(query: string, options?: {\n        chatId?: string;\n        userId?: string;\n        after?: string;\n        before?: string;\n        limit?: number;\n    }): Promise<Array<{\n        messageId: string;\n        chatId: string;\n        userId: string;\n        displayName: string;\n        content: string;\n        timestamp: string;\n    }>>;\n\n    getUserProfile(userId: string, chatId?: string): Promise<{\n        identity: {\n            userId: string;\n            displayName: string;\n            username?: string;\n            aliases: string[];\n        } | null;\n        globalProfile: {\n            traits: string[];\n            interests: string[];\n            communicationStyle: string;\n            relationToAgent: string;\n            stablePatterns: string[];\n            agentPolicyHints: string[];\n            followupCandidates: string[];\n            sourceChatIds: string[];\n            confidence: number;\n        } | null;\n        groupProfile: {\n            dunbarTier: number;\n            affinityScore: number;\n            traits: string[];\n            interests: string[];\n            communicationStyle: string;\n            relationToAgent: string;\n            recentEpisodes: Array<{\n                date: string;\n                type: string;\n                summary: string;\n                topicLabel?: string;\n                evidence?: string[];\n                agentOutcome?: string;\n                confidence?: number;\n            }>;\n            mergedMemory: Array<{\n                periodStart: string;\n                periodEnd: string;\n                granularity: string;\n                relationshipTrend: string;\n                highlights: string[];\n                stablePatterns?: string[];\n                agentPolicyHints?: string[];\n                followupCandidates?: string[];\n            }>;\n        } | null;\n        recentFacts: Array<{\n            factId: string;\n            category: string;\n            content: string;\n            sourceChatId?: string | null;\n            sourceChatTitle?: string | null;\n            sourceTopicLabel?: string | null;\n            observedAt?: string | null;\n            visibility?: \"private\" | \"contextual\" | \"public\";\n            sensitivity?: \"low\" | \"medium\" | \"high\";\n        }>;\n    }>;\n\n    getRecentInteractions(chatId?: string, userId?: string, limit?: number): Promise<Array<{\n        timestamp: string;\n        chatId: string;\n        chatLabel?: string;\n        userId: string;\n        displayName?: string;\n        userLabel?: string;\n        type: string;\n        summary: string;\n        sentiment: string;\n        significance: number;\n    }>>;\n\n    resolvePerson(query: string, options?: {\n        chatId?: string;\n        limit?: number;\n    }): Promise<{\n        matches: MemoryPersonMatch[];\n    }>;\n\n    getPersonDossier(queryOrUserId: string, options?: {\n        chatId?: string;\n        /** 默认 3，最大 10。 */\n        limit?: number;\n        factsLimit?: number;\n        interactionsLimit?: number;\n        topicsLimit?: number;\n        messagesLimit?: number;\n        groupProfilesLimit?: number;\n    }): Promise<{\n        dossiers: Array<{\n            match: MemoryPersonMatch;\n            groupProfiles: Array<{\n                userId: string;\n                chatId: string;\n                chatTitle?: string;\n                isDirectMessage?: boolean;\n                dunbarTier: number;\n                affinityScore: number;\n                traits: string[];\n                interests: string[];\n                communicationStyle: string;\n                relationToAgent: string;\n                messageCount: number;\n                lastSeenAt: string;\n            }>;\n            facts: Array<{\n                id: string;\n                subject: string;\n                category: string;\n                content: string;\n                confidence: number;\n                sourceChatId?: string | null;\n                sourceChatTitle?: string | null;\n                sourceTopicLabel?: string | null;\n                observedAt?: string | null;\n                visibility?: \"private\" | \"contextual\" | \"public\";\n                sensitivity?: \"low\" | \"medium\" | \"high\";\n                updatedAt: string;\n            }>;\n            recentInteractions: Array<{\n                timestamp: string;\n                chatId: string;\n                userId: string;\n                type: string;\n                summary: string;\n                sentiment: string;\n                significance: number;\n            }>;\n            recentTopics: Array<{\n                topicId: string;\n                chatId: string;\n                label: string;\n                summary: string;\n                keywords: string[];\n                participants: string[];\n                startedAt: string;\n                endedAt: string | null;\n                callbackPotential: number;\n            }>;\n            recentMessages: Array<{\n                messageId: string;\n                chatId: string;\n                userId: string;\n                displayName: string;\n                content: string;\n                timestamp: string;\n            }>;\n        }>;\n    }>;\n\n    semanticSearch(query: string, options?: {\n        scope?: \"facts\" | \"topics\" | \"all\";\n        limit?: number;\n    }): Promise<Array<{\n        type: \"fact\" | \"topic\";\n        content: string;\n        score: number;\n    }>>;\n}"
   },
   {
     "name": "onebot",
     "description": "onebot.d.ts — QQ / OneBot 平台 API 系统注入的 OneBot host proxy 接口。 也会以 `qq` 别名暴露给 sandbox。",
     "methods": [
+      {
+        "name": "useMessages",
+        "brief": "加载 OneBot/NapCat 消息指南。用于消息检索、历史消息、已读、转发、合并转发和消息表情点赞等成组能力；调用本方法只披露指南。",
+        "fullDoc": "```typescript\nuseMessages(): Promise<string>\n```\n\n\n加载 OneBot/NapCat 消息指南。用于消息检索、历史消息、已读、转发、合并转发和消息表情点赞等成组能力；调用本方法只披露指南。"
+      },
+      {
+        "name": "useGroupAdministration",
+        "brief": "加载 OneBot/NapCat 群管理指南。用于群资料、成员列表、禁言、踢人、管理员、公告、精华消息和群待办等成组能力；调用本方法只披露指南。",
+        "fullDoc": "```typescript\nuseGroupAdministration(): Promise<string>\n```\n\n\n加载 OneBot/NapCat 群管理指南。用于群资料、成员列表、禁言、踢人、管理员、公告、精华消息和群待办等成组能力；调用本方法只披露指南。"
+      },
+      {
+        "name": "useFiles",
+        "brief": "加载 OneBot/NapCat 文件指南。用于图片/语音/文件解析、群文件系统、文件 URL 和跨机器媒体处理注意事项；调用本方法只披露指南。",
+        "fullDoc": "```typescript\nuseFiles(): Promise<string>\n```\n\n\n加载 OneBot/NapCat 文件指南。用于图片/语音/文件解析、群文件系统、文件 URL 和跨机器媒体处理注意事项；调用本方法只披露指南。"
+      },
+      {
+        "name": "useUsersAndProfile",
+        "brief": "加载 OneBot/NapCat 用户与资料指南。用于好友列表、陌生人资料、最近会话、点赞、好友请求和账号资料等成组能力；调用本方法只披露指南。",
+        "fullDoc": "```typescript\nuseUsersAndProfile(): Promise<string>\n```\n\n\n加载 OneBot/NapCat 用户与资料指南。用于好友列表、陌生人资料、最近会话、点赞、好友请求和账号资料等成组能力；调用本方法只披露指南。"
+      },
+      {
+        "name": "useSystemUtilities",
+        "brief": "加载 OneBot/NapCat 工具指南。用于版本/状态探测、发送能力检查、OCR、URL 安全检查、频道资料和 AI 语音等低频能力；调用本方法只披露指南。",
+        "fullDoc": "```typescript\nuseSystemUtilities(): Promise<string>\n```\n\n\n加载 OneBot/NapCat 工具指南。用于版本/状态探测、发送能力检查、OCR、URL 安全检查、频道资料和 AI 语音等低频能力；调用本方法只披露指南。"
+      },
+      {
+        "name": "getMessage",
+        "brief": "根据 OneBot 消息 ID 获取消息详情。",
+        "fullDoc": "```typescript\ngetMessage(messageId: string | number): Promise<OneBotRawMessage>\n```\n\n\n根据 OneBot 消息 ID 获取消息详情。\n\n**示例：**\n```typescript\nconst msg = await onebot.getMessage(794582600);\n```"
+      },
       {
         "name": "sendText",
         "brief": "发送文本消息。",
@@ -228,11 +268,11 @@
       },
       {
         "name": "downloadMedia",
-        "brief": "下载媒体到本地 workspace/Downloads/。",
-        "fullDoc": "```typescript\ndownloadMedia(mediaRef: string): Promise<string>\n```\n\n\n下载媒体到本地 workspace/Downloads/。\n\n**示例：**\n```typescript\nconst localPath = await onebot.downloadMedia(mediaRef);\n```"
+        "brief": "下载 QQ 媒体到 CyberGroupmate 本机 workspace/Downloads/。 mediaRef 可以是图片/媒体 file、URL、base64/data URL，也可以直接传 OneBot 消息 ID； 传消息 ID 时会通过 NapCat get_msg 解析消息里的图片/媒体段。",
+        "fullDoc": "```typescript\ndownloadMedia(mediaRef: string | number): Promise<string>\n```\n\n\n下载 QQ 媒体到 CyberGroupmate 本机 workspace/Downloads/。\nmediaRef 可以是图片/媒体 file、URL、base64/data URL，也可以直接传 OneBot 消息 ID；\n传消息 ID 时会通过 NapCat get_msg 解析消息里的图片/媒体段。\n\n**示例：**\n```typescript\nconst localPath = await onebot.downloadMedia(794582600);\n```"
       }
     ],
-    "typeDefs": "interface OneBotMessageAck {\n    message_id?: unknown;\n    id?: unknown;\n    chatId?: string | number;\n    group_id?: string | number;\n    user_id?: string | number;\n}\n\ninterface OneBotMediaPayload {\n    type?: string;\n    file?: string;\n    url?: string;\n    caption?: string;\n    fileName?: string;\n}"
+    "typeDefs": "interface OneBotMessageAck {\n    message_id?: unknown;\n    id?: unknown;\n    chatId?: string | number;\n    group_id?: string | number;\n    user_id?: string | number;\n}\n\ninterface OneBotMediaPayload {\n    type?: string;\n    file?: string;\n    url?: string;\n    caption?: string;\n    fileName?: string;\n}\n\ninterface OneBotRawMessage {\n    message_id?: string | number;\n    real_id?: string | number;\n    time?: number;\n    message_type?: \"private\" | \"group\" | string;\n    sender?: Record<string, unknown>;\n    message?: unknown;\n    raw_message?: string;\n    [key: string]: unknown;\n}"
   },
   {
     "name": "runtime",
@@ -392,6 +432,56 @@
     "description": "telegram.d.ts — Telegram 平台 API 这是系统注入的 Telegram host proxy 的接口子集。 提供给 Agent 在 sandbox 执行时作为 TypeScript 强类型上下文参考。 平台连接与消息监听由宿主侧官方 adapter 管理。",
     "methods": [
       {
+        "name": "useInlineBot",
+        "brief": "加载 inline bot 使用指南。用于像 Telegram 客户端输入 `@bot query` 一样查询 inline bot 并发送某个结果；调用本方法只披露指南，不会执行实际发送。",
+        "fullDoc": "```typescript\nuseInlineBot(): Promise<string>\n```\n\n\n加载 inline bot 使用指南。用于像 Telegram 客户端输入 `@bot query` 一样查询 inline bot 并发送某个结果；调用本方法只披露指南，不会执行实际发送。"
+      },
+      {
+        "name": "useStories",
+        "brief": "加载 Stories 使用指南。用于读取、发布、编辑、删除、置顶 Story，以及查看互动和观看者；调用本方法只披露指南，不会执行实际 Story 操作。",
+        "fullDoc": "```typescript\nuseStories(): Promise<string>\n```\n\n\n加载 Stories 使用指南。用于读取、发布、编辑、删除、置顶 Story，以及查看互动和观看者；调用本方法只披露指南，不会执行实际 Story 操作。"
+      },
+      {
+        "name": "usePolls",
+        "brief": "加载投票流程指南。用于创建投票/测验、读取投票结果等成组流程；调用本方法只披露相关 API，不会发起投票。",
+        "fullDoc": "```typescript\nusePolls(): Promise<string>\n```\n\n\n加载投票流程指南。用于创建投票/测验、读取投票结果等成组流程；调用本方法只披露相关 API，不会发起投票。"
+      },
+      {
+        "name": "usePeerResolution",
+        "brief": "加载 peer 解析指南。用于处理 PEER_ID_INVALID、access hash 缺失、裸数字 user id 无法发送等问题；调用本方法只披露排障流程。",
+        "fullDoc": "```typescript\nusePeerResolution(): Promise<string>\n```\n\n\n加载 peer 解析指南。用于处理 PEER_ID_INVALID、access hash 缺失、裸数字 user id 无法发送等问题；调用本方法只披露排障流程。"
+      },
+      {
+        "name": "useMessageSearch",
+        "brief": "加载历史消息检索指南。用于主动爬楼、搜索视野外上下文或流式遍历历史；调用本方法只披露检索 API 和使用流程。",
+        "fullDoc": "```typescript\nuseMessageSearch(): Promise<string>\n```\n\n\n加载历史消息检索指南。用于主动爬楼、搜索视野外上下文或流式遍历历史；调用本方法只披露检索 API 和使用流程。"
+      },
+      {
+        "name": "useAccountProfile",
+        "brief": "加载账号资料指南。用于修改 bio、姓名、用户名、头像、生日、emoji status、close friends 等个人资料；调用本方法只披露指南，不直接修改账号。",
+        "fullDoc": "```typescript\nuseAccountProfile(): Promise<string>\n```\n\n\n加载账号资料指南。用于修改 bio、姓名、用户名、头像、生日、emoji status、close friends 等个人资料；调用本方法只披露指南，不直接修改账号。"
+      },
+      {
+        "name": "useAdvancedMessages",
+        "brief": "加载高级消息指南。用于复制、评论、引用、定时消息、网页预览、reaction 用户和消息关联查询等成组能力；调用本方法只披露指南。",
+        "fullDoc": "```typescript\nuseAdvancedMessages(): Promise<string>\n```\n\n\n加载高级消息指南。用于复制、评论、引用、定时消息、网页预览、reaction 用户和消息关联查询等成组能力；调用本方法只披露指南。"
+      },
+      {
+        "name": "useChatAdministration",
+        "brief": "加载群组/频道管理指南。用于建群建频道、成员权限、管理员、标题描述头像、慢速模式和内容保护等管理操作；调用本方法只披露指南。",
+        "fullDoc": "```typescript\nuseChatAdministration(): Promise<string>\n```\n\n\n加载群组/频道管理指南。用于建群建频道、成员权限、管理员、标题描述头像、慢速模式和内容保护等管理操作；调用本方法只披露指南。"
+      },
+      {
+        "name": "useInvites",
+        "brief": "加载邀请链接与入群请求指南。用于创建/编辑/撤销邀请链接、查看邀请成员、处理 join request 或预览邀请链接；调用本方法只披露指南。",
+        "fullDoc": "```typescript\nuseInvites(): Promise<string>\n```\n\n\n加载邀请链接与入群请求指南。用于创建/编辑/撤销邀请链接、查看邀请成员、处理 join request 或预览邀请链接；调用本方法只披露指南。"
+      },
+      {
+        "name": "useForumTopics",
+        "brief": "加载论坛话题指南。用于确认群是否开启 Forum、列出话题或定位 topic id；调用本方法只披露相关 API。",
+        "fullDoc": "```typescript\nuseForumTopics(): Promise<string>\n```\n\n\n加载论坛话题指南。用于确认群是否开启 Forum、列出话题或定位 topic id；调用本方法只披露相关 API。"
+      },
+      {
         "name": "sendText",
         "brief": "发送普通文本消息",
         "fullDoc": "```typescript\nsendText(chatId: number | string, text: string, opts?: { replyTo?: number; silent?: boolean; }): Promise<{ id: number; text: string; date: Date; chat: { id: number; title?: string; username?: string; type: \"private\" | \"group\" | \"supergroup\" | \"channel\"; }; sender: { id: number; displayName?: string; title?: string; username?: string; }; isMention: boolean; replyToMessage?: { id: number } | null; media?: unknown; mediaInfo?: { type: \"photo\" | \"sticker\" | \"video\" | \"document\" | \"animation\" | \"audio\" | \"other\"; rawType?: string; fileId?: string; uniqueFileId?: string; emoji?: string; mimeType?: string; fileName?: string; width?: number; height?: number; fileSize?: number; filePath?: string; downloadStatus?: \"downloaded\" | \"cached\" | \"too_large\" | \"failed\"; downloadError?: string; }; }>\n```\n\n\n发送普通文本消息"
@@ -417,9 +507,9 @@
         "fullDoc": "```typescript\nsendMediaGroup(chatId: number | string, medias: Array<{ type: 'photo' | 'video' | 'document' | 'audio'; file: string; caption?: string; fileName?: string }>, opts?: { replyTo?: number; silent?: boolean; }): Promise<Array<{ id: number; text: string; date: Date; chat: { id: number; title?: string; username?: string; type: \"private\" | \"group\" | \"supergroup\" | \"channel\"; }; sender: { id: number; displayName?: string; title?: string; username?: string; }; isMention: boolean; replyToMessage?: { id: number } | null; media?: unknown; mediaInfo?: { type: \"photo\" | \"sticker\" | \"video\" | \"document\" | \"animation\" | \"audio\" | \"other\"; rawType?: string; fileId?: string; uniqueFileId?: string; emoji?: string; mimeType?: string; fileName?: string; width?: number; height?: number; fileSize?: number; filePath?: string; downloadStatus?: \"downloaded\" | \"cached\" | \"too_large\" | \"failed\"; downloadError?: string; }; }>>\n```\n\n\n发送媒体相册（多张图片/视频合并为一组）。\n第一个媒体项的 caption 将作为整组的文案。\n\n**示例：**\n```typescript\n// sendMediaGroup(chatId, [\n  { type: 'photo', file: 'https://example.com/1.jpg', caption: '相册标题' },\n  { type: 'photo', file: 'https://example.com/2.jpg' },\n])\n```"
       },
       {
-        "name": "sendPoll",
-        "brief": "发起投票或测验。",
-        "fullDoc": "```typescript\nsendPoll(chatId: number | string, question: string, options: string[], opts?: { replyTo?: number; silent?: boolean; isAnonymous?: boolean; type?: \"regular\" | \"quiz\"; allowsMultipleAnswers?: boolean; correctOptionId?: number; explanation?: string; }): Promise<{ id: number; text: string; date: Date; chat: { id: number; title?: string; username?: string; type: \"private\" | \"group\" | \"supergroup\" | \"channel\"; }; sender: { id: number; displayName?: string; title?: string; username?: string; }; isMention: boolean; replyToMessage?: { id: number } | null; media?: unknown; mediaInfo?: { type: \"photo\" | \"sticker\" | \"video\" | \"document\" | \"animation\" | \"audio\" | \"other\"; rawType?: string; fileId?: string; uniqueFileId?: string; emoji?: string; mimeType?: string; fileName?: string; width?: number; height?: number; fileSize?: number; filePath?: string; downloadStatus?: \"downloaded\" | \"cached\" | \"too_large\" | \"failed\"; downloadError?: string; }; }>\n```\n\n\n发起投票或测验。\n\n**参数：**\n- `question`: 投票标题\n- `options`: 候选选项文本列表（2-10 个）\n\n**示例：**\n```typescript\n// sendPoll(chatId, '今晚吃什么？', ['火锅', '烧烤', '外卖'], { isAnonymous: false })\n```\n\n```typescript\n// sendPoll(chatId, 'JS 中 typeof null 是？', ['object', 'null', 'undefined'], { type: 'quiz', correctOptionId: 0 })\n```"
+        "name": "forwardMessage",
+        "brief": "转发一条或多条已有消息到目标聊天，用于复读、搬运或保留原消息来源。 支持隐藏原作者/原 caption；目标聊天放第一个参数，便于遵守绑定聊天写限制。",
+        "fullDoc": "```typescript\nforwardMessage(toChatId: number | string, fromChatId: number | string, messageIds: number | number[], opts?: { silent?: boolean; schedule?: Date | number | string; clearDraft?: boolean; noAuthor?: boolean; noCaption?: boolean; forbidForwards?: boolean; toThreadId?: number; sendAs?: number | string; videoTimestamp?: number; }): Promise<TelegramMessage | TelegramMessage[]>\n```\n\n\n转发一条或多条已有消息到目标聊天，用于复读、搬运或保留原消息来源。\n支持隐藏原作者/原 caption；目标聊天放第一个参数，便于遵守绑定聊天写限制。\n\n**参数：**\n- `toChatId`: 目标聊天 ID、username、\"me\" 或 \"self\"\n- `fromChatId`: 原消息所在聊天 ID、username、\"me\" 或 \"self\"\n- `messageIds`: 要转发的消息 ID；数组最多 100 条\n\n**示例：**\n```typescript\n// const sent = await telegram.forwardMessage(chatId, chatId, msg.id);\n```\n\n```typescript\n// await telegram.forwardMessage(targetChatId, sourceChatId, [101, 102], { silent: true, noAuthor: true });\n```"
       },
       {
         "name": "sendReaction",
@@ -462,11 +552,6 @@
         "fullDoc": "```typescript\ngetUser(userId: number | string): Promise<{ id: number; displayName?: string; title?: string; username?: string; firstName: string; lastName?: string; isBot: boolean; }>\n```\n\n\n精确获取指定用户的基础信息"
       },
       {
-        "name": "getDialogs",
-        "brief": "获取最近的对话列表（包含 peer、最后一条消息、未读数）",
-        "fullDoc": "```typescript\ngetDialogs(opts?: { limit?: number }): Promise<Array<{ peer: { id: number; displayName?: string; title?: string; username?: string; }; lastMessage?: { id: number; text: string; date: Date; chat: { id: number; title?: string; username?: string; type: \"private\" | \"group\" | \"supergroup\" | \"channel\"; }; sender: { id: number; displayName?: string; title?: string; username?: string; }; isMention: boolean; replyToMessage?: { id: number } | null; media?: unknown; mediaInfo?: { type: \"photo\" | \"sticker\" | \"video\" | \"document\" | \"animation\" | \"audio\" | \"other\"; rawType?: string; fileId?: string; uniqueFileId?: string; emoji?: string; mimeType?: string; fileName?: string; width?: number; height?: number; fileSize?: number; filePath?: string; downloadStatus?: \"downloaded\" | \"cached\" | \"too_large\" | \"failed\"; downloadError?: string; }; }; unreadCount: number; }>>\n```\n\n\n获取最近的对话列表（包含 peer、最后一条消息、未读数）"
-      },
-      {
         "name": "getFullUser",
         "brief": "获取用户的完整资料（包含个人简介 bio 等）。",
         "fullDoc": "```typescript\ngetFullUser(userId: number | string): Promise<{ id: number; displayName?: string; title?: string; username?: string; firstName: string; lastName?: string; isBot: boolean; bio?: string; commonChatsCount?: number; }>\n```\n\n\n获取用户的完整资料（包含个人简介 bio 等）。\n\n**示例：**\n```typescript\n// const full = await telegram.getFullUser(userId); console.log(full.bio);\n```"
@@ -482,29 +567,9 @@
         "fullDoc": "```typescript\ngetChatMembers(chatId: number | string, opts?: { limit?: number }): Promise<Array<{ id: number; displayName?: string; title?: string; username?: string; }>>\n```\n\n\n分页拉取群组成员列表"
       },
       {
-        "name": "getHistory",
-        "brief": "拉取指定会话的历史消息（一次性返回列表）",
-        "fullDoc": "```typescript\ngetHistory(chatId: number | string, opts?: { limit?: number }): Promise<Array<{ id: number; text: string; date: Date; chat: { id: number; title?: string; username?: string; type: \"private\" | \"group\" | \"supergroup\" | \"channel\"; }; sender: { id: number; displayName?: string; title?: string; username?: string; }; isMention: boolean; replyToMessage?: { id: number } | null; media?: unknown; mediaInfo?: { type: \"photo\" | \"sticker\" | \"video\" | \"document\" | \"animation\" | \"audio\" | \"other\"; rawType?: string; fileId?: string; uniqueFileId?: string; emoji?: string; mimeType?: string; fileName?: string; width?: number; height?: number; fileSize?: number; filePath?: string; downloadStatus?: \"downloaded\" | \"cached\" | \"too_large\" | \"failed\"; downloadError?: string; }; }>>\n```\n\n\n拉取指定会话的历史消息（一次性返回列表）"
-      },
-      {
         "name": "getMessages",
         "brief": "按消息 ID 精确获取一条或多条消息。（在别人回复或者提及某消息但是你看不见的时候，善用该函数爬楼获取上下文）",
         "fullDoc": "```typescript\ngetMessages(chatId: number | string, messageIds: number[]): Promise<Array<{ id: number; text: string; date: Date; chat: { id: number; title?: string; username?: string; type: \"private\" | \"group\" | \"supergroup\" | \"channel\"; }; sender: { id: number; displayName?: string; title?: string; username?: string; }; isMention: boolean; replyToMessage?: { id: number } | null; media?: unknown; mediaInfo?: { type: \"photo\" | \"sticker\" | \"video\" | \"document\" | \"animation\" | \"audio\" | \"other\"; rawType?: string; fileId?: string; uniqueFileId?: string; emoji?: string; mimeType?: string; fileName?: string; width?: number; height?: number; fileSize?: number; filePath?: string; downloadStatus?: \"downloaded\" | \"cached\" | \"too_large\" | \"failed\"; downloadError?: string; }; } | null>>\n```\n\n\n按消息 ID 精确获取一条或多条消息。（在别人回复或者提及某消息但是你看不见的时候，善用该函数爬楼获取上下文）\n\n**示例：**\n```typescript\n// const msgs = await telegram.getMessages(chatId, [100, 101, 102]);\n```"
-      },
-      {
-        "name": "searchMessages",
-        "brief": "在群组内搜索消息。（可主动利用该函数获取视野外上下文信息）",
-        "fullDoc": "```typescript\nsearchMessages(chatId: number | string, query: string, opts?: { limit?: number }): Promise<Array<{ id: number; text: string; date: Date; chat: { id: number; title?: string; username?: string; type: \"private\" | \"group\" | \"supergroup\" | \"channel\"; }; sender: { id: number; displayName?: string; title?: string; username?: string; }; isMention: boolean; replyToMessage?: { id: number } | null; media?: unknown; mediaInfo?: { type: \"photo\" | \"sticker\" | \"video\" | \"document\" | \"animation\" | \"audio\" | \"other\"; rawType?: string; fileId?: string; uniqueFileId?: string; emoji?: string; mimeType?: string; fileName?: string; width?: number; height?: number; fileSize?: number; filePath?: string; downloadStatus?: \"downloaded\" | \"cached\" | \"too_large\" | \"failed\"; downloadError?: string; }; }>>\n```\n\n\n在群组内搜索消息。（可主动利用该函数获取视野外上下文信息）\n\n**示例：**\n```typescript\n// const results = await telegram.searchMessages(chatId, '关键词', { limit: 20 });\n```"
-      },
-      {
-        "name": "getForumTopics",
-        "brief": "获取指定群组的论坛板块（话题）列表。要求该群组已开启 Forum 模式。",
-        "fullDoc": "```typescript\ngetForumTopics(chatId: number | string, opts?: { limit?: number }): Promise<Array<{ id: number; title: string; isClosed: boolean; isPinned: boolean; creatorId: number; unreadCount: number; }>>\n```\n\n\n获取指定群组的论坛板块（话题）列表。要求该群组已开启 Forum 模式。\n\n**示例：**\n```typescript\n// const topics = await telegram.getForumTopics(chatId);\n```"
-      },
-      {
-        "name": "getPollResults",
-        "brief": "主动拉取某条投票消息的最新计票结果。",
-        "fullDoc": "```typescript\ngetPollResults(chatId: number | string, messageId: number): Promise<{ type: \"poll\"; id: string; question: string; answers: Array<{ text: string; voterCount: number; chosen: boolean; correct: boolean; }>; totalVoters: number; isClosed: boolean; isPublic: boolean; isQuiz: boolean; isMultiple: boolean; solution?: string; } | null>\n```\n\n\n主动拉取某条投票消息的最新计票结果。\n\n**示例：**\n```typescript\n// const poll = await telegram.getPollResults(chatId, pollMsgId);\n```"
       },
       {
         "name": "getMessageReactions",
@@ -515,16 +580,6 @@
         "name": "downloadMedia",
         "brief": "下载媒体文件的二进制数据。返回 base64 编码的 buffer 和文件大小。 需要传入通过 mediaInfo.fileId 获取的文件标识符。",
         "fullDoc": "```typescript\ndownloadMedia(fileId: string, chatId?: number | string, messageId?: number, uniqueFileId?: string): Promise<{ buffer: string; size: number; }>\n```\n\n\n下载媒体文件的二进制数据。返回 base64 编码的 buffer 和文件大小。\n需要传入通过 mediaInfo.fileId 获取的文件标识符。\n\n**参数：**\n- `fileId`: TDLib/Bot API 兼容的文件 ID\n- `chatId`: 可选，用于 file reference 过期时自动 refetch\n- `messageId`: 可选，同上\n- `uniqueFileId`: 可选，用于缓存命中\n\n**示例：**\n```typescript\nconst msg = messages[0];\nif (msg.mediaInfo?.fileId) {\n  const data = await telegram.downloadMedia(msg.mediaInfo.fileId, chatId, msg.id, msg.mediaInfo.uniqueFileId);\n  // data.buffer 是 base64 编码的文件内容, data.size 是字节数\n}\n```"
-      },
-      {
-        "name": "iterHistory",
-        "brief": "以异步迭代器方式遍历历史消息，用于深入流式检索",
-        "fullDoc": "```typescript\niterHistory(chatId: number | string, opts?: { limit?: number }): AsyncIterable<{ id: number; text: string; date: Date; chat: { id: number; title?: string; username?: string; type: \"private\" | \"group\" | \"supergroup\" | \"channel\"; }; sender: { id: number; displayName?: string; title?: string; username?: string; }; isMention: boolean; replyToMessage?: { id: number } | null; media?: unknown; mediaInfo?: { type: \"photo\" | \"sticker\" | \"video\" | \"document\" | \"animation\" | \"audio\" | \"other\"; rawType?: string; fileId?: string; uniqueFileId?: string; emoji?: string; mimeType?: string; fileName?: string; width?: number; height?: number; fileSize?: number; filePath?: string; downloadStatus?: \"downloaded\" | \"cached\" | \"too_large\" | \"failed\"; downloadError?: string; }; }>\n```\n\n\n以异步迭代器方式遍历历史消息，用于深入流式检索"
-      },
-      {
-        "name": "iterDialogs",
-        "brief": "以异步迭代器方式遍历最近的对话列表",
-        "fullDoc": "```typescript\niterDialogs(opts?: { limit?: number }): AsyncIterable<{ peer: { id: number; displayName?: string; title?: string; username?: string; }; lastMessage?: { id: number; text: string; date: Date; chat: { id: number; title?: string; username?: string; type: \"private\" | \"group\" | \"supergroup\" | \"channel\"; }; sender: { id: number; displayName?: string; title?: string; username?: string; }; isMention: boolean; replyToMessage?: { id: number } | null; media?: unknown; mediaInfo?: { type: \"photo\" | \"sticker\" | \"video\" | \"document\" | \"animation\" | \"audio\" | \"other\"; rawType?: string; fileId?: string; uniqueFileId?: string; emoji?: string; mimeType?: string; fileName?: string; width?: number; height?: number; fileSize?: number; filePath?: string; downloadStatus?: \"downloaded\" | \"cached\" | \"too_large\" | \"failed\"; downloadError?: string; }; }; unreadCount: number; }>\n```\n\n\n以异步迭代器方式遍历最近的对话列表"
       },
       {
         "name": "joinChat",
@@ -546,7 +601,8 @@
         "brief": "触发短暂的 `Typing` 正在输入反馈状态",
         "fullDoc": "```typescript\nsendTyping(chatId: number | string): Promise<void>\n```\n\n\n触发短暂的 `Typing` 正在输入反馈状态"
       }
-    ]
+    ],
+    "typeDefs": "type TelegramMessage = {\n    id: number;\n    text: string;\n    date: Date;\n    chat: { id: number; title?: string; username?: string; type: \"private\" | \"group\" | \"supergroup\" | \"channel\"; };\n    sender: { id: number; displayName?: string; title?: string; username?: string; } | null;\n    isMention: boolean;\n    replyToMessage?: { id: number } | null;\n    media?: unknown;\n    mediaInfo?: {\n        type: \"photo\" | \"sticker\" | \"video\" | \"document\" | \"animation\" | \"audio\" | \"other\";\n        rawType?: string;\n        fileId?: string;\n        uniqueFileId?: string;\n        emoji?: string;\n        mimeType?: string;\n        fileName?: string;\n        width?: number;\n        height?: number;\n        fileSize?: number;\n        filePath?: string;\n        downloadStatus?: \"downloaded\" | \"cached\" | \"too_large\" | \"failed\";\n        downloadError?: string;\n    };\n    forwardFrom?: string;\n    forwardFromUrl?: string;\n};"
   },
   {
     "name": "vision",

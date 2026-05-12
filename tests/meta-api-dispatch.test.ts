@@ -38,6 +38,15 @@ describe("createDispatchApi", () => {
             },
             groundingRunner: async () => "grounded",
             taskIdFactory: () => "task-meta-1",
+            getActiveUserProfilesForChat: (chatId) => chatId === "telegram:1"
+                ? [{
+                    userId: "telegram:u1",
+                    displayName: "阿喵",
+                    aliases: [],
+                    currentChatLabel: "快乐摸鱼群(telegram:1)",
+                    messageCount: 1,
+                }]
+                : undefined,
         });
 
         const result = await api.taskToGroup("telegram:1", {
@@ -56,7 +65,9 @@ describe("createDispatchApi", () => {
         assert.equal(enqueued[0].contextSnapshot.contentDirection, "reply with a concise answer");
         assert.equal(enqueued[0].contextSnapshot.toneGuidance, "calm");
         assert.equal(enqueued[0].contextSnapshot.groundingContext, "grounded");
-        assert.equal(enqueued[0].contextSnapshot.personContext, JSON.stringify({ facts: ["x"] }));
+        assert.equal(enqueued[0].contextSnapshot.personContext, undefined);
+        assert.equal(enqueued[0].contextSnapshot.dispatchContext, JSON.stringify({ facts: ["x"] }));
+        assert.equal(enqueued[0].contextSnapshot.activeUserProfiles[0].userId, "telegram:u1");
         assert.deepEqual(enqueued[0].useSkills, ["memory", "telegram"]);
     });
 

@@ -14,6 +14,7 @@ import { randomUUID } from "node:crypto";
 import { CodeActExecutor } from "../src/subagent/code-act-executor.js";
 import { CallbackQueue } from "../src/subagent/callback-queue.js";
 import type { CodeActReplyTask, SubagentCallback, GroupContextPackage, Decision } from "../src/subagent/types.js";
+import { cleanupTestMemory, createTestMemory } from "./helpers/test-db.js";
 
 /** 创建测试用的 CodeActReplyTask */
 function makeTask(chatId: string = "chat1", decisions: Partial<Decision>[] = []): CodeActReplyTask {
@@ -109,6 +110,50 @@ describe("S3: Sandbox 多实例 + CodeActExecutor", () => {
             // session 应被 compact（不超过 20 + 1 = 21）
             assert.ok(executor.getSessionSize() <= 21, `session 应被 compact: ${executor.getSessionSize()}`);
             assert.ok(executor.lastCompactedAt !== null, "应有 compact 记录");
+        });
+
+        it("#5b compact 时从 memory 重建被压缩的交互历史", async () => {
+            const memory = createTestMemory("executor-compact-rebuild");
+            try {
+                memory.storeMessageBatch([
+                    { messageId: "m1", chatId: "chat1", userId: "u1", displayName: "Alice", text: "第一条用户消息", timestamp: "2026-01-01T10:00:00.000Z" },
+                    { messageId: "m2", chatId: "chat1", userId: "agent", displayName: "赛博群友", text: "agent 自己发出的消息", timestamp: "2026-01-01T10:00:10.000Z" },
+                    { messageId: "m3", chatId: "chat1", userId: "u2", displayName: "Bob", text: "最后一次增量位置", timestamp: "2026-01-01T10:00:20.000Z" },
+                ]);
+
+                const executor = new CodeActExecutor("chat1", { maxSessionMessages: 6, maxExecutionTimeMs: 60000 });
+                (executor as any).memory = memory;
+                executor.session = [
+                    { role: "user", content: "## 目标消息\n[2026-01-01 10:00] [msgId:m1] Alice: 第一条用户消息", timestamp: "2026-01-01T10:00:00.000Z" },
+                    { role: "assistant", content: "收到。", timestamp: "2026-01-01T10:00:01.000Z" },
+                    { role: "user", content: "## 目标消息 (更新)\n[2026-01-01 10:00] [msgId:m3] Bob: 最后一次增量位置", timestamp: "2026-01-01T10:00:20.000Z" },
+                    { role: "assistant", content: "tail 1", timestamp: "2026-01-01T10:00:21.000Z" },
+                    { role: "user", content: "tail 2", timestamp: "2026-01-01T10:00:22.000Z" },
+                    { role: "assistant", content: "tail 3", timestamp: "2026-01-01T10:00:23.000Z" },
+                    { role: "user", content: "tail 4", timestamp: "2026-01-01T10:00:24.000Z" },
+                ];
+                (executor as any).executionRecords = [{
+                    taskId: "5c7cab41-9f47-44e3-bd6d-fad0f20f1510",
+                    timestamp: "2026-01-01T10:00:30.000Z",
+                    endReason: "end_turn",
+                    turns: 11,
+                    sentMessages: [{ chatId: "chat1", messageId: "m2", text: "agent 自己发出的消息", timestamp: "2026-01-01T10:00:10.000Z" }],
+                    thinkingSummary: "已经回复并确认上下文",
+                }];
+
+                await (executor as any).compactSession();
+
+                assert.match(executor.session[0].content, /被压缩的交互历史/);
+                assert.match(executor.session[0].content, /\[msgId:m1\].*第一条用户消息/);
+                assert.match(executor.session[0].content, /\[msgId:m2\].*agent 自己发出的消息/);
+                assert.match(executor.session[0].content, /\[msgId:m3\].*最后一次增量位置/);
+                assert.doesNotMatch(executor.session[0].content, /5c7cab41-9f47-44e3-bd6d-fad0f20f1510/);
+                assert.doesNotMatch(executor.session[0].content, /- Task /);
+                assert.match(executor.session[0].content, /已发消息: "agent 自己发出的消息"/);
+                assert.match(executor.session[0].content, /思路: 已经回复并确认上下文/);
+            } finally {
+                cleanupTestMemory(memory, "executor-compact-rebuild");
+            }
         });
 
         it("#6 callbackHandler 在执行后被调用", async () => {

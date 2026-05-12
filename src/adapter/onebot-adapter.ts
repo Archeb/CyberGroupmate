@@ -12,6 +12,12 @@ import type { MediaDownloader } from "../core/media-downloader.js";
 import { ensureSupportedFormat } from "../core/vision-processor.js";
 import { composeChatId, ensureCompositeId, parseChatId } from "../core/chat-id.js";
 import { createLogger } from "../core/logger.js";
+import {
+    getOneBotNapCatGuideGroupForAction,
+    getOneBotNapCatWriteTarget,
+    isAllowedOneBotNapCatAction,
+    normalizeOneBotNapCatAction,
+} from "../core/onebot-napcat-passthrough.js";
 import { WebSocket } from "ws";
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
@@ -356,6 +362,21 @@ export class OneBotAdapter implements PlatformAdapter {
         }
 
         switch (method) {
+            case "onebot.getMessage":
+            case "qq.getMessage": {
+                const messageId = String(args[0] ?? "").trim();
+                if (!messageId) throw new Error("onebot.getMessage: messageId is required");
+                return this.getMessage(messageId);
+            }
+            case "onebot.callApi":
+            case "qq.callApi": {
+                const action = String(args[0] ?? "").trim();
+                const rawParams = args[1];
+                const params = rawParams && typeof rawParams === "object" && !Array.isArray(rawParams)
+                    ? rawParams as Record<string, unknown>
+                    : {};
+                return this.callNapCatGuideAction(action, params);
+            }
             case "onebot.sendText":
             case "qq.sendText": {
                 const chatId = ensureCompositeId("onebot", String(args[0] ?? ""));
@@ -428,7 +449,11 @@ export class OneBotAdapter implements PlatformAdapter {
             case "qq.downloadMedia": {
                 const mediaRef = String(args[0] ?? "");
                 if (!mediaRef) throw new Error("onebot.downloadMedia: mediaRef is required");
-                return this.downloadMedia(null, mediaRef);
+                const buffer = await this.downloadMedia(null, mediaRef);
+                return {
+                    buffer: buffer.toString("base64"),
+                    size: buffer.length,
+                };
             }
             default:
                 throw new Error(`Unsupported OneBot method: ${method}`);
@@ -491,32 +516,174 @@ export class OneBotAdapter implements PlatformAdapter {
         }
     }
 
+    private async getMessage(messageId: string): Promise<unknown> {
+        const id = /^-?\d+$/.test(messageId) ? Number(messageId) : messageId;
+        const result = await this.callAction("get_msg", { message_id: id }) as Record<string, unknown>;
+        return result?.data ?? result;
+    }
+
+    private async callNapCatGuideAction(action: string, params: Record<string, unknown>): Promise<unknown> {
+        const normalizedAction = normalizeOneBotNapCatAction(action);
+        if (!normalizedAction) throw new Error("onebot.callApi: action is required");
+        if (!isAllowedOneBotNapCatAction(normalizedAction)) {
+            throw new Error(`onebot.callApi: NapCat action '${normalizedAction}' is not exposed through built-in guides`);
+        }
+
+        const targetChatId = getOneBotNapCatWriteTarget(normalizedAction, params);
+        if (targetChatId && this.isChatMuted(targetChatId)) {
+            throw new Error(`[禁言中] 你在该聊天已被 /mute，OneBot/NapCat 写操作 ${normalizedAction} 已被抑制。`);
+        }
+
+        const preparedParams = this.prepareNapCatGuideParams(normalizedAction, params);
+        const group = getOneBotNapCatGuideGroupForAction(normalizedAction);
+        log.debug("OneBot NapCat passthrough", { action: normalizedAction, guide: group });
+        return this.callAction(normalizedAction, preparedParams);
+    }
+
+    private prepareNapCatGuideParams(action: string, params: Record<string, unknown>): Record<string, unknown> {
+        const prepared = { ...params };
+        const localFileParamActions = new Set(["get_image", "get_record", "ocr_image", "set_qq_avatar"]);
+        if (!localFileParamActions.has(action)) return prepared;
+
+        for (const key of ["file", "image"]) {
+            const value = prepared[key];
+            if (typeof value !== "string") continue;
+            const dataUrl = this.toDataUrlIfLocalFile(value);
+            if (dataUrl) prepared[key] = dataUrl;
+        }
+        return prepared;
+    }
+
     async downloadMedia(_rawMessage: unknown, mediaRef: string): Promise<Buffer> {
+        const ref = mediaRef.trim();
+        if (!ref) throw new Error("downloadMedia: mediaRef is required");
+
+        let messageLookupError: unknown;
+        if (this.looksLikeMessageId(ref)) {
+            try {
+                return await this.downloadMediaFromMessage(ref);
+            } catch (err) {
+                messageLookupError = err;
+                log.debug("按消息 ID 下载媒体失败，继续按媒体引用解析", {
+                    mediaRef: ref,
+                    error: String(err),
+                });
+            }
+        }
+
+        try {
+            return await this.downloadDirectMediaRef(ref);
+        } catch (err) {
+            if (messageLookupError) {
+                throw new Error(`downloadMedia: cannot resolve mediaRef ${ref}; get_msg failed: ${String(messageLookupError)}; direct lookup failed: ${String(err)}`);
+            }
+            throw err;
+        }
+    }
+
+    private looksLikeMessageId(mediaRef: string): boolean {
+        return /^-?\d+$/.test(mediaRef.trim());
+    }
+
+    private async downloadMediaFromMessage(messageId: string): Promise<Buffer> {
+        const data = await this.getMessage(messageId) as Record<string, unknown> | undefined;
+        const message = data?.message ?? data?.raw_message ?? "";
+        const segments = this.normalizeMessageSegments(message);
+        const mediaInfo = this.extractMediaInfo(segments);
+        if (!mediaInfo) {
+            throw new Error(`消息 ${messageId} 中没有可下载媒体`);
+        }
+        return this.downloadMediaInfo(mediaInfo);
+    }
+
+    private async downloadMediaInfo(mediaInfo: OneBotMediaInfo): Promise<Buffer> {
+        if (mediaInfo.url) {
+            return this.downloadDirectMediaRef(mediaInfo.url);
+        }
+        return this.downloadDirectMediaRef(mediaInfo.fileId);
+    }
+
+    private async downloadDirectMediaRef(mediaRef: string): Promise<Buffer> {
         if (mediaRef.startsWith("face:")) {
             throw new Error(`downloadMedia: QQ内置表情无法下载 (${mediaRef})`);
         }
         if (mediaRef.startsWith("mface:")) {
             throw new Error(`downloadMedia: QQ商城表情需通过URL下载 (${mediaRef})`);
         }
+        const inlineBuffer = this.decodeInlineMedia(mediaRef);
+        if (inlineBuffer) return inlineBuffer;
         if (mediaRef.startsWith("http://") || mediaRef.startsWith("https://")) {
-            const resp = await fetch(mediaRef);
-            if (!resp.ok) throw new Error(`downloadMedia: HTTP ${resp.status} for ${mediaRef}`);
-            return Buffer.from(await resp.arrayBuffer());
+            return this.fetchRemoteMedia(mediaRef);
         }
         // Fallback: try get_image OneBot API to resolve a downloadable URL
-        try {
-            const result = await this.callAction("get_image", { file: mediaRef }) as Record<string, unknown>;
-            const imgData = result?.data ?? result;
-            const imgUrl = (imgData as Record<string, unknown>)?.url;
-            if (typeof imgUrl === "string" && (imgUrl.startsWith("http://") || imgUrl.startsWith("https://"))) {
-                const resp = await fetch(imgUrl);
-                if (!resp.ok) throw new Error(`downloadMedia: HTTP ${resp.status} for resolved URL`);
-                return Buffer.from(await resp.arrayBuffer());
+        const attempts = [
+            { file: mediaRef },
+            { file_id: mediaRef },
+        ];
+        let lastError: unknown;
+        for (const params of attempts) {
+            try {
+                const result = await this.callAction("get_image", params) as Record<string, unknown>;
+                const imgData = (result?.data ?? result) as Record<string, unknown>;
+                const buffer = await this.bufferFromOneBotFileData(imgData);
+                if (buffer) return buffer;
+                lastError = new Error("get_image 未返回可下载 URL/base64，且本地路径不可读");
+            } catch (e) {
+                lastError = e;
+                log.debug("get_image 回退失败", { mediaRef, params, error: String(e) });
             }
-        } catch (e) {
-            log.warn("get_image 回退失败", { mediaRef, error: String(e) });
         }
-        throw new Error(`downloadMedia: cannot resolve mediaRef ${mediaRef}`);
+        throw new Error(`downloadMedia: cannot resolve mediaRef ${mediaRef}${lastError ? ` (${String(lastError)})` : ""}`);
+    }
+
+    private async fetchRemoteMedia(url: string): Promise<Buffer> {
+        const resp = await fetch(url);
+        if (!resp.ok) throw new Error(`downloadMedia: HTTP ${resp.status} for ${url}`);
+        return Buffer.from(await resp.arrayBuffer());
+    }
+
+    private decodeInlineMedia(value: string): Buffer | null {
+        const trimmed = value.trim();
+        const dataUrlMatch = /^data:[^;]+;base64,(.+)$/i.exec(trimmed);
+        const base64Payload = dataUrlMatch?.[1]
+            ?? (trimmed.startsWith("base64://") ? trimmed.slice("base64://".length) : undefined);
+        if (!base64Payload) return null;
+        try {
+            return Buffer.from(base64Payload, "base64");
+        } catch {
+            return null;
+        }
+    }
+
+    private async bufferFromOneBotFileData(data: Record<string, unknown>): Promise<Buffer | null> {
+        const base64 = typeof data.base64 === "string" ? data.base64 : undefined;
+        if (base64) {
+            const buffer = this.decodeInlineMedia(base64) ?? Buffer.from(base64, "base64");
+            if (buffer.length > 0) return buffer;
+        }
+
+        const candidates = [
+            typeof data.url === "string" ? data.url : undefined,
+            typeof data.file === "string" ? data.file : undefined,
+            typeof data.path === "string" ? data.path : undefined,
+        ].filter((item): item is string => !!item && item.trim().length > 0);
+
+        for (const candidate of candidates) {
+            const inline = this.decodeInlineMedia(candidate);
+            if (inline) return inline;
+            if (candidate.startsWith("http://") || candidate.startsWith("https://")) {
+                return this.fetchRemoteMedia(candidate);
+            }
+
+            const localPath = candidate.startsWith("file://")
+                ? path.resolve(candidate.slice("file://".length))
+                : path.resolve(candidate);
+            if (existsSync(localPath)) {
+                return readFileSync(localPath);
+            }
+        }
+
+        return null;
     }
 
     private async sendMessage(chatId: string, text: string, opts: Record<string, unknown>): Promise<unknown> {
@@ -1224,9 +1391,26 @@ export class OneBotAdapter implements PlatformAdapter {
         };
     }
 
-    private normalizeMessageSegments(message: string | OneBotMessageSegment[]): OneBotMessageSegment[] {
-        if (Array.isArray(message)) return message;
-        return this.parseCqString(message);
+    private normalizeMessageSegments(message: unknown): OneBotMessageSegment[] {
+        if (Array.isArray(message)) {
+            return message
+                .map(seg => this.normalizeMessageSegment(seg))
+                .filter((seg): seg is OneBotMessageSegment => !!seg);
+        }
+        const single = this.normalizeMessageSegment(message);
+        if (single) return [single];
+        if (typeof message === "string") return this.parseCqString(message);
+        return [];
+    }
+
+    private normalizeMessageSegment(seg: unknown): OneBotMessageSegment | null {
+        if (!seg || typeof seg !== "object") return null;
+        const rec = seg as Record<string, unknown>;
+        if (typeof rec.type !== "string") return null;
+        const data = rec.data && typeof rec.data === "object"
+            ? rec.data as Record<string, unknown>
+            : {};
+        return { type: rec.type, data };
     }
 
     private parseCqString(input: string): OneBotMessageSegment[] {
@@ -1304,16 +1488,17 @@ export class OneBotAdapter implements PlatformAdapter {
             const data = seg.data ?? {};
             if (seg.type === "image") {
                 const url = typeof data.url === "string" ? data.url : undefined;
-                const file = String(data.file ?? "");
+                const file = String(data.file ?? data.path ?? "");
+                const fileId = String(data.file_id ?? file);
                 const subType = typeof data.sub_type === "number" ? data.sub_type
                     : typeof data.sub_type === "string" ? Number(data.sub_type) : undefined;
                 const isSticker = subType === 1;
                 return {
                     type: isSticker ? "sticker" : "photo",
                     url,
-                    fileId: url || file,
-                    uniqueFileId: String(data.file_unique ?? data.file_id ?? file),
-                    fileName: typeof data.file === "string" ? path.basename(String(data.file)) : undefined,
+                    fileId: url || fileId,
+                    uniqueFileId: String(data.file_unique ?? data.file_id ?? (file || url || fileId)),
+                    fileName: typeof data.name === "string" ? data.name : (file ? path.basename(file) : undefined),
                     width: typeof data.width === "number" ? data.width : (typeof data.width === "string" ? Number(data.width) || undefined : undefined),
                     height: typeof data.height === "number" ? data.height : (typeof data.height === "string" ? Number(data.height) || undefined : undefined),
                     mimeType: typeof data.mime_type === "string" ? data.mime_type : undefined,
@@ -1343,35 +1528,38 @@ export class OneBotAdapter implements PlatformAdapter {
             }
             if (seg.type === "video") {
                 const url = typeof data.url === "string" ? data.url : undefined;
-                const file = String(data.file ?? "");
+                const file = String(data.file ?? data.path ?? "");
+                const fileId = String(data.file_id ?? file);
                 return {
                     type: "video",
                     url,
-                    fileId: url || file,
-                    uniqueFileId: String(data.file_unique ?? data.file_id ?? file),
-                    fileName: typeof data.file === "string" ? path.basename(String(data.file)) : undefined,
+                    fileId: url || fileId,
+                    uniqueFileId: String(data.file_unique ?? data.file_id ?? (file || url || fileId)),
+                    fileName: typeof data.name === "string" ? data.name : (file ? path.basename(file) : undefined),
                 };
             }
             if (seg.type === "record") {
                 const url = typeof data.url === "string" ? data.url : undefined;
-                const file = String(data.file ?? "");
+                const file = String(data.file ?? data.path ?? "");
+                const fileId = String(data.file_id ?? file);
                 return {
                     type: "audio",
                     url,
-                    fileId: url || file,
-                    uniqueFileId: String(data.file_unique ?? data.file_id ?? file),
-                    fileName: typeof data.file === "string" ? path.basename(String(data.file)) : undefined,
+                    fileId: url || fileId,
+                    uniqueFileId: String(data.file_unique ?? data.file_id ?? (file || url || fileId)),
+                    fileName: typeof data.name === "string" ? data.name : (file ? path.basename(file) : undefined),
                 };
             }
             if (seg.type === "file") {
                 const url = typeof data.url === "string" ? data.url : undefined;
-                const file = String(data.file ?? "");
+                const file = String(data.file ?? data.path ?? "");
+                const fileId = String(data.file_id ?? file);
                 return {
                     type: "document",
                     url,
-                    fileId: url || file,
-                    uniqueFileId: String(data.file_unique ?? data.file_id ?? file),
-                    fileName: typeof data.name === "string" ? data.name : (typeof data.file === "string" ? path.basename(String(data.file)) : undefined),
+                    fileId: url || fileId,
+                    uniqueFileId: String(data.file_unique ?? data.file_id ?? (file || url || fileId)),
+                    fileName: typeof data.name === "string" ? data.name : (file ? path.basename(file) : undefined),
                 };
             }
         }

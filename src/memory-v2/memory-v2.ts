@@ -32,6 +32,7 @@ import type {
     AssociatedMemory,
     TopicNode,
     PersonIdentity,
+    PersonProfile,
     PersonGroupProfile,
     InteractionEpisode,
     MergedMemory,
@@ -43,6 +44,7 @@ import type {
     MessageSearchResult,
     InteractionSearchResult,
     UserProfileSearchResult,
+    CoreFactProvenance,
     MessageLogEntry,
     RecentMessageEntry,
     RecallOptions,
@@ -105,6 +107,20 @@ function buildFtsOrQuery(query: string): string {
         .filter(Boolean);
     if (terms.length === 0) return "";
     return terms.map(term => `"${term}"`).join(" OR ");
+}
+
+function identityAliasScore(identity: PersonIdentity, normalizedQuery: string): number {
+    const candidates = [
+        identity.userId,
+        identity.displayName,
+        identity.username ?? "",
+        ...identity.aliases,
+    ].map(value => value.trim().toLocaleLowerCase()).filter(Boolean);
+
+    if (candidates.some(value => value === normalizedQuery)) return 100;
+    if (candidates.some(value => value.startsWith(normalizedQuery))) return 80;
+    if (candidates.some(value => value.includes(normalizedQuery))) return 60;
+    return 0;
 }
 
 // ─── System Prompt 加载（统一使用 prompt-loader 支持 override）───
@@ -316,6 +332,23 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
                 updated_at TEXT NOT NULL
             );
 
+            -- 个体全局画像（跨群共享的长期认知）
+            CREATE TABLE IF NOT EXISTS person_profiles (
+                user_id TEXT PRIMARY KEY,
+                traits TEXT NOT NULL DEFAULT '[]',
+                interests TEXT NOT NULL DEFAULT '[]',
+                communication_style TEXT DEFAULT '',
+                relation_to_agent TEXT DEFAULT '',
+                stable_patterns TEXT NOT NULL DEFAULT '[]',
+                agent_policy_hints TEXT NOT NULL DEFAULT '[]',
+                followup_candidates TEXT NOT NULL DEFAULT '[]',
+                source_chat_ids TEXT NOT NULL DEFAULT '[]',
+                confidence REAL DEFAULT 0,
+                last_reflected_at TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
             -- 个体群内画像（每群独立）
             CREATE TABLE IF NOT EXISTS person_group_profiles (
                 user_id TEXT NOT NULL,
@@ -379,6 +412,15 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
                 category TEXT NOT NULL DEFAULT 'general',
                 confidence REAL DEFAULT 1.0,
                 source TEXT,
+                source_chat_id TEXT,
+                source_chat_title TEXT,
+                source_topic_id TEXT,
+                source_topic_label TEXT,
+                source_message_ids TEXT DEFAULT '[]',
+                source_interaction_ids TEXT DEFAULT '[]',
+                observed_at TEXT,
+                visibility TEXT DEFAULT 'contextual',
+                sensitivity TEXT DEFAULT 'low',
                 embedding BLOB,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
@@ -452,6 +494,16 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
 
         // person_identities 新增 username 列（兼容旧数据库）
         try { this.db.exec(`ALTER TABLE person_identities ADD COLUMN username TEXT`); } catch { /* 列已存在 */ }
+        try { this.db.exec(`ALTER TABLE core_facts ADD COLUMN source_chat_id TEXT`); } catch { /* 列已存在 */ }
+        try { this.db.exec(`ALTER TABLE core_facts ADD COLUMN source_chat_title TEXT`); } catch { /* 列已存在 */ }
+        try { this.db.exec(`ALTER TABLE core_facts ADD COLUMN source_topic_id TEXT`); } catch { /* 列已存在 */ }
+        try { this.db.exec(`ALTER TABLE core_facts ADD COLUMN source_topic_label TEXT`); } catch { /* 列已存在 */ }
+        try { this.db.exec(`ALTER TABLE core_facts ADD COLUMN source_message_ids TEXT DEFAULT '[]'`); } catch { /* 列已存在 */ }
+        try { this.db.exec(`ALTER TABLE core_facts ADD COLUMN source_interaction_ids TEXT DEFAULT '[]'`); } catch { /* 列已存在 */ }
+        try { this.db.exec(`ALTER TABLE core_facts ADD COLUMN observed_at TEXT`); } catch { /* 列已存在 */ }
+        try { this.db.exec(`ALTER TABLE core_facts ADD COLUMN visibility TEXT DEFAULT 'contextual'`); } catch { /* 列已存在 */ }
+        try { this.db.exec(`ALTER TABLE core_facts ADD COLUMN sensitivity TEXT DEFAULT 'low'`); } catch { /* 列已存在 */ }
+        try { this.db.exec(`CREATE INDEX IF NOT EXISTS idx_facts_source_chat ON core_facts(source_chat_id)`); } catch { /* index */ }
         try { this.db.exec(`ALTER TABLE topics ADD COLUMN associated_memories TEXT DEFAULT '[]'`); } catch { /* 列已存在 */ }
         try { this.db.exec(`ALTER TABLE topics ADD COLUMN callback_potential INTEGER DEFAULT 0`); } catch { /* 列已存在 */ }
 
@@ -778,14 +830,41 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
     }
 
     /** 写入核心事实到 core_facts 表 */
-    storeFact(subject: string, content: string, category: FactCategory, source?: string, expiresAt?: string, embedding?: Float32Array, confidence?: number): string {
+    storeFact(
+        subject: string,
+        content: string,
+        category: FactCategory,
+        source?: string,
+        expiresAt?: string,
+        embedding?: Float32Array,
+        confidence?: number,
+        provenance?: CoreFactProvenance,
+    ): string {
         const id = randomUUID();
         const ts = now();
         const conf = confidence ?? 1.0;
         this.db.prepare(`
-            INSERT INTO core_facts (id, subject, content, category, confidence, source, embedding, created_at, updated_at, expires_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(id, subject, content, category, conf, source ?? null, embedding ? embeddingToBuffer(embedding) : null, ts, ts, expiresAt ?? null);
+            INSERT INTO core_facts (
+                id, subject, content, category, confidence, source,
+                source_chat_id, source_chat_title, source_topic_id, source_topic_label,
+                source_message_ids, source_interaction_ids, observed_at, visibility, sensitivity,
+                embedding, created_at, updated_at, expires_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+            id, subject, content, category, conf, source ?? null,
+            provenance?.sourceChatId ?? null,
+            provenance?.sourceChatTitle ?? null,
+            provenance?.sourceTopicId ?? null,
+            provenance?.sourceTopicLabel ?? null,
+            toJSON(provenance?.sourceMessageIds ?? []),
+            toJSON(provenance?.sourceInteractionIds ?? []),
+            provenance?.observedAt ?? ts,
+            provenance?.visibility ?? "contextual",
+            provenance?.sensitivity ?? "low",
+            embedding ? embeddingToBuffer(embedding) : null,
+            ts, ts, expiresAt ?? null,
+        );
 
         // 同步 FTS5
         try {
@@ -840,6 +919,54 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
                 ts,
             );
             log.debug("upsertPersonIdentity: INSERT", { userId, displayName: data.displayName ?? "" });
+        }
+    }
+
+    upsertPersonProfile(userId: string, data: Partial<PersonProfile>): void {
+        const ts = now();
+        const existing = this.db.prepare("SELECT user_id FROM person_profiles WHERE user_id = ?").get(userId);
+
+        if (existing) {
+            const builder = new SafeUpdateBuilder("person_profiles");
+            if (data.traits !== undefined) builder.set("traits", toJSON(data.traits));
+            if (data.interests !== undefined) builder.set("interests", toJSON(data.interests));
+            if (data.communicationStyle !== undefined) builder.set("communication_style", data.communicationStyle);
+            if (data.relationToAgent !== undefined) builder.set("relation_to_agent", data.relationToAgent);
+            if (data.stablePatterns !== undefined) builder.set("stable_patterns", toJSON(data.stablePatterns));
+            if (data.agentPolicyHints !== undefined) builder.set("agent_policy_hints", toJSON(data.agentPolicyHints));
+            if (data.followupCandidates !== undefined) builder.set("followup_candidates", toJSON(data.followupCandidates));
+            if (data.sourceChatIds !== undefined) builder.set("source_chat_ids", toJSON(data.sourceChatIds));
+            if (data.confidence !== undefined) builder.set("confidence", data.confidence);
+            if (data.lastReflectedAt !== undefined) builder.set("last_reflected_at", data.lastReflectedAt);
+            builder.set("updated_at", ts);
+            builder.where("user_id", userId);
+
+            const { sql, params } = builder.build();
+            this.db.prepare(sql).run(...params);
+            log.debug("upsertPersonProfile: UPDATE", { userId });
+        } else {
+            this.db.prepare(`
+                INSERT INTO person_profiles (
+                    user_id, traits, interests, communication_style, relation_to_agent,
+                    stable_patterns, agent_policy_hints, followup_candidates,
+                    source_chat_ids, confidence, last_reflected_at, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `).run(
+                userId,
+                toJSON(data.traits),
+                toJSON(data.interests),
+                data.communicationStyle ?? "",
+                data.relationToAgent ?? "",
+                toJSON(data.stablePatterns),
+                toJSON(data.agentPolicyHints),
+                toJSON(data.followupCandidates),
+                toJSON(data.sourceChatIds),
+                data.confidence ?? 0,
+                data.lastReflectedAt ?? null,
+                data.createdAt ?? ts,
+                ts,
+            );
+            log.debug("upsertPersonProfile: INSERT", { userId });
         }
     }
 
@@ -1066,20 +1193,55 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
         };
     }
 
-    searchByAlias(query: string, limit: number = 10): PersonIdentity[] {
-        const rows = this.db.prepare(
-            `SELECT * FROM person_identities WHERE display_name LIKE '%' || ? || '%' OR aliases LIKE '%' || ? || '%' LIMIT ?`
-        ).all(query, query, limit) as Record<string, unknown>[];
-        return rows.map(row => ({
+    getPersonProfile(userId: string): PersonProfile | null {
+        const row = this.db.prepare("SELECT * FROM person_profiles WHERE user_id = ?").get(userId) as Record<string, unknown> | undefined;
+        if (!row) return null;
+        return {
             userId: row.user_id as string,
-            displayName: row.display_name as string,
-            username: (row.username as string) ?? undefined,
-            aliases: fromJSON(row.aliases as string, []),
-            totalMessageCount: row.total_message_count as number,
-            lastSeenAt: row.last_seen_at as string,
-            firstSeenAt: row.first_seen_at as string,
+            traits: fromJSON<string[]>(row.traits as string, []),
+            interests: fromJSON<string[]>(row.interests as string, []),
+            communicationStyle: (row.communication_style as string) ?? "",
+            relationToAgent: (row.relation_to_agent as string) ?? "",
+            stablePatterns: fromJSON<string[]>(row.stable_patterns as string, []),
+            agentPolicyHints: fromJSON<string[]>(row.agent_policy_hints as string, []),
+            followupCandidates: fromJSON<string[]>(row.followup_candidates as string, []),
+            sourceChatIds: fromJSON<string[]>(row.source_chat_ids as string, []),
+            confidence: (row.confidence as number) ?? 0,
+            lastReflectedAt: (row.last_reflected_at as string) ?? null,
+            createdAt: row.created_at as string,
             updatedAt: row.updated_at as string,
-        }));
+        };
+    }
+
+    searchByAlias(query: string, limit: number = 10): PersonIdentity[] {
+        const normalizedQuery = query.trim().toLocaleLowerCase();
+        if (!normalizedQuery) return [];
+        const candidateLimit = Math.min(Math.max(limit * 5, limit), 200);
+        const rows = this.db.prepare(
+            `SELECT * FROM person_identities
+             WHERE user_id = ?
+                OR display_name LIKE '%' || ? || '%'
+                OR username LIKE '%' || ? || '%'
+                OR aliases LIKE '%' || ? || '%'
+             LIMIT ?`
+        ).all(query, query, query, query, candidateLimit) as Record<string, unknown>[];
+        return rows
+            .map(row => ({
+                userId: row.user_id as string,
+                displayName: row.display_name as string,
+                username: (row.username as string) ?? undefined,
+                aliases: fromJSON(row.aliases as string, []),
+                totalMessageCount: row.total_message_count as number,
+                lastSeenAt: row.last_seen_at as string,
+                firstSeenAt: row.first_seen_at as string,
+                updatedAt: row.updated_at as string,
+            }))
+            .sort((left, right) =>
+                identityAliasScore(right, normalizedQuery) - identityAliasScore(left, normalizedQuery)
+                || right.totalMessageCount - left.totalMessageCount
+                || right.lastSeenAt.localeCompare(left.lastSeenAt)
+            )
+            .slice(0, limit);
     }
 
     storeInteraction(episode: Omit<InteractionEpisode, "id">): string {
@@ -1904,7 +2066,10 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
 
         const limit = Math.min(Math.max(options.limit ?? 10, 1), 50);
         const sql = [
-            "SELECT cf.id, cf.subject, cf.category, cf.content, cf.confidence, cf.updated_at",
+            `SELECT cf.id, cf.subject, cf.category, cf.content, cf.confidence,
+                    cf.source_chat_id, cf.source_chat_title, cf.source_topic_id, cf.source_topic_label,
+                    cf.source_message_ids, cf.source_interaction_ids, cf.observed_at,
+                    cf.visibility, cf.sensitivity, cf.updated_at`,
             "FROM core_facts cf",
             "INNER JOIN core_facts_fts fts ON cf.rowid = fts.rowid",
             "WHERE core_facts_fts MATCH ?",
@@ -1932,6 +2097,15 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
             category: row.category as FactCategory,
             content: row.content as string,
             confidence: row.confidence as number,
+            sourceChatId: (row.source_chat_id as string) ?? null,
+            sourceChatTitle: (row.source_chat_title as string) ?? null,
+            sourceTopicId: (row.source_topic_id as string) ?? null,
+            sourceTopicLabel: (row.source_topic_label as string) ?? null,
+            sourceMessageIds: fromJSON<string[]>(row.source_message_ids as string, []),
+            sourceInteractionIds: fromJSON<string[]>(row.source_interaction_ids as string, []),
+            observedAt: (row.observed_at as string) ?? null,
+            visibility: ((row.visibility as string) ?? "contextual") as FactSearchResult["visibility"],
+            sensitivity: ((row.sensitivity as string) ?? "low") as FactSearchResult["sensitivity"],
             updatedAt: row.updated_at as string,
         }));
     }
@@ -2142,11 +2316,15 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
 
     getUserProfile(userId: string, chatId?: string): UserProfileSearchResult {
         const identity = this.getPersonIdentity(userId);
+        const globalProfile = this.getPersonProfile(userId);
         const groupProfile = chatId
             ? this.getProfilesForChat(chatId).find((profile) => profile.userId === userId) ?? null
             : null;
         const recentFacts = this.db.prepare(`
-            SELECT id, subject, category, content, confidence, updated_at
+            SELECT id, subject, category, content, confidence,
+                   source_chat_id, source_chat_title, source_topic_id, source_topic_label,
+                   source_message_ids, source_interaction_ids, observed_at,
+                   visibility, sensitivity, updated_at
             FROM core_facts
             WHERE subject = ?
               AND (expires_at IS NULL OR expires_at > datetime('now'))
@@ -2156,6 +2334,7 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
 
         return {
             identity,
+            globalProfile,
             groupProfile,
             recentFacts: recentFacts.map((row) => ({
                 factId: row.id as string,
@@ -2163,27 +2342,43 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
                 category: row.category as FactCategory,
                 content: row.content as string,
                 confidence: row.confidence as number,
+                sourceChatId: (row.source_chat_id as string) ?? null,
+                sourceChatTitle: (row.source_chat_title as string) ?? null,
+                sourceTopicId: (row.source_topic_id as string) ?? null,
+                sourceTopicLabel: (row.source_topic_label as string) ?? null,
+                sourceMessageIds: fromJSON<string[]>(row.source_message_ids as string, []),
+                sourceInteractionIds: fromJSON<string[]>(row.source_interaction_ids as string, []),
+                observedAt: (row.observed_at as string) ?? null,
+                visibility: ((row.visibility as string) ?? "contextual") as FactSearchResult["visibility"],
+                sensitivity: ((row.sensitivity as string) ?? "low") as FactSearchResult["sensitivity"],
                 updatedAt: row.updated_at as string,
             })),
         };
     }
 
-    getRecentInteractions(chatId: string, userId?: string, limit: number = 10): InteractionSearchResult[] {
-        const rows = userId
-            ? this.db.prepare(`
-                SELECT chat_id, user_id, type, summary, sentiment, significance, created_at
-                FROM interactions
-                WHERE chat_id = ? AND user_id = ?
-                ORDER BY created_at DESC
-                LIMIT ?
-            `).all(chatId, userId, limit)
-            : this.db.prepare(`
-                SELECT chat_id, user_id, type, summary, sentiment, significance, created_at
-                FROM interactions
-                WHERE chat_id = ?
-                ORDER BY created_at DESC
-                LIMIT ?
-            `).all(chatId, limit);
+    getRecentInteractions(chatId?: string | null, userId?: string, limit: number = 10): InteractionSearchResult[] {
+        const boundedLimit = Math.min(Math.max(limit ?? 10, 1), 50);
+        const conditions: string[] = [];
+        const params: unknown[] = [];
+
+        if (chatId) {
+            conditions.push("chat_id = ?");
+            params.push(chatId);
+        }
+        if (userId) {
+            conditions.push("user_id = ?");
+            params.push(userId);
+        }
+
+        const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+        params.push(boundedLimit);
+        const rows = this.db.prepare(`
+            SELECT chat_id, user_id, type, summary, sentiment, significance, created_at
+            FROM interactions
+            ${where}
+            ORDER BY created_at DESC
+            LIMIT ?
+        `).all(...params);
 
         return (rows as Array<Record<string, unknown>>).map((row) => ({
             timestamp: row.created_at as string,
@@ -2329,6 +2524,53 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
         return result;
     }
 
+    /** 按起止 messageId 重建一段时间连续的消息窗口（包含 agent 自己落盘的消息）。 */
+    getMessagesBetweenIds(chatId: string, startMessageId: string, endMessageId: string): RecentMessageEntry[] {
+        const start = this.getMessageById(chatId, startMessageId);
+        const end = this.getMessageById(chatId, endMessageId);
+        if (!start || !end) {
+            log.debug("getMessagesBetweenIds: boundary not found", {
+                chatId,
+                startMessageId,
+                endMessageId,
+                hasStart: !!start,
+                hasEnd: !!end,
+            });
+            return [];
+        }
+
+        const from = start.timestamp <= end.timestamp ? start.timestamp : end.timestamp;
+        const to = start.timestamp <= end.timestamp ? end.timestamp : start.timestamp;
+        const rows = this.db.prepare(
+            `SELECT message_id, chat_id, user_id, display_name, text, reply_to_message_id, timestamp, media_type, media_info
+             FROM message_log
+             WHERE chat_id = ?
+               AND timestamp >= ?
+               AND timestamp <= ?
+             ORDER BY timestamp ASC, rowid ASC`
+        ).all(chatId, from, to) as Record<string, unknown>[];
+
+        const result = rows.map((row): RecentMessageEntry => ({
+            messageId: row.message_id as string,
+            chatId: row.chat_id as string,
+            userId: row.user_id as string,
+            displayName: (row.display_name as string) ?? "",
+            text: (row.text as string) ?? "",
+            replyToMessageId: (row.reply_to_message_id as string) ?? undefined,
+            timestamp: row.timestamp as string,
+            mediaType: (row.media_type as string) ?? undefined,
+            mediaInfo: (row.media_info as string) ?? undefined,
+        }));
+
+        log.debug("getMessagesBetweenIds", {
+            chatId,
+            startMessageId,
+            endMessageId,
+            count: result.length,
+        });
+        return result;
+    }
+
     // ── Sticker 描述缓存 ──
 
     getStickerDescription(uniqueFileId: string): { description: string; emoji?: string; emojis?: string[] } | null {
@@ -2451,6 +2693,32 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
         };
     }
 
+    /** 分页列出全部全局 person_profiles */
+    listPersonProfiles(limit = 50, offset = 0): { items: PersonProfile[]; total: number } {
+        const total = (this.db.prepare("SELECT COUNT(*) as cnt FROM person_profiles").get() as { cnt: number }).cnt;
+        const rows = this.db.prepare(
+            "SELECT * FROM person_profiles ORDER BY updated_at DESC LIMIT ? OFFSET ?"
+        ).all(limit, offset) as Record<string, unknown>[];
+        return {
+            total,
+            items: rows.map(row => ({
+                userId: row.user_id as string,
+                traits: fromJSON<string[]>(row.traits as string, []),
+                interests: fromJSON<string[]>(row.interests as string, []),
+                communicationStyle: (row.communication_style as string) ?? "",
+                relationToAgent: (row.relation_to_agent as string) ?? "",
+                stablePatterns: fromJSON<string[]>(row.stable_patterns as string, []),
+                agentPolicyHints: fromJSON<string[]>(row.agent_policy_hints as string, []),
+                followupCandidates: fromJSON<string[]>(row.followup_candidates as string, []),
+                sourceChatIds: fromJSON<string[]>(row.source_chat_ids as string, []),
+                confidence: (row.confidence as number) ?? 0,
+                lastReflectedAt: (row.last_reflected_at as string) ?? null,
+                createdAt: row.created_at as string,
+                updatedAt: row.updated_at as string,
+            })),
+        };
+    }
+
     /** 删除某个 PersonIdentity */
     deletePersonIdentity(userId: string): boolean {
         const result = this.db.prepare("DELETE FROM person_identities WHERE user_id = ?").run(userId);
@@ -2493,7 +2761,7 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
     }
 
     /** 分页列出/过滤 core_facts */
-    listCoreFacts(options?: { subject?: string; category?: string; limit?: number; offset?: number }): { items: CoreFact[]; total: number } {
+    listCoreFacts(options?: { subject?: string; category?: string; sourceChatId?: string; limit?: number; offset?: number }): { items: CoreFact[]; total: number } {
         const limit = options?.limit ?? 50;
         const offset = options?.offset ?? 0;
 
@@ -2511,6 +2779,11 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
             querySql += " AND category = ?";
             params.push(options.category);
         }
+        if (options?.sourceChatId) {
+            countSql += " AND source_chat_id = ?";
+            querySql += " AND source_chat_id = ?";
+            params.push(options.sourceChatId);
+        }
 
         const total = (this.db.prepare(countSql).get(...params) as { cnt: number }).cnt;
         querySql += " ORDER BY updated_at DESC LIMIT ? OFFSET ?";
@@ -2525,6 +2798,15 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
                 category: row.category as FactCategory,
                 confidence: row.confidence as number,
                 source: (row.source as string) ?? null,
+                sourceChatId: (row.source_chat_id as string) ?? null,
+                sourceChatTitle: (row.source_chat_title as string) ?? null,
+                sourceTopicId: (row.source_topic_id as string) ?? null,
+                sourceTopicLabel: (row.source_topic_label as string) ?? null,
+                sourceMessageIds: fromJSON<string[]>(row.source_message_ids as string, []),
+                sourceInteractionIds: fromJSON<string[]>(row.source_interaction_ids as string, []),
+                observedAt: (row.observed_at as string) ?? null,
+                visibility: ((row.visibility as string) ?? "contextual") as CoreFact["visibility"],
+                sensitivity: ((row.sensitivity as string) ?? "low") as CoreFact["sensitivity"],
                 createdAt: row.created_at as string,
                 updatedAt: row.updated_at as string,
                 expiresAt: (row.expires_at as string) ?? null,
@@ -2533,13 +2815,27 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
     }
 
     /** 按 ID 更新 core_fact */
-    updateFact(id: string, data: { content?: string; category?: string; confidence?: number; expiresAt?: string | null }): boolean {
+    updateFact(id: string, data: {
+        content?: string;
+        category?: string;
+        confidence?: number;
+        expiresAt?: string | null;
+    } & CoreFactProvenance): boolean {
         const ts = now();
         const builder = new SafeUpdateBuilder("core_facts");
         if (data.content !== undefined) builder.set("content", data.content);
         if (data.category !== undefined) builder.set("category", data.category);
         if (data.confidence !== undefined) builder.set("confidence", data.confidence);
         if (data.expiresAt !== undefined) builder.set("expires_at", data.expiresAt);
+        if (data.sourceChatId !== undefined) builder.set("source_chat_id", data.sourceChatId);
+        if (data.sourceChatTitle !== undefined) builder.set("source_chat_title", data.sourceChatTitle);
+        if (data.sourceTopicId !== undefined) builder.set("source_topic_id", data.sourceTopicId);
+        if (data.sourceTopicLabel !== undefined) builder.set("source_topic_label", data.sourceTopicLabel);
+        if (data.sourceMessageIds !== undefined) builder.set("source_message_ids", toJSON(data.sourceMessageIds));
+        if (data.sourceInteractionIds !== undefined) builder.set("source_interaction_ids", toJSON(data.sourceInteractionIds));
+        if (data.observedAt !== undefined) builder.set("observed_at", data.observedAt);
+        if (data.visibility !== undefined) builder.set("visibility", data.visibility);
+        if (data.sensitivity !== undefined) builder.set("sensitivity", data.sensitivity);
         builder.set("updated_at", ts);
         builder.where("id", id);
 

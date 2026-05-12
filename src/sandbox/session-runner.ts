@@ -714,9 +714,9 @@ ${fullDocs}
                 outputParts.push(`[⚠ Sandbox Error]\n${errorMsg}`);
                 errorOccurred = true;
 
-                // 如果 sandbox 进程已死，立即终止 session（不再重试）
-                if (!sandbox.isAlive()) {
-                    log.error("Sandbox worker died, aborting session", { sessionId, turn: turnNum, error: errorMsg });
+                // 如果 sandbox 进程已死或本轮执行超时，立即终止 session（不再用卡住的 worker 重试）。
+                if (!sandbox.isAlive() || isCodeExecutionTimeoutError(errorMsg)) {
+                    log.error("Sandbox execution aborted, ending session", { sessionId, turn: turnNum, error: errorMsg });
                     turns.push(turn);
 
                     emitProgress({ turn: turnNum, phase: "end", isProcessing: false, endReason: "error" });
@@ -725,7 +725,7 @@ ${fullDocs}
                         turns,
                         messages,
                         endReason: "error",
-                        error: `Sandbox worker died: ${errorMsg}`,
+                        error: `Sandbox execution aborted: ${errorMsg}`,
                     };
                 }
             }
@@ -845,4 +845,8 @@ function truncateOutput(output: string): string {
         output.slice(0, MAX_OUTPUT_CHARS) +
         `\n...[truncated, ${output.length - MAX_OUTPUT_CHARS} chars omitted]`
     );
+}
+
+function isCodeExecutionTimeoutError(message: string): boolean {
+    return message.includes("Code execution timed out after");
 }

@@ -24,6 +24,7 @@ const log = createLogger("post-task-window");
 
 const DEFAULT_WINDOW_MS = 120_000;
 const IDLE_RECHECK_MS = 2_000;
+const MIN_MAX_WINDOW_MS = 5 * 60_000;
 
 interface ExecutorLike {
     enqueue(task: CodeActReplyTask): void;
@@ -35,6 +36,7 @@ interface ActivePostTaskWindow {
     chatId: string;
     startedAtMs: number;
     flushAtMs: number;
+    maxFlushAtMs: number;
     callbacks: SubagentCallback[];
     messages: PostTaskReactionMessage[];
     sentMessageIds: Set<string>;
@@ -44,6 +46,7 @@ interface ActivePostTaskWindow {
 
 export interface PostTaskWindowManagerOptions {
     windowMs?: number;
+    maxWindowMs?: number;
     callbackQueue: CallbackQueue;
     accumulator: Pick<AttentionAccumulator, "block" | "unblock">;
     subagentManager: Pick<SubagentManager, "get">;
@@ -52,6 +55,7 @@ export interface PostTaskWindowManagerOptions {
 
 export class PostTaskWindowManager {
     private readonly windowMs: number;
+    private readonly maxWindowMs: number;
     private readonly callbackQueue: CallbackQueue;
     private readonly accumulator: Pick<AttentionAccumulator, "block" | "unblock">;
     private readonly subagentManager: Pick<SubagentManager, "get">;
@@ -60,6 +64,7 @@ export class PostTaskWindowManager {
 
     constructor(options: PostTaskWindowManagerOptions) {
         this.windowMs = options.windowMs ?? DEFAULT_WINDOW_MS;
+        this.maxWindowMs = options.maxWindowMs ?? Math.max(MIN_MAX_WINDOW_MS, this.windowMs * 3);
         this.callbackQueue = options.callbackQueue;
         this.accumulator = options.accumulator;
         this.subagentManager = options.subagentManager;
@@ -82,6 +87,7 @@ export class PostTaskWindowManager {
             chatId,
             startedAtMs,
             flushAtMs: startedAtMs + this.windowMs,
+            maxFlushAtMs: startedAtMs + this.maxWindowMs,
             callbacks: [],
             messages: [],
             sentMessageIds: new Set<string>(),
@@ -131,6 +137,7 @@ export class PostTaskWindowManager {
             chatId: callback.chatId,
             startedAtMs,
             flushAtMs: startedAtMs + this.windowMs,
+            maxFlushAtMs: startedAtMs + this.maxWindowMs,
             callbacks: [callback],
             messages: [],
             sentMessageIds: new Set<string>(),
@@ -255,9 +262,10 @@ export class PostTaskWindowManager {
 
     private scheduleFlush(window: ActivePostTaskWindow, delayMs: number): void {
         if (window.timer) clearTimeout(window.timer);
+        const maxDelayMs = Math.max(0, window.maxFlushAtMs - Date.now());
         window.timer = setTimeout(() => {
             this.flushIfIdle(window.chatId);
-        }, Math.max(0, delayMs));
+        }, Math.max(0, Math.min(delayMs, maxDelayMs)));
         if (window.timer.unref) window.timer.unref();
     }
 
@@ -265,16 +273,36 @@ export class PostTaskWindowManager {
         const window = this.windows.get(chatId);
         if (!window) return;
 
+        const now = Date.now();
+        const isExpired = now >= window.maxFlushAtMs;
         const subagent = this.subagentManager.get(chatId);
         const executor = subagent?.codeActExecutor as ExecutorLike | null | undefined;
         const isBusy = Boolean(executor?.isProcessing?.()) || (executor?.getQueueSize?.() ?? 0) > 0;
-        if (isBusy) {
+        if (isBusy && !isExpired) {
             this.scheduleFlush(window, IDLE_RECHECK_MS);
             return;
         }
         if (window.callbacks.length === 0) {
+            if (isExpired) {
+                this.windows.delete(chatId);
+                if (window.timer) clearTimeout(window.timer);
+                this.accumulator.unblock(chatId);
+                log.warn("post-task window expired without callback; unblocked chat", {
+                    chatId,
+                    durationMs: now - window.startedAtMs,
+                    messages: window.messages.length,
+                });
+                return;
+            }
             this.scheduleFlush(window, IDLE_RECHECK_MS);
             return;
+        }
+        if (isBusy && isExpired) {
+            log.warn("post-task window force flushed while executor busy", {
+                chatId,
+                callbacks: window.callbacks.length,
+                durationMs: now - window.startedAtMs,
+            });
         }
 
         this.windows.delete(chatId);

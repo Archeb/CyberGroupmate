@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { clearConfigCache, loadConfig, resolveComponentProfiles } from "../src/core/config.js";
+import { clearConfigCache, loadConfig, resolveComponentProfiles, serializeConfigToYAML } from "../src/core/config.js";
 
 const tempDirs: string[] = [];
 
@@ -102,6 +102,7 @@ describe("config meta routing", () => {
             "  dimensions: 128",
             "  similarity_metric: cosine",
             "subagent:",
+            "  deduplicate_sent_messages: false",
             "  meta_history:",
             "    soft_char_limit: 22000",
             "    trim_target_chars: 12000",
@@ -113,10 +114,12 @@ describe("config meta routing", () => {
         clearConfigCache();
         const config = loadConfig(configPath, true);
 
+        assert.equal(config.subagent?.deduplicateSentMessages, false);
         assert.equal(config.subagent?.metaHistory?.softCharLimit, 22000);
         assert.equal(config.subagent?.metaHistory?.trimTargetChars, 12000);
         assert.equal(config.subagent?.metaHistory?.minMessages, 10);
         assert.equal(config.subagent?.metaHistory?.hardMessageLimit, 60);
         assert.equal(config.subagent?.metaHistory?.trimTargetMessages, 40);
+        assert.match(serializeConfigToYAML(config), /deduplicate_sent_messages: false/);
     });
 });

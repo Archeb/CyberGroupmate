@@ -8,7 +8,7 @@ import type {
 import type { AssociatedMemory, GroupModel } from "../../memory-v2/types.js";
 import { deriveChatType, formatTopicList, type FormattableTopic } from "../prompt-renderer-utils.js";
 import { formatMessageLine, type RawMessage, type StickerDescriptionLookup } from "../../core/message-enricher.js";
-import { getDunbarTierLabel, getRawId } from "../../core/chat-id.js";
+import { getRawId } from "../../core/chat-id.js";
 import type { VisionConfig } from "../../core/config.js";
 
 const META_ASSOCIATED_MEMORIES_ENABLED = false;
@@ -80,14 +80,7 @@ function stableStringList(values?: string[]): string {
 
 function getAssociatedMemorySignature(memory: AssociatedMemory): string {
     if (memory.type === "core_fact") {
-        return [
-            memory.type,
-            memory.factId,
-            memory.subject,
-            memory.category,
-            memory.content,
-            memory.confidence,
-        ].join("::");
+        return "";
     }
 
     return [
@@ -104,6 +97,7 @@ function getTopicDigestSignature(digest: TopicDigest): string {
     const associatedMemories = META_ASSOCIATED_MEMORIES_ENABLED && digest.associatedMemories?.length
         ? [...digest.associatedMemories]
             .map(getAssociatedMemorySignature)
+            .filter(Boolean)
             .sort((left, right) => left.localeCompare(right))
             .join("|")
         : "";
@@ -127,6 +121,7 @@ function getProfileSignature(profile: ActiveUserProfile): string {
     return [
         profile.userId,
         profile.displayName,
+        profile.userLabel ?? "",
         profile.messageCount,
         profile.dunbarTier ?? "",
         profile.rapport ?? "",
@@ -134,6 +129,13 @@ function getProfileSignature(profile: ActiveUserProfile): string {
         profile.username ?? "",
         profile.communicationStyle ?? "",
         profile.relationToAgent ?? "",
+        stableStringList(profile.relationshipMemory),
+        stableStringList(profile.agentPolicyHints),
+        stableStringList(profile.stablePatterns),
+        stableStringList(profile.followupCandidates),
+        profile.globalRelationToAgent ?? "",
+        profile.currentRelationToAgent ?? "",
+        profile.currentChatLabel ?? "",
         stableStringList(profile.aliases),
         stableStringList(profile.traits),
     ].join("::");
@@ -144,26 +146,27 @@ function formatAssociatedMemories(memories?: AssociatedMemory[]): string[] {
         return [];
     }
 
+    const renderedMemories = memories.filter(memory => memory.type !== "core_fact");
+    if (renderedMemories.length === 0) {
+        return [];
+    }
+
     const lines = ["  关联记忆:"];
-    for (const memory of memories.slice(0, 3)) {
-        if (memory.type === "core_fact") {
-            lines.push(`    - [${memory.subject} · ${memory.category}] ${memory.content}`);
-        } else {
-            lines.push(`    - [历史话题] ${memory.label} — ${memory.summary}`);
-        }
+    for (const memory of renderedMemories.slice(0, 3)) {
+        lines.push(`    - [历史话题] ${memory.label} — ${memory.summary}`);
     }
     return lines;
 }
 
 function formatProfileLine(profile: ActiveUserProfile): string {
-    const tier = profile.dunbarTier ? getDunbarTierLabel(profile.dunbarTier) : "未知层级";
     const aliases = profile.aliases?.length ? ` [别名: ${profile.aliases.join(", ")}]` : "";
     const mention = profile.mention ? ` (提及方式: ${profile.mention})` : "";
-    const rapport = typeof profile.rapport === "number" ? `, 好感${profile.rapport}` : "";
-    const relation = profile.relationToAgent ? `, 关系: ${profile.relationToAgent}` : "";
-    const traits = profile.traits?.length ? ` | 特征: ${profile.traits.join(", ")}` : "";
-    const style = profile.communicationStyle ? ` | 风格: ${profile.communicationStyle}` : "";
-    return `- ${profile.displayName}${mention}${aliases} (${tier}${rapport}${relation})${traits}${style}`;
+    const relation = profile.globalRelationToAgent ?? (
+        profile.relationToAgent?.startsWith("全局: ")
+            ? profile.relationToAgent.split("；")[0]?.replace(/^全局:\s*/, "")
+            : undefined
+    );
+    return `- ${profile.userLabel ?? profile.displayName}${mention}${aliases}${relation ? ` | 总体关系: ${relation}` : ""}`;
 }
 
 function toRawMessage(message: AttentionRecentMessage, messagesById?: Map<string, AttentionRecentMessage>): RawMessage {
@@ -747,15 +750,31 @@ export const metaProfilesProvider: SectionProvider<MetaProfilesData> = {
         };
     },
     render(data) {
-        return `## 活跃参与者\n${data.profiles.map(formatProfileLine).join("\n")}`;
+        return [
+            "## 活跃参与者",
+            ...formatProfileUseGuidance(),
+            ...data.profiles.map(formatProfileLine),
+        ].join("\n");
     },
     renderDelta(delta) {
         if (delta.profiles.length === 0) {
             return "";
         }
-        return `## 活跃参与者 (更新)\n${delta.profiles.map(formatProfileLine).join("\n")}`;
+        return [
+            "## 活跃参与者 (更新)",
+            ...formatProfileUseGuidance(),
+            ...delta.profiles.map(formatProfileLine),
+        ].join("\n");
     },
 };
+
+function formatProfileUseGuidance(): string[] {
+    return [
+        "使用原则:",
+        "- 这里只显示当前 L0 直接叫住 agent 的人物身份和全局总体关系，用于判断优先级和是否需要派发。",
+        "- 详细关系记忆会交给 Subagent；需要事实或跨群细节时主动调用 memory/conversations 搜索，不要凭这段身份摘要补全结论。",
+    ];
+}
 
 export const metaDecisionPromptProvider: SectionProvider<string> = {
     schema: {

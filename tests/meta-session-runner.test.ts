@@ -14,6 +14,8 @@ import {
     resetMetaCodeActState,
     runMetaSession,
 } from "../src/meta-sandbox/meta-session-runner.js";
+import { buildPrefixMap } from "../src/sandbox/api-intent-extractor.js";
+import type { ModuleEntry } from "../src/sandbox/modules/module-registry.js";
 
 const TEST_LLM_CONFIG: LLMConfig = {
     provider: "openai",
@@ -203,6 +205,104 @@ describe("runMetaSession", () => {
         assert.match(llmCalls[1][llmCalls[1].length - 1].content, /42/);
         assert.match(llmCalls[1][llmCalls[1].length - 2].content, /const value = await tools\.answer/);
         assert.doesNotMatch(llmCalls[1][llmCalls[1].length - 2].content, /<end_turn>/);
+    });
+
+    it("injects Meta API docs through two-pass before executing platform APIs", async () => {
+        const registry: ModuleEntry[] = [{
+            name: "dispatch",
+            description: "Meta dispatch API",
+            methods: [{
+                name: "taskToGroup",
+                brief: "taskToGroup(chatId, taskSpec)",
+                fullDoc: [
+                    "```typescript",
+                    "taskToGroup(chatId: string, taskSpec: { contentDirection: string }): Promise<{ taskId: string }>",
+                    "```",
+                    "",
+                    "Use this to delegate writes to a group Subagent.",
+                ].join("\n"),
+            }],
+        }];
+        const sandbox = new MetaSandbox({
+            dispatch: {
+                taskToGroup: async (_chatId: string, taskSpec: { contentDirection: string }) => ({
+                    taskId: "task-1",
+                    contentDirection: taskSpec.contentDirection,
+                }),
+            },
+        });
+        const llmCalls: ChatMessage[][] = [];
+        const progressEvents: any[] = [];
+        const onProgress = (event: unknown) => {
+            const data = event as { chatId?: string };
+            if (data.chatId === META_CODEACT_CHAT_ID) {
+                progressEvents.push(event);
+            }
+        };
+        codeActEvents.on("codeact:progress", onProgress);
+
+        const responses: LLMResponse[] = [
+            {
+                content: [
+                    "Need to dispatch.",
+                    "",
+                    "```ts",
+                    "await dispatch.taskToGroup(\"telegram:g1\", { contentDirection: \"pass1\" });",
+                    "```",
+                ].join("\n"),
+            },
+            {
+                content: [
+                    "Docs loaded; rewrite with the right shape.",
+                    "",
+                    "```ts",
+                    "const task = await dispatch.taskToGroup(\"telegram:g1\", { contentDirection: \"pass2\" });",
+                    "console.log(task.taskId, task.contentDirection);",
+                    "```",
+                ].join("\n"),
+            },
+            {
+                content: "Done.\n[SESSION_DIGEST]dispatched via injected docs[/SESSION_DIGEST]\n<end_turn>",
+            },
+        ];
+
+        try {
+            const result = await runMetaSession(
+                [{ role: "system", content: "system" }],
+                sandbox,
+                [TEST_LLM_CONFIG],
+                {
+                    llmCaller: async (messages) => {
+                        llmCalls.push(messages.map((message) => ({ ...message })));
+                        const next = responses.shift();
+                        assert.ok(next);
+                        return next;
+                    },
+                    twoPassConfig: {
+                        getPrefixMap: () => buildPrefixMap(registry),
+                        lookupDocs: (methods) => {
+                            assert.deepEqual(methods, ["dispatch.taskToGroup"]);
+                            return "# 完整 API 文档\n\n### dispatch.taskToGroup\n\n" + registry[0].methods[0].fullDoc;
+                        },
+                    },
+                },
+            );
+
+            assert.equal(result.endReason, "end_turn");
+            assert.equal(result.turns[0]?.code, [
+                "const task = await dispatch.taskToGroup(\"telegram:g1\", { contentDirection: \"pass2\" });",
+                "console.log(task.taskId, task.contentDirection);",
+            ].join("\n"));
+            assert.match(result.turns[0]?.observation ?? "", /task-1 pass2/);
+            assert.match(llmCalls[1]?.at(-1)?.content ?? "", /Meta API 文档加载完成/);
+            assert.match(llmCalls[1]?.at(-1)?.content ?? "", /### dispatch\.taskToGroup/);
+            assert.deepEqual(
+                progressEvents.map((event) => event.phase),
+                ["thinking", "type_resolving", "thinking", "executing", "observation", "thinking", "end"],
+            );
+        } finally {
+            codeActEvents.off("codeact:progress", onProgress);
+        }
     });
 
     it("ignores code+end_turn and waits for a pure-text digest+end_turn turn", async () => {

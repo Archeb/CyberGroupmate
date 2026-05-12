@@ -11,6 +11,8 @@
 import type { CapabilityRegistryEnv } from "../../capability-registry.js";
 import { resolve as pathResolve } from "node:path";
 import { existsSync } from "node:fs";
+import { loadBuiltinGuideContent } from "../../builtin-guides.js";
+import { isAllowedTelegramMtcutePassthroughMethod } from "../../../core/telegram-mtcute-passthrough.js";
 
 // ─── 工具函数 ───
 
@@ -42,7 +44,11 @@ export function formatTelegramAck(prefix: string, payload: unknown): string {
 
 // ─── Telegram 客户端代理 ───
 
-export function createTelegramClientProxy(env: CapabilityRegistryEnv, sentHistory: Map<string, Set<string>>) {
+export function createTelegramClientProxy(
+    env: CapabilityRegistryEnv,
+    sentHistory: Map<string, Set<string>>,
+    deduplicateSentMessages = true,
+) {
     /**
      * 将可能的工作区相对路径解析为绝对路径。
      * 如果解析后的路径对应的文件存在，则返回绝对路径；
@@ -97,29 +103,109 @@ export function createTelegramClientProxy(env: CapabilityRegistryEnv, sentHistor
         return `[mediaGroup:${mediaKeys.join("||")}]`;
     }
 
-    /**
-     * 检查消息是否是重复发送。
-     * 如果是新消息则记录并返回 false；如果已发送过则返回 true。
-     */
+    /** 检查消息是否是已成功发送过的重复消息。 */
     function isDuplicate(chatId: string, text: string): boolean {
         const key = String(chatId);
         const existing = sentHistory.get(key);
-        if (existing && existing.has(text)) {
-            return true;
-        }
+        return existing?.has(text) ?? false;
+    }
+
+    /** 仅在平台发送成功后记录，避免失败/拦截调用污染去重历史。 */
+    function recordSent(chatId: string, text: string): void {
+        const key = String(chatId);
+        const existing = sentHistory.get(key);
         if (!existing) {
             sentHistory.set(key, new Set([text]));
         } else {
             existing.add(text);
         }
-        return false;
     }
 
-    return {
-        getMe: async () => env.callHost("telegram.getMe", []),
+    function shouldBlockDuplicate(chatId: string, text: string): boolean {
+        return deduplicateSentMessages && isDuplicate(chatId, text);
+    }
+
+    function recordSentIfDedupEnabled(chatId: string, text: string): void {
+        if (!deduplicateSentMessages) return;
+        recordSent(chatId, text);
+    }
+
+    function isTelegramPeerResolutionError(err: unknown): boolean {
+        const msg = err instanceof Error ? `${err.name}: ${err.message}\n${err.stack ?? ""}` : String(err);
+        return /PEER_ID_INVALID|MtPeerNotFoundError|peer .*not found|not found in local cache|reading 'inputPeer'|reading "inputPeer"|Invalid peer id/i.test(msg);
+    }
+
+    function buildTelegramPeerGuidance(method: string, args: unknown[]): string {
+        const target = args.length > 0 ? String(args[0]) : "(unknown)";
+        return [
+            `[Telegram peer guardrail] ${method} 目标 peer=${target} 未解析。`,
+            "这通常表示当前 mtcute session 还没遇见这个用户/私聊，缺少 access hash。下一步不要反复用裸数字 ID 重试。",
+            "优先做法：",
+            "- 有 username 时先 await telegram.meetPeer('@username')，或直接用 username 作为发送目标。",
+            "- 有手机号时先 await telegram.meetPeer('+8613...', { kind: 'phone' })。",
+            "- 已有对话时先 await telegram.findDialogs(userIdOrUsername) 或 await telegram.getDialogs({ limit: 200 }) 预热。",
+            "- 有该用户消息 ID 时先 await telegram.meetPeer(userId, { chatId, messageIds: [messageId] }) 或 await telegram.getMessages(chatId, [messageId])。",
+        ].join("\n");
+    }
+
+    async function callTelegramHost(method: string, args: unknown[] = []): Promise<unknown> {
+        try {
+            return await env.callHost(method, args);
+        } catch (err) {
+            if (!isTelegramPeerResolutionError(err)) throw err;
+            const base = err instanceof Error ? err.message : String(err);
+            const guidance = buildTelegramPeerGuidance(method, args);
+            env.emitOutput(guidance);
+            env.notifyHost({
+                type: "system.telegram_peer_guardrail",
+                scene: "telegram",
+                method,
+                chatId: args.length > 0 ? String(args[0]) : undefined,
+                error: base,
+                timestamp: new Date().toISOString(),
+            });
+            throw new Error(`${base}\n\n${guidance}`);
+        }
+    }
+
+    function useTelegramGuide(methodName: string): string {
+        const content = loadBuiltinGuideContent("telegram", methodName);
+        if (!content) throw new Error(`Telegram guide not found: ${methodName}`);
+        const wrapped = `\n═══ [TelegramGuide: ${methodName}] ═══\n${content}\n═══ [/TelegramGuide: ${methodName}] ═══\n`;
+        env.emitOutput(wrapped);
+        return wrapped;
+    }
+
+    function resolveStoryMedia(media: unknown): unknown {
+        if (typeof media === "string") {
+            return resolveLocalFile(media);
+        }
+        if (media && typeof media === "object") {
+            const record = media as Record<string, unknown>;
+            return {
+                ...record,
+                file: resolveLocalFile(record.file),
+            };
+        }
+        return media;
+    }
+
+    const methods = {
+        useInlineBot: async () => useTelegramGuide("useInlineBot"),
+        useStories: async () => useTelegramGuide("useStories"),
+        usePolls: async () => useTelegramGuide("usePolls"),
+        usePeerResolution: async () => useTelegramGuide("usePeerResolution"),
+        useMessageSearch: async () => useTelegramGuide("useMessageSearch"),
+        useAccountProfile: async () => useTelegramGuide("useAccountProfile"),
+        useAdvancedMessages: async () => useTelegramGuide("useAdvancedMessages"),
+        useChatAdministration: async () => useTelegramGuide("useChatAdministration"),
+        useInvites: async () => useTelegramGuide("useInvites"),
+        useForumTopics: async () => useTelegramGuide("useForumTopics"),
+
+        getMe: async () => callTelegramHost("telegram.getMe", []),
         sendText: async (chatId: number | string, text: string, opts?: { replyTo?: number }) => {
             // ── 重复消息拦截 ──
-            if (isDuplicate(String(chatId), text)) {
+            if (shouldBlockDuplicate(String(chatId), text)) {
                 const warning = `[⚠ 运行时警告: 重复消息已拦截] 目标 chat=${String(chatId)} 的消息 "${text.length > 80 ? text.slice(0, 80) + '...' : text}" 与本次 session 中已发送的消息内容完全一致，已自动拦截，不会重复发送。`;
                 env.emitOutput(warning);
                 env.notifyHost({
@@ -131,7 +217,8 @@ export function createTelegramClientProxy(env: CapabilityRegistryEnv, sentHistor
                 });
                 return null;
             }
-            const sent = hydrateTelegramMessage(await env.callHost("telegram.sendText", [chatId, text, opts]));
+            const sent = hydrateTelegramMessage(await callTelegramHost("telegram.sendText", [chatId, text, opts]));
+            recordSentIfDedupEnabled(String(chatId), text);
             env.emitOutput(formatTelegramAck("[Telegram] sendText ok", sent));
             // 发射 agent_message_sent 通知，供 SentMessageCollector 捕获
             env.notifyHost({
@@ -147,7 +234,7 @@ export function createTelegramClientProxy(env: CapabilityRegistryEnv, sentHistor
         },
         sendMedia: async (chatId: number | string, media: unknown, opts?: { replyTo?: number; caption?: string }) => {
             const mediaText = buildTelegramMediaDedupKey(media, opts?.caption);
-            if (isDuplicate(String(chatId), mediaText)) {
+            if (shouldBlockDuplicate(String(chatId), mediaText)) {
                 const preview = mediaText.length > 80 ? mediaText.slice(0, 80) + '...' : mediaText;
                 const warning = `[⚠ 运行时警告: 重复消息已拦截] 目标 chat=${String(chatId)} 的媒体消息 "${preview}" 与本次 session 中已发送的消息内容完全一致，已自动拦截，不会重复发送。`;
                 env.emitOutput(warning);
@@ -173,7 +260,8 @@ export function createTelegramClientProxy(env: CapabilityRegistryEnv, sentHistor
                 };
             }
 
-            const sent = hydrateTelegramMessage(await env.callHost("telegram.sendMedia", [chatId, processedMedia, opts]));
+            const sent = hydrateTelegramMessage(await callTelegramHost("telegram.sendMedia", [chatId, processedMedia, opts]));
+            recordSentIfDedupEnabled(String(chatId), mediaText);
             env.emitOutput(formatTelegramAck("[Telegram] sendMedia ok", sent));
             // 发射 agent_message_sent 通知
             env.notifyHost({
@@ -193,7 +281,7 @@ export function createTelegramClientProxy(env: CapabilityRegistryEnv, sentHistor
             if (opts?.fileName) fileParts.push(`fileName=${opts.fileName}`);
             if (opts?.mimeType) fileParts.push(`mimeType=${opts.mimeType}`);
             const fileText = `[file:${fileParts.join("|")}]`;
-            if (isDuplicate(String(chatId), fileText)) {
+            if (shouldBlockDuplicate(String(chatId), fileText)) {
                 const warning = `[⚠ 运行时警告: 重复消息已拦截] 目标 chat=${String(chatId)} 的文件消息 "${fileText.length > 80 ? fileText.slice(0, 80) + '...' : fileText}" 与本次 session 中已发送的消息内容完全一致，已自动拦截，不会重复发送。`;
                 env.emitOutput(warning);
                 env.notifyHost({
@@ -206,7 +294,8 @@ export function createTelegramClientProxy(env: CapabilityRegistryEnv, sentHistor
                 return null;
             }
 
-            const sent = hydrateTelegramMessage(await env.callHost("telegram.sendFile", [chatId, absFilePath, opts]));
+            const sent = hydrateTelegramMessage(await callTelegramHost("telegram.sendFile", [chatId, absFilePath, opts]));
+            recordSentIfDedupEnabled(String(chatId), fileText);
             env.emitOutput(formatTelegramAck("[Telegram] sendFile ok", sent));
             // 发射 agent_message_sent 通知
             env.notifyHost({
@@ -222,7 +311,7 @@ export function createTelegramClientProxy(env: CapabilityRegistryEnv, sentHistor
         },
         sendSticker: async (chatId: number | string, uniqueFileId: string, opts?: { replyTo?: number }) => {
             // ── 贴纸重复发送很正常，不拦截 ──
-            const sent = hydrateTelegramMessage(await env.callHost("telegram.sendSticker", [chatId, uniqueFileId, opts]));
+            const sent = hydrateTelegramMessage(await callTelegramHost("telegram.sendSticker", [chatId, uniqueFileId, opts]));
             env.emitOutput(formatTelegramAck("[Telegram] sendSticker ok", sent));
             env.notifyHost({
                 type: "system.agent_message_sent",
@@ -235,24 +324,24 @@ export function createTelegramClientProxy(env: CapabilityRegistryEnv, sentHistor
             return sent;
         },
         getChat: async (chatId: number | string) =>
-            env.callHost("telegram.getChat", [chatId]),
+            callTelegramHost("telegram.getChat", [chatId]),
         getUser: async (userId: number | string) =>
-            env.callHost("telegram.getUser", [userId]),
+            callTelegramHost("telegram.getUser", [userId]),
         getChatMembers: async (chatId: number | string, opts?: { limit?: number }) =>
-            env.callHost("telegram.getChatMembers", [chatId, opts]),
+            callTelegramHost("telegram.getChatMembers", [chatId, opts]),
         getHistory: async (chatId: number | string, opts?: { limit?: number }) => {
-            const messages = await env.callHost("telegram.getHistory", [chatId, opts]);
+            const messages = await callTelegramHost("telegram.getHistory", [chatId, opts]);
             return Array.isArray(messages) ? messages.map(hydrateTelegramMessage) : [];
         },
         iterHistory: async function* (chatId: number | string, opts?: { limit?: number }) {
-            const messages = await env.callHost("telegram.getHistory", [chatId, opts]);
+            const messages = await callTelegramHost("telegram.getHistory", [chatId, opts]);
             if (!Array.isArray(messages)) return;
             for (const message of messages) {
                 yield hydrateTelegramMessage(message);
             }
         },
         iterDialogs: async function* (opts?: { limit?: number }) {
-            const dialogs = await env.callHost("telegram.getDialogs", [opts]);
+            const dialogs = await callTelegramHost("telegram.getDialogs", [opts]);
             if (!Array.isArray(dialogs)) return;
             for (const dialog of dialogs) {
                 const raw = dialog as Record<string, unknown>;
@@ -263,52 +352,78 @@ export function createTelegramClientProxy(env: CapabilityRegistryEnv, sentHistor
             }
         },
         readHistory: async (chatId: number | string) =>
-            env.callHost("telegram.readHistory", [chatId]),
+            callTelegramHost("telegram.readHistory", [chatId]),
         sendTyping: async (chatId: number | string) => {
-            await env.callHost("telegram.sendTyping", [chatId]);
+            await callTelegramHost("telegram.sendTyping", [chatId]);
             env.emitOutput(`[Telegram] sendTyping ok chat=${String(chatId)}`);
         },
         joinChat: async (chatId: number | string) => {
-            await env.callHost("telegram.joinChat", [chatId]);
+            await callTelegramHost("telegram.joinChat", [chatId]);
             env.emitOutput(`[Telegram] joinChat ok chat=${String(chatId)}`);
         },
         leaveChat: async (chatId: number | string) => {
-            await env.callHost("telegram.leaveChat", [chatId]);
+            await callTelegramHost("telegram.leaveChat", [chatId]);
             env.emitOutput(`[Telegram] leaveChat ok chat=${String(chatId)}`);
         },
         getDialogs: async (opts?: { limit?: number }) => {
-            const dialogs = await env.callHost("telegram.getDialogs", [opts]);
+            const dialogs = await callTelegramHost("telegram.getDialogs", [opts]);
             return Array.isArray(dialogs) ? dialogs : [];
+        },
+        findDialogs: async (peers: number | string | Array<number | string>, opts?: { limit?: number }) => {
+            const dialogs = await callTelegramHost("telegram.findDialogs", [peers, opts]);
+            return Array.isArray(dialogs) ? dialogs : [];
+        },
+        meetPeer: async (peer: number | string, opts?: { kind?: "id" | "username" | "phone"; chatId?: number | string; messageIds?: number[]; dialogsLimit?: number; force?: boolean }) =>
+            callTelegramHost("telegram.meetPeer", [peer, opts]),
+        resolvePeer: async (peer: number | string, opts?: { kind?: "id" | "username" | "phone"; chatId?: number | string; messageIds?: number[]; dialogsLimit?: number; force?: boolean }) =>
+            callTelegramHost("telegram.resolvePeer", [peer, opts]),
+
+        // ─── Guide-only: inline bot consumer flow ───
+
+        queryInlineBot: async (bot: number | string, query: string, opts?: { peer?: number | string; offset?: string }) =>
+            callTelegramHost("telegram.queryInlineBot", [bot, query, opts]),
+        sendInlineBotResult: async (chatId: number | string, queryId: number | string, resultId: string, opts?: { replyTo?: number; silent?: boolean; hideVia?: boolean; clearDraft?: boolean }) => {
+            const sent = await callTelegramHost("telegram.sendInlineBotResult", [chatId, queryId, resultId, opts]);
+            env.emitOutput(`[Telegram] sendInlineBotResult ok chat=${String(chatId)} result=${resultId}`);
+            env.notifyHost({
+                type: "system.agent_message_sent",
+                scene: "telegram",
+                chatId: String(chatId),
+                text: `[inline-bot-result:${resultId}]`,
+                replyToMessageId: opts?.replyTo,
+                timestamp: new Date().toISOString(),
+            });
+            return sent;
         },
 
         // ─── 扩展: 主动拉取 ───
 
         getFullUser: async (userId: number | string) =>
-            env.callHost("telegram.getFullUser", [userId]),
+            callTelegramHost("telegram.getFullUser", [userId]),
         getFullChat: async (chatId: number | string) =>
-            env.callHost("telegram.getFullChat", [chatId]),
+            callTelegramHost("telegram.getFullChat", [chatId]),
         getForumTopics: async (chatId: number | string, opts?: { limit?: number }) =>
-            env.callHost("telegram.getForumTopics", [chatId, opts]),
+            callTelegramHost("telegram.getForumTopics", [chatId, opts]),
         getMessages: async (chatId: number | string, messageIds: number[]) => {
-            const messages = await env.callHost("telegram.getMessages", [chatId, messageIds]);
+            const messages = await callTelegramHost("telegram.getMessages", [chatId, messageIds]);
             return Array.isArray(messages) ? messages.map(hydrateTelegramMessage) : [];
         },
         searchMessages: async (chatId: number | string, query: string, opts?: { limit?: number }) => {
-            const messages = await env.callHost("telegram.searchMessages", [chatId, query, opts]);
+            const messages = await callTelegramHost("telegram.searchMessages", [chatId, query, opts]);
             return Array.isArray(messages) ? messages.map(hydrateTelegramMessage) : [];
         },
         getPollResults: async (chatId: number | string, messageId: number) =>
-            env.callHost("telegram.getPollResults", [chatId, messageId]),
+            callTelegramHost("telegram.getPollResults", [chatId, messageId]),
         getMessageReactions: async (chatId: number | string, messageIds: number[]) =>
-            env.callHost("telegram.getMessageReactions", [chatId, messageIds]),
+            callTelegramHost("telegram.getMessageReactions", [chatId, messageIds]),
         downloadMedia: async (fileId: string, chatId?: number | string, messageId?: number, uniqueFileId?: string) =>
-            env.callHost("telegram.downloadMedia", [fileId, chatId, messageId, uniqueFileId]),
+            callTelegramHost("telegram.downloadMedia", [fileId, chatId, messageId, uniqueFileId]),
 
         // ─── 扩展: 发送与交互 ───
 
         sendMediaGroup: async (chatId: number | string, medias: unknown[], opts?: { replyTo?: number; silent?: boolean }) => {
             const mediaGroupText = buildTelegramMediaGroupDedupKey(medias);
-            if (isDuplicate(String(chatId), mediaGroupText)) {
+            if (shouldBlockDuplicate(String(chatId), mediaGroupText)) {
                 const warning = `[⚠ 运行时警告: 重复消息已拦截] 目标 chat=${String(chatId)} 的媒体组与本次 session 中已发送的内容一致，已自动拦截。`;
                 env.emitOutput(warning);
                 env.notifyHost({
@@ -333,7 +448,8 @@ export function createTelegramClientProxy(env: CapabilityRegistryEnv, sentHistor
                 return m;
             });
 
-            const sent = await env.callHost("telegram.sendMediaGroup", [chatId, processedMedias, opts]);
+            const sent = await callTelegramHost("telegram.sendMediaGroup", [chatId, processedMedias, opts]);
+            recordSentIfDedupEnabled(String(chatId), mediaGroupText);
             env.emitOutput(`[Telegram] sendMediaGroup ok chat=${String(chatId)} count=${medias.length}`);
             env.notifyHost({
                 type: "system.agent_message_sent",
@@ -344,10 +460,35 @@ export function createTelegramClientProxy(env: CapabilityRegistryEnv, sentHistor
             });
             return sent;
         },
+        forwardMessage: async (
+            toChatId: number | string,
+            fromChatId: number | string,
+            messageIds: number | number[],
+            opts?: Record<string, unknown>,
+        ) => {
+            const sent = await callTelegramHost("telegram.forwardMessage", [toChatId, fromChatId, messageIds, opts]);
+            const hydrated = Array.isArray(sent) ? sent.map(hydrateTelegramMessage) : hydrateTelegramMessage(sent);
+            const ids = Array.isArray(messageIds) ? messageIds : [messageIds];
+            const sentMessageId = !Array.isArray(hydrated) && hydrated && typeof hydrated === "object" && "id" in hydrated
+                ? (hydrated as { id?: unknown }).id
+                : undefined;
+            env.emitOutput(Array.isArray(hydrated)
+                ? `[Telegram] forwardMessage ok chat=${String(toChatId)} count=${hydrated.length}`
+                : formatTelegramAck("[Telegram] forwardMessage ok", hydrated));
+            env.notifyHost({
+                type: "system.agent_message_sent",
+                scene: "telegram",
+                chatId: String(toChatId),
+                messageId: sentMessageId,
+                text: `[forward:${String(fromChatId)}:${ids.join(",")}]`,
+                timestamp: new Date().toISOString(),
+            });
+            return hydrated;
+        },
         sendPoll: async (chatId: number | string, question: string, options: string[], opts?: Record<string, unknown>) => {
             // ── 重复消息拦截（基于 question）──
             const pollText = `[poll:${question}]`;
-            if (isDuplicate(String(chatId), pollText)) {
+            if (shouldBlockDuplicate(String(chatId), pollText)) {
                 const warning = `[⚠ 运行时警告: 重复消息已拦截] 目标 chat=${String(chatId)} 的投票 "${question}" 与本次 session 中已发送的内容一致，已自动拦截。`;
                 env.emitOutput(warning);
                 env.notifyHost({
@@ -359,7 +500,8 @@ export function createTelegramClientProxy(env: CapabilityRegistryEnv, sentHistor
                 });
                 return null;
             }
-            const sent = hydrateTelegramMessage(await env.callHost("telegram.sendPoll", [chatId, question, options, opts]));
+            const sent = hydrateTelegramMessage(await callTelegramHost("telegram.sendPoll", [chatId, question, options, opts]));
+            recordSentIfDedupEnabled(String(chatId), pollText);
             env.emitOutput(formatTelegramAck("[Telegram] sendPoll ok", sent));
             env.notifyHost({
                 type: "system.agent_message_sent",
@@ -371,25 +513,43 @@ export function createTelegramClientProxy(env: CapabilityRegistryEnv, sentHistor
             return sent;
         },
         sendReaction: async (chatId: number | string, messageId: number, emoji: string | null) => {
-            await env.callHost("telegram.sendReaction", [chatId, messageId, emoji]);
+            await callTelegramHost("telegram.sendReaction", [chatId, messageId, emoji]);
             env.emitOutput(`[Telegram] sendReaction ok chat=${String(chatId)} msg=${messageId} emoji=${emoji ?? "(removed)"}`);
         },
         editMessage: async (chatId: number | string, messageId: number, text: string) => {
-            const edited = hydrateTelegramMessage(await env.callHost("telegram.editMessage", [chatId, messageId, text]));
+            const edited = hydrateTelegramMessage(await callTelegramHost("telegram.editMessage", [chatId, messageId, text]));
             env.emitOutput(formatTelegramAck("[Telegram] editMessage ok", edited));
             return edited;
         },
         deleteMessages: async (chatId: number | string, messageIds: number[]) => {
-            await env.callHost("telegram.deleteMessages", [chatId, messageIds]);
+            await callTelegramHost("telegram.deleteMessages", [chatId, messageIds]);
             env.emitOutput(`[Telegram] deleteMessages ok chat=${String(chatId)} ids=[${messageIds.join(",")}]`);
         },
         pinMessage: async (chatId: number | string, messageId: number, opts?: { silent?: boolean }) => {
-            await env.callHost("telegram.pinMessage", [chatId, messageId, opts]);
+            await callTelegramHost("telegram.pinMessage", [chatId, messageId, opts]);
             env.emitOutput(`[Telegram] pinMessage ok chat=${String(chatId)} msg=${messageId}`);
         },
         unpinMessage: async (chatId: number | string, messageId: number) => {
-            await env.callHost("telegram.unpinMessage", [chatId, messageId]);
+            await callTelegramHost("telegram.unpinMessage", [chatId, messageId]);
             env.emitOutput(`[Telegram] unpinMessage ok chat=${String(chatId)} msg=${messageId}`);
         },
+
     };
+
+    return new Proxy(methods, {
+        get(target, prop, receiver) {
+            if (typeof prop !== "string") return Reflect.get(target, prop, receiver);
+            if (prop in target) return Reflect.get(target, prop, receiver);
+            if (!isAllowedTelegramMtcutePassthroughMethod(prop)) return undefined;
+            if (prop.startsWith("iter")) {
+                return async function* (...args: unknown[]) {
+                    const result = await callTelegramHost("telegram.mtcute", [prop, ...args]);
+                    if (!Array.isArray(result)) return;
+                    for (const item of result) yield item;
+                };
+            }
+            return async (...args: unknown[]) => callTelegramHost("telegram.mtcute", [prop, ...args]);
+        },
+    });
 }
+

@@ -30,7 +30,14 @@ export const COLUMN_WHITELIST = {
     ],
     core_facts: [
         "subject", "content", "category", "confidence", "source",
-        "embedding", "created_at", "updated_at", "expires_at",
+        "source_chat_id", "source_chat_title", "source_topic_id", "source_topic_label",
+        "source_message_ids", "source_interaction_ids", "observed_at",
+        "visibility", "sensitivity", "embedding", "created_at", "updated_at", "expires_at",
+    ],
+    person_profiles: [
+        "traits", "interests", "communication_style", "relation_to_agent",
+        "stable_patterns", "agent_policy_hints", "followup_candidates",
+        "source_chat_ids", "confidence", "last_reflected_at", "created_at", "updated_at",
     ],
     person_identities: [
         "display_name", "username", "aliases", "total_message_count",

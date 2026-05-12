@@ -12,7 +12,7 @@
 import { createInterface } from "node:readline";
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
-import { installCapabilityRegistry, setPlatform } from "./capability-registry.js";
+import { installCapabilityRegistry, setDuplicateMessageBlocking, setPlatform } from "./capability-registry.js";
 import { BackgroundManager } from "./background-manager.js";
 import { createPromiseTracker } from "./promise-tracker.js";
 import { filesystem } from "./modules/filesystem/index.js";
@@ -34,6 +34,7 @@ let loadedSkills: LoadedSkill[] = [];
 
 // ─── 暴露 setPlatform 到全局，供 host 通过 sandbox.execute 调用 ───
 (globalThis as Record<string, unknown>).__setPlatform = setPlatform;
+(globalThis as Record<string, unknown>).__setDuplicateMessageBlocking = setDuplicateMessageBlocking;
 
 // ─── 顶层安全网：防止未捕获的异常导致 worker 进程崩溃 ───
 

@@ -3,10 +3,11 @@ import type { GroundingConfig } from "../../core/config.js";
 import { runParallelGrounding } from "../../main-agent/grounding-util.js";
 import type { AttentionAccumulator } from "../../accumulator/attention-accumulator.js";
 import { CodeActExecutor } from "../../subagent/code-act-executor.js";
-import type { GroupContextPackage, CodeActReplyTask } from "../../subagent/types.js";
+import type { ActiveUserProfile, GroupContextPackage, CodeActReplyTask } from "../../subagent/types.js";
 import type { MemoryStoreV2 } from "../../memory-v2/index.js";
 import type { GlobalState } from "../../main-agent/global-state.js";
 import type { SubagentManager } from "../../subagent/subagent-manager.js";
+import { getGroupModelKey } from "../../core/chat-id.js";
 
 export interface DispatchTrackingSpec {
     key?: string;
@@ -64,6 +65,7 @@ export interface DispatchApiDeps {
     executorFactory?: (chatId: string) => ExecutorLike;
     initializeExecutor?: (executor: ExecutorLike, chatId: string) => void | Promise<void>;
     taskIdFactory?: () => string;
+    getActiveUserProfilesForChat?: (chatId: string) => ActiveUserProfile[] | undefined;
 }
 
 export function createDispatchApi(deps: DispatchApiDeps) {
@@ -86,13 +88,19 @@ export function createDispatchApi(deps: DispatchApiDeps) {
                     confidence: 1.0,
                     reason: "Meta-CodeAct dispatch",
                 }],
-                contextSnapshot: buildDispatchContext(chatId, taskSpec, groundingContext),
+                contextSnapshot: buildDispatchContext(
+                    deps.memory,
+                    chatId,
+                    taskSpec,
+                    groundingContext,
+                    deps.getActiveUserProfilesForChat?.(chatId),
+                ),
                 replyMode: "SINGLE",
                 useSkills: taskSpec.useSkills,
                 createdAt: new Date().toISOString(),
             };
 
-            deps.globalState?.recordDispatchedSubagentTask({
+            deps.globalState?.recordDispatchedSubagentTask?.({
                 taskId,
                 chatId,
                 contentDirection: taskSpec.contentDirection,
@@ -159,17 +167,26 @@ async function maybeRunGrounding(
 }
 
 function buildDispatchContext(
+    memory: MemoryStoreV2,
     chatId: string,
     taskSpec: DispatchTaskSpec,
     groundingContext?: string,
+    activeUserProfiles?: ActiveUserProfile[],
 ): GroupContextPackage {
+    const groupModel = typeof memory.getGroupModel === "function"
+        ? memory.getGroupModel(getGroupModelKey(chatId))
+        : null;
     return {
         depth: 2,
         chatId,
         snapshotTimestamp: new Date().toISOString(),
         topicDigests: [],
         engagementScore: 0,
-        personContext: taskSpec.context ? JSON.stringify(taskSpec.context) : undefined,
+        groupModel: groupModel ?? undefined,
+        chatTitle: groupModel?.chatTitle,
+        isDirectMessage: groupModel?.isDirectMessage,
+        activeUserProfiles: activeUserProfiles && activeUserProfiles.length > 0 ? activeUserProfiles : undefined,
+        dispatchContext: taskSpec.context ? JSON.stringify(taskSpec.context) : undefined,
         toneGuidance: taskSpec.toneGuidance,
         contentDirection: taskSpec.contentDirection,
         groundingContext,

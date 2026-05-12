@@ -15,6 +15,7 @@ import type { ImageCatalog } from "../core/image-catalog.js";
 import type { PlatformAdapter } from "../adapter/platform-adapter.js";
 import type { AppConfig } from "../core/config.js";
 import type { AttentionAccumulator } from "../accumulator/attention-accumulator.js";
+import type { MetaSandbox } from "../meta-sandbox/meta-sandbox.js";
 
 /** Dashboard 需要的所有组件引用 */
 export interface DashboardDeps {
@@ -33,6 +34,8 @@ export interface DashboardDeps {
     imageCatalog?: ImageCatalog;
     /** 平台 adapter 引用（用于 mute 等控制操作） */
     adapters?: PlatformAdapter[];
+    /** Meta-CodeAct sandbox（用于 Dashboard debug 执行） */
+    metaSandbox?: MetaSandbox;
     /** Dashboard 保存配置后的回调（用于热应用） */
     onConfigSaved?: (config: AppConfig) => Promise<void> | void;
 }

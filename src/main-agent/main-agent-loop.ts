@@ -16,6 +16,7 @@ import { DEFAULT_SUBAGENT_CONFIG } from "../subagent/types.js";
 import type { AttentionItem } from "../accumulator/types.js";
 import { AttentionAccumulator } from "../accumulator/attention-accumulator.js";
 import { createLogger } from "../core/logger.js";
+import { ensureCompositeId, getPlatform } from "../core/chat-id.js";
 import { buildWakeConditionPayload, matchCallbackWakeConditions } from "./wake-conditions.js";
 import type { PlatformAdapter } from "../adapter/platform-adapter.js";
 import { markChatAsRead } from "../adapter/read-receipts.js";
@@ -421,7 +422,16 @@ export class MainAgentLoop {
             case "DIRECT_ADDRESS":
                 if (!subagent) return null;
                 entry = subagent.buildQueueEntry("DIRECT_ADDRESS");
-                entry.directAddressReason = extractDirectAddressReason(item.payload);
+                {
+                    const directAddress = extractDirectAddressPayload(item.payload, item.chatId);
+                    entry.directAddressReason = directAddress.reason;
+                    if (directAddress.messageIds.length > 0) {
+                        entry.directAddressMessageIds = directAddress.messageIds;
+                    }
+                    if (directAddress.userIds.length > 0) {
+                        entry.directAddressUserIds = directAddress.userIds;
+                    }
+                }
                 break;
             case "SCHEDULER":
             case "WAKE_CONDITION":
@@ -597,12 +607,24 @@ function extractSchedulerTriggers(payload: unknown): NonNullable<AttentionQueueE
     return [];
 }
 
-function extractDirectAddressReason(payload: unknown): string | undefined {
+function extractDirectAddressPayload(payload: unknown, chatId: string): { reason?: string; messageIds: string[]; userIds: string[] } {
     if (!payload || typeof payload !== "object") {
-        return undefined;
+        return { messageIds: [], userIds: [] };
     }
     const record = payload as Record<string, unknown>;
-    return typeof record.reason === "string" ? record.reason : undefined;
+    const event = record.event && typeof record.event === "object"
+        ? record.event as Record<string, unknown>
+        : {};
+    const messageId = event.messageId;
+    const userId = event.userId;
+    const platform = getPlatform(chatId);
+    return {
+        reason: typeof record.reason === "string" ? record.reason : undefined,
+        messageIds: typeof messageId === "string" || typeof messageId === "number" ? [String(messageId)] : [],
+        userIds: typeof userId === "string" || typeof userId === "number"
+            ? [ensureCompositeId(platform, String(userId))]
+            : [],
+    };
 }
 
 function createSyntheticMetaEntry(item: AttentionItem): AttentionQueueEntry {

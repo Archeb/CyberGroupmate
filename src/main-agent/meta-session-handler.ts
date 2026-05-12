@@ -11,6 +11,7 @@ import type { ContextManifest, SectionNode } from "../context-engine/types.js";
 import type { IMemoryStoreV2 } from "../memory-v2/index.js";
 import type { MetaSandbox } from "../meta-sandbox/meta-sandbox.js";
 import { runMetaSession, type MetaLLMCaller, type MetaSessionResult } from "../meta-sandbox/meta-session-runner.js";
+import { buildMetaApiPrefixMap, buildMetaApiReference, lookupMetaApiDocs } from "../meta-sandbox/meta-api/module-registry.js";
 import { loadConfig } from "../core/config.js";
 import { generateModuleRoster } from "../sandbox/modules/module-registry.js";
 import type { ActiveUserProfile, AttendResult, AttentionQueueEntry, AttentionRecentMessage, MetaSessionHistoryEntry, SubagentCallback, TopicDigest } from "../subagent/types.js";
@@ -39,6 +40,7 @@ export interface MetaSessionHandlerDeps {
     memory: Pick<IMemoryStoreV2, "getGroupModel" | "getProfilesForChat" | "getPersonIdentity" | "getTopicById" | "todoList" | "getRecentMessages">
         & Partial<Pick<IMemoryStoreV2, "getStickerDescription">>;
     sandbox: MetaSandbox;
+    setActiveUserProfilesForDispatch?: (profilesByChatId: Map<string, ActiveUserProfile[]>) => void;
     getLlmConfigs: () => LLMConfig[];
     getVisionConfig?: () => VisionConfig | undefined;
     llmCaller?: MetaLLMCaller;
@@ -72,13 +74,23 @@ export function createMetaSessionHandler(deps: MetaSessionHandlerDeps): MetaSess
             callbacks: callbacks.length,
         });
 
-        const result = await runMetaSession(messages, deps.sandbox, llmConfigs, {
-            maxTurns: deps.maxTurns,
-            codeTimeout: deps.codeTimeout,
-            llmCaller: deps.llmCaller,
-            llmTimeoutMs: deps.llmTimeoutMs,
-            contextManifest,
-        });
+        const result = await (async () => {
+            try {
+                return await runMetaSession(messages, deps.sandbox, llmConfigs, {
+                    maxTurns: deps.maxTurns,
+                    codeTimeout: deps.codeTimeout,
+                    llmCaller: deps.llmCaller,
+                    llmTimeoutMs: deps.llmTimeoutMs,
+                    contextManifest,
+                    twoPassConfig: {
+                        getPrefixMap: buildMetaApiPrefixMap,
+                        lookupDocs: lookupMetaApiDocs,
+                    },
+                });
+            } finally {
+                deps.setActiveUserProfilesForDispatch?.(new Map());
+            }
+        })();
 
         if (historySeedMessage || result.messages.length > initialMessageCount) {
             const historyMessages = collectMetaSessionHistory([
@@ -99,6 +111,7 @@ export function createMetaSessionHandler(deps: MetaSessionHandlerDeps): MetaSess
 
     handler.resetMetaSessionContext = () => {
         engine.ledger.reset();
+        deps.setActiveUserProfilesForDispatch?.(new Map());
         log.info("Meta session handler context 已重置");
     };
 
@@ -140,6 +153,7 @@ async function buildMetaMessages(
 
     const currentParts: string[] = [];
     const renderTrees: SectionNode[][] = [];
+    const activeProfilesForDispatch = new Map<string, ActiveUserProfile[]>();
 
     const isProactiveIdle = entries.some((entry) => entry.source === "PROACTIVE_IDLE");
     const globalRender = engine.render({
@@ -153,11 +167,21 @@ async function buildMetaMessages(
     pushCurrentRenderPart(currentParts, globalRender.tree);
 
     for (const entry of entries) {
-        const renderResult = engine.render(await buildMetaResolveContext(deps, entry));
+        const resolveContext = await buildMetaResolveContext(deps, entry);
+        const activeUserProfiles = Array.isArray(resolveContext.activeUserProfiles)
+            ? resolveContext.activeUserProfiles.filter((profile): profile is ActiveUserProfile =>
+                !!profile && typeof profile === "object" && typeof (profile as ActiveUserProfile).userId === "string"
+            )
+            : [];
+        if (activeUserProfiles.length > 0) {
+            activeProfilesForDispatch.set(entry.chatId, activeUserProfiles);
+        }
+        const renderResult = engine.render(resolveContext);
         renderTrees.push(renderResult.tree);
         manifests.push(renderResult.manifest);
         pushCurrentRenderPart(currentParts, renderResult.tree);
     }
+    deps.setActiveUserProfilesForDispatch?.(activeProfilesForDispatch);
 
     const proactiveInstruction = isProactiveIdle
         ? loadPromptFile("meta-agent/proactive-idle.md")
@@ -488,20 +512,18 @@ function enrichTopicDigests(
 
 function buildActiveUserProfiles(
     entry: AttentionQueueEntry,
-    memory: Pick<IMemoryStoreV2, "getProfilesForChat" | "getPersonIdentity">,
+    memory: Pick<IMemoryStoreV2, "getProfilesForChat" | "getPersonIdentity">
+        & Partial<Pick<IMemoryStoreV2, "getPersonProfile" | "getGroupModel">>,
 ): ActiveUserProfile[] {
     const recentMessages = entry.recentMessages ?? [];
-    const senderCounts = new Map<string, number>();
-
-    for (const message of recentMessages) {
-        if (!message.userId) continue;
-        senderCounts.set(message.userId, (senderCounts.get(message.userId) ?? 0) + 1);
+    const directUserIds = getDirectAddressUserIds(entry);
+    if (directUserIds.size === 0) {
+        return [];
     }
-
-    if (senderCounts.size === 0) {
-        for (const participant of entry.topicDigests.flatMap((digest) => digest.participants)) {
-            if (!participant) continue;
-            senderCounts.set(participant, 0);
+    const messageCounts = new Map<string, number>();
+    for (const message of recentMessages) {
+        if (directUserIds.has(message.userId)) {
+            messageCounts.set(message.userId, (messageCounts.get(message.userId) ?? 0) + 1);
         }
     }
 
@@ -509,19 +531,34 @@ function buildActiveUserProfiles(
     const profilesByUserId = new Map(profiles.map((profile) => [profile.userId, profile]));
     const result: ActiveUserProfile[] = [];
 
-    for (const [userId, messageCount] of senderCounts) {
+    for (const userId of directUserIds) {
         const identity = memory.getPersonIdentity(userId);
         const profile = profilesByUserId.get(userId);
+        const globalProfile = memory.getPersonProfile?.(userId) ?? null;
+        const relationParts = [
+            globalProfile?.relationToAgent ? `全局: ${globalProfile.relationToAgent}` : "",
+            profile?.relationToAgent ? `当前场景: ${profile.relationToAgent}` : "",
+        ].filter(Boolean);
+        const fallbackName = recentMessages.find((message) => message.userId === userId)?.displayName;
         result.push({
             userId,
-            displayName: identity?.displayName ?? recentMessages.find((message) => message.userId === userId)?.displayName ?? userId,
+            displayName: identity?.displayName ?? fallbackName ?? userId,
+            userLabel: formatUserLabel(memory, userId, fallbackName),
+            currentChatLabel: formatChatLabel(memory, entry.chatId),
             aliases: identity?.aliases ?? [],
             dunbarTier: profile?.dunbarTier,
             rapport: typeof profile?.affinityScore === "number" ? Math.round(profile.affinityScore) : undefined,
-            traits: profile?.traits ?? [],
-            communicationStyle: profile?.communicationStyle,
-            relationToAgent: profile?.relationToAgent,
-            messageCount,
+            traits: [...new Set([...(globalProfile?.traits ?? []), ...(profile?.traits ?? [])])].slice(0, 6),
+            interests: [...new Set([...(globalProfile?.interests ?? []), ...(profile?.interests ?? [])])].slice(0, 8),
+            communicationStyle: [globalProfile?.communicationStyle, profile?.communicationStyle].filter((value): value is string => !!value).map(value => clipText(value, 160)).join("；") || undefined,
+            relationToAgent: relationParts.join("；") || undefined,
+            globalRelationToAgent: globalProfile?.relationToAgent,
+            currentRelationToAgent: profile?.relationToAgent,
+            relationshipMemory: profile ? summarizeRelationshipMemory(profile) : [],
+            agentPolicyHints: [...new Set([...(globalProfile?.agentPolicyHints ?? []), ...(profile ? collectAgentPolicyHints(profile) : [])])].map(value => clipText(value, 140)).slice(0, 5),
+            stablePatterns: [...new Set([...(globalProfile?.stablePatterns ?? []), ...(profile ? collectStablePatterns(profile) : [])])].map(value => clipText(value, 140)).slice(0, 4),
+            followupCandidates: [...new Set([...(globalProfile?.followupCandidates ?? []), ...(profile ? collectFollowupCandidates(profile) : [])])].map(value => clipText(value, 140)).slice(0, 3),
+            messageCount: messageCounts.get(userId) ?? 0,
             username: identity?.username,
         });
     }
@@ -532,6 +569,92 @@ function buildActiveUserProfiles(
         }
         return left.userId.localeCompare(right.userId);
     });
+}
+
+function getDirectAddressUserIds(entry: AttentionQueueEntry): Set<string> {
+    const userIds = new Set((entry.directAddressUserIds ?? []).filter(Boolean));
+    if (userIds.size > 0 || entry.source !== "DIRECT_ADDRESS") {
+        return userIds;
+    }
+    const directMessageIds = new Set(entry.directAddressMessageIds ?? []);
+    if (directMessageIds.size > 0) {
+        for (const message of entry.recentMessages ?? []) {
+            if (directMessageIds.has(message.messageId) && message.userId) {
+                userIds.add(message.userId);
+            }
+        }
+    }
+    if (userIds.size === 0) {
+        const latestSender = [...(entry.recentMessages ?? [])].reverse().find(message => !!message.userId);
+        if (latestSender?.userId) {
+            userIds.add(latestSender.userId);
+        }
+    }
+    return userIds;
+}
+
+function formatUserLabel(
+    memory: Partial<Pick<IMemoryStoreV2, "getPersonIdentity">>,
+    userId: string,
+    fallbackName?: string,
+): string {
+    const identity = memory.getPersonIdentity?.(userId);
+    const name = identity?.displayName?.trim() || fallbackName?.trim() || userId;
+    return `${name}(${userId})`;
+}
+
+function formatChatLabel(
+    memory: Partial<Pick<IMemoryStoreV2, "getGroupModel">>,
+    chatId: string,
+): string {
+    const groupModel = memory.getGroupModel?.(getGroupModelKey(chatId));
+    const title = groupModel?.chatTitle?.trim() || chatId;
+    return `${title}(${chatId})`;
+}
+
+function summarizeRelationshipMemory(profile: { recentEpisodes?: Array<{ summary: string; topicLabel?: string }>; mergedMemory?: Array<{ relationshipTrend: string; highlights: string[]; granularity: string; periodStart: string; periodEnd: string; salientEvents?: Array<{ summary: string; confidence?: number }> }> }): string[] {
+    const merged = [...(profile.mergedMemory ?? [])]
+        .sort((a, b) => new Date(b.periodEnd).getTime() - new Date(a.periodEnd).getTime())
+        .slice(0, 2)
+        .flatMap(memory => {
+            const period = `${memory.periodStart?.slice(0, 10) ?? "?"}~${memory.periodEnd?.slice(0, 10) ?? "?"}`;
+            const trend = memory.relationshipTrend || memory.highlights?.slice(0, 2).join("；") || "";
+            const salient = memory.salientEvents?.[0]?.summary;
+            return [
+                trend ? `[本群${memory.granularity} ${period}] ${clipText(trend, 220)}` : "",
+                salient ? `[本群关键事件] ${clipText(salient, 180)}` : "",
+            ];
+        });
+    if (merged.length > 0) {
+        return merged.filter(Boolean).slice(0, 3);
+    }
+    return (profile.recentEpisodes ?? [])
+        .slice(-2)
+        .map(ep => `[本群近期事件] ${clipText(`${ep.topicLabel ? `${ep.topicLabel}: ` : ""}${ep.summary}`, 180)}`)
+        .filter(Boolean);
+}
+
+function collectAgentPolicyHints(profile: { mergedMemory?: Array<{ agentPolicyHints?: string[] }> }): string[] {
+    return [...new Set((profile.mergedMemory ?? []).flatMap(m => m.agentPolicyHints ?? []))]
+        .filter(Boolean)
+        .slice(0, 4);
+}
+
+function collectStablePatterns(profile: { mergedMemory?: Array<{ stablePatterns?: string[] }> }): string[] {
+    return [...new Set((profile.mergedMemory ?? []).flatMap(m => m.stablePatterns ?? []))]
+        .filter(Boolean)
+        .slice(0, 4);
+}
+
+function collectFollowupCandidates(profile: { mergedMemory?: Array<{ followupCandidates?: string[] }> }): string[] {
+    return [...new Set((profile.mergedMemory ?? []).flatMap(m => m.followupCandidates ?? []))]
+        .filter(Boolean)
+        .slice(0, 4);
+}
+
+function clipText(value: string, maxLength: number): string {
+    const normalized = value.replace(/\s+/g, " ").trim();
+    return normalized.length > maxLength ? `${normalized.slice(0, maxLength - 1)}…` : normalized;
 }
 
 function tonePresetFor(stickinessLevel: AttentionQueueEntry["stickinessLevel"]): string {
@@ -553,137 +676,6 @@ function loadRequiredPrompt(relativePath: string): string {
         throw new Error(`Missing prompt file: ${relativePath}`);
     }
     return content;
-}
-
-function buildMetaApiReference(): string {
-    return `## conversations — 跨群检索
-
-\`\`\`ts
-await conversations.query(filters?: {
-  chatIds?: string[],    // 限定群组 ID，空则搜索全部
-  user?: string,         // 人名/别名/username/userId，会先解析已知身份
-  userId?: string,       // 精确限定发言者 ID（如 "telegram:123456"）
-  keyword?: string,      // 正文关键词；无 user 或 user 未解析时会先匹配 displayName，再匹配正文
-  after?: string,        // ISO 时间下限
-  before?: string,       // ISO 时间上限
-  limit?: number         // 结果数上限（默认 20，最大 100）
-}): Promise<{
-  messages: { messageId, chatId, chatTitle, chatLabel, userId, displayName, content, timestamp }[],
-  topics: { topicId, chatId, chatTitle, chatLabel, label, summary, keywords, participants, startedAt, endedAt, sentiment, callbackPotential }[],
-  resolvedUsers: { userId, displayName, username?, aliases }[]
-}>
-\`\`\`
-chatLabel 已格式化为 "[群名(compositeId)]"，打印时直接使用它，例如 \`${"${m.chatLabel}"} ${"${m.displayName}"}: ${"${m.content}"}\`。
-
-## memory — 跨群实体检索
-
-\`\`\`ts
-await memory.searchEntities(query: string, options?: {
-  chatId?: string,             // 限定群组
-  after?: string,              // ISO 时间下限
-  before?: string,             // ISO 时间上限
-  categories?: string[],       // 事实分类过滤
-  limit?: number               // 默认 10，最大 50
-}): Promise<{
-  identities: { identity: { userId, aliases, displayName }, profile: { recentFacts, dunbarTier } }[],
-  recentSessions: { topicId, chatId, label, summary, keywords, participants }[],
-  sessionDigests: { createdAt, content }[],
-  coreFacts: { factId, subject, content, category, updatedAt }[],
-  topicKeywords: string[]
-}>
-\`\`\`
-
-## agents — 查询聊天列表/获取下属状态
-
-\`\`\`ts
-await agents.listStatus(): Promise<{
-  chatId: string,
-    chatTitle?: string,       // 群标题 / 私聊对象名
-  queueSize: number,        // Q4 积压任务数
-  isProcessing: boolean,    // 当前是否在执行
-  lastActiveAt: string,     // 最后活跃时间
-  stickinessLevel: "CORE" | "FAMILIAR" | "ACQUAINTANCE" | "STRANGER"
-}[]>
-\`\`\`
-
-## dispatch — 任务派发
-
-\`\`\`ts
-await dispatch.taskToGroup(chatId: string, taskSpec: {
-  contentDirection: string,  // 必填：行动方向，告诉 Subagent 往哪个方向回复
-  toneGuidance?: string,     // 语气指导（轻松 / 正式 / 简短等）
-  suggestedEmojis?: string[], // 建议用于召回可发送贴纸的 emoji 候选，如 ["😂","🤣","😅"]；适合贴纸时填写
-  context?: any,             // 跨群上下文，直接注入给 Subagent 的 prompt
-  useSkills?: string[],      // 需要额外加载的 Skill 模块名
-  tracking?: {               // 可选：派发后自动记录待跟进 todo / remind
-    key?: string,            // 默认 dispatch:<taskId>
-    content: string,         // 待跟进内容
-    remindAfterMinutes?: number,
-    callback?: string,       // reminder 唤醒后给 meta 的明确动作
-    data?: any               // 附带结构化数据
-  }
-}): Promise<{ taskId: string, trackingKey?: string, reminderId?: string }>
-await dispatch.getTask(taskId: string): Promise<{
-  taskId: string,
-  chatId: string,
-  contentDirection: string,
-  toneGuidance?: string,
-  status: "PENDING" | "RUNNING" | "COMPLETED" | "ERROR" | "SKIPPED" | "TIMEOUT",
-  createdAt: string,
-  updatedAt: string,
-  completedAt?: string,
-  sessionId?: string,
-  summary?: string,
-  sentMessages?: { messageId?, text, timestamp }[],
-  error?: string
-} | null>
-await dispatch.listTasks(options?: { chatId?: string, status?: string, limit?: number, offset?: number }): Promise<{ tasks, total, hasMore }>
-\`\`\`
-dispatch 的 chatId 参数要用「注意力切换」头部里的带平台的 composite chatId（如 \`telegram:1234567890\`）
-dispatch 会自动将 context 序列化后注入 Subagent 的任务 prompt。你查到的跨群信息、事实、讨论记录都可以放在 context 里。tracking 会把待跟进项写入 todo，bindingId 为目标 chatId；如果设置 remindAfterMinutes，还会注册一次性唤醒。
-当回复适合用贴纸表达情绪或活跃气氛时，在 taskSpec.suggestedEmojis 填 2-6 个相关 emoji；系统会用这些 emoji 搜索可用贴纸并交给 Subagent 最终决定是否发送。
-当你派发的是提问、跨群转述、等待群友回应或重要回复时，优先在同一次 dispatch.taskToGroup() 里填写 tracking；这样系统会自动保留 taskId、trackingKey、目标 chatId 和 callback，避免另写 todo/remind 时漏掉上下文。
-后续如果只拿到 callback 的 taskId，需要回看原始任务方向、上下文或 subagent 的 thinkingTranscript summary，使用 dispatch.getTask(taskId)。
-
-## todo — 跨会话/跨绑定 Todo
-
-\`\`\`ts
-await todo.set({ key, content, bindingId?, dueAt? }): Promise<{ bindingId, key, content, dueAt, createdAt, updatedAt, expired }>
-await todo.get(key: string, bindingId?: string): Promise<{ key, content, dueAt, createdAt, updatedAt, expired } | null>
-await todo.list({ bindingId?, includeExpired? }?): Promise<{ bindingId, key, content, dueAt, createdAt, updatedAt, expired }[]>
-await todo.delete(key: string, bindingId?: string): Promise<void>
-\`\`\`
-bindingId 可以是 composite chatId，也可以是 "meta"；默认 "meta"。
-
-## remind — 一次性唤醒
-
-\`\`\`ts
-await remind.set({
-  name: string,
-  callback: string,      // 必填：被唤醒后要做什么
-  bindingId?: string,    // composite chatId 或 "meta"，默认 "meta"
-  triggerAt?: string,    // ISO 时间
-  delayMinutes?: number, // 与 triggerAt 二选一
-  data?: any
-}): Promise<{ id, type, bindingId, name, callback, triggerAt, data }>
-await remind.get(id: string): Promise<... | null>
-await remind.list({ bindingId?, includeTriggered? }?): Promise<...[]>
-await remind.delete(id: string): Promise<boolean>
-\`\`\`
-
-## cron — 周期唤醒
-
-await cron.set({
-  name: string,
-  cronExpr: string,      // 最短间隔 1 小时
-  callback: string,      // 必填：每次触发后要做什么
-  bindingId?: string,    // composite chatId 或 "meta"，默认 "meta"
-  data?: any
-}): Promise<{ id, type, bindingId, name, callback, cronExpr, data }>
-await cron.get(id: string): Promise<... | null>
-await cron.list({ bindingId? }?): Promise<...[]>
-await cron.delete(id: string): Promise<boolean>
-\`\`\``;
 }
 
 function buildGlobalTodos(

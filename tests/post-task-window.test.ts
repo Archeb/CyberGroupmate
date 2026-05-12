@@ -22,11 +22,14 @@ function makeCallback(overrides?: Partial<SubagentCallback>): SubagentCallback {
 
 function makeManager(options?: {
     windowMs?: number;
+    maxWindowMs?: number;
     q5?: CallbackQueue;
     enqueued?: CodeActReplyTask[];
     directTasks?: CodeActReplyTask[];
     unblocks?: string[];
     blocks?: string[];
+    isProcessing?: () => boolean;
+    getQueueSize?: () => number;
 }) {
     const q5 = options?.q5 ?? new CallbackQueue();
     const enqueued = options?.enqueued ?? [];
@@ -34,8 +37,8 @@ function makeManager(options?: {
     const blocks = options?.blocks ?? [];
     const executor = {
         enqueue: (task: CodeActReplyTask) => enqueued.push(task),
-        isProcessing: () => false,
-        getQueueSize: () => 0,
+        isProcessing: options?.isProcessing ?? (() => false),
+        getQueueSize: options?.getQueueSize ?? (() => 0),
     };
     const subagent = {
         codeActExecutor: executor,
@@ -44,6 +47,7 @@ function makeManager(options?: {
     };
     const manager = new PostTaskWindowManager({
         windowMs: options?.windowMs ?? 20,
+        maxWindowMs: options?.maxWindowMs,
         callbackQueue: q5,
         accumulator: {
             block: (chatId: string) => blocks.push(chatId),
@@ -145,6 +149,48 @@ describe("PostTaskWindowManager", () => {
         assert.equal(callback.chatId, chatId);
         assert.equal(callback.postTaskWindow?.directMessageCount, 1);
         assert.deepEqual(unblocks, [chatId]);
+        manager.dispose();
+    });
+
+    it("expires sent-message windows that never receive a callback", async () => {
+        const { manager, q5, blocks, unblocks } = makeManager({ windowMs: 20, maxWindowMs: 40 });
+        const chatId = "telegram:stale";
+
+        manager.handleSentMessage(chatId, {
+            _id: "sent-event-stale",
+            _ts: "2026-05-03T12:00:00.000Z",
+            type: "system.agent_message_sent",
+            scene: "telegram",
+            chatId,
+            messageId: "sent-stale-1",
+            text: "hello",
+        });
+
+        assert.equal(manager.hasActiveWindow(chatId), true);
+        assert.deepEqual(blocks, [chatId]);
+
+        await sleep(80);
+
+        assert.equal(manager.hasActiveWindow(chatId), false);
+        assert.equal(q5.size, 0);
+        assert.deepEqual(unblocks, [chatId]);
+        manager.dispose();
+    });
+
+    it("force flushes callback windows after the max lifetime even if executor stays busy", async () => {
+        const { manager, q5, unblocks } = makeManager({
+            windowMs: 20,
+            maxWindowMs: 40,
+            isProcessing: () => true,
+        });
+
+        manager.handleCallback(makeCallback());
+        await sleep(80);
+
+        assert.equal(q5.size, 1);
+        const [callback] = q5.drain();
+        assert.equal(callback.taskId, "task-1");
+        assert.deepEqual(unblocks, ["telegram:1"]);
         manager.dispose();
     });
 

@@ -60,9 +60,9 @@ function createEntry(): AttentionQueueEntry {
 
 function createMemoryStub() {
     return {
-        getGroupModel: () => ({
-            chatId: "telegram:g1",
-            chatTitle: "快乐摸鱼群",
+        getGroupModel: (chatId = "telegram:g1") => ({
+            chatId,
+            chatTitle: chatId === "telegram:g2" ? "技术串门群" : "快乐摸鱼群",
             isDirectMessage: true,
             description: "日常闲聊打水",
             dominantLanguage: "zh-CN",
@@ -106,6 +106,20 @@ function createMemoryStub() {
             totalMessageCount: 120,
             lastSeenAt: "2026-05-01T14:28:01.000Z",
             firstSeenAt: "2026-01-01T00:00:00.000Z",
+            updatedAt: "2026-05-01T00:00:00.000Z",
+        }),
+        getPersonProfile: () => ({
+            userId: "telegram:u1",
+            traits: ["跨群短句"],
+            interests: ["团建"],
+            communicationStyle: "熟人式短句",
+            relationToAgent: "跨群熟人",
+            stablePatterns: ["直接叫 agent 处理上下文"],
+            agentPolicyHints: ["先看关系记忆再接话"],
+            followupCandidates: [],
+            sourceChatIds: ["telegram:g1", "telegram:g2"],
+            confidence: 0.8,
+            lastReflectedAt: "2026-05-01T00:00:00.000Z",
             updatedAt: "2026-05-01T00:00:00.000Z",
         }),
         getTopicById: () => ({
@@ -153,6 +167,7 @@ describe("createMetaSessionHandler", () => {
         const sandbox = new MetaSandbox({});
         const llmCalls: ChatMessage[][] = [];
         const persistedHistory: Array<{ role: "assistant" | "user"; content: string; timestamp: string }> = [];
+        const dispatchProfileSnapshots: Array<Array<[string, unknown[]]>> = [];
         const handler = createMetaSessionHandler({
             getPersona: () => ({ name: "测试编排者", description: "验证 meta context engine" }),
             globalState: {
@@ -165,6 +180,9 @@ describe("createMetaSessionHandler", () => {
             },
             memory: createMemoryStub() as any,
             sandbox,
+            setActiveUserProfilesForDispatch: (profilesByChatId) => {
+                dispatchProfileSnapshots.push([...profilesByChatId.entries()]);
+            },
             getLlmConfigs: () => [TEST_LLM_CONFIG],
             llmCaller: async (messages): Promise<LLMResponse> => {
                 if (isFirstNoCodeConfirmationCall(messages)) {
@@ -198,6 +216,8 @@ describe("createMetaSessionHandler", () => {
         assert.match(firstPrompt, /## 话题注册表增量/);
         assert.doesNotMatch(firstPrompt, /阿喵偏好短句沟通/);
         assert.match(firstPrompt, /## 活跃参与者 \(更新\)/);
+        assert.match(firstPrompt, /阿喵\(telegram:u1\)/);
+        assert.match(firstPrompt, /# 注意力切换: 快乐摸鱼群 \(composite chatId: telegram:g1\)/);
         assert.match(firstPrompt, /## 聊天画像/);
 
         assert.match(replayedHistoricalPrompt, /## 新消息/);
@@ -208,6 +228,9 @@ describe("createMetaSessionHandler", () => {
         assert.match(currentPrompt, /# 注意力切换:/);
         assert.match(currentPrompt, /## 聊天画像/);
         assert.match(currentPrompt, /## 当前注意力元数据/);
+        assert.equal(dispatchProfileSnapshots[0]?.[0]?.[0], "telegram:g1");
+        assert.equal((dispatchProfileSnapshots[0]?.[0]?.[1]?.[0] as any)?.userId, "telegram:u1");
+        assert.deepEqual(dispatchProfileSnapshots.at(-1), []);
     });
 
     it("keeps current attention metadata and group model under the matching chat header", async () => {

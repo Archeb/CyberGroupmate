@@ -31,9 +31,34 @@ import {
     resetMetaCodeActState,
 } from "../meta-sandbox/meta-session-runner.js";
 import { getMetaHistoryWindowStatus } from "../main-agent/meta-history-retention.js";
+import { getPlatform } from "../core/chat-id.js";
 
 const log = createLogger("dashboard-api");
 const SKILLS_ROOT = join(process.cwd(), "workspace", "skills");
+const DEBUG_EXECUTION_LOCKS = new Set<string>();
+
+const DEFAULT_CODEACT_DEBUG_TIMEOUT_MS = 30_000;
+const MAX_CODEACT_DEBUG_TIMEOUT_MS = 120_000;
+const DEFAULT_SUBAGENT_DEBUG_MODULES = [
+    "runtime", "fs", "skills", "mcp", "cron", "todo", "memory", "vision", "shell",
+];
+const BUILTIN_DEBUG_DTS: Record<string, string> = {
+    runtime: "runtime/runtime.d.ts",
+    fs: "filesystem/filesystem.d.ts",
+    filesystem: "filesystem/filesystem.d.ts",
+    skills: "skills/skills.d.ts",
+    mcp: "mcp-bridge/mcp-bridge.d.ts",
+    "mcp-bridge": "mcp-bridge/mcp-bridge.d.ts",
+    cron: "cron/cron.d.ts",
+    todo: "kv/todo.d.ts",
+    kv: "kv/todo.d.ts",
+    memory: "memory/memory.d.ts",
+    vision: "vision/vision.d.ts",
+    shell: "shell/shell.d.ts",
+    telegram: "telegram/telegram.d.ts",
+    discord: "discord/discord.d.ts",
+    onebot: "onebot/onebot.d.ts",
+};
 
 function qs(val: unknown): string {
     if (Array.isArray(val)) return String(val[0] ?? "");
@@ -86,6 +111,72 @@ function listSkillEntries(): Array<{
 
 function readTextIfExists(filePath: string): string {
     return fs.existsSync(filePath) ? fs.readFileSync(filePath, "utf-8") : "";
+}
+
+function normalizeDebugTimeout(value: unknown): number {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return DEFAULT_CODEACT_DEBUG_TIMEOUT_MS;
+    return Math.max(1_000, Math.min(Math.floor(parsed), MAX_CODEACT_DEBUG_TIMEOUT_MS));
+}
+
+function acquireDebugLock(key: string): boolean {
+    if (DEBUG_EXECUTION_LOCKS.has(key)) {
+        return false;
+    }
+    DEBUG_EXECUTION_LOCKS.add(key);
+    return true;
+}
+
+function releaseDebugLock(key: string): void {
+    DEBUG_EXECUTION_LOCKS.delete(key);
+}
+
+function readDebugDts(pathFromModulesRoot: string): { path: string; content: string } | null {
+    const path = join(process.cwd(), "src", "sandbox", "modules", pathFromModulesRoot);
+    const content = readTextIfExists(path);
+    return content ? { path: `file:///codeact-debug/${pathFromModulesRoot.replace(/\\/g, "/")}`, content } : null;
+}
+
+function buildSubagentDebugTypeLibs(chatId: string): Array<{ path: string; content: string }> {
+    const config = loadConfig("config.yaml", true);
+    const platform = getPlatform(chatId);
+    const modules = new Set<string>([
+        ...(config.subagent?.baseSkills ?? DEFAULT_SUBAGENT_DEBUG_MODULES),
+        platform,
+    ].filter(Boolean));
+    const libs: Array<{ path: string; content: string }> = [];
+
+    for (const moduleName of modules) {
+        const dtsPath = BUILTIN_DEBUG_DTS[moduleName];
+        if (!dtsPath) continue;
+        const lib = readDebugDts(dtsPath);
+        if (lib) libs.push(lib);
+    }
+
+    for (const skill of listSkillEntries()) {
+        const content = readTextIfExists(join(SKILLS_ROOT, skill.id, skill.dtsFileName));
+        if (content) {
+            libs.push({
+                path: `file:///codeact-debug/skills/${skill.id}/${skill.dtsFileName}`,
+                content,
+            });
+        }
+    }
+
+    return libs;
+}
+
+function buildMetaDebugTypeLibs(): Array<{ path: string; content: string }> {
+    const dirPath = join(process.cwd(), "src", "meta-sandbox", "meta-api", "modules");
+    if (!fs.existsSync(dirPath)) return [];
+    return fs.readdirSync(dirPath)
+        .filter((file) => file.endsWith(".d.ts"))
+        .sort()
+        .map((file) => ({
+            path: `file:///codeact-debug/meta/${file}`,
+            content: readTextIfExists(join(dirPath, file)),
+        }))
+        .filter((lib) => lib.content.length > 0);
 }
 
 function serializeTopic(topic: any): Record<string, unknown> | null {
@@ -683,6 +774,113 @@ export function createApiRouter(deps: DashboardDeps, bridge: EventBridge): Route
             isProcessing: executor.isProcessing(),
             lastCompactedAt: executor.lastCompactedAt,
         });
+    });
+
+    router.get("/codeact/:chatId/debug-types", (req, res) => {
+        try {
+            const chatId = req.params.chatId;
+            const libs = chatId === META_CODEACT_CHAT_ID
+                ? buildMetaDebugTypeLibs()
+                : buildSubagentDebugTypeLibs(chatId);
+            res.json({ libs });
+        } catch (err) {
+            res.status(500).json({ error: String(err) });
+        }
+    });
+
+    router.post("/codeact/:chatId/debug-execute", async (req, res) => {
+        const chatId = req.params.chatId;
+        const code = typeof req.body?.code === "string" ? req.body.code : "";
+        const timeoutMs = normalizeDebugTimeout(req.body?.timeoutMs);
+        const lockKey = chatId === META_CODEACT_CHAT_ID ? "meta" : `subagent:${chatId}`;
+        const startedAt = new Date().toISOString();
+        const startTime = Date.now();
+
+        if (!code.trim()) {
+            res.status(400).json({ ok: false, error: "code is required" });
+            return;
+        }
+        if (!acquireDebugLock(lockKey)) {
+            res.status(409).json({ ok: false, error: "debug execution already running" });
+            return;
+        }
+
+        try {
+            if (chatId === META_CODEACT_CHAT_ID) {
+                const state = getMetaCodeActState();
+                if (state.isProcessing) {
+                    res.status(409).json({ ok: false, error: "meta codeact is processing" });
+                    return;
+                }
+                if (!deps.metaSandbox) {
+                    res.status(503).json({ ok: false, error: "meta sandbox is not available" });
+                    return;
+                }
+
+                const result = await deps.metaSandbox.execute(code, { timeoutMs });
+                res.json({
+                    ok: !result.error,
+                    chatId,
+                    target: "meta",
+                    output: result.output,
+                    error: result.error,
+                    logs: result.logs,
+                    timeoutMs,
+                    startedAt,
+                    completedAt: new Date().toISOString(),
+                    durationMs: Date.now() - startTime,
+                });
+                return;
+            }
+
+            const sub = deps.subagentManager.get(chatId);
+            if (!sub) {
+                res.status(404).json({ ok: false, error: "chat not found" });
+                return;
+            }
+            const executor = sub.codeActExecutor as CodeActExecutor | null;
+            if (executor?.isProcessing()) {
+                res.status(409).json({ ok: false, error: "codeact is processing" });
+                return;
+            }
+
+            const sandbox = await deps.sandboxPool.acquire(chatId);
+            try {
+                const platform = getPlatform(chatId);
+                const deduplicateSentMessages = loadConfig("config.yaml", true).subagent?.deduplicateSentMessages !== false;
+                await sandbox.execute(`__setPlatform(${JSON.stringify(platform)})`, 5_000);
+                await sandbox.execute(`__setDuplicateMessageBlocking(${JSON.stringify(deduplicateSentMessages)})`, 5_000);
+
+                const result = await sandbox.execute(code, timeoutMs);
+                res.json({
+                    ok: !result.error,
+                    chatId,
+                    target: "subagent",
+                    output: result.output,
+                    error: result.error,
+                    timeoutMs,
+                    startedAt,
+                    completedAt: new Date().toISOString(),
+                    durationMs: Date.now() - startTime,
+                });
+            } finally {
+                deps.sandboxPool.release(chatId);
+            }
+        } catch (err) {
+            res.status(200).json({
+                ok: false,
+                chatId,
+                target: chatId === META_CODEACT_CHAT_ID ? "meta" : "subagent",
+                output: err instanceof Error ? err.stack ?? err.message : String(err),
+                error: true,
+                timeoutMs,
+                startedAt,
+                completedAt: new Date().toISOString(),
+                durationMs: Date.now() - startTime,
+            });
+        } finally {
+            releaseDebugLock(lockKey);
+        }
     });
 
     router.post("/codeact/:chatId/cancel", async (req, res) => {

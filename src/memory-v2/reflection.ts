@@ -14,7 +14,7 @@
  */
 
 import { createLogger } from "../core/logger.js";
-import { getPlatform, ensureCompositeId, getRawId } from "../core/chat-id.js";
+import { getPlatform, ensureCompositeId, getRawId, getGroupModelKey } from "../core/chat-id.js";
 import { callLLMWithFallback, type LLMConfig, type ChatMessage } from "../core/llm.js";
 import { resolveComponentTimeout } from "../core/config.js";
 import { formatMessages, type RawMessage } from "../core/message-enricher.js";
@@ -24,12 +24,15 @@ import { join } from "node:path";
 import { loadPromptFile, registerCacheClear } from "../core/prompt-loader.js";
 import type {
     TopicNode,
+    PersonProfile,
     PersonGroupProfile,
     InteractionEpisode,
     MergedMemory,
     GroupModel,
     FactCategory,
     ReflectionResult,
+    RecentMessageEntry,
+    CoreFactProvenance,
 } from "./types.js";
 import type { MemoryStoreV2 } from "./memory-v2.js";
 
@@ -39,6 +42,17 @@ const log = createLogger("reflection");
 
 /** LLM 返回的结构化反思结果 */
 interface ReflectionLLMOutput {
+    globalPersonUpdates?: Array<{
+        userId: string;
+        traits?: string[];
+        interests?: string[];
+        communicationStyle?: string;
+        relationToAgent?: string;
+        stablePatterns?: string[];
+        agentPolicyHints?: string[];
+        followupCandidates?: string[];
+        confidence?: number;
+    }>;
     personUpdates: Array<{
         userId: string;
         traits?: string[];
@@ -67,6 +81,13 @@ interface ReflectionLLMOutput {
         category: FactCategory;
         /** 操作类型：不提供或 "upsert" 为新增/更新，"delete" 为删除 */
         action?: "upsert" | "delete";
+        sourceTopicId?: string | null;
+        sourceTopicLabel?: string | null;
+        sourceMessageIds?: string[];
+        sourceInteractionIds?: string[];
+        observedAt?: string | null;
+        visibility?: CoreFactProvenance["visibility"];
+        sensitivity?: CoreFactProvenance["sensitivity"];
     }>;
     topicsSummary: Array<{
         label: string;
@@ -79,6 +100,31 @@ interface ReflectionLLMOutput {
         displayName?: string;
         aliases?: string[];
     }>;
+    relationshipEvents?: Array<{
+        userId: string;
+        summary: string;
+        type?: InteractionEpisode["type"] | "milestone" | "preference" | "boundary";
+        sentiment?: InteractionEpisode["sentiment"];
+        significance?: number;
+        interactionQuality?: InteractionQuality;
+        messageIds?: string[];
+        topicId?: string | null;
+        topicLabel?: string;
+        evidence?: string[];
+        agentOutcome?: string;
+        confidence?: number;
+    }>;
+    agentFeedback?: {
+        effectiveBehaviors?: string[];
+        avoidBehaviors?: string[];
+        toneHints?: string[];
+    };
+    followupCandidates?: Array<{
+        userId?: string;
+        topic?: string;
+        reason?: string;
+        suggestedAction?: string;
+    }>;
     insights: string;
 }
 
@@ -89,6 +135,9 @@ interface ParticipantStats {
     topicsParticipated: number;
     activeDays: Set<string>;
     sentiments: string[];
+    directInteractions: number;
+    agentReplies: number;
+    interactionTypes: Map<string, number>;
 }
 
 /** 单个 Tier 的画像精度限制 */
@@ -250,6 +299,20 @@ export async function runReflection(
         }
     }
 
+    // 4a-global. 写入跨群全局画像（同一个人在不同 chat 共享的长期认知）
+    if (llmOutput.globalPersonUpdates?.length) {
+        for (const gu of llmOutput.globalPersonUpdates) {
+            const compositeUid = ensureCompositeId(getPlatform(chatId), gu.userId);
+            const existing = memory.getPersonProfile(compositeUid);
+            const updateData = mergeGlobalPersonProfile(existing, gu, chatId, startTime);
+            memory.upsertPersonProfile(compositeUid, updateData);
+            log.debug("Reflection 4a-global: 写入全局画像", {
+                userId: compositeUid,
+                fields: Object.keys(updateData),
+            });
+        }
+    }
+
     // 4a. 写入画像增量（不再直接使用 LLM 的 dunbarTier，改由 affinityScore 驱动）
     for (const pu of llmOutput.personUpdates) {
         const updateData: Partial<PersonGroupProfile> = {};
@@ -274,15 +337,16 @@ export async function runReflection(
         }
     }
 
+    const qualityMap = new Map<string, InteractionQuality | undefined>();
+    for (const pu of llmOutput.personUpdates) {
+        if (pu.interactionQuality) {
+            const compositeUid = ensureCompositeId(getPlatform(chatId), pu.userId);
+            qualityMap.set(compositeUid, pu.interactionQuality);
+        }
+    }
+
     // 4a-score. 亲和度评分：计算 affinityScore 并派生 dunbarTier
     {
-        const qualityMap = new Map<string, ReflectionLLMOutput["personUpdates"][0]["interactionQuality"]>();
-        for (const pu of llmOutput.personUpdates) {
-            if (pu.interactionQuality) {
-                const compositeUid = ensureCompositeId(getPlatform(chatId), pu.userId);
-                qualityMap.set(compositeUid, pu.interactionQuality);
-            }
-        }
         const updatedProfiles = memory.getProfilesForChat(chatId);
         const scores = computeAffinityScores(updatedProfiles, stats, qualityMap, isDirectMessage, memory, chatId);
         for (const [userId, { score, tier }] of scores) {
@@ -294,40 +358,36 @@ export async function runReflection(
         }
     }
 
-    // 4a″. 将本次 interactions 转为 recentEpisodes 写入对应 profile（memory.md §3.2 情感记忆渐进合并）
-    if (interactions.length > 0) {
-        const interactionsByUser = new Map<string, typeof interactions>();
-        for (const intr of interactions) {
-            const uid = intr.userId;
-            if (!uid || uid === "agent") continue;
-            const arr = interactionsByUser.get(uid) ?? [];
-            arr.push(intr);
-            interactionsByUser.set(uid, arr);
+    // 4a″. 将本次 interactions/LLM relationshipEvents 转为带证据的 recentEpisodes
+    const relationshipEpisodes = buildRelationshipEpisodes({
+        chatId,
+        interactions,
+        topics,
+        memory,
+        qualityMap,
+        relationshipEvents: llmOutput.relationshipEvents ?? [],
+    });
+    if (relationshipEpisodes.length > 0) {
+        const latestProfiles = memory.getProfilesForChat(chatId);
+        const profilesByUserId = new Map(latestProfiles.map(p => [p.userId, p]));
+        const episodesByUser = new Map<string, InteractionEpisode[]>();
+        for (const ep of relationshipEpisodes) {
+            if (!ep.userId || ep.userId === "agent") continue;
+            const arr = episodesByUser.get(ep.userId) ?? [];
+            arr.push(ep);
+            episodesByUser.set(ep.userId, arr);
         }
-        for (const [userId, userInteractions] of interactionsByUser) {
-            const profile = profiles.find(p => p.userId === userId);
+        for (const [userId, userEpisodes] of episodesByUser) {
+            const profile = profilesByUserId.get(userId);
             if (!profile) continue;
             const existing = profile.recentEpisodes ?? [];
-            // 去重：跳过已存在的 episode id
             const existingIds = new Set(existing.map(e => e.id));
-            const newEpisodes = userInteractions
-                .filter(intr => !existingIds.has(intr.id))
-                .map(intr => ({
-                    id: intr.id,
-                    date: intr.date,
-                    chatId: intr.chatId,
-                    userId: intr.userId,
-                    topicId: intr.topicId ?? null,
-                    type: intr.type,
-                    summary: intr.summary,
-                    sentiment: intr.sentiment ?? "neutral" as const,
-                    significance: intr.significance ?? 0.5,
-                }));
+            const newEpisodes = userEpisodes.filter(ep => !existingIds.has(ep.id));
             if (newEpisodes.length > 0) {
                 memory.upsertPersonGroupProfile(userId, chatId, {
                     recentEpisodes: [...existing, ...newEpisodes],
                 });
-                log.debug("Reflection 4a″: 写入 recentEpisodes", {
+                log.debug("Reflection 4a″: 写入 richer recentEpisodes", {
                     userId, count: newEpisodes.length, total: existing.length + newEpisodes.length,
                 });
             }
@@ -349,6 +409,7 @@ export async function runReflection(
             memory.updateFact(fact.id, {
                 content: fact.content,
                 category: fact.category,
+                ...buildFactProvenance(fact, topics, interactions, chatId, groupModel, isDirectMessage, startTime),
             });
             newCoreFacts.push(`[updated] ${fact.content}`);
             log.debug("Reflection 4b: 更新事实", { id: fact.id, subject: fact.subject });
@@ -375,9 +436,11 @@ export async function runReflection(
     for (let ei = 0; ei < newFactsForEmbedding.length; ei++) {
         const fact = llmOutput.factUpdates[newFactsForEmbedding[ei].index];
         memory.storeFact(
-            fact.subject, fact.content, fact.category, "reflection",
+            fact.subject, fact.content, fact.category, `reflection:${chatId}`,
             undefined,
             factEmbeddings[ei] ?? undefined,
+            undefined,
+            buildFactProvenance(fact, topics, interactions, chatId, groupModel, isDirectMessage, startTime),
         );
         newCoreFacts.push(fact.content);
         log.debug("Reflection 4b: 新增事实", {
@@ -419,13 +482,31 @@ export async function runReflection(
     if (gu.communicationNorms) groupUpdateData.communicationNorms = gu.communicationNorms;
     if (gu.recentFeedback) groupUpdateData.recentFeedback = gu.recentFeedback;
 
-    // Issue 5: 将 insights 追加到 recentFeedback，使其被 attend 上下文自动消费
-    if (llmOutput.insights) {
+    const reflectionFeedback = [
+        llmOutput.insights ? `[反思洞察] ${llmOutput.insights}` : "",
+        ...(llmOutput.agentFeedback?.effectiveBehaviors?.length
+            ? [`[有效互动] ${llmOutput.agentFeedback.effectiveBehaviors.join("；")}`]
+            : []),
+        ...(llmOutput.agentFeedback?.avoidBehaviors?.length
+            ? [`[避免方式] ${llmOutput.agentFeedback.avoidBehaviors.join("；")}`]
+            : []),
+        ...(llmOutput.agentFeedback?.toneHints?.length
+            ? [`[语气提示] ${llmOutput.agentFeedback.toneHints.join("；")}`]
+            : []),
+        ...(llmOutput.followupCandidates?.length
+            ? [`[可回访] ${llmOutput.followupCandidates
+                .slice(0, 5)
+                .map(item => [item.userId, item.topic, item.suggestedAction ?? item.reason].filter(Boolean).join(" / "))
+                .join("；")}`]
+            : []),
+    ].filter(Boolean);
+
+    // 将 reflection 对 agent 行为的洞察追加到 recentFeedback，使其被 attend 上下文自动消费
+    if (reflectionFeedback.length > 0) {
         const existingFeedback = groupUpdateData.recentFeedback || groupModel?.recentFeedback || "";
-        const insightsPrefix = "[反思洞察] ";
         groupUpdateData.recentFeedback = existingFeedback
-            ? `${existingFeedback}\n${insightsPrefix}${llmOutput.insights}`
-            : `${insightsPrefix}${llmOutput.insights}`;
+            ? `${existingFeedback}\n${reflectionFeedback.join("\n")}`
+            : reflectionFeedback.join("\n");
     }
 
     memory.upsertGroupModel(chatId, groupUpdateData);
@@ -546,7 +627,16 @@ function computeParticipantStats(
     const getOrCreate = (userId: string): ParticipantStats => {
         let s = statsMap.get(userId);
         if (!s) {
-            s = { userId, messageCount: 0, topicsParticipated: 0, activeDays: new Set(), sentiments: [] };
+            s = {
+                userId,
+                messageCount: 0,
+                topicsParticipated: 0,
+                activeDays: new Set(),
+                sentiments: [],
+                directInteractions: 0,
+                agentReplies: 0,
+                interactionTypes: new Map(),
+            };
             statsMap.set(userId, s);
         }
         return s;
@@ -570,10 +660,21 @@ function computeParticipantStats(
         }
     }
 
-    // 从 interactions 统计情感
+    // 从 interactions 统计直接互动与情感
     for (const ep of interactions) {
-        // interactions 没有直接的 userId 字段，跳过
-        // 但有 sentiment 可以用于整体统计
+        if (!ep.userId) continue;
+        const s = getOrCreate(ep.userId);
+        s.sentiments.push(ep.sentiment ?? "neutral");
+        s.interactionTypes.set(ep.type, (s.interactionTypes.get(ep.type) ?? 0) + 1);
+        if (ep.type === "direct_message" || ep.type === "agent_mentioned") {
+            s.directInteractions++;
+        }
+        if (ep.type === "agent_replied") {
+            s.agentReplies++;
+        }
+        if (ep.date) {
+            s.activeDays.add(ep.date.substring(0, 10));
+        }
     }
 
     return statsMap;
@@ -856,6 +957,8 @@ function buildReflectionPrompt(
     memory?: MemoryStoreV2,
 ): string {
     const sections: string[] = [];
+    const MAX_TOPIC_BLOCKS = 60;
+    const MAX_MESSAGES_PER_TOPIC = 30;
 
     // 基本信息（私聊 vs 群聊）
     if (groupModel) {
@@ -880,9 +983,10 @@ function buildReflectionPrompt(
     if (topics.length > 0 && memory) {
         const chatId = topics[0].chatId;
         const topicBlocks: string[] = [];
+        const promptTopics = topics.length > MAX_TOPIC_BLOCKS ? topics.slice(-MAX_TOPIC_BLOCKS) : topics;
 
-        for (let i = 0; i < topics.length; i++) {
-            const t = topics[i];
+        for (let i = 0; i < promptTopics.length; i++) {
+            const t = promptTopics[i];
             const header = `### 话题 ${i + 1}: ${t.label} (${t.startedAt?.substring(0, 10) ?? "?"})\n` +
                 `参与者: ${t.participants.join(", ")} | 情感: ${t.sentiment} | 消息数: ${t.messageRange.count}\n` +
                 `摘要: ${t.summary || "(无)"}\n` +
@@ -891,12 +995,13 @@ function buildReflectionPrompt(
             // 获取话题关联的实际消息
             let conversationText = "";
             if (t.messageRange.messageIds.length > 0) {
-                const msgs = memory.getMessagesByIds(chatId, t.messageRange.messageIds);
+                const messageIds = t.messageRange.messageIds.slice(-MAX_MESSAGES_PER_TOPIC);
+                const msgs = memory.getMessagesByIds(chatId, messageIds);
                 if (msgs.length > 0) {
                     // RecentMessageEntry → RawMessage
                     const rawMsgs: RawMessage[] = msgs.map(m => ({
                         id: m.messageId,
-                        sender: m.displayName || getRawId(m.userId),
+                        sender: m.displayName ? `${m.displayName}(${m.userId})` : formatUserLabel(memory, m.userId),
                         text: m.text,
                         timestamp: m.timestamp,
                         replyToMsgId: m.replyToMessageId,
@@ -914,10 +1019,14 @@ function buildReflectionPrompt(
             }
         }
 
-        sections.push(`## 近期话题与对话 (${topics.length} 个)\n\n${topicBlocks.join("\n\n---\n\n")}`);
+        const omitted = topics.length > promptTopics.length
+            ? `；仅显示最近 ${promptTopics.length} 个，每个话题最多 ${MAX_MESSAGES_PER_TOPIC} 条消息`
+            : "";
+        sections.push(`## 近期话题与对话 (${topics.length} 个${omitted})\n\n${topicBlocks.join("\n\n---\n\n")}`);
     } else if (topics.length > 0) {
         // fallback: 无 memory 时仅显示话题摘要
-        const topicLines = topics.map((t, i) =>
+        const promptTopics = topics.length > MAX_TOPIC_BLOCKS ? topics.slice(-MAX_TOPIC_BLOCKS) : topics;
+        const topicLines = promptTopics.map((t, i) =>
             `${i + 1}. **${t.label}** (${t.startedAt?.substring(0, 10) ?? "?"})\n` +
             `   摘要: ${t.summary || "(无)"}\n` +
             `   参与者: ${t.participants.join(", ")}\n` +
@@ -925,29 +1034,59 @@ function buildReflectionPrompt(
             `   情感: ${t.sentiment}\n` +
             `   消息数: ${t.messageRange.count}`
         ).join("\n\n");
-        sections.push(`## 近期话题 (${topics.length} 个)\n\n${topicLines}`);
+        const omitted = topics.length > promptTopics.length ? `；仅显示最近 ${promptTopics.length} 个` : "";
+        sections.push(`## 近期话题 (${topics.length} 个${omitted})\n\n${topicLines}`);
+    }
+
+    // 近期直接互动：这些是 recentEpisodes 和关系记忆的主要原料
+    if (interactions.length > 0) {
+        const interactionLines = interactions
+            .slice(-80)
+            .map(intr => formatInteractionForPrompt(intr, topics, memory))
+            .join("\n");
+        sections.push(`## 近期直接互动 (${interactions.length} 条，最多显示 80 条)\n\n${interactionLines}`);
     }
 
     // 参与者量化数据
     if (stats.size > 0) {
         const statLines = Array.from(stats.values()).map(s =>
-            `- ${getRawId(s.userId)}: ${s.messageCount} 条消息, ${s.topicsParticipated} 个话题, ${s.activeDays.size} 天活跃`
+            `- ${formatUserLabel(memory, s.userId)}: ${s.messageCount} 条消息, ${s.topicsParticipated} 个话题, ` +
+            `${s.directInteractions} 次直呼/私聊, ${s.agentReplies} 次 agent 回复, ${s.activeDays.size} 天活跃, ` +
+            `互动类型=${formatCountMap(s.interactionTypes)}`
         ).join("\n");
         sections.push(`## 参与者统计\n\n${statLines}`);
     }
 
     // 现有画像
     if (profiles.length > 0) {
+        if (memory) {
+            const globalLines = profiles.map(p => {
+                const global = memory.getPersonProfile(p.userId);
+                if (!global) {
+                    return `- **${formatUserLabel(memory, p.userId)}**: (暂无全局画像，需从本次和跨群事实中提炼稳定认知)`;
+                }
+                return `- **${formatUserLabel(memory, p.userId)}**: traits=[${global.traits.join(", ")}], interests=[${global.interests.join(", ")}], ` +
+                    `style="${global.communicationStyle}", relation="${global.relationToAgent}", ` +
+                    `patterns=[${global.stablePatterns.join("；")}], hints=[${global.agentPolicyHints.join("；")}], ` +
+                    `sources=[${global.sourceChatIds.join(", ")}], confidence=${global.confidence}`;
+            }).join("\n");
+            sections.push(`## 全局画像 (${profiles.length} 人，跨群共享)\n\n${globalLines}`);
+        }
+
         const profileLines = profiles.map(p => {
             // Issue 6: 查询 PersonIdentity 获取 displayName/aliases
             const identity = memory?.getPersonIdentity(p.userId);
-            const namePart = identity?.displayName ? ` (显示名: ${identity.displayName}` +
-                (identity.username ? `, @${identity.username}` : "") +
-                (identity.aliases?.length ? `, 别名: [${identity.aliases.join(", ")}]` : "") +
-                `)` : "";
-            return `- **${getRawId(p.userId)}**${namePart} (Tier ${p.dunbarTier}): ` +
+            const namePart = identity?.username || identity?.aliases?.length
+                ? ` (${[
+                    identity.username ? `@${identity.username}` : "",
+                    identity.aliases?.length ? `别名: [${identity.aliases.join(", ")}]` : "",
+                ].filter(Boolean).join(", ")})`
+                : "";
+            const relationshipMemory = formatRelationshipMemoryBrief(p);
+            return `- **${formatUserLabel(memory, p.userId)}**${namePart} (Tier ${p.dunbarTier}): ` +
                 `traits=[${p.traits.join(", ")}], interests=[${p.interests.join(", ")}], ` +
-                `style="${p.communicationStyle}", relation="${p.relationToAgent}"`;
+                `style="${p.communicationStyle}", relation="${p.relationToAgent}"` +
+                (relationshipMemory ? `\n  ${relationshipMemory}` : "");
         }).join("\n");
         sections.push(`## 现有画像 (${profiles.length} 人)\n\n${profileLines}`);
     }
@@ -960,7 +1099,14 @@ function buildReflectionPrompt(
             const facts = result.items;
             if (facts.length > 0) {
                 for (const f of facts) {
-                    factLines.push(`- [id:${f.id}] (${f.category}) ${getRawId(f.subject)}: ${f.content}`);
+                    const source = [
+                        f.sourceChatId ? `来源chat=${formatChatLabel(memory, f.sourceChatId, f.sourceChatTitle)}` : f.sourceChatTitle ? `来源chat=${f.sourceChatTitle}` : "",
+                        f.sourceTopicLabel || f.sourceTopicId ? `topic=${f.sourceTopicLabel || f.sourceTopicId}` : "",
+                        f.observedAt ? `observedAt=${f.observedAt}` : "",
+                        f.visibility ? `visibility=${f.visibility}` : "",
+                        f.sensitivity ? `sensitivity=${f.sensitivity}` : "",
+                    ].filter(Boolean).join(" | ");
+                    factLines.push(`- [id:${f.id}] (${f.category}) ${formatUserLabel(memory, f.subject)}: ${f.content}${source ? ` (${source})` : ""}`);
                 }
             }
         }
@@ -978,6 +1124,310 @@ function buildReflectionPrompt(
     return sections.join("\n\n---\n\n");
 }
 
+function formatCountMap(map: Map<string, number> | Record<string, number> | undefined): string {
+    if (!map) return "{}";
+    const entries = map instanceof Map ? [...map.entries()] : Object.entries(map);
+    if (entries.length === 0) return "{}";
+    return entries.map(([key, value]) => `${key}:${value}`).join(", ");
+}
+
+function formatUserLabel(memory: MemoryStoreV2 | undefined, userId: string, fallbackName?: string): string {
+    const identity = memory?.getPersonIdentity(userId);
+    const name = identity?.displayName?.trim() || fallbackName?.trim() || userId;
+    return `${name}(${userId})`;
+}
+
+function formatChatLabel(memory: MemoryStoreV2 | undefined, chatId: string, fallbackTitle?: string | null): string {
+    const model = memory?.getGroupModel(getGroupModelKey(chatId));
+    const title = model?.chatTitle?.trim() || fallbackTitle?.trim() || chatId;
+    return `${title}(${chatId})`;
+}
+
+function mergeGlobalPersonProfile(
+    existing: PersonProfile | null,
+    update: NonNullable<ReflectionLLMOutput["globalPersonUpdates"]>[number],
+    chatId: string,
+    reflectedAt: string,
+): Partial<PersonProfile> {
+    return {
+        traits: dedupeStrings([...(existing?.traits ?? []), ...(update.traits ?? [])]).slice(0, 16),
+        interests: dedupeStrings([...(existing?.interests ?? []), ...(update.interests ?? [])]).slice(0, 24),
+        communicationStyle: chooseStableProfileText(existing?.communicationStyle, update.communicationStyle),
+        relationToAgent: chooseStableProfileText(existing?.relationToAgent, update.relationToAgent),
+        stablePatterns: dedupeStrings([...(existing?.stablePatterns ?? []), ...(update.stablePatterns ?? [])]).slice(0, 16),
+        agentPolicyHints: dedupeStrings([...(existing?.agentPolicyHints ?? []), ...(update.agentPolicyHints ?? [])]).slice(0, 16),
+        followupCandidates: dedupeStrings([...(existing?.followupCandidates ?? []), ...(update.followupCandidates ?? [])]).slice(0, 12),
+        sourceChatIds: dedupeStrings([...(existing?.sourceChatIds ?? []), chatId]),
+        confidence: Math.max(existing?.confidence ?? 0, clamp01(update.confidence ?? 0.75)),
+        lastReflectedAt: reflectedAt,
+    };
+}
+
+function chooseStableProfileText(existing?: string, incoming?: string): string {
+    const current = existing?.trim() ?? "";
+    const next = incoming?.trim() ?? "";
+    if (!current) return next;
+    if (!next) return current;
+    return next.length > current.length * 1.15 ? next : current;
+}
+
+function formatRelationshipMemoryBrief(profile: PersonGroupProfile): string {
+    const recent = (profile.recentEpisodes ?? [])
+        .slice(-3)
+        .map(ep => `${ep.topicLabel ? `${ep.topicLabel}: ` : ""}${ep.summary}`)
+        .filter(Boolean);
+    const merged = (profile.mergedMemory ?? [])
+        .slice(0, 2)
+        .map(m => {
+            const patterns = m.stablePatterns?.length ? `；模式: ${m.stablePatterns.slice(0, 2).join(" / ")}` : "";
+            const hints = m.agentPolicyHints?.length ? `；提示: ${m.agentPolicyHints.slice(0, 2).join(" / ")}` : "";
+            return `[${m.granularity} ${m.periodStart.substring(0, 10)}~${m.periodEnd.substring(0, 10)}] ${m.relationshipTrend || m.highlights.join("；")}${patterns}${hints}`;
+        })
+        .filter(Boolean);
+    const chunks: string[] = [];
+    if (recent.length) chunks.push(`近期关系事件: ${recent.join("；")}`);
+    if (merged.length) chunks.push(`长期关系记忆: ${merged.join("；")}`);
+    return chunks.join("\n  ");
+}
+
+function buildFactProvenance(
+    fact: ReflectionLLMOutput["factUpdates"][number],
+    topics: TopicNode[],
+    interactions: InteractionEpisode[],
+    chatId: string,
+    groupModel: GroupModel | null,
+    isDirectMessage: boolean,
+    reflectedAt: string,
+): CoreFactProvenance {
+    const topic = (fact.sourceTopicId
+        ? topics.find(t => t.id === fact.sourceTopicId || t.pipelineTopicId === fact.sourceTopicId)
+        : undefined)
+        ?? (fact.sourceTopicLabel ? topics.find(t => t.label === fact.sourceTopicLabel) : undefined)
+        ?? topics.find(t => t.participants.includes(fact.subject) || t.participants.includes(getRawId(fact.subject)));
+    const interactionIds = fact.sourceInteractionIds?.length
+        ? fact.sourceInteractionIds
+        : interactions
+            .filter(i => i.userId === fact.subject || getRawId(i.userId) === getRawId(fact.subject))
+            .slice(-5)
+            .map(i => i.id);
+    const messageIds = fact.sourceMessageIds?.length
+        ? fact.sourceMessageIds
+        : topic?.messageRange.messageIds.slice(0, 8) ?? [];
+    return {
+        sourceChatId: chatId,
+        sourceChatTitle: groupModel?.chatTitle ?? chatId,
+        sourceTopicId: fact.sourceTopicId ?? topic?.id ?? null,
+        sourceTopicLabel: fact.sourceTopicLabel ?? topic?.label ?? null,
+        sourceMessageIds: messageIds,
+        sourceInteractionIds: interactionIds,
+        observedAt: fact.observedAt ?? topic?.startedAt ?? reflectedAt,
+        visibility: fact.visibility ?? (isDirectMessage ? "private" : "contextual"),
+        sensitivity: fact.sensitivity ?? "low",
+    };
+}
+
+function formatInteractionForPrompt(
+    interaction: InteractionEpisode,
+    topics: TopicNode[],
+    memory?: MemoryStoreV2,
+): string {
+    const topic = inferTopicForInteraction(interaction, topics, memory);
+    const evidence = memory ? findEvidenceMessages(memory, interaction, topic).slice(0, 3) : [];
+    const evidenceText = evidence.length
+        ? ` | 证据: ${evidence.map(formatMessageEvidence).join(" / ")}`
+        : "";
+    const topicText = topic ? ` | 话题: ${topic.label}` : "";
+    return `- [${interaction.date}] ${formatUserLabel(memory, interaction.userId)} ${interaction.type} ` +
+        `(情感:${interaction.sentiment}, 重要度:${interaction.significance}) ${interaction.summary}${topicText}${evidenceText}`;
+}
+
+function buildRelationshipEpisodes(options: {
+    chatId: string;
+    interactions: InteractionEpisode[];
+    topics: TopicNode[];
+    memory: MemoryStoreV2;
+    qualityMap: Map<string, InteractionQuality | undefined>;
+    relationshipEvents: NonNullable<ReflectionLLMOutput["relationshipEvents"]>;
+}): InteractionEpisode[] {
+    const result: InteractionEpisode[] = [];
+    const { chatId, interactions, topics, memory, qualityMap, relationshipEvents } = options;
+
+    for (const intr of interactions) {
+        if (!intr.userId || intr.userId === "agent") continue;
+        const topic = inferTopicForInteraction(intr, topics, memory);
+        const evidenceMessages = findEvidenceMessages(memory, intr, topic);
+        const evidence = evidenceMessages.slice(0, 5).map(formatMessageEvidence);
+        const messageIds = [...new Set(evidenceMessages.map(m => m.messageId))];
+        const mediaTypes = [...new Set(evidenceMessages.map(m => m.mediaType).filter((v): v is string => !!v))];
+        const replyToMessageIds = [...new Set(evidenceMessages.map(m => m.replyToMessageId).filter((v): v is string => !!v))];
+        const sourceIds = [
+            `interaction:${intr.id}`,
+            ...(topic ? [`topic:${topic.id}`] : []),
+            ...messageIds.map(id => `message:${id}`),
+        ];
+
+        result.push({
+            ...intr,
+            displayName: memory.getPersonIdentity(intr.userId)?.displayName,
+            direction: inferDirection(intr),
+            interactionQuality: qualityMap.get(intr.userId),
+            topicId: intr.topicId ?? topic?.id ?? null,
+            topicLabel: topic?.label,
+            topicSummary: topic?.summary,
+            messageIds,
+            sourceIds,
+            evidence,
+            agentOutcome: findAgentOutcome(intr, interactions),
+            confidence: evidence.length > 0 ? 0.85 : 0.55,
+            mediaTypes,
+            replyToMessageIds,
+        });
+    }
+
+    for (let i = 0; i < relationshipEvents.length; i++) {
+        const event = relationshipEvents[i];
+        if (!event.userId || !event.summary) continue;
+        const userId = ensureCompositeId(getPlatform(chatId), event.userId);
+        const topic = event.topicId
+            ? topics.find(t => t.id === event.topicId) ?? memory.getTopicById(event.topicId)
+            : event.topicLabel
+                ? topics.find(t => t.label === event.topicLabel)
+                : null;
+        const messageIds = [...new Set(event.messageIds ?? [])];
+        result.push({
+            id: `reflection-event-${Date.now()}-${i}`,
+            date: new Date().toISOString(),
+            chatId,
+            userId,
+            topicId: event.topicId ?? topic?.id ?? null,
+            type: normalizeInteractionType(event.type),
+            summary: event.summary,
+            sentiment: event.sentiment ?? "neutral",
+            significance: clamp01(event.significance ?? 0.75),
+            displayName: memory.getPersonIdentity(userId)?.displayName,
+            direction: "mixed",
+            interactionQuality: event.interactionQuality,
+            topicLabel: event.topicLabel ?? topic?.label,
+            topicSummary: topic?.summary,
+            messageIds,
+            sourceIds: [
+                `reflectionEvent:${i}`,
+                ...(topic ? [`topic:${topic.id}`] : []),
+                ...messageIds.map(id => `message:${id}`),
+            ],
+            evidence: event.evidence ?? [],
+            agentOutcome: event.agentOutcome,
+            confidence: clamp01(event.confidence ?? 0.7),
+        });
+    }
+
+    return result;
+}
+
+function inferTopicForInteraction(
+    interaction: InteractionEpisode,
+    topics: TopicNode[],
+    memory?: MemoryStoreV2,
+): TopicNode | null {
+    if (interaction.topicId) {
+        const existing = topics.find(t => t.id === interaction.topicId) ?? memory?.getTopicById(interaction.topicId) ?? null;
+        if (existing) return existing;
+    }
+    const interactionTime = new Date(interaction.date).getTime();
+    if (!Number.isFinite(interactionTime)) return null;
+    const candidates = topics
+        .filter(t => t.participants.includes(interaction.userId))
+        .map(t => {
+            const start = new Date(t.startedAt).getTime();
+            const end = t.endedAt ? new Date(t.endedAt).getTime() : start + 2 * 60 * 60_000;
+            const distance = interactionTime >= start && interactionTime <= end
+                ? 0
+                : Math.min(Math.abs(interactionTime - start), Math.abs(interactionTime - end));
+            return { topic: t, distance };
+        })
+        .sort((a, b) => a.distance - b.distance);
+    return candidates[0]?.distance <= 6 * 60 * 60_000 ? candidates[0].topic : null;
+}
+
+function findEvidenceMessages(
+    memory: MemoryStoreV2,
+    interaction: InteractionEpisode,
+    topic: TopicNode | null,
+): RecentMessageEntry[] {
+    const byId = new Map<string, RecentMessageEntry>();
+    if (topic?.messageRange.messageIds.length) {
+        for (const msg of memory.getMessagesByIds(interaction.chatId, topic.messageRange.messageIds)) {
+            if (msg.userId === interaction.userId || topic.messageRange.messageIds.length <= 8) {
+                byId.set(msg.messageId, msg);
+            }
+        }
+    }
+
+    const time = new Date(interaction.date).getTime();
+    if (Number.isFinite(time)) {
+        const after = new Date(time - 10 * 60_000).toISOString();
+        const before = new Date(time + 10 * 60_000).toISOString();
+        const rows = memory.queryMessages({
+            chatIds: [interaction.chatId],
+            ...(interaction.type === "agent_replied" ? {} : { userIds: [interaction.userId] }),
+            after,
+            before,
+            limit: 12,
+        });
+        for (const row of rows) {
+            byId.set(row.messageId, {
+                messageId: row.messageId,
+                chatId: row.chatId,
+                userId: row.userId,
+                displayName: row.displayName,
+                text: row.content,
+                timestamp: row.timestamp,
+            });
+        }
+    }
+
+    return [...byId.values()]
+        .sort((a, b) => a.timestamp.localeCompare(b.timestamp))
+        .slice(0, 12);
+}
+
+function formatMessageEvidence(message: RecentMessageEntry): string {
+    const media = message.mediaType ? ` [${message.mediaType}]` : "";
+    const text = (message.text || "").replace(/\s+/g, " ").trim();
+    const sender = message.displayName ? `${message.displayName}(${message.userId})` : message.userId;
+    return `${sender}${media}: ${text.slice(0, 120)}`;
+}
+
+function inferDirection(interaction: InteractionEpisode): InteractionEpisode["direction"] {
+    if (interaction.type === "direct_message" || interaction.type === "agent_mentioned") return "user_to_agent";
+    if (interaction.type === "agent_replied") return "agent_to_user";
+    return "ambient";
+}
+
+function findAgentOutcome(interaction: InteractionEpisode, interactions: InteractionEpisode[]): string | undefined {
+    if (interaction.type === "agent_replied") return undefined;
+    const time = new Date(interaction.date).getTime();
+    if (!Number.isFinite(time)) return undefined;
+    const reply = interactions
+        .filter(i => i.type === "agent_replied")
+        .map(i => ({ interaction: i, delta: new Date(i.date).getTime() - time }))
+        .filter(i => i.delta >= 0 && i.delta <= 30 * 60_000)
+        .sort((a, b) => a.delta - b.delta)[0]?.interaction;
+    return reply ? `agent replied: ${reply.summary.slice(0, 160)}` : undefined;
+}
+
+function normalizeInteractionType(type: NonNullable<ReflectionLLMOutput["relationshipEvents"]>[number]["type"] | undefined): InteractionEpisode["type"] {
+    if (type === "agent_replied" || type === "agent_mentioned" || type === "direct_message" || type === "reaction") {
+        return type;
+    }
+    return "reaction";
+}
+
+function clamp01(value: number): number {
+    if (!Number.isFinite(value)) return 0.5;
+    return Math.max(0, Math.min(1, value));
+}
+
 // ─── JSON 解析 ───
 
 /**
@@ -993,12 +1443,16 @@ export function parseReflectionJSON(raw: string): ReflectionLLMOutput | null {
         const parsed = JSON.parse(jsonStr) as Partial<ReflectionLLMOutput>;
 
         return {
+            globalPersonUpdates: Array.isArray(parsed.globalPersonUpdates) ? parsed.globalPersonUpdates : undefined,
             personUpdates: Array.isArray(parsed.personUpdates) ? parsed.personUpdates : [],
             groupUpdates: parsed.groupUpdates ?? {},
             factUpdates: Array.isArray((parsed as any).factUpdates) ? (parsed as any).factUpdates
                 : Array.isArray((parsed as any).newFacts) ? (parsed as any).newFacts : [],
             topicsSummary: Array.isArray(parsed.topicsSummary) ? parsed.topicsSummary : [],
             identityUpdates: Array.isArray(parsed.identityUpdates) ? parsed.identityUpdates : undefined,
+            relationshipEvents: Array.isArray(parsed.relationshipEvents) ? parsed.relationshipEvents : undefined,
+            agentFeedback: parsed.agentFeedback,
+            followupCandidates: Array.isArray(parsed.followupCandidates) ? parsed.followupCandidates : undefined,
             insights: typeof parsed.insights === "string" ? parsed.insights : "",
         };
     } catch (err) {
@@ -1012,12 +1466,16 @@ export function parseReflectionJSON(raw: string): ReflectionLLMOutput | null {
                 const extracted = jsonStr.substring(firstBrace, lastBrace + 1);
                 const parsed = JSON.parse(extracted) as Partial<ReflectionLLMOutput>;
                 return {
+                    globalPersonUpdates: Array.isArray(parsed.globalPersonUpdates) ? parsed.globalPersonUpdates : undefined,
                     personUpdates: Array.isArray(parsed.personUpdates) ? parsed.personUpdates : [],
                     groupUpdates: parsed.groupUpdates ?? {},
                     factUpdates: Array.isArray((parsed as any).factUpdates) ? (parsed as any).factUpdates
                         : Array.isArray((parsed as any).newFacts) ? (parsed as any).newFacts : [],
                     topicsSummary: Array.isArray(parsed.topicsSummary) ? parsed.topicsSummary : [],
                     identityUpdates: Array.isArray(parsed.identityUpdates) ? parsed.identityUpdates : undefined,
+                    relationshipEvents: Array.isArray(parsed.relationshipEvents) ? parsed.relationshipEvents : undefined,
+                    agentFeedback: parsed.agentFeedback,
+                    followupCandidates: Array.isArray(parsed.followupCandidates) ? parsed.followupCandidates : undefined,
                     insights: typeof parsed.insights === "string" ? parsed.insights : "",
                 };
             } catch {
@@ -1082,10 +1540,12 @@ export function trimProfileByTier(
         changed = true;
     }
 
-    // 裁剪 recentEpisodes（按天数）
+    // 裁剪 recentEpisodes（按天数）。最低保留到 episode->week 合并线之后，
+    // 避免 Tier 3/4 的事件在有机会进入 mergedMemory 前被直接丢弃。
     const episodes = profile.recentEpisodes ?? [];
     if (episodes.length > 0) {
-        const cutoff = Date.now() - limits.episodeDays * 86400_000;
+        const effectiveEpisodeDays = Math.max(limits.episodeDays, DEFAULT_MERGE_THRESHOLDS.episodeToWeek + 1);
+        const cutoff = Date.now() - effectiveEpisodeDays * 86400_000;
         const filtered = episodes.filter(ep =>
             new Date(ep.date).getTime() >= cutoff
         );
@@ -1168,14 +1628,31 @@ export async function mergeEpisodes(
 
     let mergedCount = toMerge.length;
     const newMergedList = [...existingMerged];
+    const baseMemoryContext = buildExistingMemoryContext({
+        userId,
+        chatId,
+        memory,
+        profile,
+        referenceMemories: existingMerged,
+        recentEpisodes: kept,
+    });
 
     // ── Step 2: 将过期 episodes 按 ISO 周分组→生成 week MergedMemory ──
     if (toMerge.length > 0) {
         const weekGroups = groupByPeriod(toMerge.map(ep => ({
+            id: ep.id,
             date: ep.date,
             sentiment: ep.sentiment,
             significance: ep.significance,
             summary: ep.summary,
+            type: ep.type,
+            topicId: ep.topicId,
+            topicLabel: ep.topicLabel,
+            interactionQuality: ep.interactionQuality,
+            evidence: ep.evidence,
+            agentOutcome: ep.agentOutcome,
+            sourceIds: ep.sourceIds,
+            confidence: ep.confidence,
         })), "week");
 
         for (const [, items] of weekGroups) {
@@ -1183,7 +1660,7 @@ export async function mergeEpisodes(
 
             // 使用 LLM 分析合并结果（若提供了 llmConfigs）
             const llmResult = llmConfigs?.length
-                ? await analyzeMergeWithLLM(userId, items, llmConfigs, reflectionConfig)
+                ? await analyzeMergeWithLLM(userId, items, baseMemoryContext, llmConfigs, reflectionConfig)
                 : null;
 
             newMergedList.push({
@@ -1196,21 +1673,40 @@ export async function mergeEpisodes(
                 highlights: llmResult?.highlights
                     ?? items.filter(i => i.significance > 0.7).map(i => i.summary),
                 relationshipTrend: llmResult?.relationshipTrend ?? "",
+                ...buildMergedMemoryMetadata(items, llmResult),
             });
         }
     }
 
     // ── Step 3: 合并 week → month (>30天的 week) ──
     const monthCutoff = now - thresholds.weekToMonth * 86400_000;
-    await cascadeMerge(newMergedList, "week", "month", monthCutoff, llmConfigs, reflectionConfig);
+    await cascadeMerge(newMergedList, "week", "month", monthCutoff, llmConfigs, reflectionConfig, {
+        userId,
+        chatId,
+        memory,
+        profile,
+        recentEpisodes: kept,
+    });
 
     // ── Step 4: 合并 month → quarter (>90天的 month) ──
     const quarterCutoff = now - thresholds.monthToQuarter * 86400_000;
-    await cascadeMerge(newMergedList, "month", "quarter", quarterCutoff, llmConfigs, reflectionConfig);
+    await cascadeMerge(newMergedList, "month", "quarter", quarterCutoff, llmConfigs, reflectionConfig, {
+        userId,
+        chatId,
+        memory,
+        profile,
+        recentEpisodes: kept,
+    });
 
     // ── Step 5: 合并 quarter → year (>365天的 quarter) ──
     const yearCutoff = now - thresholds.quarterToYear * 86400_000;
-    await cascadeMerge(newMergedList, "quarter", "year", yearCutoff, llmConfigs, reflectionConfig);
+    await cascadeMerge(newMergedList, "quarter", "year", yearCutoff, llmConfigs, reflectionConfig, {
+        userId,
+        chatId,
+        memory,
+        profile,
+        recentEpisodes: kept,
+    });
 
     // ── Step 6: 写回 ──
     // 按 periodStart 降序排列（最近的在前）
@@ -1222,6 +1718,7 @@ export async function mergeEpisodes(
         recentEpisodes: kept,
         mergedMemory: newMergedList,
     });
+    promoteMergedMemoryToGlobalProfile(userId, chatId, newMergedList, memory);
 
     if (mergedCount > 0) {
         log.debug("mergeEpisodes 完成", {
@@ -1238,10 +1735,19 @@ export async function mergeEpisodes(
 // ─── 合并辅助函数 ───
 
 interface MergeItem {
+    id?: string;
     date: string;
     sentiment: string;
     significance: number;
     summary: string;
+    type?: InteractionEpisode["type"];
+    topicId?: string | null;
+    topicLabel?: string;
+    interactionQuality?: InteractionQuality;
+    evidence?: string[];
+    agentOutcome?: string;
+    sourceIds?: string[];
+    confidence?: number;
 }
 
 /** 按粒度分组 MergeItem */
@@ -1261,6 +1767,235 @@ interface MergeAnalysisResult {
     overallSentiment: MergedMemory["overallSentiment"];
     highlights: string[];
     relationshipTrend: string;
+    stablePatterns?: string[];
+    userPreferences?: string[];
+    agentPolicyHints?: string[];
+    salientEvents?: MergedMemory["salientEvents"];
+    followupCandidates?: string[];
+    confidence?: number;
+}
+
+interface ExistingMemoryContextOptions {
+    userId: string;
+    chatId: string;
+    memory: MemoryStoreV2;
+    profile: PersonGroupProfile;
+    referenceMemories?: MergedMemory[];
+    recentEpisodes?: InteractionEpisode[];
+}
+
+interface CascadeMergeContext {
+    userId: string;
+    chatId: string;
+    memory: MemoryStoreV2;
+    profile: PersonGroupProfile;
+    recentEpisodes?: InteractionEpisode[];
+}
+
+function buildMergedMemoryMetadata(
+    items: MergeItem[],
+    llmResult: MergeAnalysisResult | null,
+): Partial<MergedMemory> {
+    const highValueItems = items
+        .filter(i => i.significance > 0.7)
+        .sort((a, b) => b.significance - a.significance);
+    return {
+        sourceEventIds: [...new Set(items.map(i => i.id).filter((v): v is string => !!v))],
+        eventTypeCounts: countBy(items.map(i => i.type).filter(Boolean).map(String)),
+        topicCounts: countBy(items.map(i => i.topicLabel ?? i.topicId ?? "").filter(Boolean).map(String)),
+        activeDays: new Set(items.map(i => i.date.substring(0, 10))).size,
+        qualityDistribution: countBy(items.map(i => i.interactionQuality ?? "").filter(Boolean).map(String)),
+        stablePatterns: llmResult?.stablePatterns ?? [],
+        userPreferences: llmResult?.userPreferences ?? [],
+        agentPolicyHints: llmResult?.agentPolicyHints ?? [],
+        salientEvents: llmResult?.salientEvents ?? highValueItems.slice(0, 5).map(i => ({
+            summary: i.summary,
+            sourceIds: [...new Set([...(i.sourceIds ?? []), ...(i.id ? [`interaction:${i.id}`] : [])])],
+            confidence: i.confidence ?? Math.max(0.5, i.significance),
+        })),
+        followupCandidates: llmResult?.followupCandidates ?? [],
+        confidence: llmResult?.confidence ?? average(items.map(i => i.confidence ?? 0.6)),
+    };
+}
+
+function buildCascadedMemoryMetadata(
+    items: MergedMemory[],
+    llmResult: MergeAnalysisResult | null,
+): Partial<MergedMemory> {
+    return {
+        sourceMemoryIds: items.map(i => `${i.granularity}:${i.periodStart}:${i.periodEnd}`),
+        sourceEventIds: [...new Set(items.flatMap(i => i.sourceEventIds ?? []))],
+        eventTypeCounts: mergeCountRecords(items.map(i => i.eventTypeCounts)),
+        topicCounts: mergeCountRecords(items.map(i => i.topicCounts)),
+        activeDays: items.reduce((sum, item) => sum + (item.activeDays ?? 0), 0),
+        qualityDistribution: mergeCountRecords(items.map(i => i.qualityDistribution)),
+        stablePatterns: llmResult?.stablePatterns ?? dedupeStrings(items.flatMap(i => i.stablePatterns ?? [])).slice(0, 8),
+        userPreferences: llmResult?.userPreferences ?? dedupeStrings(items.flatMap(i => i.userPreferences ?? [])).slice(0, 8),
+        agentPolicyHints: llmResult?.agentPolicyHints ?? dedupeStrings(items.flatMap(i => i.agentPolicyHints ?? [])).slice(0, 8),
+        salientEvents: llmResult?.salientEvents ?? items.flatMap(i => i.salientEvents ?? []).slice(0, 8),
+        followupCandidates: llmResult?.followupCandidates ?? dedupeStrings(items.flatMap(i => i.followupCandidates ?? [])).slice(0, 8),
+        confidence: llmResult?.confidence ?? average(items.map(i => i.confidence ?? 0.6)),
+    };
+}
+
+function promoteMergedMemoryToGlobalProfile(
+    userId: string,
+    chatId: string,
+    mergedMemory: MergedMemory[],
+    memory: MemoryStoreV2,
+): void {
+    if (mergedMemory.length === 0) return;
+    const existing = memory.getPersonProfile(userId);
+    const sorted = [...mergedMemory].sort((a, b) =>
+        new Date(b.periodEnd).getTime() - new Date(a.periodEnd).getTime()
+    );
+    const strongest = sorted.find(m => m.granularity === "month" || m.granularity === "quarter" || m.granularity === "year")
+        ?? sorted[0];
+
+    memory.upsertPersonProfile(userId, {
+        interests: dedupeStrings([
+            ...(existing?.interests ?? []),
+            ...sorted.flatMap(m => m.userPreferences ?? []),
+        ]).slice(0, 24),
+        relationToAgent: existing?.relationToAgent || strongest.relationshipTrend || "",
+        stablePatterns: dedupeStrings([
+            ...(existing?.stablePatterns ?? []),
+            ...sorted.flatMap(m => m.stablePatterns ?? []),
+        ]).slice(0, 16),
+        agentPolicyHints: dedupeStrings([
+            ...(existing?.agentPolicyHints ?? []),
+            ...sorted.flatMap(m => m.agentPolicyHints ?? []),
+        ]).slice(0, 16),
+        followupCandidates: dedupeStrings([
+            ...(existing?.followupCandidates ?? []),
+            ...sorted.flatMap(m => m.followupCandidates ?? []),
+        ]).slice(0, 12),
+        sourceChatIds: dedupeStrings([...(existing?.sourceChatIds ?? []), chatId]),
+        confidence: Math.max(existing?.confidence ?? 0, average(sorted.map(m => m.confidence ?? 0.7))),
+        lastReflectedAt: new Date().toISOString(),
+    });
+}
+
+function countBy(values: string[]): Record<string, number> {
+    const counts: Record<string, number> = {};
+    for (const value of values) {
+        counts[value] = (counts[value] ?? 0) + 1;
+    }
+    return counts;
+}
+
+function mergeCountRecords(records: Array<Record<string, number> | undefined>): Record<string, number> {
+    const result: Record<string, number> = {};
+    for (const record of records) {
+        if (!record) continue;
+        for (const [key, value] of Object.entries(record)) {
+            result[key] = (result[key] ?? 0) + value;
+        }
+    }
+    return result;
+}
+
+function average(values: number[]): number {
+    const filtered = values.filter(Number.isFinite);
+    if (filtered.length === 0) return 0.6;
+    return Math.round((filtered.reduce((sum, value) => sum + value, 0) / filtered.length) * 100) / 100;
+}
+
+function dedupeStrings(values: string[]): string[] {
+    return [...new Set(values.map(v => v.trim()).filter(Boolean))];
+}
+
+function buildExistingMemoryContext(options: ExistingMemoryContextOptions): string {
+    const { userId, chatId, memory, profile } = options;
+    const lines: string[] = [];
+    const identity = memory.getPersonIdentity(userId);
+    const global = memory.getPersonProfile(userId);
+
+    lines.push(`用户: ${formatUserLabel(memory, userId, identity?.displayName)}`);
+    lines.push(`当前 chat: ${formatChatLabel(memory, chatId)}`);
+
+    if (global) {
+        lines.push("全局画像:");
+        lines.push(`- traits=[${formatBriefList(global.traits, 8)}]`);
+        lines.push(`- interests=[${formatBriefList(global.interests, 10)}]`);
+        if (global.communicationStyle) lines.push(`- style=${clipText(global.communicationStyle, 220)}`);
+        if (global.relationToAgent) lines.push(`- relation=${clipText(global.relationToAgent, 260)}`);
+        if (global.stablePatterns.length) lines.push(`- stablePatterns=[${formatBriefList(global.stablePatterns, 6)}]`);
+        if (global.agentPolicyHints.length) lines.push(`- agentPolicyHints=[${formatBriefList(global.agentPolicyHints, 6)}]`);
+        if (global.followupCandidates.length) lines.push(`- followupCandidates=[${formatBriefList(global.followupCandidates, 4)}]`);
+        if (global.sourceChatIds.length) lines.push(`- sourceChats=[${global.sourceChatIds.slice(0, 8).join(", ")}]`);
+    } else {
+        lines.push("全局画像: (暂无)");
+    }
+
+    lines.push("当前场景画像:");
+    lines.push(`- tier=${profile.dunbarTier}, affinity=${profile.affinityScore}`);
+    if (profile.traits.length) lines.push(`- traits=[${formatBriefList(profile.traits, 8)}]`);
+    if (profile.interests.length) lines.push(`- interests=[${formatBriefList(profile.interests, 10)}]`);
+    if (profile.communicationStyle) lines.push(`- style=${clipText(profile.communicationStyle, 220)}`);
+    if (profile.relationToAgent) lines.push(`- relation=${clipText(profile.relationToAgent, 260)}`);
+
+    const recentEpisodes = [...(options.recentEpisodes ?? [])]
+        .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+        .slice(0, 5);
+    if (recentEpisodes.length) {
+        lines.push("近期未合并关系事件:");
+        for (const ep of recentEpisodes) {
+            const label = ep.topicLabel ? ` topic=${ep.topicLabel}` : "";
+            lines.push(`- [${ep.date.substring(0, 10)}${label}] ${clipText(ep.summary, 220)}`);
+        }
+    }
+
+    const referenceMemories = [...(options.referenceMemories ?? [])]
+        .sort((a, b) => new Date(b.periodEnd).getTime() - new Date(a.periodEnd).getTime())
+        .slice(0, 8);
+    if (referenceMemories.length) {
+        lines.push("既有长期记忆摘要（参照，不是本次待合并对象）:");
+        for (const memoryItem of referenceMemories) {
+            lines.push(formatMergedMemoryContextLine(memoryItem));
+        }
+    }
+
+    const facts = memory.listCoreFacts({ subject: userId, limit: 8 }).items;
+    if (facts.length) {
+        lines.push("已有 core facts（带来源，参照去重/判断边界）:");
+        for (const fact of facts) {
+            const source = [
+                fact.sourceChatId ? `source=${formatChatLabel(memory, fact.sourceChatId, fact.sourceChatTitle)}` : fact.sourceChatTitle ? `source=${fact.sourceChatTitle}` : "",
+                fact.sourceTopicLabel || fact.sourceTopicId ? `topic=${fact.sourceTopicLabel || fact.sourceTopicId}` : "",
+                fact.visibility ? `visibility=${fact.visibility}` : "",
+                fact.sensitivity ? `sensitivity=${fact.sensitivity}` : "",
+            ].filter(Boolean).join(", ");
+            lines.push(`- [${fact.category}] ${clipText(fact.content, 220)}${source ? ` (${source})` : ""}`);
+        }
+    }
+
+    return lines.join("\n");
+}
+
+function formatMergedMemoryContextLine(memoryItem: MergedMemory): string {
+    const parts = [
+        `- [${memoryItem.granularity} ${memoryItem.periodStart.substring(0, 10)}~${memoryItem.periodEnd.substring(0, 10)}]`,
+        `sentiment=${memoryItem.overallSentiment}`,
+        `count=${memoryItem.interactionCount}`,
+        memoryItem.relationshipTrend ? `trend=${clipText(memoryItem.relationshipTrend, 220)}` : "",
+        memoryItem.highlights.length ? `highlights=[${formatBriefList(memoryItem.highlights, 3, 140)}]` : "",
+        memoryItem.stablePatterns?.length ? `patterns=[${formatBriefList(memoryItem.stablePatterns, 3, 120)}]` : "",
+        memoryItem.agentPolicyHints?.length ? `hints=[${formatBriefList(memoryItem.agentPolicyHints, 3, 120)}]` : "",
+    ].filter(Boolean);
+    return parts.join(", ");
+}
+
+function formatBriefList(values: string[] | undefined, limit: number, itemLimit = 80): string {
+    if (!values?.length) return "";
+    const sliced = values.slice(0, limit).map(value => clipText(value, itemLimit));
+    const omitted = values.length > limit ? `; ...+${values.length - limit}` : "";
+    return `${sliced.join("; ")}${omitted}`;
+}
+
+function clipText(value: string, maxLength: number): string {
+    const normalized = value.replace(/\s+/g, " ").trim();
+    return normalized.length > maxLength ? `${normalized.slice(0, maxLength - 1)}…` : normalized;
 }
 
 /**
@@ -1270,19 +2005,31 @@ interface MergeAnalysisResult {
 async function analyzeMergeWithLLM(
     userId: string,
     items: MergeItem[],
+    existingMemoryContext: string,
     llmConfigs: LLMConfig[],
     reflectionConfig?: ReflectionExternalConfig,
 ): Promise<MergeAnalysisResult | null> {
     if (items.length === 0) return null;
 
-    const eventLines = items.map(i =>
-        `- [${i.date}] (情感:${i.sentiment}, 重要度:${i.significance}) ${i.summary}`
-    ).join("\n");
+    const eventLines = items.map(i => {
+        const meta = [
+            `情感:${i.sentiment}`,
+            `重要度:${i.significance}`,
+            i.type ? `类型:${i.type}` : "",
+            i.topicLabel ? `话题:${i.topicLabel}` : "",
+            i.interactionQuality ? `质量:${i.interactionQuality}` : "",
+            typeof i.confidence === "number" ? `置信度:${i.confidence}` : "",
+        ].filter(Boolean).join(", ");
+        const evidence = i.evidence?.length ? `\n  证据: ${i.evidence.slice(0, 3).join(" / ")}` : "";
+        const outcome = i.agentOutcome ? `\n  结果: ${i.agentOutcome}` : "";
+        return `- [${i.date}] (${meta}) ${i.summary}${evidence}${outcome}`;
+    }).join("\n");
 
     const userPrompt = applyTemplate(getMergeEpisodesUserTpl(), {
         userId,
         count: String(items.length),
         eventLines,
+        existingMemoryContext,
     });
 
     try {
@@ -1305,6 +2052,12 @@ async function analyzeMergeWithLLM(
             overallSentiment: parsed.overallSentiment ?? "neutral",
             highlights: Array.isArray(parsed.highlights) ? parsed.highlights : [],
             relationshipTrend: typeof parsed.relationshipTrend === "string" ? parsed.relationshipTrend : "",
+            stablePatterns: Array.isArray(parsed.stablePatterns) ? parsed.stablePatterns : undefined,
+            userPreferences: Array.isArray(parsed.userPreferences) ? parsed.userPreferences : undefined,
+            agentPolicyHints: Array.isArray(parsed.agentPolicyHints) ? parsed.agentPolicyHints : undefined,
+            salientEvents: Array.isArray(parsed.salientEvents) ? parsed.salientEvents : undefined,
+            followupCandidates: Array.isArray(parsed.followupCandidates) ? parsed.followupCandidates : undefined,
+            confidence: typeof parsed.confidence === "number" ? clamp01(parsed.confidence) : undefined,
         };
     } catch (err) {
         log.warn("analyzeMergeWithLLM 失败，回退到规则合并", { userId, error: String(err) });
@@ -1317,6 +2070,7 @@ async function analyzeMergeWithLLM(
  */
 async function analyzeCascadeMergeWithLLM(
     items: MergedMemory[],
+    existingMemoryContext: string,
     llmConfigs: LLMConfig[],
     reflectionConfig?: ReflectionExternalConfig,
 ): Promise<MergeAnalysisResult | null> {
@@ -1325,12 +2079,15 @@ async function analyzeCascadeMergeWithLLM(
     const lines = items.map(i =>
         `- [${i.periodStart}~${i.periodEnd}] 粒度:${i.granularity}, ` +
         `情感:${i.overallSentiment}, 交互:${i.interactionCount}次, ` +
-        `亮点:[${i.highlights.join("; ")}], 趋势:${i.relationshipTrend || "(无)"}`
+        `亮点:[${i.highlights.join("; ")}], 趋势:${i.relationshipTrend || "(无)"}, ` +
+        `模式:[${(i.stablePatterns ?? []).join("; ")}], 提示:[${(i.agentPolicyHints ?? []).join("; ")}], ` +
+        `话题分布:{${formatCountMap(i.topicCounts)}}, 类型分布:{${formatCountMap(i.eventTypeCounts)}}`
     ).join("\n");
 
     const userPrompt = applyTemplate(getMergeCascadeUserTpl(), {
         count: String(items.length),
         lines,
+        existingMemoryContext,
     });
 
     try {
@@ -1353,6 +2110,12 @@ async function analyzeCascadeMergeWithLLM(
             overallSentiment: parsed.overallSentiment ?? "neutral",
             highlights: Array.isArray(parsed.highlights) ? parsed.highlights : [],
             relationshipTrend: typeof parsed.relationshipTrend === "string" ? parsed.relationshipTrend : "",
+            stablePatterns: Array.isArray(parsed.stablePatterns) ? parsed.stablePatterns : undefined,
+            userPreferences: Array.isArray(parsed.userPreferences) ? parsed.userPreferences : undefined,
+            agentPolicyHints: Array.isArray(parsed.agentPolicyHints) ? parsed.agentPolicyHints : undefined,
+            salientEvents: Array.isArray(parsed.salientEvents) ? parsed.salientEvents : undefined,
+            followupCandidates: Array.isArray(parsed.followupCandidates) ? parsed.followupCandidates : undefined,
+            confidence: typeof parsed.confidence === "number" ? clamp01(parsed.confidence) : undefined,
         };
     } catch (err) {
         log.warn("analyzeCascadeMergeWithLLM 失败，回退到规则合并", { error: String(err) });
@@ -1371,6 +2134,7 @@ async function cascadeMerge(
     cutoffTime: number,
     llmConfigs?: LLMConfig[],
     reflectionConfig?: ReflectionExternalConfig,
+    context?: CascadeMergeContext,
 ): Promise<void> {
     const toUpgrade: MergedMemory[] = [];
     const remaining: number[] = []; // indices to keep
@@ -1409,10 +2173,20 @@ async function cascadeMerge(
         const allHighlights = items.flatMap(i => i.highlights);
         const totalCount = items.reduce((sum, i) => sum + i.interactionCount, 0);
         const sentiments = items.map(i => i.overallSentiment);
+        const existingMemoryContext = context
+            ? buildExistingMemoryContext({
+                userId: context.userId,
+                chatId: context.chatId,
+                memory: context.memory,
+                profile: context.profile,
+                recentEpisodes: context.recentEpisodes,
+                referenceMemories: list.filter(memoryItem => !items.includes(memoryItem)),
+            })
+            : "";
 
         // 使用 LLM 分析级联合并结果
         const llmResult = llmConfigs?.length
-            ? await analyzeCascadeMergeWithLLM(items, llmConfigs, reflectionConfig)
+            ? await analyzeCascadeMergeWithLLM(items, existingMemoryContext, llmConfigs, reflectionConfig)
             : null;
 
         newEntries.push({
@@ -1425,6 +2199,7 @@ async function cascadeMerge(
             highlights: llmResult?.highlights ?? allHighlights,
             relationshipTrend: llmResult?.relationshipTrend
                 ?? (items.map(i => i.relationshipTrend).filter(Boolean).join("; ") || ""),
+            ...buildCascadedMemoryMetadata(items, llmResult),
         });
     }
 

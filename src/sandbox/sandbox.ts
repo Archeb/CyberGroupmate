@@ -123,6 +123,7 @@ interface PtyTab {
 export class Sandbox extends EventEmitter {
     private child: ChildProcess | null = null;
     private rl: Interface | null = null;
+    private stopping = false;
     private pendingRequests: Map<
         string,
         {
@@ -256,6 +257,7 @@ export class Sandbox extends EventEmitter {
         if (this.child) {
             throw new Error("Sandbox already started");
         }
+        this.stopping = false;
 
         const workerPath = join(this.projectRoot, "src", "sandbox", "sandbox-worker.ts");
         const tsxCliPath = join(this.projectRoot, "node_modules", "tsx", "dist", "cli.mjs");
@@ -294,6 +296,7 @@ export class Sandbox extends EventEmitter {
             this.pendingRequests.clear();
             this.child = null;
             this.rl = null;
+            this.stopping = false;
         });
 
         this.child.on("error", (err) => {
@@ -531,6 +534,7 @@ export class Sandbox extends EventEmitter {
             }
 
             const value = await this.hostCallHandler(method, args);
+            if (!this.child?.stdin) return;
             const msg = JSON.stringify({
                 type: "host_call_result",
                 id,
@@ -539,6 +543,7 @@ export class Sandbox extends EventEmitter {
             });
             this.child.stdin.write(msg + "\n");
         } catch (err) {
+            if (!this.child?.stdin) return;
             const msg = JSON.stringify({
                 type: "host_call_result",
                 id,
@@ -562,7 +567,20 @@ export class Sandbox extends EventEmitter {
         return new Promise<ExecutionResult>((resolve, reject) => {
             const timer = setTimeout(() => {
                 this.pendingRequests.delete(id);
-                reject(new Error(`Code execution timed out after ${timeout}ms`));
+                const error = new Error(`Code execution timed out after ${timeout}ms`);
+                log.warn("execute: timeout, stopping sandbox worker", {
+                    chatId: this.chatId,
+                    requestId: id,
+                    timeoutMs: timeout,
+                });
+                reject(error);
+                void this.stop().catch((err) => {
+                    log.warn("execute: failed to stop timed-out sandbox worker", {
+                        chatId: this.chatId,
+                        requestId: id,
+                        error: String(err),
+                    });
+                });
             }, timeout);
 
             this.pendingRequests.set(id, { resolve, reject, timer });
@@ -737,10 +755,11 @@ export class Sandbox extends EventEmitter {
     }
 
     isAlive(): boolean {
-        return this.child !== null && this.child.exitCode === null;
+        return !this.stopping && this.child !== null && this.child.exitCode === null;
     }
 
     async stop(): Promise<void> {
+        this.stopping = true;
         // Kill all PTY tabs
         for (const [, tab] of this.ptyTabs) {
             if (tab.pendingRequest) {
@@ -752,12 +771,16 @@ export class Sandbox extends EventEmitter {
         }
         this.ptyTabs.clear();
 
-        if (!this.child) return;
+        if (!this.child) {
+            this.stopping = false;
+            return;
+        }
 
         return new Promise<void>((resolve) => {
             this.child!.once("exit", () => {
                 this.child = null;
                 this.rl = null;
+                this.stopping = false;
                 resolve();
             });
             this.child!.kill("SIGTERM");

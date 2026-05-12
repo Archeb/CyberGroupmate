@@ -20,6 +20,75 @@ function makeConfig(overrides: Partial<OneBotConfig> = {}): OneBotConfig {
 }
 
 describe("OneBotAdapter", () => {
+    it("should resolve numeric download refs through get_msg image URLs", async () => {
+        const nc = makeNC();
+        const adapter = new OneBotAdapter(makeConfig(), nc);
+        const calls: Array<{ action: string; params: Record<string, unknown> }> = [];
+        const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+        const originalFetch = globalThis.fetch;
+
+        // @ts-expect-error - fake connected websocket for handleCall guard
+        adapter.ws = { readyState: 1 };
+        // @ts-expect-error - override private method for payload inspection
+        adapter.callAction = async (action: string, params: Record<string, unknown>) => {
+            calls.push({ action, params });
+            if (action === "get_msg") {
+                return {
+                    message_id: 794582600,
+                    message: [
+                        {
+                            type: "image",
+                            data: {
+                                file: "cached-image.jpg",
+                                file_unique: "unique-image",
+                                url: "https://cdn.example.test/image.png",
+                            },
+                        },
+                    ],
+                };
+            }
+            throw new Error(`unexpected action: ${action}`);
+        };
+        globalThis.fetch = async (url) => {
+            assert.equal(String(url), "https://cdn.example.test/image.png");
+            return new Response(bytes, { status: 200 });
+        };
+
+        try {
+            const result = await adapter.handleCall("onebot.downloadMedia", ["794582600"]) as { buffer: string; size: number };
+            assert.deepEqual(calls, [{ action: "get_msg", params: { message_id: 794582600 } }]);
+            assert.equal(result.buffer, bytes.toString("base64"));
+            assert.equal(result.size, bytes.length);
+        } finally {
+            globalThis.fetch = originalFetch;
+            nc.dispose();
+        }
+    });
+
+    it("should use get_image base64 instead of remote local paths", async () => {
+        const nc = makeNC();
+        const adapter = new OneBotAdapter(makeConfig(), nc);
+        const bytes = Buffer.from("image-bytes");
+
+        // @ts-expect-error - override private method for focused download test
+        adapter.callAction = async (action: string, params: Record<string, unknown>) => {
+            assert.equal(action, "get_image");
+            assert.deepEqual(params, { file: "cached-image.jpg" });
+            return {
+                file: "/remote/napcat/cache/cached-image.jpg",
+                base64: bytes.toString("base64"),
+            };
+        };
+
+        try {
+            // @ts-expect-error - invoke private-ish adapter API directly for focused transport test
+            const result = await adapter.downloadMedia(null, "cached-image.jpg");
+            assert.deepEqual(result, bytes);
+        } finally {
+            nc.dispose();
+        }
+    });
+
     it("should drop replyTo for group voice payloads", async () => {
         const nc = makeNC();
         const adapter = new OneBotAdapter(makeConfig(), nc);

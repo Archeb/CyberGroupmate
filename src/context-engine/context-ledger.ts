@@ -11,6 +11,8 @@ import { createLogger } from "../core/logger.js";
 
 const log = createLogger("context-ledger");
 
+type LedgerSnapshotEntry = { data: unknown; hash: string; committedAt: number };
+
 export class ContextLedger {
     /** section name → 已提交状态 */
     private sections = new Map<string, CommittedSection>();
@@ -71,11 +73,38 @@ export class ContextLedger {
     }
 
     /** 导出快照（持久化/调试用） */
-    toSnapshot(): Record<string, { hash: string; committedAt: number }> {
-        const result: Record<string, { hash: string; committedAt: number }> = {};
+    toSnapshot(): Record<string, LedgerSnapshotEntry> {
+        const result: Record<string, LedgerSnapshotEntry> = {};
         for (const [name, section] of this.sections) {
-            result[name] = { hash: section.hash, committedAt: section.committedAt };
+            result[name] = {
+                data: section.data,
+                hash: section.hash,
+                committedAt: section.committedAt,
+            };
         }
         return result;
+    }
+
+    /** 从持久化快照恢复。旧版无 data 的快照会被忽略，因为 delta diff 需要结构化数据。 */
+    loadSnapshot(snapshot: unknown): void {
+        this.sections.clear();
+        if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) {
+            return;
+        }
+
+        for (const [name, value] of Object.entries(snapshot as Record<string, unknown>)) {
+            if (!value || typeof value !== "object" || Array.isArray(value)) {
+                continue;
+            }
+            const entry = value as Partial<LedgerSnapshotEntry>;
+            if (!("data" in entry) || typeof entry.hash !== "string" || typeof entry.committedAt !== "number") {
+                continue;
+            }
+            this.sections.set(name, {
+                data: entry.data,
+                hash: entry.hash,
+                committedAt: entry.committedAt,
+            });
+        }
     }
 }

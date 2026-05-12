@@ -625,13 +625,9 @@ export class RecordingPipeline extends EventEmitter {
         if (relevantProfiles.length > 0) {
             const profileLines = relevantProfiles.map(p => {
                 const identity = this.memory!.getPersonIdentity(p.userId);
-                const namePart = identity?.displayName
-                    ? ` (显示名: ${identity.displayName}` +
-                    (identity.username ? `, @${identity.username}` : "") +
-                    `)`
-                    : "";
+                const namePart = identity?.username ? ` (@${identity.username})` : "";
                 const parts = [
-                    `- **${getRawId(p.userId)}**${namePart}`,
+                    `- **${this.formatUserLabel(p.userId)}**${namePart}`,
                     "关系：" + getDunbarTierLabel(p.dunbarTier),
                     p.traits.length ? `traits=[${p.traits.join(", ")}]` : null,
                     p.interests.length ? `interests=[${p.interests.join(", ")}]` : null,
@@ -648,7 +644,14 @@ export class RecordingPipeline extends EventEmitter {
             for (const p of relevantProfiles) {
                 const result = this.memory!.listCoreFacts({ subject: p.userId, limit: 5 });
                 for (const f of result.items) {
-                    factLines.push(`- (${f.category}) ${getRawId(f.subject)}: ${f.content}`);
+                    const source = f.sourceChatId
+                        ? ` 来源: ${this.formatChatLabel(f.sourceChatId, f.sourceChatTitle)}`
+                        : f.sourceChatTitle
+                            ? ` 来源: ${f.sourceChatTitle}`
+                            : "";
+                    const topic = f.sourceTopicLabel ? ` / 话题: ${f.sourceTopicLabel}` : "";
+                    const boundary = [f.visibility, f.sensitivity].filter(Boolean).join("/");
+                    factLines.push(`- (${f.category}) ${this.formatUserLabel(f.subject)}: ${f.content}${source}${topic}${boundary ? ` (${boundary})` : ""}`);
                 }
             }
             if (factLines.length > 0) {
@@ -657,6 +660,18 @@ export class RecordingPipeline extends EventEmitter {
         }
 
         return sections;
+    }
+
+    private formatUserLabel(userId: string): string {
+        const identity = this.memory?.getPersonIdentity(userId);
+        const name = identity?.displayName?.trim() || userId;
+        return `${name}(${userId})`;
+    }
+
+    private formatChatLabel(chatId: string, fallbackTitle?: string | null): string {
+        const model = this.memory?.getGroupModel(getGroupModelKey(chatId));
+        const title = model?.chatTitle?.trim() || fallbackTitle?.trim() || chatId;
+        return `${title}(${chatId})`;
     }
 
     private computeTopicAssociations(topic: Topic, chatId: string): {
@@ -691,9 +706,17 @@ export class RecordingPipeline extends EventEmitter {
                     type: "core_fact" as const,
                     factId: fact.factId,
                     subject: fact.subject,
+                    subjectLabel: this.formatUserLabel(fact.subject),
                     category: fact.category,
                     content: fact.content,
                     confidence: fact.confidence,
+                    sourceChatId: fact.sourceChatId,
+                    sourceChatLabel: fact.sourceChatId
+                        ? this.formatChatLabel(fact.sourceChatId, fact.sourceChatTitle)
+                        : fact.sourceChatTitle ?? null,
+                    sourceTopicLabel: fact.sourceTopicLabel,
+                    visibility: fact.visibility,
+                    sensitivity: fact.sensitivity,
                 })),
                 ...topics.slice(0, 3).map((candidate) => ({
                     type: "topic" as const,

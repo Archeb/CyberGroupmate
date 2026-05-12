@@ -28,7 +28,11 @@ export function formatDiscordAck(prefix: string, payload: unknown): string {
 
 // ─── Discord 客户端代理 ───
 
-export function createDiscordClientProxy(env: CapabilityRegistryEnv, sentHistory: Map<string, Set<string>>) {
+export function createDiscordClientProxy(
+    env: CapabilityRegistryEnv,
+    sentHistory: Map<string, Set<string>>,
+    deduplicateSentMessages = true,
+) {
     /**
      * 将可能的工作区相对路径解析为绝对路径。
      * 如果解析后的路径对应的文件存在，则返回绝对路径；
@@ -75,28 +79,37 @@ export function createDiscordClientProxy(env: CapabilityRegistryEnv, sentHistory
         return "[media:unknown]";
     }
 
-    /**
-     * 检查消息是否是重复发送。
-     * 如果是新消息则记录并返回 false；如果已发送过则返回 true。
-     */
+    /** 检查消息是否是已成功发送过的重复消息。 */
     function isDuplicate(channelId: string, text: string): boolean {
         const key = String(channelId);
         const existing = sentHistory.get(key);
-        if (existing && existing.has(text)) {
-            return true;
-        }
+        return existing?.has(text) ?? false;
+    }
+
+    /** 仅在平台发送成功后记录，避免失败/拦截调用污染去重历史。 */
+    function recordSent(channelId: string, text: string): void {
+        const key = String(channelId);
+        const existing = sentHistory.get(key);
         if (!existing) {
             sentHistory.set(key, new Set([text]));
         } else {
             existing.add(text);
         }
-        return false;
+    }
+
+    function shouldBlockDuplicate(channelId: string, text: string): boolean {
+        return deduplicateSentMessages && isDuplicate(channelId, text);
+    }
+
+    function recordSentIfDedupEnabled(channelId: string, text: string): void {
+        if (!deduplicateSentMessages) return;
+        recordSent(channelId, text);
     }
 
     return {
         sendText: async (channelId: string, text: string, opts?: { replyTo?: string }) => {
             // ── 重复消息拦截 ──
-            if (isDuplicate(channelId, text)) {
+            if (shouldBlockDuplicate(channelId, text)) {
                 const warning = `[⚠ 运行时警告: 重复消息已拦截] 目标 channel=${channelId} 的消息 "${text.length > 80 ? text.slice(0, 80) + '...' : text}" 与本次 session 中已发送的消息内容完全一致，已自动拦截，不会重复发送。`;
                 env.emitOutput(warning);
                 env.notifyHost({
@@ -109,6 +122,7 @@ export function createDiscordClientProxy(env: CapabilityRegistryEnv, sentHistory
                 return null;
             }
             const sent = await env.callHost("discord.sendText", [channelId, text, opts]);
+            recordSentIfDedupEnabled(channelId, text);
             env.emitOutput(formatDiscordAck("[Discord] sendText ok", sent));
             // 发射 agent_message_sent 通知，供 SentMessageCollector 捕获
             env.notifyHost({
@@ -125,7 +139,7 @@ export function createDiscordClientProxy(env: CapabilityRegistryEnv, sentHistory
         sendMedia: async (channelId: string, media: unknown, opts?: { replyTo?: string; caption?: string }) => {
             // ── 重复消息拦截（基于 caption + 媒体标识）──
             const mediaText = buildDiscordMediaDedupKey(media, opts?.caption);
-            if (isDuplicate(channelId, mediaText)) {
+            if (shouldBlockDuplicate(channelId, mediaText)) {
                 const preview = mediaText.length > 80 ? mediaText.slice(0, 80) + '...' : mediaText;
                 const warning = `[⚠ 运行时警告: 重复消息已拦截] 目标 channel=${channelId} 的媒体消息 "${preview}" 与本次 session 中已发送的消息内容完全一致，已自动拦截，不会重复发送。`;
                 env.emitOutput(warning);
@@ -152,6 +166,7 @@ export function createDiscordClientProxy(env: CapabilityRegistryEnv, sentHistory
             }
 
             const sent = await env.callHost("discord.sendMedia", [channelId, processedMedia, opts]);
+            recordSentIfDedupEnabled(channelId, mediaText);
             env.emitOutput(formatDiscordAck("[Discord] sendMedia ok", sent));
             env.notifyHost({
                 type: "system.agent_message_sent",

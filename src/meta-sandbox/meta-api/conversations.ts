@@ -1,8 +1,9 @@
-import { getGroupModelKey } from "../../core/chat-id.js";
+import { getGroupModelKey, getPlatform } from "../../core/chat-id.js";
 import type {
     GroupModel,
     IMemoryStoreV2,
     MessageSearchResult,
+    RecentMessageEntry,
     PersonIdentity,
     TopicNode,
     TopicSearchResult,
@@ -46,6 +47,74 @@ export interface ConversationsQueryResult {
     resolvedUsers: ResolvedConversationUser[];
 }
 
+export interface ConversationsMessagesOptions {
+    /** 返回条数，默认 50，最大 99。 */
+    limit?: number;
+    /** 上一页返回的游标；继续往更早消息滚动时原样传回。 */
+    cursor?: string;
+    /** ISO 时间上限；cursor 未传时生效。 */
+    before?: string;
+    /** ISO 时间下限。 */
+    after?: string;
+}
+
+export interface ConversationsMessagesResult {
+    chatId: string;
+    chatTitle: string;
+    /** 形如 "[早苗群(telegram:-100123)]"。 */
+    chatLabel: string;
+    messages: ConversationMessageResult[];
+    nextCursor?: string;
+}
+
+export interface ConversationsInboxOptions {
+    /** 返回条数，默认 20，最大 100。 */
+    limit?: number;
+    /** 上一页返回的游标；不需要理解其内容，原样传回即可。 */
+    cursor?: string;
+    /** 未读聊天置顶，默认 true。 */
+    unreadFirst?: boolean;
+    /** 限定聊天 ID。 */
+    chatIds?: string[];
+    /** 是否包含没有消息的已知聊天，默认 false。 */
+    includeEmpty?: boolean;
+}
+
+export interface ConversationInboxMessage {
+    messageId: string;
+    chatId: string;
+    userId: string;
+    displayName: string;
+    content: string;
+    timestamp: string;
+}
+
+export interface ConversationInboxItem {
+    chatId: string;
+    platform?: string;
+    chatTitle: string;
+    /** 形如 "[早苗群(telegram:-100123)]"。 */
+    chatLabel: string;
+    isDirectMessage?: boolean;
+    latestMessage?: ConversationInboxMessage;
+    /** latestMessage 晚于 lastAttendedAt，或从未 attend 但已有消息。 */
+    unread: boolean;
+    /** 最多精确到最近 100 条；运行中 observer buffer 可提供更即时的值。 */
+    unreadCount: number;
+    lastAttendedAt: string | null;
+    lastActiveAt?: string;
+    queueSize: number;
+    isProcessing: boolean;
+    stickinessLevel: string;
+}
+
+export interface ConversationsInboxResult {
+    items: ConversationInboxItem[];
+    total: number;
+    unreadTotal: number;
+    nextCursor?: string;
+}
+
 type ConversationsReader = Pick<IMemoryStoreV2,
     "queryMessages" |
     "searchTopics" |
@@ -57,8 +126,78 @@ type ConversationsReader = Pick<IMemoryStoreV2,
     "listGroupModels"
 >;
 
-export function createConversationsApi(memory: ConversationsReader) {
+type ExecutorReader = {
+    getQueueSize?: () => number;
+    isProcessing?: () => boolean;
+};
+
+type ObserverReader = {
+    getBufferSize?: () => number;
+};
+
+type SubagentReader = {
+    chatId: string;
+    lastActivityAt?: number;
+    lastAttendedAt?: string | null;
+    stickiness?: {
+        level?: string;
+    };
+    codeActExecutor?: unknown;
+    observer?: ObserverReader;
+};
+
+type SubagentManagerReader = {
+    getAllSubagents: () => unknown[];
+};
+
+export function createConversationsApi(memory: ConversationsReader, subagentManager?: SubagentManagerReader) {
     return {
+        inbox: async (options: ConversationsInboxOptions = {}): Promise<ConversationsInboxResult> => {
+            const limit = clampLimit(options.limit, 20, 100);
+            const offset = decodeInboxCursor(options.cursor);
+            const includeEmpty = options.includeEmpty ?? false;
+            const unreadFirst = options.unreadFirst ?? true;
+            const allowedChatIds = uniqueStrings(options.chatIds);
+            const allowed = allowedChatIds.length > 0 ? new Set(allowedChatIds) : null;
+
+            const subagents = getSubagents(subagentManager);
+            const subagentByChatId = new Map(subagents.map((subagent) => [subagent.chatId, subagent]));
+            const chatIds = collectInboxChatIds(memory, subagents, allowed);
+
+            const allItems = chatIds
+                .map((chatId) => buildInboxItem(memory, chatId, subagentByChatId.get(chatId)))
+                .filter((item) => includeEmpty || item.latestMessage)
+                .sort(compareInboxItems(unreadFirst));
+            const items = allItems.slice(offset, offset + limit);
+            const nextOffset = offset + items.length;
+
+            return {
+                items,
+                total: allItems.length,
+                unreadTotal: allItems.filter((item) => item.unread).length,
+                nextCursor: nextOffset < allItems.length ? encodeInboxCursor(nextOffset) : undefined,
+            };
+        },
+        messages: async (chatId: string, options: ConversationsMessagesOptions = {}): Promise<ConversationsMessagesResult> => {
+            const limit = clampLimit(options.limit, 50, 99);
+            const before = decodeMessageCursor(options.cursor) ?? options.before;
+            const rows = enrichMessages(memory, queryMessagesWith(memory, {
+                chatIds: [chatId],
+                after: options.after,
+                before,
+                limit: limit + 1,
+            }));
+            const messages = rows.slice(0, limit);
+            const chatTitle = resolveChatTitle(memory, chatId);
+
+            return {
+                chatId,
+                chatTitle,
+                chatLabel: formatChatLabel(chatTitle, chatId),
+                messages,
+                nextCursor: rows.length > limit ? makeBeforeCursor(messages[messages.length - 1]?.timestamp) : undefined,
+            };
+        },
         query: async (filters: ConversationsQueryFilters = {}): Promise<ConversationsQueryResult> => {
             const limit = clampLimit(filters.limit, 20, 100);
             const chatIds = uniqueStrings(filters.chatIds);
@@ -86,6 +225,188 @@ export function createConversationsApi(memory: ConversationsReader) {
             return { messages, topics, resolvedUsers };
         },
     };
+}
+
+function collectInboxChatIds(
+    memory: ConversationsReader,
+    subagents: SubagentReader[],
+    allowed: Set<string> | null,
+): string[] {
+    const chatIds = new Set<string>();
+    for (const subagent of subagents) {
+        if (!allowed || allowed.has(subagent.chatId)) {
+            chatIds.add(subagent.chatId);
+        }
+    }
+    for (const group of memory.listGroupModels()) {
+        if (!allowed || allowed.has(group.chatId)) {
+            chatIds.add(group.chatId);
+        }
+    }
+    return [...chatIds];
+}
+
+function getSubagents(subagentManager: SubagentManagerReader | undefined): SubagentReader[] {
+    return (subagentManager?.getAllSubagents?.() ?? [])
+        .filter((value): value is SubagentReader =>
+            !!value
+            && typeof value === "object"
+            && typeof (value as { chatId?: unknown }).chatId === "string"
+        );
+}
+
+function buildInboxItem(
+    memory: ConversationsReader,
+    chatId: string,
+    subagent?: SubagentReader,
+): ConversationInboxItem {
+    const groupModel = resolveGroupModel(memory, chatId);
+    const chatTitle = groupModel?.chatTitle || resolveChatTitle(memory, chatId);
+    const latest = memory.getRecentMessages(chatId, 1)[0];
+    const latestMessage = latest ? recentMessageToInboxMessage(latest) : undefined;
+    const lastAttendedAt = subagent?.lastAttendedAt ?? null;
+    const observerUnreadCount = subagent?.observer?.getBufferSize?.() ?? 0;
+    const unread = isUnread(latestMessage, lastAttendedAt, observerUnreadCount);
+    const unreadCount = unread
+        ? Math.max(observerUnreadCount, countUnreadMessages(memory, chatId, lastAttendedAt, latestMessage))
+        : 0;
+
+    return {
+        chatId,
+        platform: resolvePlatform(chatId),
+        chatTitle,
+        chatLabel: formatChatLabel(chatTitle, chatId),
+        isDirectMessage: groupModel?.isDirectMessage,
+        latestMessage,
+        unread,
+        unreadCount,
+        lastAttendedAt,
+        lastActiveAt: latestMessage?.timestamp ?? formatActivityTime(subagent?.lastActivityAt),
+        queueSize: asExecutorReader(subagent?.codeActExecutor)?.getQueueSize?.() ?? 0,
+        isProcessing: asExecutorReader(subagent?.codeActExecutor)?.isProcessing?.() ?? false,
+        stickinessLevel: subagent?.stickiness?.level ?? "STRANGER",
+    };
+}
+
+function resolveGroupModel(memory: ConversationsReader, chatId: string): GroupModel | null {
+    const direct = memory.getGroupModel(chatId);
+    if (direct) {
+        return direct;
+    }
+
+    try {
+        const groupKey = getGroupModelKey(chatId);
+        return groupKey === chatId ? null : memory.getGroupModel(groupKey);
+    } catch {
+        return null;
+    }
+}
+
+function recentMessageToInboxMessage(message: RecentMessageEntry): ConversationInboxMessage {
+    return {
+        messageId: message.messageId,
+        chatId: message.chatId,
+        userId: message.userId,
+        displayName: message.displayName,
+        content: message.text,
+        timestamp: message.timestamp,
+    };
+}
+
+function isUnread(
+    latestMessage: ConversationInboxMessage | undefined,
+    lastAttendedAt: string | null,
+    observerUnreadCount: number,
+): boolean {
+    if (observerUnreadCount > 0) {
+        return true;
+    }
+    if (!latestMessage) {
+        return false;
+    }
+    return !lastAttendedAt || latestMessage.timestamp > lastAttendedAt;
+}
+
+function countUnreadMessages(
+    memory: ConversationsReader,
+    chatId: string,
+    lastAttendedAt: string | null,
+    latestMessage: ConversationInboxMessage | undefined,
+): number {
+    if (!latestMessage) {
+        return 0;
+    }
+    if (!lastAttendedAt) {
+        return memory.getRecentMessages(chatId, 100).length;
+    }
+    return memory.queryMessages({ chatIds: [chatId], after: lastAttendedAt, limit: 100 })
+        .filter((message) => message.timestamp > lastAttendedAt)
+        .length;
+}
+
+function compareInboxItems(unreadFirst: boolean) {
+    return (left: ConversationInboxItem, right: ConversationInboxItem): number => {
+        if (unreadFirst && left.unread !== right.unread) {
+            return left.unread ? -1 : 1;
+        }
+        const leftTime = left.latestMessage?.timestamp ?? left.lastActiveAt ?? "";
+        const rightTime = right.latestMessage?.timestamp ?? right.lastActiveAt ?? "";
+        if (leftTime !== rightTime) {
+            return rightTime.localeCompare(leftTime);
+        }
+        return left.chatId.localeCompare(right.chatId);
+    };
+}
+
+function resolvePlatform(chatId: string): string | undefined {
+    try {
+        return getPlatform(chatId);
+    } catch {
+        const index = chatId.indexOf(":");
+        return index > 0 ? chatId.slice(0, index) : undefined;
+    }
+}
+
+function formatActivityTime(value: number | undefined): string | undefined {
+    if (typeof value !== "number" || !Number.isFinite(value)) {
+        return undefined;
+    }
+    return new Date(value).toISOString();
+}
+
+function asExecutorReader(value: unknown): ExecutorReader | null {
+    if (!value || typeof value !== "object") {
+        return null;
+    }
+    return value as ExecutorReader;
+}
+
+function decodeInboxCursor(cursor: string | undefined): number {
+    if (!cursor) {
+        return 0;
+    }
+    const offset = Number.parseInt(cursor, 10);
+    return Number.isFinite(offset) && offset > 0 ? offset : 0;
+}
+
+function encodeInboxCursor(offset: number): string {
+    return String(offset);
+}
+
+function decodeMessageCursor(cursor: string | undefined): string | undefined {
+    const value = cursor?.trim();
+    return value || undefined;
+}
+
+function makeBeforeCursor(timestamp: string | undefined): string | undefined {
+    if (!timestamp) {
+        return undefined;
+    }
+    const parsed = new Date(timestamp);
+    if (Number.isNaN(parsed.getTime())) {
+        return timestamp;
+    }
+    return new Date(parsed.getTime() - 1).toISOString();
 }
 
 function resolveUsers(
@@ -341,22 +662,7 @@ function enrichTopics(
 }
 
 function resolveChatTitle(memory: ConversationsReader, chatId: string): string {
-    const direct = memory.getGroupModel(chatId);
-    if (direct?.chatTitle) {
-        return direct.chatTitle;
-    }
-
-    try {
-        const groupKey = getGroupModelKey(chatId);
-        const group = groupKey === chatId ? null : memory.getGroupModel(groupKey);
-        if (group?.chatTitle) {
-            return group.chatTitle;
-        }
-    } catch {
-        // Non-composite test ids are allowed.
-    }
-
-    return chatId;
+    return resolveGroupModel(memory, chatId)?.chatTitle || chatId;
 }
 
 function formatChatLabel(chatTitle: string, chatId: string): string {

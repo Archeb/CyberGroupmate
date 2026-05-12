@@ -21,6 +21,8 @@ export interface MethodDoc {
     brief: string;
     /** 完整 TypeDoc 文档（MD 格式，含参数、返回值、示例代码等）（Pass 2 用） */
     fullDoc: string;
+    /** 是否在注入该方法文档时附带模块 typeDefs。默认为 true。 */
+    includeTypeDefs?: boolean;
 }
 
 /** 单个模块的注册条目 */
@@ -38,6 +40,7 @@ export interface ModuleEntry {
 import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { loadBuiltinGuideRegistry } from "../builtin-guides.js";
 
 const __mr_filename = fileURLToPath(import.meta.url);
 const __mr_dirname = dirname(__mr_filename);
@@ -52,11 +55,48 @@ export function loadModuleRegistry(): ModuleEntry[] {
     try {
         const jsonPath = join(__mr_dirname, "modules-docs.json");
         const raw = readFileSync(jsonPath, "utf-8");
-        return JSON.parse(raw) as ModuleEntry[];
+        return mergeModuleRegistries(JSON.parse(raw) as ModuleEntry[], loadBuiltinGuideRegistry());
     } catch {
-        // fallback: 返回空（此时回退到旧的 d.ts 流程）
-        return [];
+        // fallback: 至少保留内置 guide 入口
+        return loadBuiltinGuideRegistry();
     }
+}
+
+/** 合并同名模块，供内置模块、MCP、Skills 与内置 guide 共同进入同一个 namespace。 */
+export function mergeModuleRegistries(...registries: ModuleEntry[][]): ModuleEntry[] {
+    const merged: ModuleEntry[] = [];
+    for (const registry of registries) {
+        for (const entry of registry) {
+            const existing = merged.find(item => item.name === entry.name);
+            if (!existing) {
+                merged.push({
+                    ...entry,
+                    methods: [...entry.methods],
+                });
+                continue;
+            }
+
+            if (!existing.description && entry.description) {
+                existing.description = entry.description;
+            }
+
+            for (const method of entry.methods) {
+                const methodIndex = existing.methods.findIndex(item => item.name === method.name);
+                if (methodIndex >= 0) {
+                    existing.methods[methodIndex] = method;
+                } else {
+                    existing.methods.push(method);
+                }
+            }
+
+            if (entry.typeDefs) {
+                existing.typeDefs = existing.typeDefs
+                    ? `${existing.typeDefs}\n\n${entry.typeDefs}`
+                    : entry.typeDefs;
+            }
+        }
+    }
+    return merged;
 }
 
 /**
@@ -134,7 +174,9 @@ export function lookupFullDocs(registry: ModuleEntry[], calledMethods: string[])
         if (seen.has(key)) continue;
         seen.add(key);
         found.push(`### ${moduleName}.${methodName}\n\n${method.fullDoc}`);
-        referencedModules.add(moduleName);
+        if (method.includeTypeDefs !== false) {
+            referencedModules.add(moduleName);
+        }
     }
 
     if (found.length === 0) return "";
