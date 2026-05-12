@@ -161,17 +161,17 @@ describe("OneBotAdapter", () => {
 
         it("disabled by default → no API call", async () => {
             const { nc, adapter, calls } = setup();
-            await adapter.markAsRead("onebot:group:679691983");
+            await adapter.markAsRead("onebot:group:123456789");
             assert.equal(calls.length, 0);
             nc.dispose();
         });
 
         it("enabled for group → calls mark_group_msg_as_read", async () => {
             const { nc, adapter, calls } = setup({ enableReadReceipts: true });
-            await adapter.markAsRead("onebot:group:679691983");
+            await adapter.markAsRead("onebot:group:123456789");
             assert.equal(calls.length, 1);
             assert.equal(calls[0].action, "mark_group_msg_as_read");
-            assert.equal(calls[0].params.group_id, 679691983);
+            assert.equal(calls[0].params.group_id, 123456789);
             nc.dispose();
         });
 
@@ -190,7 +190,7 @@ describe("OneBotAdapter", () => {
             (adapter as any).ws = { readyState: 1 };
             (adapter as any).callAction = async () => { throw new Error("retcode 1404"); };
             // 不应抛出
-            await assert.doesNotReject(() => adapter.markAsRead("onebot:group:679691983"));
+            await assert.doesNotReject(() => adapter.markAsRead("onebot:group:123456789"));
             nc.dispose();
         });
     });
@@ -229,7 +229,7 @@ describe("OneBotAdapter", () => {
 
         it("enabled in group → still no-op (NapCat 仅私聊有此扩展)", async () => {
             const { nc, adapter, calls } = setup({ enableTyping: true });
-            const ret = await adapter.handleCall("onebot.sendTyping", ["onebot:group:679691983"]);
+            const ret = await adapter.handleCall("onebot.sendTyping", ["onebot:group:123456789"]);
             assert.equal(ret, null);
             assert.equal(calls.length, 0);
             nc.dispose();

@@ -58,14 +58,14 @@ describe("群名变更同步", () => {
 
             nc.push({
                 type: "onebot.group_name_change",
-                chatId: "onebot:group:679691983",
-                groupId: "679691983",
+                chatId: "onebot:group:123456789",
+                groupId: "123456789",
                 oldName: "旧群名",
                 newName: "新群名",
             });
 
             assert.equal(receivedEvents.length, 1);
-            assert.equal(receivedEvents[0].chatId, "onebot:group:679691983");
+            assert.equal(receivedEvents[0].chatId, "onebot:group:123456789");
             assert.equal(receivedEvents[0].newName, "新群名");
             assert.equal(receivedEvents[0].oldName, "旧群名");
 
@@ -82,7 +82,7 @@ describe("群名变更同步", () => {
                 }
             });
 
-            nc.push({ type: "nc.message", chatId: "onebot:group:679691983" });
+            nc.push({ type: "nc.message", chatId: "onebot:group:123456789" });
             nc.push({ type: "system.adapter_status" });
 
             assert.equal(receivedEvents.length, 0);
