@@ -209,6 +209,12 @@ telegram:
 #   # 是否将本地文件编码为 data URL 后发送（跨机器部署建议开启）
 #   # 开启后，发送图片时会使用 data:image/png;base64,... 这类 payload，避免 file:// 路径不可达
 #   send_file_as_data_url: true
+#   # 是否在私聊中投递"对方正在输入"（依赖 NapCat 扩展接口 set_input_status，群聊无此能力）
+#   # enable_typing: false
+#   # 是否在 agent 标记会话已读时调用 NapCat 的 mark_*_msg_as_read（QQ 不强制依赖此能力）
+#   # enable_read_receipts: false
+#   # 是否在收到媒体消息时自动落盘（与 Telegram 一致；关闭后需由 LLM 显式 downloadMedia）
+#   # auto_download_incoming: true
 #   # 入站白名单（可选）
 #   # whitelist:
 #   #   enabled: true

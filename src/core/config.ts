@@ -180,6 +180,12 @@ export interface OneBotConfig {
     selfId: string;
     /** 是否将本地文件编码为 data URL 发送（跨机器部署时建议开启） */
     sendFileAsDataUrl?: boolean;
+    /** 是否在私聊中调用 NapCat `set_input_status` 投递"对方正在输入"。默认 false。群聊无对应接口，始终 no-op。 */
+    enableTyping?: boolean;
+    /** 是否调用 NapCat `mark_*_msg_as_read` 标记会话已读。默认 false。 */
+    enableReadReceipts?: boolean;
+    /** 是否在收到媒体消息时自动下载并缓存到本地。默认 true。 */
+    autoDownloadIncoming?: boolean;
     /** 入站白名单（可选） */
     whitelist?: {
         enabled: boolean;
@@ -602,6 +608,9 @@ export function loadConfig(configPath?: string, forceReload?: boolean): AppConfi
             wsUrl: str(fileOB.ws_url) ?? "",
             selfId: str(fileOB.self_id) ?? "",
             sendFileAsDataUrl: fileOB.send_file_as_data_url != null ? Boolean(fileOB.send_file_as_data_url) : undefined,
+            enableTyping: fileOB.enable_typing != null ? Boolean(fileOB.enable_typing) : undefined,
+            enableReadReceipts: fileOB.enable_read_receipts != null ? Boolean(fileOB.enable_read_receipts) : undefined,
+            autoDownloadIncoming: fileOB.auto_download_incoming != null ? Boolean(fileOB.auto_download_incoming) : undefined,
             whitelist: parseOneBotWhitelist(fileOB),
             humanizedDelay: parseOneBotHumanizedDelay(fileOB),
         } : undefined,
@@ -1224,6 +1233,15 @@ export function serializeConfigToObject(config: AppConfig): Record<string, unkno
         };
         if (config.onebot.sendFileAsDataUrl != null) {
             ob.send_file_as_data_url = config.onebot.sendFileAsDataUrl;
+        }
+        if (config.onebot.enableTyping != null) {
+            ob.enable_typing = config.onebot.enableTyping;
+        }
+        if (config.onebot.enableReadReceipts != null) {
+            ob.enable_read_receipts = config.onebot.enableReadReceipts;
+        }
+        if (config.onebot.autoDownloadIncoming != null) {
+            ob.auto_download_incoming = config.onebot.autoDownloadIncoming;
         }
         if (config.onebot.whitelist) {
             ob.whitelist = {
