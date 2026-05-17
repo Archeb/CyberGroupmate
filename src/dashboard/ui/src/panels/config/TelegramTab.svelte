@@ -3,8 +3,8 @@
   export let telegramEnabled = false;
   export let pwFocus;
   export let pwBlur;
-</script>
   import MonacoEditor from "../../components/MonacoEditor.svelte";
+</script>
 
 <h3 class="card-title text-sm">
   <i class="fa-solid fa-paper-plane opacity-50 mr-1"></i> Telegram 设置
