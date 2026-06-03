@@ -1745,6 +1745,16 @@ export class TelegramAdapter implements PlatformAdapter {
     ): Promise<boolean> {
         const text = normalized.text.trim();
 
+        // ── 检查命令目标：若带 @username，必须与自己的用户名匹配 ──
+        const cmdMentionMatch = text.match(/^\/(\S+?)@(\S+)/);
+        if (cmdMentionMatch) {
+            const mentionedUsername = cmdMentionMatch[2].toLowerCase();
+            const selfUsername = this.selfUser?.username?.toLowerCase();
+            if (selfUsername && mentionedUsername !== selfUsername) {
+                return false;
+            }
+        }
+
         // ── /invisible ──
         if (/^\/invisible(?:@\S+)?$/i.test(text)) {
             const userId = normalized.userId;

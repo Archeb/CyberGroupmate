@@ -668,6 +668,8 @@ interface TelegramClient {
     // ─── /invisible tests ───
 
     it("/invisible should toggle user invisibility and send confirmation", async () => {
+        // 清理跨测试/跨运行持久化状态
+        try { fs.rmSync("workspace/invisible-users.json", { force: true }); } catch {}
         const nc = makeNC();
         const sentTexts: Array<[unknown, unknown]> = [];
         let newMessageHandler: ((msg: unknown) => void | Promise<void>) | null = null;
@@ -1020,6 +1022,198 @@ interface TelegramClient {
         });
 
         assert.equal(events.length, 1);
+
+        await adapter.stop();
+        nc.dispose();
+    });
+
+    // ─── @username command targeting tests ───
+
+    it("should process /invisible@SelfUsername when username matches", async () => {
+        // 清理跨测试持久化状态，避免被前序测试污染
+        try { fs.rmSync("workspace/invisible-users.json", { force: true }); } catch {}
+        const nc = makeNC();
+        const sentTexts: Array<[unknown, unknown]> = [];
+        let newMessageHandler: ((msg: unknown) => void | Promise<void>) | null = null;
+
+        const fakeClient = {
+            async start() {
+                return { id: 99, displayName: "Bot", isBot: true, username: "MyBot" };
+            },
+            onNewMessage: {
+                add(handler: (msg: unknown) => void | Promise<void>) {
+                    newMessageHandler = handler;
+                },
+                remove() { newMessageHandler = null; },
+            },
+            async sendText(chatId: unknown, text: unknown) {
+                sentTexts.push([chatId, text]);
+                return { id: 1, text, date: new Date(), chat: { id: chatId, type: "group" }, sender: { id: 99, isBot: true } };
+            },
+            async destroy() {},
+        };
+
+        const adapter = new TelegramAdapter(
+            makeConfig(), nc, async () => "", () => {},
+            async () => fakeClient,
+        );
+        await adapter.start();
+        assert.ok(newMessageHandler);
+
+        // /invisible@MyBot with matching self username → should process
+        await newMessageHandler!({
+            id: 1, text: "/invisible@MyBot", date: new Date(),
+            chat: { id: -100, title: "Test", type: "group" },
+            sender: { id: 42, displayName: "Alice", isBot: false },
+        });
+
+        assert.ok(sentTexts.length >= 1, "should send confirmation for matching @username");
+        assert.ok(String(sentTexts[0][1]).includes("隐身"), "confirmation should mention 隐身");
+        assert.ok(adapter.isUserInvisible("telegram:42"), "user should be invisible");
+
+        await adapter.stop();
+        nc.dispose();
+    });
+
+    it("should ignore /invisible@OtherBot when username does not match self", async () => {
+        // 清理跨测试持久化状态，避免被前序测试污染
+        try { fs.rmSync("workspace/invisible-users.json", { force: true }); } catch {}
+        const nc = makeNC();
+        const events = captureEvents(nc);
+        const sentTexts: Array<[unknown, unknown]> = [];
+        let newMessageHandler: ((msg: unknown) => void | Promise<void>) | null = null;
+
+        const fakeClient = {
+            async start() {
+                return { id: 99, displayName: "Bot", isBot: true, username: "MyBot" };
+            },
+            onNewMessage: {
+                add(handler: (msg: unknown) => void | Promise<void>) {
+                    newMessageHandler = handler;
+                },
+                remove() { newMessageHandler = null; },
+            },
+            async sendText(chatId: unknown, text: unknown) {
+                sentTexts.push([chatId, text]);
+                return { id: 1, text, date: new Date(), chat: { id: chatId, type: "group" }, sender: { id: 99, isBot: true } };
+            },
+            async destroy() {},
+        };
+
+        const adapter = new TelegramAdapter(
+            makeConfig(), nc, async () => "", () => {},
+            async () => fakeClient,
+        );
+        await adapter.start();
+        assert.ok(newMessageHandler);
+
+        // /invisible@OtherBot with self.username = "MyBot" → should be ignored as command
+        await newMessageHandler!({
+            id: 1, text: "/invisible@OtherBot", date: new Date(),
+            chat: { id: -100, title: "Test", type: "group" },
+            sender: { id: 42, displayName: "Alice", isBot: false },
+        });
+
+        // Should NOT send confirmation reply
+        assert.equal(sentTexts.length, 0, "should not send confirmation for non-matching @username");
+        // Should NOT toggle invisibility
+        assert.ok(!adapter.isUserInvisible("telegram:42"), "user should NOT be invisible");
+        // Message should flow through to NC as a normal message
+        assert.equal(events.length, 1, "message should be pushed to NC as normal message");
+        assert.equal(events[0].type, "nc.message");
+        assert.equal(events[0].messageId, "1");
+
+        await adapter.stop();
+        nc.dispose();
+    });
+
+    it("should still process bare /invisible when self has no username", async () => {
+        // 清理跨测试持久化状态，避免被前序测试污染
+        try { fs.rmSync("workspace/invisible-users.json", { force: true }); } catch {}
+        const nc = makeNC();
+        const sentTexts: Array<[unknown, unknown]> = [];
+        let newMessageHandler: ((msg: unknown) => void | Promise<void>) | null = null;
+
+        const fakeClient = {
+            async start() {
+                // No username → selfUsername will be undefined
+                return { id: 99, displayName: "Bot", isBot: true };
+            },
+            onNewMessage: {
+                add(handler: (msg: unknown) => void | Promise<void>) {
+                    newMessageHandler = handler;
+                },
+                remove() { newMessageHandler = null; },
+            },
+            async sendText(chatId: unknown, text: unknown) {
+                sentTexts.push([chatId, text]);
+                return { id: 1, text, date: new Date(), chat: { id: chatId, type: "group" }, sender: { id: 99, isBot: true } };
+            },
+            async destroy() {},
+        };
+
+        const adapter = new TelegramAdapter(
+            makeConfig(), nc, async () => "", () => {},
+            async () => fakeClient,
+        );
+        await adapter.start();
+        assert.ok(newMessageHandler);
+
+        // Bare /invisible when self has no username → should still process
+        await newMessageHandler!({
+            id: 1, text: "/invisible", date: new Date(),
+            chat: { id: -100, title: "Test", type: "group" },
+            sender: { id: 42, displayName: "Alice", isBot: false },
+        });
+
+        assert.ok(sentTexts.length >= 1, "should send confirmation for bare /invisible");
+        assert.ok(adapter.isUserInvisible("telegram:42"), "user should be invisible");
+
+        await adapter.stop();
+        nc.dispose();
+    });
+
+    it("should still process /invisible@AnyUser when self has no username", async () => {
+        // 清理跨测试持久化状态，避免被前序测试污染
+        try { fs.rmSync("workspace/invisible-users.json", { force: true }); } catch {}
+        const nc = makeNC();
+        const sentTexts: Array<[unknown, unknown]> = [];
+        let newMessageHandler: ((msg: unknown) => void | Promise<void>) | null = null;
+
+        const fakeClient = {
+            async start() {
+                // No username → selfUsername will be undefined → skip @username check
+                return { id: 99, displayName: "Bot", isBot: true };
+            },
+            onNewMessage: {
+                add(handler: (msg: unknown) => void | Promise<void>) {
+                    newMessageHandler = handler;
+                },
+                remove() { newMessageHandler = null; },
+            },
+            async sendText(chatId: unknown, text: unknown) {
+                sentTexts.push([chatId, text]);
+                return { id: 1, text, date: new Date(), chat: { id: chatId, type: "group" }, sender: { id: 99, isBot: true } };
+            },
+            async destroy() {},
+        };
+
+        const adapter = new TelegramAdapter(
+            makeConfig(), nc, async () => "", () => {},
+            async () => fakeClient,
+        );
+        await adapter.start();
+        assert.ok(newMessageHandler);
+
+        // /invisible@SomeUser when self has no username → still process (can't verify, so allow)
+        await newMessageHandler!({
+            id: 1, text: "/invisible@SomeUser", date: new Date(),
+            chat: { id: -100, title: "Test", type: "group" },
+            sender: { id: 42, displayName: "Alice", isBot: false },
+        });
+
+        assert.ok(sentTexts.length >= 1, "should still process when self has no username");
+        assert.ok(adapter.isUserInvisible("telegram:42"), "user should be invisible");
 
         await adapter.stop();
         nc.dispose();
