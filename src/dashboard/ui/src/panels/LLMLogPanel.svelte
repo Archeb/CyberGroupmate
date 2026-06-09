@@ -475,7 +475,7 @@
             </span>
             <span class="llm-row-time">{time}</span>
             <span class="badge badge-xs {callerBadge}">{entry.caller}</span>
-            <span class="llm-row-model">{entry.model}</span>
+            <span class="llm-row-model" title="{entry.model}">{entry.profileName ?? entry.model}</span>
             <span class="llm-row-meta"
               ><i class="fa-solid fa-envelope fa-xs"></i>{msgCount}{hasImages ? " " : ""}{#if hasImages}<i class="fa-solid fa-image fa-xs"></i>{/if}</span
             >

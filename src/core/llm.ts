@@ -51,6 +51,8 @@ export interface LLMCallEvent {
     maxTokens: number;
     /** provider */
     provider: string;
+    /** llm_profiles 中的 key（如 gemini-flash） */
+    profileName?: string;
     /** 消息摘要：每条消息的 role + content 前 200 字 + imageParts 信息 */
     messageSummaries: Array<{
         role: string;
@@ -342,7 +344,7 @@ async function callLLMSingleKey(
     }
     const releaseSlot = await rateLimiter.acquire(profileName);
     try {
-        return await _callLLMSingleKeyInner(messages, config, options);
+        return await _callLLMSingleKeyInner(messages, config, { ...options, profileName });
     } finally {
         releaseSlot();
     }
@@ -380,6 +382,7 @@ async function _callLLMSingleKeyInner(
             temperature,
             maxTokens,
             provider: config.provider ?? "openai",
+            profileName: options?.profileName,
             messageSummaries: summarizeMessages(messages),
             timestamp: new Date().toISOString(),
             extraBody: config.extraBody,

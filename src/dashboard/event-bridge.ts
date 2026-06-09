@@ -27,6 +27,7 @@ export interface LLMLogEntry {
     temperature: number;
     maxTokens: number;
     provider: string;
+    profileName?: string;
     timestamp: string;
     messageSummaries: LLMCallEvent["messageSummaries"];
     contextManifest?: ContextManifest;
@@ -63,6 +64,7 @@ export class LLMLogBuffer {
             temperature: data.temperature,
             maxTokens: data.maxTokens,
             provider: data.provider,
+            profileName: data.profileName,
             timestamp: data.timestamp,
             messageSummaries: data.messageSummaries,
             contextManifest: data.contextManifest,
