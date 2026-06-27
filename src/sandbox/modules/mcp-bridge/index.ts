@@ -159,6 +159,20 @@ function cloneServerList(list: McpServerInfo[]): McpServerInfo[] {
 
 // ─── 配置 / transport 判定 ───
 
+/**
+ * 把字符串里的 `${VAR}` 占位符替换为 `process.env[VAR]`。
+ *
+ * VAR 由 cgm 的环境变量注入器（buildEnvPlan，scope=host/both）写入 host 进程的 process.env，
+ * 而 MCP 预配置连接 / 工具调用都跑在 host 进程，所以这里能取到。
+ * 在请求/连接时（而非解析时）解析：
+ *   - 持久化的 mcp-connections.json 仍只保存字面量 `${VAR}`，密钥不落盘；
+ *   - dashboard 热改 env 后，下一次请求即生效，无需重连。
+ * 未定义的变量替换为空串；非 `${...}` 文本原样保留。
+ */
+function interpolateEnv(value: string): string {
+    return value.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (_match, name: string) => process.env[name] ?? "");
+}
+
 function getTransportKind(config: McpServerConfig): McpTransportKind {
     if (config.transport) return config.transport;
     return config.url ? "streamable-http" : "stdio";
@@ -282,8 +296,12 @@ function buildHttpHeaders(
 ): Record<string, string> {
     const headers: Record<string, string> = {
         Accept: options?.accept ?? HTTP_ACCEPT,
-        ...(conn.config.headers ?? {}),
     };
+    // config.headers 的值支持 `${VAR}` 环境变量插值（如 Authorization: "Bearer ${ZAI_API_KEY}"）。
+    // 放在 Accept 之后写入，保留"配置项可覆盖 Accept"的原有语义。
+    for (const [key, value] of Object.entries(conn.config.headers ?? {})) {
+        headers[key] = interpolateEnv(value);
+    }
     if (options?.includeContentType !== false) {
         headers["Content-Type"] = "application/json";
     }
@@ -434,8 +452,13 @@ async function extractHttpResponseResult(conn: McpConnection, response: Response
     return result.value;
 }
 
+/** 解析 streamable-http 目标 URL，支持 `${VAR}` 环境变量插值。 */
+function resolveHttpUrl(conn: McpConnection): string {
+    return interpolateEnv(conn.config.url!);
+}
+
 async function postHttpMessage(conn: McpConnection, payload: JsonRpcMessage, options?: { skipSessionId?: boolean }): Promise<Response> {
-    return fetch(conn.config.url!, {
+    return fetch(resolveHttpUrl(conn), {
         method: "POST",
         headers: buildHttpHeaders(conn, { skipSessionId: options?.skipSessionId }),
         body: JSON.stringify(payload),
@@ -518,7 +541,7 @@ async function initializeHttpConnection(conn: McpConnection): Promise<void> {
 async function closeHttpConnection(conn: McpConnection): Promise<void> {
     if (!conn.sessionId) return;
     try {
-        const response = await fetch(conn.config.url!, {
+        const response = await fetch(resolveHttpUrl(conn), {
             method: "DELETE",
             headers: buildHttpHeaders(conn, { includeContentType: false, accept: "application/json" }),
         });
@@ -568,9 +591,12 @@ async function connectServer(config: McpServerConfig): Promise<McpConnection> {
 
     if (conn.transportKind === "stdio") {
         const env: Record<string, string> = { ...(process.env as Record<string, string>) };
-        if (config.env) Object.assign(env, config.env);
+        // command / args / env 的值同样支持 `${VAR}` 环境变量插值。
+        if (config.env) {
+            for (const [key, value] of Object.entries(config.env)) env[key] = interpolateEnv(value);
+        }
 
-        const child = spawn(config.command!, config.args ?? [], {
+        const child = spawn(interpolateEnv(config.command!), (config.args ?? []).map(interpolateEnv), {
             stdio: ["pipe", "pipe", "pipe"],
             env,
         });

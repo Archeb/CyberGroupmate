@@ -423,7 +423,14 @@ export interface EnvironmentVariable {
     scope: "both" | "host" | "sandbox";
 }
 
-/** MCP Server 预配置（config.yaml 中声明，Sandbox 启动时自动连接） */
+/**
+ * MCP Server 预配置（config.yaml 中声明，Sandbox 启动时自动连接）。
+ *
+ * command / args / env / url / headers 的字符串值支持 `${VAR}` 环境变量插值——
+ * VAR 取自 env_vars 注入器（scope=host/both，写入 host 进程 process.env），
+ * 在连接/请求时解析，密钥不会以明文落盘到 mcp-connections.json。
+ * 例：headers: { Authorization: "Bearer ${ZAI_API_KEY}" }
+ */
 export interface McpServerPreConfig {
     /** 显示名称（也是 tool 命名空间） */
     name: string;
