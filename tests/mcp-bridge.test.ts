@@ -401,4 +401,78 @@ describe("mcp-bridge Streamable HTTP", () => {
             });
         }
     });
+
+    it("interpolates ${VAR} env placeholders in headers at request time (literal kept on disk)", async () => {
+        initMcpBridge({ persistPath: "" });
+        process.env.ZAI_TEST_KEY = "secret-zai-token";
+
+        let serverUrl = "";
+        const seenAuthHeaders: string[] = [];
+
+        const server = createServer(async (req, res) => {
+            const authHeader = req.headers.authorization;
+            if (authHeader) seenAuthHeaders.push(String(authHeader));
+
+            if (req.method === "DELETE") { res.writeHead(204); res.end(); return; }
+            if (req.method !== "POST") { res.writeHead(405); res.end(); return; }
+
+            const body = await readBody(req);
+            const msg = JSON.parse(body) as { id?: number; method?: string };
+
+            if (msg.method === "initialize") {
+                writeJson(res, {
+                    jsonrpc: "2.0", id: msg.id,
+                    result: { protocolVersion: "2025-03-26", capabilities: { tools: {} }, serverInfo: { name: "zai", version: "1.0.0" } },
+                }, { "Mcp-Session-Id": "sess-zai" });
+                return;
+            }
+            if (msg.method === "notifications/initialized") { res.writeHead(202); res.end(); return; }
+            if (msg.method === "tools/list") {
+                writeJson(res, { jsonrpc: "2.0", id: msg.id, result: { tools: [{ name: "webSearchPrime", description: "search" }] } });
+                return;
+            }
+            if (msg.method === "tools/call") {
+                writeJson(res, { jsonrpc: "2.0", id: msg.id, result: { content: [{ type: "text", text: "ok" }] } });
+                return;
+            }
+            res.writeHead(404); res.end();
+        });
+
+        await new Promise<void>((resolve) => {
+            server.listen(0, "127.0.0.1", () => {
+                const address = server.address();
+                if (!address || typeof address === "string") throw new Error("Failed to bind mock MCP server");
+                serverUrl = `http://127.0.0.1:${address.port}/mcp`;
+                resolve();
+            });
+        });
+
+        try {
+            await mcpBridge.connect({
+                name: "zai",
+                transport: "streamable-http",
+                url: serverUrl,
+                headers: { Authorization: "Bearer ${ZAI_TEST_KEY}" },
+            });
+            await mcpBridge.call("zai", "webSearchPrime", { query: "x" });
+
+            // The server must have received the RESOLVED token on every request (init, list, call).
+            assert.ok(seenAuthHeaders.length > 0, "server should have seen Authorization headers");
+            assert.ok(
+                seenAuthHeaders.every((header) => header === "Bearer secret-zai-token"),
+                `all auth headers should be resolved; saw ${JSON.stringify(seenAuthHeaders)}`,
+            );
+
+            // The persisted/exported config must keep the LITERAL ${VAR}, never the resolved secret.
+            const configs = getConnectionConfigs();
+            assert.equal(configs[0]?.headers?.Authorization, "Bearer ${ZAI_TEST_KEY}");
+            assert.ok(!JSON.stringify(configs).includes("secret-zai-token"), "secret must not be persisted in config");
+        } finally {
+            delete process.env.ZAI_TEST_KEY;
+            await disconnectAll();
+            await new Promise<void>((resolve, reject) => {
+                server.close((err) => (err ? reject(err) : resolve()));
+            });
+        }
+    });
 });
