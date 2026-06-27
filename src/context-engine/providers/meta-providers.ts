@@ -11,6 +11,7 @@ import { formatMessageLine, type RawMessage, type StickerDescriptionLookup } fro
 import { getRawId } from "../../core/chat-id.js";
 import type { VisionConfig } from "../../core/config.js";
 import { formatTsForPrompt, getWeekdayLabel } from "../../core/timezone.js";
+import { sanitizeTriageReason } from "../../core/triage-sanitize.js";
 
 const META_ASSOCIATED_MEMORIES_ENABLED = false;
 
@@ -653,7 +654,8 @@ export const metaTopicDigestsProvider: SectionProvider<MetaTopicDigestData> = {
                 participants: digest.participants,
                 messageCount: digest.messageCount,
                 createdAt: digest.lastActivityAt,
-                triageReason: digest.triageReason,
+                // 兜底：Meta 看到的 triageReason 不含预写金句，杜绝照搬进 contentDirection
+                triageReason: sanitizeTriageReason(digest.triageReason),
             };
             const header = formatTopicList([topic], "");
             const extras: string[] = [];

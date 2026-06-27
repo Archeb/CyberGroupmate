@@ -16,6 +16,7 @@
 
 import { EventEmitter } from "node:events";
 import { createLogger } from "../core/logger.js";
+import { sanitizeTriageReason } from "../core/triage-sanitize.js";
 import { callLLMWithFallback, type ChatMessage } from "../core/llm.js";
 import { loadConfig, resolveComponentProfiles, resolveComponentTimeout, type LLMConfig, type VisionConfig } from "../core/config.js";
 import { topicClusteringProvider, topicTriageProvider } from "../context-engine/providers/pipeline-providers.js";
@@ -982,6 +983,8 @@ export class RecordingPipeline extends EventEmitter {
                 state: topic.state,
                 triageFound: !!triage,
                 triageReason: triage?.reason,
+                // 下游（Meta）实际拿到的是清洗后版本——记录以便核对金句是否被剥离
+                triageReasonClean: sanitizeTriageReason(triage?.reason),
                 msgCount: topicMsgs.length,
             });
             if (triage) {
@@ -1007,7 +1010,8 @@ export class RecordingPipeline extends EventEmitter {
                 }
 
                 const decision = {
-                    reason: triage.reason,
+                    // 兜底清洗：去掉 triage 替下游预写的成句金句，避免 Meta 照搬进 contentDirection
+                    reason: sanitizeTriageReason(triage.reason),
                 };
                 // 将 decision 持久化到 topic 对象，supply triageReason 给下游 toDigest
                 this.registry.setDecision(topic.id, decision);
