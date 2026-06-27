@@ -6,7 +6,7 @@
  */
 
 export { MemoryStoreV2 } from "./memory-v2.js";
-export { runReflection, parseReflectionJSON, mergeEpisodes, trimProfileByTier, DEFAULT_TIER_LIMITS, type TierLimitEntry, type TierLimitsConfig } from "./reflection.js";
+export { runReflection, parseReflectionJSON, mergeEpisodes, trimProfileByTier, DEFAULT_TIER_LIMITS, isSizeReducibleError, REFLECTION_SCOPE_LEVELS, type TierLimitEntry, type TierLimitsConfig, type ReflectionScope } from "./reflection.js";
 export type { ReflectionExternalConfig as ReflectionConfig } from "../core/config.js";
 
 // Context Manager (M3)

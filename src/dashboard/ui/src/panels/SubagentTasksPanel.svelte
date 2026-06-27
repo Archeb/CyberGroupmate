@@ -206,6 +206,7 @@
 </div>
 
 <style>
+.muted { font-weight: 400; opacity: 0.5; font-size: 0.75rem; }
 .tasks-layout {
   display: grid;
   grid-template-columns: minmax(18rem, 24rem) minmax(0, 1fr);

@@ -16,6 +16,8 @@ import {
     trimProfileByTier,
     parseReflectionJSON,
     DEFAULT_TIER_LIMITS,
+    isSizeReducibleError,
+    REFLECTION_SCOPE_LEVELS,
     type ReflectionConfig,
 } from "../src/memory-v2/index.js";
 import type { MemoryStoreV2 } from "../src/memory-v2/index.js";
@@ -460,5 +462,85 @@ describe("M2.6.9 topicsSummary sentiment 传递", () => {
         assert.equal(result!.topicsSummary.length, 2);
         assert.equal(result!.topicsSummary[0].sentiment, "positive");
         assert.equal(result!.topicsSummary[1].sentiment, "negative");
+    });
+});
+
+// ─── 回看范围自适应收缩（超时/限流则缩小 prompt 重试的决策逻辑）───
+
+describe("isSizeReducibleError 错误分类", () => {
+    it("超时类错误 → 可收缩（缩小 prompt 有望缓解）", () => {
+        for (const msg of ["Request timeout after 60s", "aborted due to timeout"]) {
+            assert.equal(isSizeReducibleError(new Error(msg)), true, msg);
+        }
+    });
+
+    it("限流 / TPM 类错误 → 可收缩", () => {
+        for (const msg of ["429 Too Many Requests", "rate limit exceeded", "model is Overloaded"]) {
+            assert.equal(isSizeReducibleError(new Error(msg)), true, msg);
+        }
+    });
+
+    it("上下文超长类错误 → 可收缩", () => {
+        for (const msg of [
+            "context length exceeded",
+            "maximum context is 8192 tokens",
+            "context_length_exceeded",
+            "prompt is too long",
+        ]) {
+            assert.equal(isSizeReducibleError(new Error(msg)), true, msg);
+        }
+    });
+
+    it("鉴权 / 解析 / 未知错误 → 不可收缩（收缩无益，应放弃本轮）", () => {
+        for (const msg of [
+            "401 Unauthorized",
+            "invalid api key",
+            "Unexpected token < in JSON",
+            "ECONNREFUSED",
+        ]) {
+            assert.equal(isSizeReducibleError(new Error(msg)), false, msg);
+        }
+    });
+
+    it("大小写不敏感，且接受 Error 或裸字符串", () => {
+        assert.equal(isSizeReducibleError(new Error("TIMEOUT")), true);
+        assert.equal(isSizeReducibleError("Rate Limit"), true);
+        assert.equal(isSizeReducibleError("totally fine"), false);
+    });
+
+    it("null / undefined / 非错误对象 → 不可收缩，不抛异常", () => {
+        assert.equal(isSizeReducibleError(null), false);
+        assert.equal(isSizeReducibleError(undefined), false);
+        assert.equal(isSizeReducibleError({ weird: true }), false);
+    });
+});
+
+describe("REFLECTION_SCOPE_LEVELS 收缩梯度", () => {
+    it("恰好 3 档：full → narrowed → minimal", () => {
+        assert.equal(REFLECTION_SCOPE_LEVELS.length, 3);
+        assert.deepEqual(
+            REFLECTION_SCOPE_LEVELS.map(s => s.label),
+            ["full", "narrowed", "minimal"],
+        );
+    });
+
+    it("首档是全量 full（首次回看不预先收缩）", () => {
+        assert.equal(REFLECTION_SCOPE_LEVELS[0].label, "full");
+    });
+
+    it("三个体量上限逐档严格递减（保证每次重试都真的更小）", () => {
+        for (let i = 1; i < REFLECTION_SCOPE_LEVELS.length; i++) {
+            const prev = REFLECTION_SCOPE_LEVELS[i - 1];
+            const cur = REFLECTION_SCOPE_LEVELS[i];
+            assert.ok(cur.maxTopicBlocks < prev.maxTopicBlocks, `maxTopicBlocks @${i}`);
+            assert.ok(cur.maxMessagesPerTopic < prev.maxMessagesPerTopic, `maxMessagesPerTopic @${i}`);
+            assert.ok(cur.maxInteractions < prev.maxInteractions, `maxInteractions @${i}`);
+        }
+    });
+
+    it("所有上限均为正数（收缩到 minimal 仍喂得动数据）", () => {
+        for (const s of REFLECTION_SCOPE_LEVELS) {
+            assert.ok(s.maxTopicBlocks > 0 && s.maxMessagesPerTopic > 0 && s.maxInteractions > 0, s.label);
+        }
     });
 });

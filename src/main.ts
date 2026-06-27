@@ -17,6 +17,7 @@ import type { ShellWakeEvent } from "./sandbox/sandbox.js";
 import { installSkillsDependencies } from "./sandbox/skill-loader.js";
 import { createSandboxHostCallHandler } from "./sandbox/host-call-handler.js";
 import { MemoryStoreV2 } from "./memory-v2/index.js";
+import { createMemoryStore } from "./core/memory-factory.js";
 import {
     loadConfig,
     resolveComponentProfiles,
@@ -424,7 +425,8 @@ async function main(): Promise<void> {
             log.debug("SandboxPool onAcquire: 已初始化", { chatId });
         },
     });
-    const memory = new MemoryStoreV2(join(DATA_DIR, "memory.db"));
+    // 经由工厂构建：本地 SQLite 存储 + 检索，并注入全局隐私分级（不启用 embedding 检索）。
+    const memory = createMemoryStore(join(DATA_DIR, "memory.db"), { config: appConfig });
     const { createInterface: createRL } = await import("node:readline");
     const hostRL = createRL({ input: process.stdin, output: process.stdout });
 

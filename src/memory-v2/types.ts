@@ -283,6 +283,15 @@ export interface GroupModel {
     chatTitle: string;
     /** 是否为私聊（由 adapter 层提供） */
     isDirectMessage?: boolean;
+    /**
+     * 是否被标记为敏感/私密会话（append-only，只进不出）。
+     * 由人工配置种子或 LLM 运行时 privacy.markSensitive() 设置，用于全局 visibility 兜底。
+     */
+    markedSensitive?: boolean;
+    /** 标记为敏感的原因（markedSensitive 为 true 时记录）。 */
+    sensitiveReason?: string;
+    /** 标记为敏感的时间 (ISO 8601)。 */
+    sensitiveAt?: string | null;
     /** 群组描述/定位 */
     description: string;
     /** 主要语言 */
@@ -630,6 +639,12 @@ export interface IMemoryStoreV2 {
 
     /** 获取群组画像 */
     getGroupModel(chatId: string): GroupModel | null;
+
+    /**
+     * 将某会话标记为敏感/私密（append-only：只置 true、幂等、无取消路径）。
+     * 用于全局 visibility 兜底；标记后该会话按 private 处理。
+     */
+    markChatSensitive(chatId: string, reason?: string): GroupModel | null;
 
     /** 获取全局个体身份 */
     getPersonIdentity(userId: string): PersonIdentity | null;

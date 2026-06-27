@@ -14,6 +14,7 @@ import { createInterface } from "node:readline";
 import { Sandbox } from "./sandbox/sandbox.js";
 import { NotificationCenter } from "./event/notification-center.js";
 import { MemoryStoreV2 } from "./memory-v2/index.js";
+import { createMemoryStore } from "./core/memory-factory.js";
 import { loadConfig, resolveComponentProfiles, resolveEmbeddingConfig } from "./core/config.js";
 import { createLogger } from "./core/logger.js";
 import { readFileSync, existsSync } from "node:fs";
@@ -183,6 +184,8 @@ async function cmdNotify(args: string[]): Promise<void> {
  * memory — 交互式 Memory 查询
  */
 async function cmdMemory(args: string[]): Promise<void> {
+    const subCmd = args[0] ?? "help";
+
     const dbPath = join(DATA_DIR, "memory.db");
     if (!existsSync(dbPath)) {
         log.error("数据库不存在", { path: dbPath });
@@ -192,10 +195,7 @@ async function cmdMemory(args: string[]): Promise<void> {
 
     const cfg = loadConfig();
     const embeddingConfig = resolveEmbeddingConfig(cfg);
-    const memory = new MemoryStoreV2(dbPath, {
-        embeddingConfig,
-    });
-    const subCmd = args[0] ?? "help";
+    const memory = createMemoryStore(dbPath, { config: cfg, embeddingConfig });
 
     switch (subCmd) {
         case "recall": {
@@ -423,7 +423,7 @@ async function cmdStatus(): Promise<void> {
         log.info("events.jsonl 不存在");
     }
 
-    // Memory stats
+    // Memory stats —— 仅读取本地 SQLite（不经检索后端），保证离线/任意 backend 配置下都可用
     const dbPath = join(DATA_DIR, "memory.db");
     if (existsSync(dbPath)) {
         const memory = new MemoryStoreV2(dbPath);

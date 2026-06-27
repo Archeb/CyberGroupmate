@@ -15,6 +15,8 @@ import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { createLogger } from "../core/logger.js";
+import { getGroupModelKey, safeGroupModelKey } from "../core/chat-id.js";
+import { buildVisibilityDeps, isPrivateChat, type VisibilityDeps } from "../core/visibility-policy.js";
 import { createRequire } from "node:module";
 import { resolveComponentTimeout, resolveComponentProfiles, type LLMConfig, type ReflectionExternalConfig, type EmbeddingConfig } from "../core/config.js";
 import {
@@ -225,6 +227,36 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
     }
 
     /**
+     * 全局 visibility 分级所需的依赖（种子 + DM 自动判定 + GroupModel 读取）。
+     * 由 memory-factory 通过 setPrivacyClassification 注入 config.privacy；默认 DM 自动私密、空种子。
+     * 用统一的 getChatVisibility 定义，使 recall 守卫与 chokepoint 完全一致。
+     */
+    private privacyDeps: VisibilityDeps = buildVisibilityDeps({
+        getGroupModel: (key: string) => this.getGroupModel(key),
+    });
+    /** enforce=off 时关闭 memory 层隐私兜底（总开关）；warn/block 都按私密处理（内部上下文恒 fail-closed）。 */
+    private privacyEnforced = true;
+
+    /** 注入全局隐私分级（config.privacy.sensitiveChats / dmAutoPrivate / enforce）。 */
+    setPrivacyClassification(opts: { sensitiveChats?: string[]; dmAutoPrivate?: boolean; enforce?: "block" | "warn" | "off" }): void {
+        this.privacyDeps = buildVisibilityDeps({
+            getGroupModel: (key: string) => this.getGroupModel(key),
+            sensitiveChats: opts.sensitiveChats,
+            dmAutoPrivate: opts.dmAutoPrivate,
+        });
+        this.privacyEnforced = opts.enforce !== "off";
+    }
+
+    /**
+     * 会话是否私密（DM / 配置种子 sensitiveChats / 运行时 markedSensitive），与 chokepoint 同一定义。
+     * 供 recall / 可见性守卫（scrubFactsByVisibility）共用。enforce=off → 一律非私密。
+     */
+    isChatPrivate(chatId: string | null | undefined): boolean {
+        if (!chatId || !this.privacyEnforced) return false;
+        return isPrivateChat(chatId, this.privacyDeps);
+    }
+
+    /**
      * 动态加载 sqlite-vec 扩展
      * 如果不可用（未安装 / 编译失败），透明 fallback 到纯 JS。
      */
@@ -387,6 +419,9 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
                 taboo_topics TEXT DEFAULT '[]',
                 last_reflected_at TEXT,
                 is_direct_message INTEGER DEFAULT 0,
+                marked_sensitive INTEGER DEFAULT 0,
+                sensitive_reason TEXT,
+                sensitive_at TEXT,
                 updated_at TEXT NOT NULL
             );
 
@@ -502,6 +537,11 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
 
         // group_models 新增 is_direct_message 列（兼容旧数据库）
         try { this.db.exec(`ALTER TABLE group_models ADD COLUMN is_direct_message INTEGER DEFAULT 0`); } catch { /* 列已存在 */ }
+
+        // group_models 新增 marked_sensitive / sensitive_reason / sensitive_at 列（全局 visibility 兜底，兼容旧数据库）
+        try { this.db.exec(`ALTER TABLE group_models ADD COLUMN marked_sensitive INTEGER DEFAULT 0`); } catch { /* 列已存在 */ }
+        try { this.db.exec(`ALTER TABLE group_models ADD COLUMN sensitive_reason TEXT`); } catch { /* 列已存在 */ }
+        try { this.db.exec(`ALTER TABLE group_models ADD COLUMN sensitive_at TEXT`); } catch { /* 列已存在 */ }
 
         // person_identities 新增 username 列（兼容旧数据库）
         try { this.db.exec(`ALTER TABLE person_identities ADD COLUMN username TEXT`); } catch { /* 列已存在 */ }
@@ -895,6 +935,7 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
         }
 
         log.debug("storeFact", { id, subject, category, hasEmbedding: !!embedding });
+
         return id;
     }
 
@@ -1122,6 +1163,9 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
             if (data.tabooTopics !== undefined) builder.set("taboo_topics", toJSON(data.tabooTopics));
             if (data.lastReflectedAt !== undefined) builder.set("last_reflected_at", data.lastReflectedAt);
             if (data.isDirectMessage !== undefined) builder.set("is_direct_message", data.isDirectMessage ? 1 : 0);
+            if (data.markedSensitive !== undefined) builder.set("marked_sensitive", data.markedSensitive ? 1 : 0);
+            if (data.sensitiveReason !== undefined) builder.set("sensitive_reason", data.sensitiveReason);
+            if (data.sensitiveAt !== undefined) builder.set("sensitive_at", data.sensitiveAt);
             builder.set("updated_at", ts);
             builder.where("chat_id", chatId);
 
@@ -1134,8 +1178,8 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
                     chat_id, chat_title, description, dominant_language, communication_norms,
                     active_members, avg_messages_per_day, peak_hours, agent_role,
                     engagement_level, recent_feedback, hot_topics, taboo_topics,
-                    last_reflected_at, is_direct_message, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    last_reflected_at, is_direct_message, marked_sensitive, sensitive_reason, sensitive_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `).run(
                 chatId,
                 data.chatTitle ?? "",
@@ -1152,6 +1196,9 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
                 toJSON(data.tabooTopics),
                 data.lastReflectedAt ?? null,
                 data.isDirectMessage ? 1 : 0,
+                data.markedSensitive ? 1 : 0,
+                data.sensitiveReason ?? null,
+                data.sensitiveAt ?? null,
                 ts,
             );
             log.debug("upsertGroupModel: INSERT", { chatId, title: data.chatTitle ?? "" });
@@ -1169,6 +1216,9 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
             chatId: row.chat_id as string,
             chatTitle: row.chat_title as string,
             isDirectMessage: !!(row.is_direct_message as number),
+            markedSensitive: !!(row.marked_sensitive as number),
+            sensitiveReason: (row.sensitive_reason as string) ?? undefined,
+            sensitiveAt: (row.sensitive_at as string) ?? null,
             description: row.description as string,
             dominantLanguage: row.dominant_language as string,
             communicationNorms: fromJSON(row.communication_norms as string, []),
@@ -1183,6 +1233,27 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
             lastReflectedAt: (row.last_reflected_at as string) ?? null,
             updatedAt: row.updated_at as string,
         };
+    }
+
+    /**
+     * 将某会话标记为敏感/私密（append-only：只置 true、幂等、无取消路径）。
+     * 写到规范化的 GroupModel key（Discord channel→guild），使全体 GroupModel 读者（reflection /
+     * recording / getChatVisibility）都能看到，且对同 guild 的所有频道一致生效。
+     * 已标记则直接幂等返回；不会覆盖已有原因/时间。
+     */
+    markChatSensitive(chatId: string, reason?: string): GroupModel | null {
+        const key = safeGroupModelKey(chatId);
+        const existing = this.getGroupModel(key);
+        if (existing?.markedSensitive) {
+            return existing; // 幂等：已敏感则不重复写
+        }
+        this.upsertGroupModel(key, {
+            markedSensitive: true,
+            sensitiveReason: reason?.trim() || existing?.sensitiveReason || "runtime marked sensitive",
+            sensitiveAt: now(),
+        });
+        log.info("markChatSensitive", { chatId, key, reason: reason?.slice(0, 120) });
+        return this.getGroupModel(key);
     }
 
     getPersonIdentity(userId: string): PersonIdentity | null {
@@ -1273,6 +1344,7 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
             episode.date ?? ts,
         );
         log.debug("storeInteraction", { id, type: episode.type });
+
         return id;
     }
 
@@ -1368,7 +1440,7 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
         queryEmbedding: Float32Array,
         limit: number = 10,
         categories?: FactCategory[],
-    ): Array<{ id: string; content: string; category: FactCategory; subject: string; confidence: number; similarity: number }> {
+    ): Array<{ id: string; content: string; category: FactCategory; subject: string; confidence: number; similarity: number; visibility?: "private" | "contextual" | "public"; sourceChatId?: string | null }> {
         // ── vec0 快路径 ──
         if (this.sqliteVecAvailable && !categories?.length) {
             // vec0 不支持 category 过滤（非 partition key），仅在无 category 过滤时使用
@@ -1382,7 +1454,7 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
 
                 if (vecRows.length === 0) return [];
 
-                const result: Array<{ id: string; content: string; category: FactCategory; subject: string; confidence: number; similarity: number }> = [];
+                const result: Array<{ id: string; content: string; category: FactCategory; subject: string; confidence: number; similarity: number; visibility?: "private" | "contextual" | "public"; sourceChatId?: string | null }> = [];
                 for (const vr of vecRows) {
                     const row = this.db.prepare(
                         "SELECT * FROM core_facts WHERE id = ? AND (expires_at IS NULL OR expires_at > datetime('now'))"
@@ -1396,6 +1468,8 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
                             confidence: row.confidence as number,
                             // vec0 默认 L2 距离
                             similarity: 1 / (1 + vr.distance),
+                            visibility: (row.visibility as "private" | "contextual" | "public") ?? undefined,
+                            sourceChatId: (row.source_chat_id as string | null) ?? null,
                         });
                     }
                 }
@@ -1435,6 +1509,8 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
                 subject: row.subject as string,
                 confidence: row.confidence as number,
                 similarity: simFn(queryEmbedding, emb),
+                visibility: (row.visibility as "private" | "contextual" | "public") ?? undefined,
+                sourceChatId: (row.source_chat_id as string | null) ?? null,
             };
         });
 
@@ -1451,6 +1527,7 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
 
     // ─── 检索方法 ───
 
+    /** 本地 SQLite 语义检索（向量 + FTS5 + LIKE 三级回退）。 */
     async recall(query: string, options?: RecallOptions): Promise<RecallResult> {
         const topicMap = new Map<string, TopicNode>();
         const factMap = new Map<string, { content: string; category: FactCategory; subject: string; confidence: number }>();
@@ -2851,6 +2928,9 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
             chatId: row.chat_id as string,
             chatTitle: row.chat_title as string,
             isDirectMessage: !!(row.is_direct_message as number),
+            markedSensitive: !!(row.marked_sensitive as number),
+            sensitiveReason: (row.sensitive_reason as string) ?? undefined,
+            sensitiveAt: (row.sensitive_at as string) ?? null,
             description: row.description as string,
             dominantLanguage: row.dominant_language as string,
             communicationNorms: fromJSON(row.communication_norms as string, []),
@@ -2967,10 +3047,13 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
 
     /** 按 ID 删除 core_fact（含 FTS5 + vec0 清理） */
     deleteFact(id: string): boolean {
+        // 先取 source_chat_id（用于解析远程 bank 做 tombstone）+ rowid（FTS 清理）
+        const meta = this.db.prepare("SELECT rowid, source_chat_id FROM core_facts WHERE id = ?")
+            .get(id) as { rowid: number; source_chat_id?: string | null } | undefined;
+
         // FTS5 cleanup
         try {
-            const row = this.db.prepare("SELECT rowid FROM core_facts WHERE id = ?").get(id) as { rowid: number } | undefined;
-            if (row) this.db.prepare("DELETE FROM core_facts_fts WHERE rowid = ?").run(row.rowid);
+            if (meta) this.db.prepare("DELETE FROM core_facts_fts WHERE rowid = ?").run(meta.rowid);
         } catch { /* FTS */ }
 
         // vec0 cleanup
