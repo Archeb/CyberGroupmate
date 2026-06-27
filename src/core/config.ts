@@ -90,6 +90,12 @@ export type SimilarityMetric = "cosine" | "dot_product" | "euclidean" | "manhatt
 
 /** Embedding 配置 */
 export interface EmbeddingConfig {
+    /**
+     * 是否启用向量 embedding 检索。默认 false：主 bot 路径不算 embedding，
+     * 本地召回走 FTS5/LIKE 关键词。设 true 才会在写入时（异步）生成向量、recall 用向量。
+     * 开启后需对存量 fact/topic 跑一次 `cli memory backfill-embeddings`。
+     */
+    enabled: boolean;
     /** 提供者：openai 兼容 API 或本地 hash-based */
     provider: "openai" | "local";
     /** API base URL（OpenAI 兼容） */
@@ -553,6 +559,7 @@ const DEFAULT_LLM: LLMConfig = {
 };
 
 const DEFAULT_EMBEDDING: EmbeddingConfig = {
+    enabled: false,
     provider: "local",
     baseUrl: "https://api.openai.com/v1",
     apiKey: "",
@@ -790,7 +797,15 @@ export function clearConfigCache(): void {
 function parseEmbeddingConfig(fileConfig: Record<string, unknown>): EmbeddingConfig {
     const raw = (fileConfig.embedding ?? {}) as Record<string, unknown>;
 
+    // 稳健布尔解析：YAML 原生 true/false 直接用；字符串 true/yes/on/1 视为开；其余/缺省回退默认（不 fail-open）。
+    const rawEnabled = raw.enabled;
+    const enabled = typeof rawEnabled === "boolean" ? rawEnabled
+        : typeof rawEnabled === "number" ? rawEnabled !== 0
+        : typeof rawEnabled === "string" ? ["true", "yes", "on", "1", "enabled"].includes(rawEnabled.trim().toLowerCase())
+        : DEFAULT_EMBEDDING.enabled;
+
     const result: EmbeddingConfig = {
+        enabled,
         provider: (str(raw.provider) as "openai" | "local") ?? DEFAULT_EMBEDDING.provider,
         baseUrl: str(raw.base_url) ?? DEFAULT_EMBEDDING.baseUrl,
         apiKey: str(raw.api_key) ?? DEFAULT_EMBEDDING.apiKey,
@@ -1448,6 +1463,7 @@ export function serializeConfigToObject(config: AppConfig): Record<string, unkno
 
     // embedding
     const emb: Record<string, unknown> = {
+        enabled: config.embedding.enabled,
         provider: config.embedding.provider,
         base_url: config.embedding.baseUrl,
         api_key: config.embedding.apiKey,

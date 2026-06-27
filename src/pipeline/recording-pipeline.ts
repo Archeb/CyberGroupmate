@@ -334,35 +334,36 @@ export class RecordingPipeline extends EventEmitter {
                         this.publishSignals(chatId, signalReadyTopics, topicMessagesById);
                     }
 
-                    // M4.5: 生成 topic embedding
+                    // M4.5: 生成 topic embedding（异步：话题已落盘，向量后台补齐，不阻塞 pipeline flush）
                     if (this.embeddingConfig) {
-                        try {
-                            const summaries = updatedTopics
-                                .filter(t => {
-                                    const cid = clusterIdMap.get(t.id) ?? t.id;
-                                    const triage = triageResult.topics.find(tr => tr.topicId === cid);
-                                    return triage?.summary;
-                                })
-                                .map(t => {
-                                    const cid = clusterIdMap.get(t.id) ?? t.id;
-                                    const triage = triageResult.topics.find(tr => tr.topicId === cid);
-                                    return { id: t.id, text: `${t.label} ${triage?.summary ?? ""}` };
-                                });
+                        const embCfg = this.embeddingConfig;
+                        const mem = this.memory; // 捕获到局部：异步闭包内丢失 this.memory 的窄化
+                        const summaries = updatedTopics
+                            .filter(t => {
+                                const cid = clusterIdMap.get(t.id) ?? t.id;
+                                const triage = triageResult.topics.find(tr => tr.topicId === cid);
+                                return triage?.summary;
+                            })
+                            .map(t => {
+                                const cid = clusterIdMap.get(t.id) ?? t.id;
+                                const triage = triageResult.topics.find(tr => tr.topicId === cid);
+                                return { id: t.id, text: `${t.label} ${triage?.summary ?? ""}` };
+                            });
 
-                            if (summaries.length > 0) {
-                                const embeddings = await embed(
-                                    summaries.map(s => s.text),
-                                    this.embeddingConfig,
-                                );
-                                for (let i = 0; i < summaries.length; i++) {
-                                    this.memory.upsertTopic(summaries[i].id, {
-                                        embedding: embeddings[i],
-                                    });
+                        if (summaries.length > 0) {
+                            void (async () => {
+                                try {
+                                    const embeddings = await embed(summaries.map(s => s.text), embCfg);
+                                    for (let i = 0; i < summaries.length; i++) {
+                                        const s = summaries[i];
+                                        const e = embeddings[i];
+                                        if (s && e) mem.upsertTopic(s.id, { embedding: e });
+                                    }
+                                    log.debug("Pipeline Step 4: embedding 生成完成（异步）", { count: summaries.length });
+                                } catch (err) {
+                                    log.warn("Pipeline Step 4: embedding 生成失败", { error: String(err) });
                                 }
-                                log.debug("Pipeline Step 4: embedding 生成完成", { count: summaries.length });
-                            }
-                        } catch (err) {
-                            log.warn("Pipeline Step 4: embedding 生成失败", { error: String(err) });
+                            })();
                         }
                     }
 

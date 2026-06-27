@@ -425,8 +425,11 @@ async function main(): Promise<void> {
             log.debug("SandboxPool onAcquire: 已初始化", { chatId });
         },
     });
-    // 经由工厂构建：本地 SQLite 存储 + 检索，并注入全局隐私分级（不启用 embedding 检索）。
-    const memory = createMemoryStore(join(DATA_DIR, "memory.db"), { config: appConfig });
+    // 经由工厂构建：本地 SQLite 存储 + 检索，并注入全局隐私分级。
+    // embedding 检索由 embedding.enabled 开关控制（默认关 → 走 FTS5/LIKE 关键词召回；
+    // 开启后写入异步生成向量、recall 走向量，存量需跑一次 cli memory backfill-embeddings）。
+    const embeddingConfig = appConfig.embedding?.enabled ? appConfig.embedding : undefined;
+    const memory = createMemoryStore(join(DATA_DIR, "memory.db"), { config: appConfig, embeddingConfig });
     const { createInterface: createRL } = await import("node:readline");
     const hostRL = createRL({ input: process.stdin, output: process.stdout });
 

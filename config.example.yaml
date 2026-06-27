@@ -296,6 +296,13 @@ reflection:
 # 控制文本向量化和向量搜索的行为
 # 所有字段可选，缺省使用括号内默认值
 embedding:
+  # 总开关：是否启用向量 embedding 检索。默认 false。
+  #   false → 主 bot 不算向量，本地召回走 FTS5/LIKE 关键词（离线、零成本）。
+  #   true  → 写入时**异步**生成向量、recall 走向量语义检索（更好的近义/跨表述召回）。
+  #           注意：开启会在每条 fact/topic 写入 + 每次 recall 时调用 embedding API（有成本/延迟）。
+  #           开启后需对存量数据跑一次：`npx tsx src/cli.ts memory backfill-embeddings`
+  enabled: false
+
   # 提供者: openai (OpenAI 兼容 API) | local (本地 hash-based)
   provider: local
 

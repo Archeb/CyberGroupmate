@@ -487,32 +487,36 @@ export async function runReflection(
             newFactsForEmbedding.push({ index: i, text: `${resolvedSubject}: ${fact.content}` });
         }
     }
-    // 为新增 facts 生成 embedding
-    let factEmbeddings: Float32Array[] = [];
+    // 新增 facts：先落盘（不带 embedding），向量异步后台补齐——不阻塞 reflection。
     const embCfg = memory.getEmbeddingConfig();
-    if (embCfg && newFactsForEmbedding.length > 0) {
-        try {
-            const { embed } = await import("./embedding.js");
-            factEmbeddings = await embed(newFactsForEmbedding.map(f => f.text), embCfg);
-            log.debug("Reflection 4b: 事实 embedding 生成完成", { count: factEmbeddings.length });
-        } catch (err) {
-            log.warn("Reflection 4b: 事实 embedding 生成失败", { error: String(err) });
-        }
-    }
+    const storedForEmbed: Array<{ id: string; text: string }> = [];
     for (let ei = 0; ei < newFactsForEmbedding.length; ei++) {
         const fact = llmOutput.factUpdates[newFactsForEmbedding[ei].index];
-        memory.storeFact(
+        const fid = memory.storeFact(
             fact.subject, fact.content, fact.category, `reflection:${chatId}`,
             undefined,
-            factEmbeddings[ei] ?? undefined,
+            undefined, // embedding 异步补（见下）
             undefined,
             buildFactProvenance(fact, topics, interactions, chatId, groupModel, isDirectMessage, startTime),
         );
+        if (embCfg) storedForEmbed.push({ id: fid, text: newFactsForEmbedding[ei].text });
         newCoreFacts.push(fact.content);
-        log.debug("Reflection 4b: 新增事实", {
-            subject: fact.subject, category: fact.category,
-            hasEmbedding: !!factEmbeddings[ei],
-        });
+        log.debug("Reflection 4b: 新增事实", { subject: fact.subject, category: fact.category });
+    }
+    // 异步补 embedding（fire-and-forget；事实已落盘，向量后台补齐）
+    if (embCfg && storedForEmbed.length > 0) {
+        void (async () => {
+            try {
+                const { embed } = await import("./embedding.js");
+                const embs = await embed(storedForEmbed.map(f => f.text), embCfg);
+                for (let i = 0; i < storedForEmbed.length; i++) {
+                    if (embs[i]) memory.setFactEmbedding(storedForEmbed[i].id, embs[i]);
+                }
+                log.debug("Reflection 4b: 事实 embedding 异步补齐完成", { count: storedForEmbed.length });
+            } catch (err) {
+                log.warn("Reflection 4b: 事实 embedding 生成失败", { error: String(err) });
+            }
+        })();
     }
 
     // 4b′. 回写话题情感到 topics 表

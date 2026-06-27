@@ -305,6 +305,22 @@ async function cmdMemory(args: string[]): Promise<void> {
             break;
         }
 
+        case "backfill-embeddings": {
+            log.info(`开始为存量 fact/topic 补 embedding（model=${embeddingConfig.model}, dim=${embeddingConfig.dimensions}）...`);
+            if (!cfg.embedding?.enabled) {
+                log.warn("注意：embedding.enabled=false —— 补好的向量主 bot 暂不会用；需把开关打开并重启 bot 后才生效。");
+            }
+            try {
+                const r = await memory.backfillEmbeddings();
+                console.log(`\n\x1b[1m=== Backfill 完成 ===\x1b[0m`);
+                console.log(`  facts:  ${r.facts} 条已补向量`);
+                console.log(`  topics: ${r.topics} 条已补向量`);
+            } catch (err) {
+                log.error("Backfill embeddings 失败", { error: String(err) });
+            }
+            break;
+        }
+
         default:
             console.log(`
 \x1b[1mMemory V2 子命令：\x1b[0m
@@ -313,6 +329,7 @@ async function cmdMemory(args: string[]): Promise<void> {
   browse <意图描述>      浏览历史消息
   reflect --chat <id>  手动触发 Reflection
   status                查看 Memory V2 统计
+  backfill-embeddings   为存量 fact/topic 补 embedding（开启 embedding 后跑一次）
       `);
     }
 

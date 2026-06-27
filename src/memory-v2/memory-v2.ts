@@ -282,40 +282,42 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
         const dims = this.embeddingConfig?.dimensions ?? 128;
         log.debug("initVecTables", { dims, provider: this.embeddingConfig?.provider ?? "local" });
         try {
-            // 检测已有 topics_vec 的维度是否匹配
-            let needRecreate = false;
-            try {
-                // 尝试插入一个零向量来检查维度
-                const testVec = Buffer.alloc(dims * 4); // float32 = 4 bytes each
-                this.db.exec(`CREATE VIRTUAL TABLE IF NOT EXISTS topics_vec USING vec0(
-                    topic_id TEXT PRIMARY KEY, chat_id TEXT partition key, embedding float[${dims}]
-                )`);
-                // 如果上面成功了（表不存在或维度匹配），直接继续
-            } catch {
-                // 如果失败（维度不匹配），需要重建
-                needRecreate = true;
-            }
+            // 维度变更检测：从 sqlite_master 解析已有 vec0 表的 float[N]，与目标 dims 比对。
+            // ⚠️ 不能靠「CREATE ... IF NOT EXISTS 是否报错」判断——表已存在时它直接 no-op、不校验维度，
+            //    旧维度表会被静默保留，后续按新维度插入才失败。必须显式解析维度。
+            const existingDims = (name: string): number | null => {
+                const row = this.db.prepare("SELECT sql FROM sqlite_master WHERE name = ?").get(name) as { sql?: string } | undefined;
+                const m = row?.sql?.match(/float\[(\d+)\]/);
+                return m ? Number(m[1]) : null;
+            };
+            const tDims = existingDims("topics_vec");
+            const fDims = existingDims("facts_vec");
+            const oldDims = tDims ?? fDims;
+            // 仅在 embedding 启用时才因维度不符重建——关闭时不写向量，旧维度表闲置无害，不动它（避免 toggle off 误删向量）。
+            const mismatch = !!this.embeddingConfig
+                && ((tDims != null && tDims !== dims) || (fDims != null && fDims !== dims));
 
-            if (needRecreate) {
-                log.info("vec0 表维度不匹配，重建中...", { targetDims: dims });
+            if (mismatch) {
+                // 维度变了：旧 vec 表 + 旧主表向量都按旧维度存的，对新维度不可用。
+                // → DROP 旧 vec 表、清空主表 embedding 列（避免 JS 回退路径用到错维向量报错/出垃圾），按新维度重建。
+                log.warn(
+                    `⚠️ embedding 维度变化：现有 vec0 表为 ${oldDims} 维，配置为 ${dims} 维。` +
+                    `已 DROP 旧 vec 表并清空存量向量，按新维度重建——请运行一次 \`cli memory backfill-embeddings\` 重新生成向量（在此之前向量召回回退为关键词）。`,
+                    { existingTopicDims: tDims, existingFactDims: fDims, targetDims: dims },
+                );
                 this.db.exec(`DROP TABLE IF EXISTS topics_vec`);
                 this.db.exec(`DROP TABLE IF EXISTS facts_vec`);
-                this.db.exec(`
-                    CREATE VIRTUAL TABLE topics_vec USING vec0(
-                        topic_id TEXT PRIMARY KEY,
-                        chat_id TEXT partition key,
-                        embedding float[${dims}]
-                    );
-                `);
+                try { this.db.exec(`UPDATE core_facts SET embedding = NULL WHERE embedding IS NOT NULL`); } catch { /* 列可能不存在 */ }
+                try { this.db.exec(`UPDATE topics SET embedding = NULL WHERE embedding IS NOT NULL`); } catch { /* 列可能不存在 */ }
             }
 
-            this.db.exec(`
-                CREATE VIRTUAL TABLE IF NOT EXISTS facts_vec USING vec0(
-                    fact_id TEXT PRIMARY KEY,
-                    embedding float[${dims}]
-                );
-            `);
-            log.debug("vec0 虚拟表就绪", { dims });
+            this.db.exec(`CREATE VIRTUAL TABLE IF NOT EXISTS topics_vec USING vec0(
+                topic_id TEXT PRIMARY KEY, chat_id TEXT partition key, embedding float[${dims}]
+            )`);
+            this.db.exec(`CREATE VIRTUAL TABLE IF NOT EXISTS facts_vec USING vec0(
+                fact_id TEXT PRIMARY KEY, embedding float[${dims}]
+            )`);
+            log.debug("vec0 虚拟表就绪", { dims, recreatedForDimChange: mismatch });
         } catch (err) {
             log.warn("vec0 虚拟表创建失败", { error: String(err) });
             this.sqliteVecAvailable = false;
@@ -790,6 +792,74 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
         } catch (err) {
             log.warn("syncFactVec 失败", { factId, error: String(err) });
         }
+    }
+
+    /**
+     * 为已存在的 fact 补写 embedding（更新 core_facts.embedding 列 + 同步 vec0）。
+     * 供「异步写入」（reflection 存完事实后台补向量）与 backfill 使用——存储与算向量解耦，不阻塞写入路径。
+     */
+    setFactEmbedding(factId: string, embedding: Float32Array): void {
+        try {
+            this.db.prepare("UPDATE core_facts SET embedding = ? WHERE id = ?").run(embeddingToBuffer(embedding), factId);
+            this.syncFactVec(factId, embedding);
+        } catch (err) {
+            log.warn("setFactEmbedding 失败", { factId, error: String(err) });
+        }
+    }
+
+    /** 为已存在的 topic 补写 embedding（更新 topics.embedding 列 + 同步 vec0）。 */
+    setTopicEmbedding(topicId: string, chatId: string, embedding: Float32Array): void {
+        try {
+            this.db.prepare("UPDATE topics SET embedding = ? WHERE id = ?").run(embeddingToBuffer(embedding), topicId);
+            this.syncTopicVec(topicId, chatId, embedding);
+        } catch (err) {
+            log.warn("setTopicEmbedding 失败", { topicId, error: String(err) });
+        }
+    }
+
+    /**
+     * 运维：为所有缺向量的 fact / topic 批量补 embedding。
+     * 开启 embedding（embedding.enabled=true）后，对存量数据跑一次（cli memory backfill-embeddings）。
+     * 未启用 embedding（无 embeddingConfig）时返回 0。分批；单批失败不致命。
+     */
+    async backfillEmbeddings(opts?: { batchSize?: number }): Promise<{ facts: number; topics: number }> {
+        const cfg = this.embeddingConfig;
+        if (!cfg) {
+            log.warn("backfillEmbeddings: 未启用 embedding（无 embeddingConfig），跳过");
+            return { facts: 0, topics: 0 };
+        }
+        const BATCH = opts?.batchSize ?? 64;
+
+        const factRows = this.db.prepare(
+            "SELECT id, subject, content FROM core_facts WHERE embedding IS NULL AND (expires_at IS NULL OR expires_at > datetime('now'))"
+        ).all() as Array<{ id: string; subject: string; content: string }>;
+        let factDone = 0;
+        for (let i = 0; i < factRows.length; i += BATCH) {
+            const chunk = factRows.slice(i, i + BATCH);
+            try {
+                const embs = await embed(chunk.map(r => `${r.subject}: ${r.content}`), cfg);
+                chunk.forEach((r, j) => { if (embs[j]) { this.setFactEmbedding(r.id, embs[j]); factDone++; } });
+            } catch (err) {
+                log.warn("backfillEmbeddings facts 批失败", { error: String(err) });
+            }
+        }
+
+        const topicRows = this.db.prepare(
+            "SELECT id, chat_id, label, summary FROM topics WHERE embedding IS NULL AND (label != '' OR summary != '')"
+        ).all() as Array<{ id: string; chat_id: string; label: string; summary: string }>;
+        let topicDone = 0;
+        for (let i = 0; i < topicRows.length; i += BATCH) {
+            const chunk = topicRows.slice(i, i + BATCH);
+            try {
+                const embs = await embed(chunk.map(r => `${r.label} ${r.summary}`.trim()), cfg);
+                chunk.forEach((r, j) => { if (embs[j]) { this.setTopicEmbedding(r.id, r.chat_id, embs[j]); topicDone++; } });
+            } catch (err) {
+                log.warn("backfillEmbeddings topics 批失败", { error: String(err) });
+            }
+        }
+
+        log.info("backfillEmbeddings 完成", { facts: factDone, topics: topicDone });
+        return { facts: factDone, topics: topicDone };
     }
 
     /**
