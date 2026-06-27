@@ -236,6 +236,21 @@
             }}
           />
         </div>
+        <div class="divider text-xs opacity-50 my-2"><i class="fa-solid fa-comment-dots mr-1"></i>回复提示词（可选）</div>
+        <p class="text-xs opacity-40 mb-2">仅在生成回复时追加到 prompt 末尾的补充提示词（如微调语气、格式）；不改动 system prompt / persona，留空则不注入。</p>
+        <div class="cfg-field">
+          <span class="cfg-label">回复提示词 (reply_prompt)</span>
+          <textarea
+            class="textarea textarea-xs textarea-bordered w-full font-mono text-xs"
+            rows="4"
+            placeholder="（可选）仅在生成回复时附加的提示词……"
+            value={p.replyPrompt ?? ""}
+            on:input={(e) => {
+              p.replyPrompt = e.target.value || undefined;
+              config = config;
+            }}
+          ></textarea>
+        </div>
         <div class="divider text-xs opacity-50 my-2"><i class="fa-solid fa-coins mr-1"></i>Pricing（可选）</div>
         <p class="text-xs opacity-40 mb-2">每百万 token 的价格（美元），用于 token 消耗统计。留空则不计费。</p>
         <div class="cfg-grid-2">

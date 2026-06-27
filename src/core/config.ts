@@ -78,6 +78,11 @@ export interface LLMConfig {
     errorContentPatterns?: string[];
     /** OpenAI Responses API 请求模式：stream / non_stream。仅 provider=openai_responses 时生效，默认 non_stream。 */
     responsesRequestMode?: "stream" | "non_stream";
+    /**
+     * 仅在「生成回复」时（session/executor reply 路径）注入的额外提示词，贴在 task prompt 最末尾（recency 最高，紧贴生成）。
+     * 不影响 memory / meta / 决策路由等其它用途；system prompt 与 persona 均不改动。
+     */
+    replyPrompt?: string;
 }
 
 /** 相似度度量方法 */
@@ -1116,6 +1121,7 @@ function parseLLMProfile(raw: Record<string, unknown>): LLMConfig {
             ? raw.error_content_patterns.map(String)
             : undefined,
         responsesRequestMode: (str(raw.responses_request_mode) as "stream" | "non_stream" | undefined),
+        replyPrompt: str(raw.reply_prompt),
     };
 }
 
@@ -1224,6 +1230,7 @@ export function serializeConfigToObject(config: AppConfig): Record<string, unkno
         if (p.customHeaders && Object.keys(p.customHeaders).length > 0) entry.custom_headers = p.customHeaders;
         if (p.errorContentPatterns && p.errorContentPatterns.length > 0) entry.error_content_patterns = p.errorContentPatterns;
         if (p.responsesRequestMode) entry.responses_request_mode = p.responsesRequestMode;
+        if (p.replyPrompt) entry.reply_prompt = p.replyPrompt;
         if (p.supportsPrefill === false) entry.supports_prefill = false;
         if (p.pricing) {
             const pricing: Record<string, unknown> = {

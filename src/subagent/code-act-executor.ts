@@ -794,6 +794,11 @@ export class CodeActExecutor {
             taskPrompt = taskPromptParts.join("\n\n");
         }
 
+        // 仅回复生成时注入：当前 session 主模型的 per-model 补充提示词（贴 task prompt 末尾，recency 最高，紧贴生成）。
+        // 不改 system prompt / persona；只影响 reply 路径。
+        const replyBoost = resolveComponentProfiles("session")[0]?.replyPrompt;
+        if (replyBoost) taskPrompt = (taskPrompt ? taskPrompt + "\n\n" : "") + replyBoost;
+
         // ═══ Fix 2: 构建 messages 时注入历史 session 上下文 ═══
         const messages: ChatMessage[] = [
             { role: "system", content: systemPrompt, cacheBreakpoint: true },

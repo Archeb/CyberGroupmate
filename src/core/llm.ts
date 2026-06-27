@@ -135,6 +135,12 @@ export interface LLMCallOptions {
     stop?: string[];
     /** 请求超时（毫秒）。来自 llmRouting.timeouts[component]，未设置则使用默认 60000 */
     timeoutMs?: number;
+    /**
+     * 覆盖单 profile 内的重试次数（默认 MAX_RETRIES=3）。设为 0 表示不重试，
+     * 失败立即抛出让上层 fallback / 自适应处理。用于 reflection 这类"重试同一超大
+     * prompt 无意义、应改为收缩 prompt 重试"的调用方。
+     */
+    maxRetries?: number;
     /** Profile 名称（用于限速器按 profile 限速） */
     profileName?: string;
     /** 调用时对应的 ContextEngine manifest（供 Dashboard 可视化） */
@@ -405,13 +411,14 @@ async function _callLLMSingleKeyInner(
     }
 
     const timeoutMs = options?.timeoutMs ?? 60_000;
+    const maxRetries = options?.maxRetries ?? MAX_RETRIES;
 
     // 创建主 AbortController 用于 Dashboard 取消
     let currentController = new AbortController();
     _activeControllers.set(callId, currentController);
 
     try {
-    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
         // 检查是否已被用户取消（上一次循环中可能被 abort）
         // 如果被取消，重置 controller 以便下一次 fetch 正常使用
         let wasUserRetry = false;
@@ -547,9 +554,9 @@ async function _callLLMSingleKeyInner(
 
             const reason = isUserAbort ? "user_retry" : isRateLimit ? "rate_limit" : isServerError ? "server_error" : isNetworkError ? "network_error" : isEmptyResponse ? "empty_response" : "quota_or_billing";
 
-            if (isRetryable && attempt < MAX_RETRIES) {
+            if (isRetryable && attempt < maxRetries) {
                 const delay = wasUserRetry ? 0 : (RETRY_DELAYS[attempt] ?? 4000);
-                log.warn(`LLM call failed (attempt ${attempt + 1}/${MAX_RETRIES}), retrying in ${delay}ms`, {
+                log.warn(`LLM call failed (attempt ${attempt + 1}/${maxRetries}), retrying in ${delay}ms`, {
                     caller,
                     error: err instanceof Error ? err.message : String(err),
                     reason,
@@ -561,7 +568,7 @@ async function _callLLMSingleKeyInner(
                         callId,
                         caller,
                         attempt: attempt + 1,
-                        maxRetries: MAX_RETRIES,
+                        maxRetries,
                         error: err instanceof Error ? err.message : String(err),
                         reason,
                         retryDelayMs: delay,
