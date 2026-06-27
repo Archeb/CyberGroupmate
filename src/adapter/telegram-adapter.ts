@@ -2118,6 +2118,14 @@ export class TelegramAdapter implements PlatformAdapter {
             return true;
         }
 
+        // ── 其它 Telegram bot 斜杠命令（/start /help 等）静默丢弃 ──
+        // 不进入处理管线、不回复，避免 bot 把命令当普通消息来反应。
+        // （上面 cmdMentionMatch 已对「@其它bot」的命令 return false，放行给对方。）
+        if (/^\/[A-Za-z][\w]*(?:@\S+)?(?:\s|$)/.test(text)) {
+            log.info("已忽略 bot 斜杠命令（不进入处理管线）", { chatId: normalized.chatId, command: text.slice(0, 40) });
+            return true;
+        }
+
         return false;
     }
 

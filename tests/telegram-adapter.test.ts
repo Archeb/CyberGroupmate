@@ -1394,4 +1394,96 @@ interface TelegramClient {
         await adapter.stop();
         nc.dispose();
     });
+
+    // ─── bot 斜杠命令静默丢弃（/start /help 等）───
+
+    it("silently drops bot slash commands (/start /help /<cmd>@self) — no reply, no NC push", async () => {
+        try { fs.rmSync("workspace/invisible-users.json", { force: true }); } catch {}
+        const nc = makeNC();
+        const events = captureEvents(nc);
+        const sentTexts: Array<[unknown, unknown]> = [];
+        let newMessageHandler: ((msg: unknown) => void | Promise<void>) | null = null;
+
+        const fakeClient = {
+            async start() {
+                return { id: 99, displayName: "Bot", isBot: true, username: "MyBot" };
+            },
+            onNewMessage: {
+                add(handler: (msg: unknown) => void | Promise<void>) { newMessageHandler = handler; },
+                remove() { newMessageHandler = null; },
+            },
+            async sendText(chatId: unknown, text: unknown) {
+                sentTexts.push([chatId, text]);
+                return { id: 1, text, date: new Date(), chat: { id: chatId, type: "group" }, sender: { id: 99, isBot: true } };
+            },
+            async destroy() {},
+        };
+
+        const adapter = new TelegramAdapter(
+            makeConfig(), nc, async () => "", () => {},
+            async () => fakeClient,
+        );
+        await adapter.start();
+        assert.ok(newMessageHandler);
+
+        // 各类应被静默丢弃的命令：裸命令 / 带参数 / @自己
+        const dropped = ["/start", "/help", "/settings now", "/help@MyBot"];
+        let id = 0;
+        for (const text of dropped) {
+            await newMessageHandler!({
+                id: ++id, text, date: new Date(),
+                chat: { id: -100, title: "Test", type: "group" },
+                sender: { id: 42, displayName: "Alice", isBot: false },
+            });
+        }
+
+        assert.equal(events.length, 0, "slash 命令不应进入 NC（不触发回复轮、不污染会话）");
+        assert.equal(sentTexts.length, 0, "slash 命令应静默丢弃，不发任何回复");
+
+        await adapter.stop();
+        nc.dispose();
+    });
+
+    it("does not over-drop: 普通文本 / 斜杠后非字母 / @其它bot 的命令仍进入 NC", async () => {
+        try { fs.rmSync("workspace/invisible-users.json", { force: true }); } catch {}
+        const nc = makeNC();
+        const events = captureEvents(nc);
+        let newMessageHandler: ((msg: unknown) => void | Promise<void>) | null = null;
+
+        const fakeClient = {
+            async start() {
+                return { id: 99, displayName: "Bot", isBot: true, username: "MyBot" };
+            },
+            onNewMessage: {
+                add(handler: (msg: unknown) => void | Promise<void>) { newMessageHandler = handler; },
+                remove() { newMessageHandler = null; },
+            },
+            async destroy() {},
+        };
+
+        const adapter = new TelegramAdapter(
+            makeConfig(), nc, async () => "", () => {},
+            async () => fakeClient,
+        );
+        await adapter.start();
+        assert.ok(newMessageHandler);
+
+        // 这些都不应被丢弃，应作为普通消息推进 NC：
+        //   普通文本；斜杠后是数字（不符合 /<letter> 命令形态）；@其它bot 的命令（放行给对方）
+        const passthrough = ["hello everyone", "/123 not a command", "/help@OtherBot"];
+        let id = 0;
+        for (const text of passthrough) {
+            events.length = 0;
+            await newMessageHandler!({
+                id: ++id, text, date: new Date(),
+                chat: { id: -100, title: "Test", type: "group" },
+                sender: { id: 42, displayName: "Alice", isBot: false },
+            });
+            assert.equal(events.length, 1, `「${text}」应作为普通消息进入 NC`);
+            assert.equal(events[0].type, "nc.message");
+        }
+
+        await adapter.stop();
+        nc.dispose();
+    });
 });
