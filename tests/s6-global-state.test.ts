@@ -234,4 +234,70 @@ describe("S6: Global State", () => {
         assert.equal(gs.getSchedulerEvents("chat-1")[0].id, cron.id);
         gs.dispose();
     });
+
+    it("#10 终态更新立即落盘（即使 autosave 关闭）", () => {
+        const dir = tempDir();
+        const path = join(dir, "s.json");
+        // autoSaveInterval: 0 → 仅终态的立即 save() 能把状态写到磁盘
+        const gs1 = new GlobalState({ filePath: path, autoSaveInterval: 0 });
+        gs1.recordDispatchedSubagentTask({
+            taskId: "task-1",
+            chatId: "telegram:1",
+            contentDirection: "reply",
+            createdAt: new Date().toISOString(),
+        });
+        const updated = gs1.updateDispatchedSubagentTask("task-1", { status: "COMPLETED" });
+        assert.equal(updated?.status, "COMPLETED");
+        assert.ok(updated?.completedAt, "终态应自动补全 completedAt");
+        // 故意不调用 save()/dispose() —— 验证终态写入已经落盘
+        const gs2 = new GlobalState({ filePath: path, autoSaveInterval: 0 });
+        const reloaded = gs2.getDispatchedSubagentTask("task-1");
+        assert.equal(reloaded?.status, "COMPLETED");
+        assert.ok(reloaded?.completedAt);
+        gs1.dispose();
+        gs2.dispose();
+    });
+
+    it("#11 启动对账：残留 RUNNING/PENDING 任务被标记为 TIMEOUT", () => {
+        const dir = tempDir();
+        const path = join(dir, "s.json");
+        const gs1 = new GlobalState({ filePath: path, autoSaveInterval: 0 });
+        // RUNNING 任务（执行中崩溃）
+        gs1.recordDispatchedSubagentTask({
+            taskId: "running-1",
+            chatId: "telegram:1",
+            contentDirection: "reply",
+            createdAt: new Date().toISOString(),
+        });
+        gs1.updateDispatchedSubagentTask("running-1", { status: "RUNNING" });
+        // PENDING 任务（入队未执行就崩溃）
+        gs1.recordDispatchedSubagentTask({
+            taskId: "pending-1",
+            chatId: "telegram:1",
+            contentDirection: "reply",
+            createdAt: new Date().toISOString(),
+        });
+        // 已完成任务不应被对账
+        gs1.recordDispatchedSubagentTask({
+            taskId: "done-1",
+            chatId: "telegram:1",
+            contentDirection: "reply",
+            createdAt: new Date().toISOString(),
+        });
+        gs1.updateDispatchedSubagentTask("done-1", { status: "COMPLETED" });
+        gs1.save();
+        gs1.dispose();
+
+        const gs2 = new GlobalState({ filePath: path, autoSaveInterval: 0 });
+        const running = gs2.getDispatchedSubagentTask("running-1");
+        const pending = gs2.getDispatchedSubagentTask("pending-1");
+        const done = gs2.getDispatchedSubagentTask("done-1");
+        assert.equal(running?.status, "TIMEOUT");
+        assert.ok(running?.completedAt);
+        assert.match(running?.error ?? "", /process exited mid-flight/);
+        assert.equal(pending?.status, "TIMEOUT");
+        assert.match(pending?.error ?? "", /process exited mid-flight/);
+        assert.equal(done?.status, "COMPLETED", "已完成任务不应被对账改写");
+        gs2.dispose();
+    });
 });
