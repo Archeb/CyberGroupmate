@@ -20,7 +20,7 @@ import type { GlobalState } from "./global-state.js";
 import { trimMetaSessionHistoryWindow } from "./meta-history-retention.js";
 
 const log = createLogger("meta-session-handler");
-const DEFAULT_BASE_SKILLS = ["runtime", "fs", "skills", "mcp", "cron", "todo", "memory", "dispatch", "vision", "shell"];
+const DEFAULT_BASE_SKILLS = ["runtime", "fs", "skills", "mcp", "cron", "todo", "memory", "privacy", "dispatch", "vision", "shell"];
 const META_END_TURN_MARKER = "<end_turn>";
 const META_RUNNER_NOTICE_PREFIX = "[Meta runner notice]";
 type MetaHistoryMessage = Pick<MetaSessionHistoryEntry, "role" | "content">;
@@ -231,11 +231,16 @@ function pushCurrentRenderPart(parts: string[], tree: SectionNode[]): void {
 
 async function buildMetaSystemPrompt(persona: { name?: string; description?: string }): Promise<string> {
     const systemPrompt = loadRequiredPrompt("meta-agent/meta-system.md");
+    const privacy = loadConfig().privacy;
+    const allowMark = privacy?.allowLlmMarkSensitive !== false;
     return renderTemplate(systemPrompt, {
         personaName: persona.name ?? "赛博群友",
         personaDescription: persona.description ?? "跨群编排 agent",
-        metaApiReference: buildMetaApiReference(),
+        metaApiReference: buildMetaApiReference(allowMark),
         availableSkillsRoster: await buildAssignableSkillsRoster(),
+        // 隐私 prompt 指引选择性注入（与 grounding 等可选能力一致）：fence 仅 enforce!=off 讲；markSensitive 还需 allowLlmMarkSensitive。
+        privacyGuidance: privacy?.enforce !== "off",
+        privacyMarkGuidance: privacy?.enforce !== "off" && allowMark,
     });
 }
 

@@ -2,6 +2,14 @@ import { existsSync, readFileSync } from "node:fs";
 import { relative, resolve } from "node:path";
 import { ensureCompositeId, getGroupModelKey, getPlatform, isValidCompositeChatId } from "../core/chat-id.js";
 import {
+    assertEgressAllowed,
+    isExplicitReadBlocked,
+    makePolicyContext,
+    scrubFactsByVisibility,
+    scrubRowsByVisibility,
+    type PolicyContext,
+} from "../core/visibility-policy.js";
+import {
     loadConfig,
     resolveComponentProfiles,
     saveConfig,
@@ -15,7 +23,8 @@ import { describeImage, ensureSupportedFormat } from "../core/vision-processor.j
 import { MemoryStoreV2 } from "../memory-v2/index.js";
 import { embed } from "../memory-v2/embedding.js";
 import { GlobalState } from "../main-agent/global-state.js";
-import { createMemoryApi } from "../meta-sandbox/meta-api/memory.js";
+import { createMemoryApi, scrubDossiers, scrubIdentityMatches } from "../meta-sandbox/meta-api/memory.js";
+import { createPrivacyApi } from "../meta-sandbox/meta-api/privacy.js";
 import type { AttentionAccumulator } from "../accumulator/attention-accumulator.js";
 import type { PlatformAdapter } from "../adapter/platform-adapter.js";
 import { getTelegramMtcuteWriteTarget, TELEGRAM_MTCUTE_WRITE_METHODS } from "../core/telegram-mtcute-passthrough.js";
@@ -85,6 +94,19 @@ function isValidEnvKey(key: string): boolean {
 
 function isBoundChatWriteRestrictionEnabled(): boolean {
     return loadConfig("config.yaml", true).subagent?.restrictAdapterWritesToBoundChat === true;
+}
+
+/**
+ * 为当前 host 调用构建 visibility 兜底上下文（boundChatId = 当前 sandbox 绑定的 chatId）。
+ * 用缓存的 loadConfig（隐私配置无需比应用其余部分更激进地绕过缓存）。
+ */
+function buildPolicyContext(chatId: string, memory: MemoryStoreV2): PolicyContext {
+    return makePolicyContext({
+        boundChatId: chatId,
+        privacy: loadConfig().privacy,
+        getGroupModel: (key: string) => memory.getGroupModel(key),
+        onViolation: (v) => log.warn("[visibility] 隐私兜底命中", { ...v }),
+    });
 }
 
 function getRestrictedWriteTarget(method: string, args: unknown[], adapter: PlatformAdapter): unknown {
@@ -296,23 +318,32 @@ export function createSandboxHostCallHandler(chatId: string, deps: CreateSandbox
     };
 
     return async (method: string, args: unknown[]) => {
+        // 每次 host 调用最多构建一次 visibility 兜底上下文（懒加载，仅隐私相关分支会触发）。
+        let _policy: PolicyContext | undefined;
+        const policy = (): PolicyContext => (_policy ??= buildPolicyContext(chatId, memory));
+
         const adapter = adapters.find((item) => item.canHandle(method));
         if (adapter) {
+            // 提取一次写目标，R2 隔离与全局严格开关共用。
+            const writeTarget = getRestrictedWriteTarget(method, args, adapter);
+            const externalTarget = writeTarget != null && !isSelfTarget(writeTarget)
+                && chatId !== "__background__" && isValidCompositeChatId(chatId)
+                ? ensureCompositeId(getPlatform(chatId), String(writeTarget))
+                : null;
+
+            // R2 写隔离：私密会话内容不得外发（始终生效，独立于 restrictAdapterWritesToBoundChat 全局开关）。
+            if (externalTarget) {
+                assertEgressAllowed("egress-write", method, externalTarget, policy());
+            }
+            // 全局严格开关：限制写操作只能发往绑定 chat。
             if (isBoundChatWriteRestrictionEnabled()) {
                 if (chatId === "__background__") {
                     enforceBackgroundWriteRestriction(method, args, adapter);
-                } else {
-                    const restrictedTarget = getRestrictedWriteTarget(method, args, adapter);
-                    if (restrictedTarget != null && !isSelfTarget(restrictedTarget)) {
-                        const rawTarget = String(restrictedTarget);
-                        const targetChatId = ensureCompositeId(getPlatform(chatId), rawTarget);
-                        if (targetChatId !== chatId) {
-                            throw new Error(
-                                `[Sandbox 安全限制] ${method} 被拦截：当前 sandbox 绑定 chat=${chatId}，` +
-                                `不允许向 chat=${targetChatId} 发送消息。`
-                            );
-                        }
-                    }
+                } else if (externalTarget && externalTarget !== chatId) {
+                    throw new Error(
+                        `[Sandbox 安全限制] ${method} 被拦截：当前 sandbox 绑定 chat=${chatId}，` +
+                        `不允许向 chat=${externalTarget} 发送消息。`
+                    );
                 }
             }
             await applyInterruptibleHumanizedDelay(adapter, method, args);
@@ -576,39 +607,58 @@ export function createSandboxHostCallHandler(chatId: string, deps: CreateSandbox
 
         if (method === "memory.searchFacts") {
             const [query, options] = args as [string, { subject?: string; categories?: string[]; limit?: number } | undefined];
-            return memory.searchFacts(query, {
+            // R1：丢弃 visibility=private 且来源 ≠ 当前会话的 fact（跨私聊/敏感群泄露兜底）。
+            const facts = memory.searchFacts(query, {
                 ...options,
                 categories: options?.categories as any,
             });
+            return scrubFactsByVisibility(facts, policy(), method).kept;
         }
         if (method === "memory.searchTopics") {
             const [query, options] = args as [string, { chatId?: string; after?: string | number | Date; before?: string | number | Date; limit?: number } | undefined];
-            return memory.searchTopics(query, {
+            const ctx = policy();
+            // R1（显式 target）：显式请求其它私密会话的话题 → 直接拦截返回空。
+            if (options?.chatId && isExplicitReadBlocked(options.chatId, ctx)) return [];
+            const rows = memory.searchTopics(query, {
                 ...options,
                 after: timestampInputToIso(options?.after) ?? undefined,
                 before: timestampInputToIso(options?.before) ?? undefined,
                 chatId: options?.chatId ?? chatId,
             });
+            return scrubRowsByVisibility(rows, (r) => r.chatId, ctx, method).kept;
         }
         if (method === "memory.searchMessages") {
             const [query, options] = args as [string, { chatId?: string; userId?: string; after?: string | number | Date; before?: string | number | Date; limit?: number } | undefined];
-            return memory.searchMessages(query, {
+            const ctx = policy();
+            // R1（显式 target）：显式请求其它私密会话的消息记录 → 直接拦截返回空。
+            if (options?.chatId && isExplicitReadBlocked(options.chatId, ctx)) return [];
+            const rows = memory.searchMessages(query, {
                 ...options,
                 after: timestampInputToIso(options?.after) ?? undefined,
                 before: timestampInputToIso(options?.before) ?? undefined,
                 chatId: options?.chatId ?? chatId,
             });
+            return scrubRowsByVisibility(rows, (r) => r.chatId, ctx, method).kept;
         }
         if (method === "memory.getUserProfile") {
             const [userId, targetChatId] = args as [string, string | undefined];
-            return memory.getUserProfile(userId, targetChatId ?? chatId);
+            const ctx = policy();
+            // R1（显式 target）：显式查别的私密会话的群内画像 → 收窄回当前会话视角。
+            const effective = (targetChatId && isExplicitReadBlocked(targetChatId, ctx)) ? chatId : (targetChatId ?? chatId);
+            const profile = memory.getUserProfile(userId, effective) as unknown as Record<string, unknown> | null;
+            if (profile && Array.isArray((profile as { recentFacts?: unknown[] }).recentFacts)) {
+                (profile as { recentFacts: unknown[] }).recentFacts =
+                    scrubFactsByVisibility((profile as { recentFacts: any[] }).recentFacts, ctx, method).kept;
+            }
+            return profile;
         }
         if (method === "memory.getRecentInteractions") {
             const [targetChatId, userId, limit] = args as [string | null | undefined, string | undefined, number | undefined];
-            const effectiveChatId = typeof targetChatId === "string" && targetChatId.trim().length > 0
-                ? targetChatId
-                : undefined;
-            return memory.getRecentInteractions(effectiveChatId, userId, limit).map((interaction) => {
+            const ctx = policy();
+            const explicitChatId = typeof targetChatId === "string" && targetChatId.trim().length > 0 ? targetChatId : undefined;
+            // R1（显式 target）：显式拉别的私密会话的交互记录 → 拦截返回空。
+            if (explicitChatId && isExplicitReadBlocked(explicitChatId, ctx)) return [];
+            const mapped = memory.getRecentInteractions(explicitChatId, userId, limit).map((interaction) => {
                 const identity = memory.getPersonIdentity(interaction.userId);
                 const displayName = identity?.displayName ?? interaction.userId;
                 const groupModel = memory.getGroupModel(getGroupModelKey(interaction.chatId));
@@ -620,11 +670,15 @@ export function createSandboxHostCallHandler(chatId: string, deps: CreateSandbox
                     chatLabel: `${chatTitle}(${interaction.chatId})`,
                 };
             });
+            // R1（聚合）：丢弃来源私密且 ≠ 当前会话的交互行。
+            return scrubRowsByVisibility(mapped, (r) => r.chatId, ctx, method).kept;
         }
         if (method === "memory.resolvePerson") {
             const [query, options] = args as [string, { chatId?: string; limit?: number } | undefined];
             const api = createMemoryApi(memory);
-            return api.resolvePerson(query, { ...options, chatId: options?.chatId ?? chatId });
+            const result = await api.resolvePerson(query, { ...options, chatId: options?.chatId ?? chatId });
+            scrubIdentityMatches(result.matches, policy()); // matches[].profile.recentFacts 泄露点
+            return result;
         }
         if (method === "memory.getPersonDossier") {
             const [queryOrUserId, options] = args as [string, {
@@ -637,30 +691,40 @@ export function createSandboxHostCallHandler(chatId: string, deps: CreateSandbox
                 groupProfilesLimit?: number;
             } | undefined];
             const api = createMemoryApi(memory);
-            return api.getPersonDossier(queryOrUserId, { ...options, chatId: options?.chatId ?? chatId });
+            const result = await api.getPersonDossier(queryOrUserId, { ...options, chatId: options?.chatId ?? chatId });
+            // R1（聚合）：人物档案跨所有会话聚合，逐项丢弃来源私密且 ≠ 当前会话的数据。
+            scrubDossiers(result.dossiers, policy());
+            return result;
         }
         if (method === "memory.semanticSearch") {
-            const [query, options] = args as [string, { scope?: "facts" | "topics" | "all"; limit?: number } | undefined];
+            const [rawQuery, options] = args as [string, { scope?: "facts" | "topics" | "all"; limit?: number } | undefined];
+            const query = String(rawQuery ?? "").slice(0, 200);
             const limit = options?.limit ?? 5;
             const embeddingConfig = memory.getEmbeddingConfig();
 
             if (embeddingConfig) {
                 try {
                     const [queryEmbedding] = await embed([query], embeddingConfig);
-                    const factResults = (options?.scope === "topics"
+                    // 本地向量话题检索：按当前会话收窄。
+                    const topicChatId = chatId;
+                    // 向量快路径绕过了 recall 的可见性守卫，这里在源头补上兜底。
+                    const ctx = policy();
+                    const rawFacts = options?.scope === "topics"
                         ? []
-                        : memory.vectorSearchFacts(queryEmbedding, limit).map((fact) => ({
-                            type: "fact" as const,
-                            content: `[${fact.subject} · ${fact.category}] ${fact.content}`,
-                            score: fact.similarity,
-                        })));
-                    const topicResults = (options?.scope === "facts"
+                        : scrubFactsByVisibility(memory.vectorSearchFacts(queryEmbedding, limit), ctx, method).kept;
+                    const rawTopics = options?.scope === "facts"
                         ? []
-                        : memory.vectorSearchTopics(queryEmbedding, limit, chatId).map((topic) => ({
-                            type: "topic" as const,
-                            content: `${topic.label} — ${topic.summary}`,
-                            score: topic.similarity,
-                        })));
+                        : scrubRowsByVisibility(memory.vectorSearchTopics(queryEmbedding, limit, topicChatId), (t) => t.chatId, ctx, method).kept;
+                    const factResults = rawFacts.map((fact) => ({
+                        type: "fact" as const,
+                        content: `[${fact.subject} · ${fact.category}] ${fact.content}`,
+                        score: fact.similarity,
+                    }));
+                    const topicResults = rawTopics.map((topic) => ({
+                        type: "topic" as const,
+                        content: `${topic.label} — ${topic.summary}`,
+                        score: topic.similarity,
+                    }));
 
                     return [...factResults, ...topicResults]
                         .sort((a, b) => b.score - a.score)
@@ -699,6 +763,8 @@ export function createSandboxHostCallHandler(chatId: string, deps: CreateSandbox
             if (targetChatId === chatId) {
                 throw new Error("当前 Subagent 不能 dispatch 给自己；当前群内行动请直接调用平台 API。");
             }
+            // R2 dispatch 隔离：私密会话不得把任务派出去，也不得把任务派进别人的私密会话。
+            assertEgressAllowed("egress-dispatch", method, targetChatId, policy());
             return dispatchApi.taskToGroup(targetChatId, args[1], {
                 source: {
                     type: "subagent",
@@ -717,6 +783,25 @@ export function createSandboxHostCallHandler(chatId: string, deps: CreateSandbox
                 throw new Error("dispatch module is not available in this host context");
             }
             return dispatchApi.listTasks(args[0]);
+        }
+
+        // privacy.* 复用 Meta 侧的 createPrivacyApi（同一套 source/visibility 计算）；
+        // 唯一差异是当前会话默认 chatId（Meta 无"当前会话"，需显式传）。
+        if (method === "privacy.markSensitive" || method === "privacy.status") {
+            const privacyApi = createPrivacyApi(
+                memory,
+                () => policy().deps,
+                () => loadConfig().privacy?.allowLlmMarkSensitive !== false,
+            );
+            const rawTarget = args[0] as string | undefined;
+            const target = typeof rawTarget === "string" && rawTarget.trim().length > 0 ? rawTarget.trim() : chatId;
+            if (method === "privacy.markSensitive") {
+                const rawReason = args[1] as string | undefined;
+                const reason = typeof rawReason === "string" && rawReason.trim().length > 0 ? rawReason.trim() : undefined;
+                log.info("privacy.markSensitive", { boundChatId: chatId, target, reason: reason?.slice(0, 120) });
+                return privacyApi.markSensitive(target, reason);
+            }
+            return privacyApi.status(target);
         }
 
         if (method === "mcp.list") {

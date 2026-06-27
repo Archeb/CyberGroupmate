@@ -276,7 +276,7 @@ async function buildDispatchContext(
     const groupModel = typeof memory.getGroupModel === "function"
         ? memory.getGroupModel(getGroupModelKey(chatId))
         : null;
-    const quoteContext = await resolveDispatchQuoteContext(memory, taskSpec, deps);
+    const quoteContext = await resolveDispatchQuoteContext(memory, chatId, taskSpec, deps);
     return {
         depth: 2,
         chatId,
@@ -297,6 +297,7 @@ async function buildDispatchContext(
 
 async function resolveDispatchQuoteContext(
     memory: MemoryStoreV2,
+    targetChatId: string,
     taskSpec: DispatchTaskSpec,
     deps?: Pick<DispatchApiDeps, "globalState" | "getQuoteOutput" | "workspaceRoot">,
 ) {
@@ -310,6 +311,8 @@ async function resolveDispatchQuoteContext(
     }
     return resolveQuoteRefs(refs, {
         memory,
+        // 派发目标会话：引用「目标会话自己」的私密内容放行（在本会话内服务），跨别的私密会话才拦/scrub。
+        boundChatId: targetChatId,
         globalState: deps?.globalState,
         getOutput: deps?.getQuoteOutput,
         workspaceRoot: deps?.workspaceRoot,

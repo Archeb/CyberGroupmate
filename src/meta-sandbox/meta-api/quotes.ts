@@ -1,10 +1,24 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { extname, isAbsolute, relative, resolve } from "node:path";
 import { getGroupModelKey, isValidCompositeChatId } from "../../core/chat-id.js";
+import { loadConfig } from "../../core/config.js";
 import { formatTsForPrompt } from "../../core/timezone.js";
-import { createMemoryApi } from "./memory.js";
+import { isPrivateChat, makePolicyContext, scrubRowsByVisibility, type PolicyContext } from "../../core/visibility-policy.js";
+import { createMemoryApi, scrubDossiers } from "./memory.js";
 import type { GlobalState } from "../../main-agent/global-state.js";
 import type { MemoryStoreV2, RecentMessageEntry, TopicNode, TopicSearchResult } from "../../memory-v2/index.js";
+
+/**
+ * 引用解析的隐私兜底上下文：quote 会被嵌入到 dispatch 任务正文里跨会话传递，
+ * 故以 Meta 视角（boundChatId=""）判定——任何私密会话的内容都不得被引用带出。
+ */
+function quotePolicyCtx(deps: QuoteResolverDeps): PolicyContext {
+    return makePolicyContext({
+        boundChatId: deps.boundChatId ?? "", // 派发目标会话视角：引用本会话自己的内容放行，跨私密会话才拦
+        privacy: loadConfig().privacy,
+        getGroupModel: (key: string) => deps.memory.getGroupModel(key),
+    });
+}
 
 export type ParsedQuoteRef =
     | { kind: "chat"; raw: string; chatId: string; source: string }
@@ -60,6 +74,13 @@ export interface QuoteResolverDeps {
     globalState?: Pick<GlobalState, "getSessionDigests">;
     workspaceRoot?: string;
     getOutput?: (index: number) => QuoteExecutionOutput | null | undefined;
+    /**
+     * 引用将被嵌入到「派发给该 chat 的任务」正文里，作为隐私兜底的目的地视角：
+     * 引用 boundChatId 自己会话的内容 = 允许（在本会话内服务，非外泄）；
+     * 引用「其它私密会话」的内容 = 拦截/scrub（防止把别群私密内容带到本任务）。
+     * 省略（无派发目标，如纯校验）则取 ""，即任何私密会话内容都视作跨界（最严）。
+     */
+    boundChatId?: string;
 }
 
 const KNOWN_PLATFORMS = ["telegram", "discord", "onebot"] as const;
@@ -223,7 +244,16 @@ async function resolveOneQuote(ref: ParsedQuoteRef, deps: QuoteResolverDeps): Pr
     }
 }
 
+/** 私密会话内容不得被引用带出（嵌入 dispatch 任务）。返回空内容 + 警告。 */
+function privateQuoteBlocked(ref: ParsedQuoteRef, title: string): ResolvedQuoteItem {
+    return { kind: ref.kind, raw: ref.raw, title, content: "", warnings: ["私密会话内容不可跨会话引用（已被隐私兜底拦截）"] };
+}
+
 function resolveChatQuote(ref: Extract<ParsedQuoteRef, { kind: "chat" }>, deps: QuoteResolverDeps): ResolvedQuoteItem {
+    const ctx = quotePolicyCtx(deps);
+    if (ctx.enforce !== "off" && ref.chatId !== ctx.boundChatId && isPrivateChat(ref.chatId, ctx.deps)) {
+        return privateQuoteBlocked(ref, `Chat ${formatChatLabel(deps.memory, ref.chatId)}`);
+    }
     const messages = [...deps.memory.getRecentMessages(ref.chatId, DEFAULT_CHAT_LIMIT)].reverse();
     return {
         kind: ref.kind,
@@ -235,6 +265,10 @@ function resolveChatQuote(ref: Extract<ParsedQuoteRef, { kind: "chat" }>, deps: 
 }
 
 function resolveChatRangeQuote(ref: Extract<ParsedQuoteRef, { kind: "chat_range" }>, deps: QuoteResolverDeps): ResolvedQuoteItem {
+    const ctx = quotePolicyCtx(deps);
+    if (ctx.enforce !== "off" && ref.chatId !== ctx.boundChatId && isPrivateChat(ref.chatId, ctx.deps)) {
+        return privateQuoteBlocked(ref, `Chat Range ${formatChatLabel(deps.memory, ref.chatId)} ${ref.startMessageId}..${ref.endMessageId}`);
+    }
     let messages = ref.startMessageId === ref.endMessageId
         ? deps.memory.getMessagesByIds(ref.chatId, [ref.startMessageId])
         : deps.memory.getMessagesBetweenIds(ref.chatId, ref.startMessageId, ref.endMessageId);
@@ -292,6 +326,7 @@ async function resolvePersonQuote(ref: Extract<ParsedQuoteRef, { kind: "person" 
         messagesLimit: 5,
         groupProfilesLimit: 5,
     });
+    scrubDossiers(result.dossiers, quotePolicyCtx(deps)); // 私密会话来源的 fact/消息/画像不得被引用带出
     const warnings: string[] = [];
     if (result.dossiers.length === 0) {
         warnings.push("没有解析到人物候选");
@@ -306,7 +341,13 @@ async function resolvePersonQuote(ref: Extract<ParsedQuoteRef, { kind: "person" 
 }
 
 function resolveHistoryQuote(ref: Extract<ParsedQuoteRef, { kind: "history" }>, deps: QuoteResolverDeps): ResolvedQuoteItem {
-    const topics = deps.memory.searchTopics(ref.query, { limit: 5 });
+    // 丢弃来源为私密会话的话题，避免私密话题被引用带出。
+    const topics = scrubRowsByVisibility(
+        deps.memory.searchTopics(ref.query, { limit: 5 }),
+        (t) => t.chatId,
+        quotePolicyCtx(deps),
+        "quote.history",
+    ).kept;
     return {
         kind: ref.kind,
         raw: ref.raw,
@@ -326,6 +367,10 @@ function resolveTopicQuote(ref: Extract<ParsedQuoteRef, { kind: "topic" }>, deps
             content: "",
             warnings: ["没有找到该 topic"],
         };
+    }
+    const ctx = quotePolicyCtx(deps);
+    if (ctx.enforce !== "off" && topic.chatId !== ctx.boundChatId && isPrivateChat(topic.chatId, ctx.deps)) {
+        return privateQuoteBlocked(ref, `Topic ${topic.label} (${topic.id})`);
     }
     return {
         kind: ref.kind,

@@ -21,7 +21,7 @@ import type { FactSearchResult, InteractionSearchResult, MemoryStoreV2, RecentMe
 import { SandboxPool } from "../sandbox/sandbox-pool.js";
 import { NotificationCenter } from "../event/notification-center.js";
 import { runCodeActSession, SentMessageCollector, type SessionResult, type SentMessageRecord } from "../sandbox/session-runner.js";
-import { loadModuleRegistry, lookupFullDocs, generateBriefOverview, mergeModuleRegistries, type ModuleEntry } from "../sandbox/modules/module-registry.js";
+import { loadModuleRegistry, lookupFullDocs, generateBriefOverview, gatePrivacyMarkSensitive, mergeModuleRegistries, type ModuleEntry } from "../sandbox/modules/module-registry.js";
 import { getMcpModuleEntries } from "../sandbox/modules/mcp-bridge/index.js";
 import { parseAllSkillDocs } from "../sandbox/skill-loader.js";
 import { buildPrefixMap } from "../sandbox/api-intent-extractor.js";
@@ -91,7 +91,9 @@ function formatFactForPrompt(fact: PromptFact, memory: MemoryStoreV2 | undefined
         fact.visibility ? `visibility=${fact.visibility}` : "",
         fact.sensitivity ? `sensitivity=${fact.sensitivity}` : "",
     ].filter(Boolean).join("；");
-    return `- [${subject} · ${fact.category}] ${fact.content}${sourceParts ? ` (${sourceParts})` : ""}`;
+    // 结构化事实带 [主体 · 类别] 前缀；无 subject 的兜底直接出正文。
+    const head = subject ? `[${subject} · ${fact.category}] ` : "";
+    return `- ${head}${fact.content}${sourceParts ? ` (${sourceParts})` : ""}`;
 }
 
 function formatInteractionForPrompt(item: PromptInteraction, memory: MemoryStoreV2 | undefined): string {
@@ -242,13 +244,13 @@ const PLATFORM_MODULES: Record<string, string> = {
  * workspace/skills/ 里的 TS Skills 的 .d.ts，提取每个方法的一句话 brief 签名。
  * 完整文档由 session-runner 在运行时错误后按需注入。
  */
-export function loadApiTypeDefs(platform: string = "telegram", allowedModules?: Set<string>): string {
+export function loadApiTypeDefs(platform: string = "telegram", allowedModules?: Set<string>, allowMarkSensitive: boolean = true): string {
     try {
         // 确保 registry 已加载（合并内置模块与动态 TS Skills）
         const registry = getModuleRegistryCache();
 
-        // 当有 allowedModules 过滤时，不使用缓存（每次 task 可能不同）
-        const cacheKey = allowedModules ? null : platform;
+        // 当有 allowedModules 过滤时，不使用缓存（每次 task 可能不同）；缓存键带 allowMarkSensitive。
+        const cacheKey = allowedModules ? null : `${platform}:${allowMarkSensitive ? 1 : 0}`;
         let moduleBrief = cacheKey ? _apiBriefCache.get(cacheKey) : undefined;
         if (!moduleBrief) {
             if (registry.length === 0) {
@@ -263,8 +265,11 @@ export function loadApiTypeDefs(platform: string = "telegram", allowedModules?: 
                     }
                 }
 
-                // 按平台过滤模块
-                const filteredRegistry = registry.filter(mod => !excludedModules.has(mod.name));
+                // 按平台过滤模块 + 按 allowMarkSensitive 剔除 privacy.markSensitive
+                const filteredRegistry = gatePrivacyMarkSensitive(
+                    registry.filter(mod => !excludedModules.has(mod.name)),
+                    allowMarkSensitive,
+                );
 
                 // 生成轻量概览（包含内置模块 + TS Skills + AgentSkills）
                 moduleBrief = generateBriefOverview(filteredRegistry, allowedModules);
@@ -688,7 +693,7 @@ export class CodeActExecutor {
         // 2. 渲染系统 prompt (subagent.md §12.2 ➎ — 稳定部分，保持 Mustache 模板)
         const currentConfig = loadConfig();
         const baseSkills = currentConfig.subagent?.baseSkills ?? [
-            "runtime", "fs", "skills", "mcp", "cron", "todo", "memory", "dispatch", "vision", "shell",
+            "runtime", "fs", "skills", "mcp", "cron", "todo", "memory", "privacy", "dispatch", "vision", "shell",
         ];
         const platform = getPlatform(this.chatId);
         const allowedSkills = new Set<string>([
@@ -701,7 +706,10 @@ export class CodeActExecutor {
         const systemVars = {
             personaName: this.personaName,
             personaDescription: this.personaDescription,
-            apiTypeDefs: loadApiTypeDefs(platform, allowedSkills),
+            apiTypeDefs: loadApiTypeDefs(platform, allowedSkills, currentConfig.privacy?.allowLlmMarkSensitive !== false),
+            // 隐私 prompt 指引选择性注入：fence 仅 enforce!=off 时讲；markSensitive 指引还需 allowLlmMarkSensitive。
+            privacyGuidance: currentConfig.privacy?.enforce !== "off",
+            privacyMarkGuidance: currentConfig.privacy?.enforce !== "off" && currentConfig.privacy?.allowLlmMarkSensitive !== false,
             platformModule: platform,
             hasTodos: todoItems.length > 0,
             todosText: todoItems.map((item) =>
@@ -727,6 +735,7 @@ export class CodeActExecutor {
         } else if (!isContinuation) {
             const topicSummary = ctx.topicSummary ?? "";
             const toneGuidance = ctx.toneGuidance ?? "";
+            // 主动记忆：由 dispatch 显式预置（task.memoryContext）；未预置则本轮不注入。
             const memoryContext = task.memoryContext;
             const explicitMemoryContextText = memoryContext
                 ? [
@@ -1005,6 +1014,7 @@ export class CodeActExecutor {
         return callback;
     }
 
+    /** 按 task 建议的 emoji 选出可发送的贴纸候选（去重、过滤不可用/.webm，上限 12，超额随机抽样）。 */
     private buildAvailableStickers(task: CodeActReplyTask): Array<{ emoji?: string; emojis?: string[]; description: string; uniqueFileId: string }> | undefined {
         if (!this.memory) return undefined;
 

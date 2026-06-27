@@ -468,6 +468,25 @@ export interface GroundingConfig {
 }
 
 /**
+ * 全局隐私兜底配置（visibility-policy）。
+ * 把 visibility 提升为按 chat 分级的全局概念，在代码层兜底防止跨群/跨私聊的隐私泄露。
+ * 详见 src/core/visibility-policy.ts。
+ */
+export interface PrivacyConfig {
+    /** 人工种子：始终视为私密/敏感的 composite chatId（敏感群 / 私聊）。 */
+    sensitiveChats: string[];
+    /** 私聊(DM)是否自动判为私密。默认 true（与 fact 默认 visibility 一致）。 */
+    dmAutoPrivate: boolean;
+    /**
+     * 是否允许 LLM 在运行时用 privacy.markSensitive() 自行把会话加入私密名单（只进不出，持久化在 GroupModel）。
+     * 默认 true。设 false 则只能由管理员通过 sensitiveChats 配置，LLM 调用会被拒绝。
+     */
+    allowLlmMarkSensitive: boolean;
+    /** 越界处理模式：block（拦截，默认）| warn（仅告警不拦截，便于上线观察）| off（关闭兜底）。 */
+    enforce: "block" | "warn" | "off";
+}
+
+/**
  * 维护约定：这里能配置的，dashboard 也必须能配置。
  * 每新增一个字段，请同步三处：① 上面对应的解析函数（parseXxxConfig）；
  * ② serializeConfigToObject 的序列化（写回 yaml）；③ dashboard UI（src/dashboard/ui/src/panels/config/ 下对应的 *Tab.svelte）。
@@ -486,6 +505,8 @@ export interface AppConfig {
     reflection: ReflectionExternalConfig;
     contextBudget?: ContextBudgetConfig;
     embedding: EmbeddingConfig;
+    /** 全局隐私兜底（按 chat 分级的 visibility 控制） */
+    privacy: PrivacyConfig;
     subagent?: SubagentExternalConfig;
     dashboard?: DashboardExternalConfig;
     vision?: VisionConfig;
@@ -538,6 +559,13 @@ const DEFAULT_EMBEDDING: EmbeddingConfig = {
     model: "text-embedding-3-small",
     dimensions: 128,
     similarityMetric: "cosine",
+};
+
+const DEFAULT_PRIVACY: PrivacyConfig = {
+    sensitiveChats: [],
+    dmAutoPrivate: true,
+    allowLlmMarkSensitive: true,
+    enforce: "block",
 };
 
 // ─── 配置加载 ───
@@ -683,6 +711,7 @@ export function loadConfig(configPath?: string, forceReload?: boolean): AppConfi
         },
         contextBudget: parsedContextBudget,
         embedding: parseEmbeddingConfig(fileConfig),
+        privacy: parsePrivacyConfig(fileConfig),
         subagent: parseSubagentConfig(fileConfig),
         dashboard: parseDashboardConfig(fileConfig),
         vision: parseVisionConfig(fileConfig),
@@ -968,6 +997,39 @@ function parseRecordingPipelineConfig(fileConfig: Record<string, unknown>): Reco
 }
 
 // ─── Grounding 配置解析 ───
+
+function parsePrivacyConfig(fileConfig: Record<string, unknown>): PrivacyConfig {
+    const raw = (fileConfig.privacy && typeof fileConfig.privacy === "object")
+        ? fileConfig.privacy as Record<string, unknown>
+        : {};
+    const enforceRaw = str(raw.enforce);
+    const enforce: PrivacyConfig["enforce"] =
+        enforceRaw === "warn" || enforceRaw === "off" || enforceRaw === "block"
+            ? enforceRaw
+            : DEFAULT_PRIVACY.enforce;
+
+    const explicit = Array.isArray(raw.sensitive_chats) ? (raw.sensitive_chats as unknown[]).map(String) : [];
+    const sensitiveChats = [...new Set(explicit)];
+
+    // 健壮布尔解析：识别 YAML/字符串的真/假写法；无法识别（含空串）回退默认，绝不 fail-open 成 true。
+    // （yaml@2 不会把 off/yes/no 当布尔，会留成字符串，故必须显式覆盖。）
+    const parseBool = (v: unknown, dflt: boolean): boolean => {
+        if (v == null) return dflt;
+        if (typeof v === "boolean") return v;
+        if (typeof v === "number") return v !== 0;
+        const s = String(v).trim().toLowerCase();
+        if (["false", "no", "off", "0", "n", "disabled"].includes(s)) return false;
+        if (["true", "yes", "on", "1", "y", "enabled"].includes(s)) return true;
+        return dflt;
+    };
+
+    return {
+        sensitiveChats,
+        dmAutoPrivate: parseBool(raw.dm_auto_private, DEFAULT_PRIVACY.dmAutoPrivate),
+        allowLlmMarkSensitive: parseBool(raw.allow_llm_mark_sensitive, DEFAULT_PRIVACY.allowLlmMarkSensitive),
+        enforce,
+    };
+}
 
 function parseGroundingConfig(fileConfig: Record<string, unknown>): GroundingConfig | undefined {
     const raw = fileConfig.grounding as Record<string, unknown> | undefined;
@@ -1538,6 +1600,14 @@ export function serializeConfigToObject(config: AppConfig): Record<string, unkno
             scope: ev.scope,
         }));
     }
+
+    // privacy（全局 visibility 兜底）
+    obj.privacy = {
+        sensitive_chats: config.privacy?.sensitiveChats ?? DEFAULT_PRIVACY.sensitiveChats,
+        dm_auto_private: config.privacy?.dmAutoPrivate ?? DEFAULT_PRIVACY.dmAutoPrivate,
+        allow_llm_mark_sensitive: config.privacy?.allowLlmMarkSensitive ?? DEFAULT_PRIVACY.allowLlmMarkSensitive,
+        enforce: config.privacy?.enforce ?? DEFAULT_PRIVACY.enforce,
+    };
 
     // grounding
     if (config.grounding) {

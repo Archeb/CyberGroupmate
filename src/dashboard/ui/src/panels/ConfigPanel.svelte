@@ -12,6 +12,7 @@
   import ReflectionTab from "./config/ReflectionTab.svelte";
   import ContextBudgetTab from "./config/ContextBudgetTab.svelte";
   import EmbeddingTab from "./config/EmbeddingTab.svelte";
+  import PrivacyTab from "./config/PrivacyTab.svelte";
   import VisionTab from "./config/VisionTab.svelte";
   import DashboardTab from "./config/DashboardTab.svelte";
   import SubagentTab from "./config/SubagentTab.svelte";
@@ -56,6 +57,7 @@
     { id: "reflection", label: "反思引擎", icon: "fa-brain" },
     { id: "contextBudget", label: "上下文预算", icon: "fa-sliders" },
     { id: "embedding", label: "Embedding", icon: "fa-vector-square" },
+    { id: "privacy", label: "隐私兜底", icon: "fa-shield-halved" },
     { id: "vision", label: "Vision", icon: "fa-eye" },
     { id: "dashboard", label: "Dashboard", icon: "fa-gauge-high" },
     { id: "subagent", label: "CodeAct", icon: "fa-robot" },
@@ -67,7 +69,7 @@
     { id: "envVars", label: "环境变量", icon: "fa-key" },
   ];
 
-  const RESTART_SECTIONS = new Set(["embedding", "dashboard", "backgroundAgent"]);
+  const RESTART_SECTIONS = new Set(["embedding", "privacy", "dashboard", "backgroundAgent"]);
   const RESTART_FIELDS = {
     telegram: ["mode", "botToken", "apiId", "apiHash", "phone"],
     discord: ["botToken"],
@@ -103,6 +105,11 @@
       if (config.dashboard.host == null || config.dashboard.host === "") {
         config.dashboard.host = "127.0.0.1";
       }
+      if (!config.privacy) config.privacy = { sensitiveChats: [], dmAutoPrivate: true, allowLlmMarkSensitive: true, enforce: "block" };
+      if (!config.privacy.sensitiveChats) config.privacy.sensitiveChats = [];
+      if (config.privacy.dmAutoPrivate == null) config.privacy.dmAutoPrivate = true;
+      if (config.privacy.allowLlmMarkSensitive == null) config.privacy.allowLlmMarkSensitive = true;
+      if (!config.privacy.enforce) config.privacy.enforce = "block";
       if (!config.subagent) config.subagent = {};
       if (config.subagent.restrictAdapterWritesToBoundChat == null) {
         config.subagent.restrictAdapterWritesToBoundChat = false;
@@ -596,6 +603,8 @@
             <ContextBudgetTab bind:config />
           {:else if currentSection === "embedding"}
             <EmbeddingTab bind:config {pwFocus} {pwBlur} />
+          {:else if currentSection === "privacy"}
+            <PrivacyTab bind:config />
           {:else if currentSection === "vision"}
             <VisionTab bind:config />
           {:else if currentSection === "dashboard"}

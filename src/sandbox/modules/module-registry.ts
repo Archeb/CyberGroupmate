@@ -100,6 +100,19 @@ export function mergeModuleRegistries(...registries: ModuleEntry[][]): ModuleEnt
 }
 
 /**
+ * 当 privacy.markSensitive 被管理员禁用时，从注册表中剔除该方法，使其不出现在给 LLM 的
+ * API 概览/文档里（避免每轮浪费 token 介绍一个不可用的方法）。运行期仍有 host 兜底拒绝调用。
+ */
+export function gatePrivacyMarkSensitive(registry: ModuleEntry[], allowMarkSensitive: boolean): ModuleEntry[] {
+    if (allowMarkSensitive) return registry;
+    return registry.map(mod =>
+        mod.name === "privacy"
+            ? { ...mod, methods: mod.methods.filter(m => m.name !== "markSensitive") }
+            : mod,
+    );
+}
+
+/**
  * 生成 Pass 1 轻量概览：每个模块的方法名 + 简短签名
  *
  * 输出格式示例：

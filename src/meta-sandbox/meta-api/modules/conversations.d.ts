@@ -2,6 +2,7 @@
  * conversations — Meta 跨群检索 API。
  *
  * 用于在 MetaSandbox 中检索所有聊天的消息和话题。读权限无界限；结果带 chatLabel，方便输出给模型继续决策。
+ * 隐私兜底在「出口」而非「读取」：把私密会话内容引用进派发任务会按目标会话被 scrub（见 dispatch/quotes）。
  */
 
 interface ConversationsQueryFilters {

@@ -3,6 +3,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildPrefixMap } from "../../sandbox/api-intent-extractor.js";
 import {
+    gatePrivacyMarkSensitive,
     generateBriefOverview,
     lookupFullDocs,
     type ModuleEntry,
@@ -13,7 +14,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 let metaApiRegistryCache: ModuleEntry[] | null = null;
-let metaApiReferenceCache: string | null = null;
+const metaApiReferenceCache = new Map<boolean, string>();
 
 export function loadMetaApiModuleRegistry(): ModuleEntry[] {
     if (metaApiRegistryCache) {
@@ -39,16 +40,16 @@ export function loadMetaApiModuleRegistry(): ModuleEntry[] {
     return metaApiRegistryCache;
 }
 
-export function buildMetaApiReference(): string {
-    if (metaApiReferenceCache) {
-        return metaApiReferenceCache;
-    }
+export function buildMetaApiReference(allowMarkSensitive: boolean = true): string {
+    const cached = metaApiReferenceCache.get(allowMarkSensitive);
+    if (cached) return cached;
 
     const registry = loadMetaApiModuleRegistry();
-    metaApiReferenceCache = registry.length > 0
-        ? generateBriefOverview(registry)
+    const reference = registry.length > 0
+        ? generateBriefOverview(gatePrivacyMarkSensitive(registry, allowMarkSensitive))
         : "// Meta API reference not available.";
-    return metaApiReferenceCache;
+    metaApiReferenceCache.set(allowMarkSensitive, reference);
+    return reference;
 }
 
 export function buildMetaApiPrefixMap(): Record<string, string> {
@@ -61,5 +62,5 @@ export function lookupMetaApiDocs(calledMethods: string[]): string {
 
 export function resetMetaApiModuleRegistryCache(): void {
     metaApiRegistryCache = null;
-    metaApiReferenceCache = null;
+    metaApiReferenceCache.clear();
 }

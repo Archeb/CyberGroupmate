@@ -194,6 +194,18 @@ export function getGroupModelKey(compositeId: string): string {
     return compositeId;
 }
 /**
+ * 安全获取 GroupModel 存储 key：非 composite id（如 "__meta__"）不抛错，原样返回。
+ * `getGroupModelKey` 对非法 id 会抛异常；隐私分级等场景需要容错。
+ */
+export function safeGroupModelKey(id: string): string {
+    try {
+        return getGroupModelKey(id);
+    } catch {
+        return id;
+    }
+}
+
+/**
  * 将 composite chatId 转换为文件系统安全的文件名。
  * `:` → `_`
  *

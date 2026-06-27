@@ -264,6 +264,10 @@ interface MemoryModule {
         }>;
     }>;
 
+    /**
+     * 语义检索记忆（事实 + 话题）。
+     * 话题按当前会话收窄；核心事实（人物画像类）为全局知识，仍可能返回。
+     */
     semanticSearch(query: string, options?: {
         scope?: "facts" | "topics" | "all";
         limit?: number;
