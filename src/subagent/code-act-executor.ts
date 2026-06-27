@@ -397,6 +397,19 @@ function formatExecutionRecordForCompact(rec: SessionExecutionRecord): string | 
 }
 
 /**
+ * session endReason → 派发任务终态映射：
+ *   - error       → ERROR
+ *   - interrupted → SKIPPED（被新消息/用户打断，是主动让路，非失败，不应误记 COMPLETED）
+ *   - 其余（end_turn / max_turns）→ COMPLETED
+ * 注意：TIMEOUT 不在此产生——它只由 GlobalState 启动对账（进程中途退出残留 RUNNING）补写。
+ */
+export function endReasonToTaskStatus(endReason: string | undefined): SubagentCallback["status"] {
+    return endReason === "error" ? "ERROR"
+        : endReason === "interrupted" ? "SKIPPED"
+            : "COMPLETED";
+}
+
+/**
  * CodeActExecutor — per-group CodeAct 执行器
  *
  * 注意：Sandbox 实例由 SandboxPool 管理，此处只持有引用。
@@ -936,14 +949,15 @@ export class CodeActExecutor {
         });
 
         // 5. 构建 callback
-        const isError = sessionResult.endReason === "error";
+        // endReason → 终态映射（见 endReasonToTaskStatus）。
+        const status: SubagentCallback["status"] = endReasonToTaskStatus(sessionResult.endReason);
         const callback: SubagentCallback = {
             taskId: task.taskId,
             chatId: this.chatId,
             chatTitle: ctx.chatTitle ?? ctx.groupModel?.chatTitle,
             isDirectMessage: ctx.isDirectMessage,
             executionType: "CODEACT",
-            status: isError ? "ERROR" : "COMPLETED",
+            status,
             summary: thinkingTranscript,
             replyContent: sessionResult.turns
                 .filter((t: any) => t.role === "assistant" && t.content)

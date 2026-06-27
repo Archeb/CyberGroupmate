@@ -48,6 +48,14 @@ const DEFAULT_CONFIG: GlobalStateConfig = {
 const MAX_SESSION_DIGESTS = 30;
 const MAX_DISPATCHED_SUBAGENT_TASKS = 500;
 
+/** 派发任务的终态集合：进入终态即视为不可逆，立即落盘并补全 completedAt */
+const TERMINAL_TASK_STATUSES: ReadonlySet<DispatchedSubagentTaskRecord["status"]> = new Set([
+    "COMPLETED",
+    "ERROR",
+    "SKIPPED",
+    "TIMEOUT",
+]);
+
 /**
  * GlobalState — 主 Agent 全局状态管理器
  */
@@ -60,6 +68,14 @@ export class GlobalState {
     constructor(config?: Partial<GlobalStateConfig>) {
         this.config = { ...DEFAULT_CONFIG, ...config };
         this.state = this.load();
+
+        // 启动对账：上次进程退出时仍在飞行（RUNNING/PENDING）的派发任务，其执行进程
+        // 已随重启消失，不可能再自行收尾 → 标记为 TIMEOUT，避免永久泄漏为 RUNNING。
+        const reconciled = this.reconcileLeakedDispatchedTasks();
+        if (reconciled > 0) {
+            log.info("启动对账：将中断的派发任务标记为 TIMEOUT", { count: reconciled });
+            this.save();
+        }
 
         // 自动保存
         if (this.config.autoSaveInterval > 0) {
@@ -352,13 +368,26 @@ export class GlobalState {
         if (index === -1) {
             return null;
         }
+        const now = new Date().toISOString();
+        const isTerminal = patch.status != null && TERMINAL_TASK_STATUSES.has(patch.status);
         const updated: DispatchedSubagentTaskRecord = {
             ...this.state.dispatchedSubagentTasks[index],
             ...patch,
-            updatedAt: new Date().toISOString(),
+            updatedAt: now,
         };
+        // 进入终态时补全 completedAt（dashboard 展示 + 启动对账依赖它）
+        if (isTerminal && updated.completedAt == null) {
+            updated.completedAt = now;
+        }
         this.state.dispatchedSubagentTasks.splice(index, 1, updated);
+        // 始终先置脏：若终态的立即 save() 因 writeFileSync 失败而未清脏，
+        // 30s 自动保存 / dispose() 仍会重试落盘，不会永久丢失这次写入。
         this.markDirty();
+        // 终态立即落盘：否则 30s 自动保存窗口内若进程重启，这次 COMPLETED/ERROR 写入会丢失，
+        // 任务永远停留在 RUNNING（见 reconcileLeakedDispatchedTasks 的启动对账兜底）。
+        if (isTerminal) {
+            this.save();
+        }
         return { ...updated };
     }
 
@@ -445,6 +474,26 @@ export class GlobalState {
 
     private markDirty(): void {
         this.dirty = true;
+    }
+
+    /**
+     * 启动对账：把残留在 RUNNING/PENDING 的派发任务标记为 TIMEOUT（中断）。
+     * 返回被对账的任务数。仅在 load() 之后调用一次。
+     */
+    private reconcileLeakedDispatchedTasks(): number {
+        const now = new Date().toISOString();
+        const note = "reconciled on startup: process exited mid-flight";
+        let count = 0;
+        for (const task of this.state.dispatchedSubagentTasks) {
+            if (task.status === "RUNNING" || task.status === "PENDING") {
+                task.status = "TIMEOUT";
+                task.completedAt = task.completedAt ?? now;
+                task.error = task.error ? `${task.error}; ${note}` : note;
+                task.updatedAt = now;
+                count++;
+            }
+        }
+        return count;
     }
 
     private load(): MainAgentGlobalState {
