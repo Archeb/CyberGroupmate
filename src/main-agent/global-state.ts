@@ -385,6 +385,7 @@ export class GlobalState {
         this.markDirty();
         // 终态立即落盘：否则 30s 自动保存窗口内若进程重启，这次 COMPLETED/ERROR 写入会丢失，
         // 任务永远停留在 RUNNING（见 reconcileLeakedDispatchedTasks 的启动对账兜底）。
+        // 注意：这是一条有意的持久化契约（tests/s6-global-state #10 同步读校验），不可改为异步去抖。
         if (isTerminal) {
             this.save();
         }
