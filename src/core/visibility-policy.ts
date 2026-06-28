@@ -21,7 +21,10 @@
  * `subagent.restrictAdapterWritesToBoundChat`（更严的超集开关）。
  */
 
-import { getRawId, safeGroupModelKey } from "./chat-id.js";
+import { getRawId, isValidCompositeChatId, safeGroupModelKey } from "./chat-id.js";
+
+/** 历史/裸 rawId 兜底：GroupModel 以 composite key 存储，裸 id 反查不到平台时按此顺序试探。 */
+const KNOWN_PLATFORMS = ["telegram", "onebot", "discord"] as const;
 
 export type ChatVisibility = "private" | "shared";
 
@@ -42,6 +45,13 @@ export interface VisibilityDeps {
     sensitiveSeed: ReadonlySet<string>;
     /** DM 是否自动判为 private（默认 true）。 */
     dmAutoPrivate: boolean;
+    /**
+     * 可选的 chatId→visibility 记忆缓存。聚合 scrub 会对同一会话的成百上千行逐行判定，
+     * 每次都查一次 GroupModel（SQLite + JSON 解析）会形成 N+1。给一次性的 PolicyContext
+     * 挂一个缓存即可让每个 distinct chatId 只查一次。长生命周期的 deps（如 store 内置）不传，
+     * 以免 markSensitive 后读到陈旧分级。
+     */
+    cache?: Map<string, ChatVisibility>;
 }
 
 /** 越界信息（用于 warn 模式告警 / 审计）。 */
@@ -93,18 +103,51 @@ export function makePolicyContext(opts: {
     return {
         boundChatId: opts.boundChatId,
         enforce: opts.privacy.enforce,
-        deps: buildVisibilityDeps({
-            getGroupModel: opts.getGroupModel,
-            sensitiveChats: opts.privacy.sensitiveChats,
-            dmAutoPrivate: opts.privacy.dmAutoPrivate,
-        }),
+        deps: {
+            ...buildVisibilityDeps({
+                getGroupModel: opts.getGroupModel,
+                sensitiveChats: opts.privacy.sensitiveChats,
+                dmAutoPrivate: opts.privacy.dmAutoPrivate,
+            }),
+            // 每个 PolicyContext 一次性缓存：消除聚合 scrub 逐行查 GroupModel 的 N+1。
+            cache: new Map<string, ChatVisibility>(),
+        },
         onViolation: opts.onViolation,
     };
+}
+
+/**
+ * 解析 GroupModel：优先用 composite/groupKey 命中；若传入的是裸 rawId（无平台前缀，多见于历史
+ * 数据里的 source_chat_id），GroupModel 是以 composite key 存的、直接查不到，再按已知平台前缀试探，
+ * 与种子匹配对裸 rawId 的容忍保持对称，避免「敏感群被标了但用裸 id 反查不到 → 误判 shared」的漏读。
+ */
+function resolveGroupModel(
+    chatId: string,
+    groupKey: string,
+    deps: VisibilityDeps,
+): GroupModelVisibilityFields | null | undefined {
+    const direct = deps.getGroupModel(groupKey) ?? (groupKey !== chatId ? deps.getGroupModel(chatId) : null);
+    if (direct) return direct;
+    if (isValidCompositeChatId(chatId)) return direct;
+    for (const platform of KNOWN_PLATFORMS) {
+        const gm = deps.getGroupModel(`${platform}:${chatId}`);
+        if (gm) return gm;
+    }
+    return direct;
 }
 
 export function getChatVisibility(chatId: string | null | undefined, deps: VisibilityDeps): ChatVisibility {
     if (!chatId) return "shared";
 
+    const cached = deps.cache?.get(chatId);
+    if (cached) return cached;
+
+    const result = computeChatVisibility(chatId, deps);
+    deps.cache?.set(chatId, result);
+    return result;
+}
+
+function computeChatVisibility(chatId: string, deps: VisibilityDeps): ChatVisibility {
     const groupKey = safeGroupModelKey(chatId);
 
     // 种子既可填 composite（telegram:-100…）也可填裸 rawId（-100…，文档/习惯写法），两种形态都要命中。
@@ -113,7 +156,7 @@ export function getChatVisibility(chatId: string | null | undefined, deps: Visib
         return "private";
     }
 
-    const gm = deps.getGroupModel(groupKey) ?? (groupKey !== chatId ? deps.getGroupModel(chatId) : null);
+    const gm = resolveGroupModel(chatId, groupKey, deps);
     if (gm?.markedSensitive) return "private";
     if (deps.dmAutoPrivate && gm?.isDirectMessage) return "private";
 

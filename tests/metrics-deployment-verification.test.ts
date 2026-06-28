@@ -11,7 +11,7 @@
 import { describe, it, after } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
-import { readFileSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -287,7 +287,12 @@ describe("Metrics Deployment Verification", () => {
 
     describe("Configuration", () => {
         it("#12 metrics can be enabled by default without an explicit config section", async () => {
-            const configContent = readFileSync(join(projectRoot, "config.yaml"), "utf-8");
+            // config.yaml 是 gitignore 的本地文件，CI / 全新 checkout 可能不存在；回退到提交进仓库的示例配置
+            // （loadConfig() 本身也走同样的回退）。
+            const configPath = existsSync(join(projectRoot, "config.yaml"))
+                ? join(projectRoot, "config.yaml")
+                : join(projectRoot, "config.example.yaml");
+            const configContent = readFileSync(configPath, "utf-8");
             const configMod = await import("../src/core/config.js");
             const config = configMod.loadConfig();
             const metricsEnabled = config.metrics?.enabled !== false;

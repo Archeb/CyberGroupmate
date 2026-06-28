@@ -21,6 +21,7 @@ import { createMemoryStore } from "./core/memory-factory.js";
 import {
     loadConfig,
     resolveComponentProfiles,
+    resolveEmbeddingConfig,
     type AppConfig,
     type EnvironmentVariable,
 } from "./core/config.js";
@@ -428,7 +429,7 @@ async function main(): Promise<void> {
     // 经由工厂构建：本地 SQLite 存储 + 检索，并注入全局隐私分级。
     // embedding 检索由 embedding.enabled 开关控制（默认关 → 走 FTS5/LIKE 关键词召回；
     // 开启后写入异步生成向量、recall 走向量，存量需跑一次 cli memory backfill-embeddings）。
-    const embeddingConfig = appConfig.embedding?.enabled ? appConfig.embedding : undefined;
+    const embeddingConfig = resolveEmbeddingConfig(appConfig);
     const memory = createMemoryStore(join(DATA_DIR, "memory.db"), { config: appConfig, embeddingConfig });
     const { createInterface: createRL } = await import("node:readline");
     const hostRL = createRL({ input: process.stdin, output: process.stdout });
@@ -497,6 +498,9 @@ async function main(): Promise<void> {
             personaName: appConfig.persona?.name ?? "赛博群友",
             personaDescription: appConfig.persona?.description ?? "赛博群友",
             memory,
+            // 开启 embedding 时，RecordingPipeline 才会为新话题增量生成向量（否则话题向量永远为空，
+            // 只能靠 cli backfill 补，召回退化为关键词）。
+            embeddingConfig,
             pipelineConfig: appConfig.recordingPipeline,
             publishTopicSignals: (signals) => {
                 const deliverableSignals = signals.filter((signal) => !postTaskWindows?.hasActiveWindow(signal.chatId));

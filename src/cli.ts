@@ -194,7 +194,9 @@ async function cmdMemory(args: string[]): Promise<void> {
     }
 
     const cfg = loadConfig();
-    const embeddingConfig = resolveEmbeddingConfig(cfg);
+    // 其它命令遵循 embedding.enabled 开关（关 → undefined，走关键词召回、不打 embedding API）；
+    // backfill-embeddings 是「为日后启用做准备」的显式操作，即便当前 enabled=false 也强制用配置的 embedding。
+    const embeddingConfig = subCmd === "backfill-embeddings" ? cfg.embedding : resolveEmbeddingConfig(cfg);
     const memory = createMemoryStore(dbPath, { config: cfg, embeddingConfig });
 
     switch (subCmd) {
@@ -306,6 +308,10 @@ async function cmdMemory(args: string[]): Promise<void> {
         }
 
         case "backfill-embeddings": {
+            if (!embeddingConfig) {
+                log.error("embedding 未配置，无法 backfill");
+                break;
+            }
             log.info(`开始为存量 fact/topic 补 embedding（model=${embeddingConfig.model}, dim=${embeddingConfig.dimensions}）...`);
             if (!cfg.embedding?.enabled) {
                 log.warn("注意：embedding.enabled=false —— 补好的向量主 bot 暂不会用；需把开关打开并重启 bot 后才生效。");

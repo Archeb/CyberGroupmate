@@ -735,16 +735,21 @@ export function createSandboxHostCallHandler(chatId: string, deps: CreateSandbox
             }
 
             const recallResult = await memory.recall(query, { chatId, maxResults: limit });
+            // recall() 不做可见性兜底（其结果现携带 sourceChatId/visibility）；与上面的向量快路径一致，
+            // 在 chokepoint 这里统一 scrub 掉来源私密且 ≠ 当前会话的 fact / topic。
+            const ctx = policy();
+            const scrubbedFacts = scrubFactsByVisibility(recallResult.facts, ctx, method).kept;
+            const scrubbedTopics = scrubRowsByVisibility(recallResult.topics, (t) => t.chatId, ctx, method).kept;
             const factResults = (options?.scope === "topics"
                 ? []
-                : recallResult.facts.map((fact) => ({
+                : scrubbedFacts.map((fact) => ({
                     type: "fact" as const,
                     content: `[${fact.subject} · ${fact.category}] ${fact.content}`,
                     score: fact.confidence,
                 })));
             const topicResults = (options?.scope === "facts"
                 ? []
-                : recallResult.topics.map((topic) => ({
+                : scrubbedTopics.map((topic) => ({
                     type: "topic" as const,
                     content: `${topic.label} — ${topic.summary}`,
                     score: (topic.callbackPotential ?? 0) / 100,
@@ -791,7 +796,11 @@ export function createSandboxHostCallHandler(chatId: string, deps: CreateSandbox
             const privacyApi = createPrivacyApi(
                 memory,
                 () => policy().deps,
-                () => loadConfig().privacy?.allowLlmMarkSensitive !== false,
+                // enforce=off 时整个隐私系统关闭：markSensitive 不应再落库（否则后续改回 block 会突然生效）。
+                () => {
+                    const p = loadConfig().privacy;
+                    return p?.allowLlmMarkSensitive !== false && p?.enforce !== "off";
+                },
             );
             const rawTarget = args[0] as string | undefined;
             const target = typeof rawTarget === "string" && rawTarget.trim().length > 0 ? rawTarget.trim() : chatId;

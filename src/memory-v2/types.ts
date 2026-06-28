@@ -386,12 +386,14 @@ export interface RecallOptions {
 export interface RecallResult {
     /** 匹配的话题节点 */
     topics: TopicNode[];
-    /** 匹配的核心事实 */
+    /** 匹配的核心事实（携带 sourceChatId/visibility，供 chokepoint 兜底 scrub 跨会话私密内容） */
     facts: Array<{
         content: string;
         category: FactCategory;
         subject: string;
         confidence: number;
+        sourceChatId?: string | null;
+        visibility?: "private" | "contextual" | "public";
     }>;
     /** 匹配的个体画像 */
     persons: PersonGroupProfile[];
@@ -664,8 +666,8 @@ export interface IMemoryStoreV2 {
     /** 向量搜索 topics（纯 JS 余弦相似度） */
     vectorSearchTopics(queryEmbedding: Float32Array, limit?: number, chatId?: string): Array<TopicNode & { similarity: number }>;
 
-    /** 向量搜索 core_facts（纯 JS 余弦相似度） */
-    vectorSearchFacts(queryEmbedding: Float32Array, limit?: number, categories?: FactCategory[]): Array<{ id: string; content: string; category: FactCategory; subject: string; confidence: number; similarity: number }>;
+    /** 向量搜索 core_facts（纯 JS 余弦相似度）。返回 visibility/sourceChatId 供 chokepoint scrub。 */
+    vectorSearchFacts(queryEmbedding: Float32Array, limit?: number, categories?: FactCategory[]): Array<{ id: string; content: string; category: FactCategory; subject: string; confidence: number; similarity: number; visibility?: "private" | "contextual" | "public"; sourceChatId?: string | null }>;
 
     // ─── 检索方法 ───
 

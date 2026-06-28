@@ -1,4 +1,4 @@
-import { safeGroupModelKey } from "../../core/chat-id.js";
+import { getRawId, safeGroupModelKey } from "../../core/chat-id.js";
 import { getChatVisibility, type VisibilityDeps } from "../../core/visibility-policy.js";
 import type { MemoryStoreV2 } from "../../memory-v2/index.js";
 
@@ -50,15 +50,20 @@ export function createPrivacyApi(
             const deps = getDeps();
             const key = safeGroupModelKey(target);
             const gm = memory.getGroupModel(key);
-            const inSeed = deps.sensitiveSeed.has(target) || deps.sensitiveSeed.has(key);
+            // visibility 以 getChatVisibility 为唯一事实来源（含裸 rawId / GroupModel 兜底），
+            // status 只额外推导一个人类可读的 source 标签——避免二次实现导致与守卫判定漂移。
+            const visibility = getChatVisibility(target, deps);
+            // 种子命中与 getChatVisibility 对齐：composite 与裸 rawId 形态都算。
+            const inSeed = deps.sensitiveSeed.has(target) || deps.sensitiveSeed.has(key)
+                || deps.sensitiveSeed.has(getRawId(target)) || deps.sensitiveSeed.has(getRawId(key));
             const source: MetaPrivacyStatus["source"] =
-                inSeed ? "config"
+                visibility === "shared" ? "none"
+                : inSeed ? "config"
                 : gm?.markedSensitive ? "marked"
-                : (deps.dmAutoPrivate && gm?.isDirectMessage) ? "dm"
-                : "none";
+                : "dm";
             return {
                 chatId: target,
-                visibility: source === "none" ? "shared" : "private",
+                visibility,
                 isDirectMessage: !!gm?.isDirectMessage,
                 markedSensitive: !!gm?.markedSensitive,
                 reason: gm?.sensitiveReason,

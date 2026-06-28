@@ -780,10 +780,13 @@ export function resolveComponentTimeout(component: RoutingComponentKey, config?:
     return undefined;
 }
 
-/** 获取 embedding 配置 */
-export function resolveEmbeddingConfig(config?: AppConfig): EmbeddingConfig {
+/**
+ * 获取生效的 embedding 配置：embedding.enabled=false 时返回 undefined（关键词召回，不写向量、不打 embedding API）。
+ * 单一闸口——所有调用方（main / cli）都经此判定，避免各处自行决定是否启用而漂移。
+ */
+export function resolveEmbeddingConfig(config?: AppConfig): EmbeddingConfig | undefined {
     const cfg = config ?? loadConfig();
-    return cfg.embedding;
+    return cfg.embedding?.enabled ? cfg.embedding : undefined;
 }
 
 export function clearConfigCache(): void {

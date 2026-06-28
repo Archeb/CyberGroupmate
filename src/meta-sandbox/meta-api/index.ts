@@ -56,7 +56,11 @@ export function buildMetaApiContext(deps: BuildMetaApiContextDeps) {
                     dmAutoPrivate: privacy?.dmAutoPrivate,
                 });
             },
-            () => loadConfig().privacy?.allowLlmMarkSensitive !== false,
+            // enforce=off 时整个隐私系统关闭：markSensitive 不应再落库（否则后续改回 block 会突然生效）。
+            () => {
+                const p = loadConfig().privacy;
+                return p?.allowLlmMarkSensitive !== false && p?.enforce !== "off";
+            },
         ),
         agents: createAgentsApi(deps.subagentManager, deps.memory),
         background: createBackgroundApi(deps.getHarnessManager ?? (() => null)),

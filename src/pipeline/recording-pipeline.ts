@@ -977,6 +977,8 @@ export class RecordingPipeline extends EventEmitter {
             if (!topic) continue;
 
             const triage = triageResult.topics.find(t => t.topicId === topicId);
+            // 清洗一次，日志与下游 decision 复用（避免每话题每次 flush 重复跑同一套正则）。
+            const triageReasonClean = sanitizeTriageReason(triage?.reason);
             log.info("updateRegistry: 话题处理", {
                 topicId: topic.id,
                 clusterTopicId: topicId,
@@ -985,7 +987,7 @@ export class RecordingPipeline extends EventEmitter {
                 triageFound: !!triage,
                 triageReason: triage?.reason,
                 // 下游（Meta）实际拿到的是清洗后版本——记录以便核对金句是否被剥离
-                triageReasonClean: sanitizeTriageReason(triage?.reason),
+                triageReasonClean,
                 msgCount: topicMsgs.length,
             });
             if (triage) {
@@ -1012,7 +1014,8 @@ export class RecordingPipeline extends EventEmitter {
 
                 const decision = {
                     // 兜底清洗：去掉 triage 替下游预写的成句金句，避免 Meta 照搬进 contentDirection
-                    reason: sanitizeTriageReason(triage.reason),
+                    // （triage 存在时 reason 必为 string；?? 仅为类型收窄，实际不会取右值）
+                    reason: triageReasonClean ?? triage.reason,
                 };
                 // 将 decision 持久化到 topic 对象，supply triageReason 给下游 toDigest
                 this.registry.setDecision(topic.id, decision);

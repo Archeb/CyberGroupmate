@@ -267,6 +267,9 @@ export async function runReflection(
 
     // ── Step 3: LLM 调用（回看范围自适应收缩：超时/限流则缩小 prompt 重试） ──
     const isDirectMessage = groupModel?.isDirectMessage ?? false;
+    // 会话整体是否私密（DM / 配置种子 / 运行时 markedSensitive）——用于给抽取出的 fact 打 visibility=private，
+    // 这样即便日后 source_chat_id 丢失（合并/全局化），fact 级标记仍能让跨会话 scrub 兜底拦截。
+    const chatIsPrivate = memory.isChatPrivate(chatId);
     const reflectionTimeout = resolveComponentTimeout("reflection");
 
     let llmOutput: ReflectionLLMOutput = {
@@ -475,7 +478,7 @@ export async function runReflection(
             memory.updateFact(fact.id, {
                 content: fact.content,
                 category: fact.category,
-                ...buildFactProvenance(fact, topics, interactions, chatId, groupModel, isDirectMessage, startTime),
+                ...buildFactProvenance(fact, topics, interactions, chatId, groupModel, isDirectMessage, chatIsPrivate, startTime),
             });
             newCoreFacts.push(`[updated] ${fact.content}`);
             log.debug("Reflection 4b: 更新事实", { id: fact.id, subject: fact.subject });
@@ -497,7 +500,7 @@ export async function runReflection(
             undefined,
             undefined, // embedding 异步补（见下）
             undefined,
-            buildFactProvenance(fact, topics, interactions, chatId, groupModel, isDirectMessage, startTime),
+            buildFactProvenance(fact, topics, interactions, chatId, groupModel, isDirectMessage, chatIsPrivate, startTime),
         );
         if (embCfg) storedForEmbed.push({ id: fid, text: newFactsForEmbedding[ei].text });
         newCoreFacts.push(fact.content);
@@ -1273,6 +1276,7 @@ function buildFactProvenance(
     chatId: string,
     groupModel: GroupModel | null,
     isDirectMessage: boolean,
+    chatIsPrivate: boolean,
     reflectedAt: string,
 ): CoreFactProvenance {
     const topic = (fact.sourceTopicId
@@ -1297,7 +1301,8 @@ function buildFactProvenance(
         sourceMessageIds: messageIds,
         sourceInteractionIds: interactionIds,
         observedAt: fact.observedAt ?? topic?.startedAt ?? reflectedAt,
-        visibility: fact.visibility ?? (isDirectMessage ? "private" : "contextual"),
+        // 来自私密会话（DM / 种子 / markedSensitive）的 fact 默认私密：source 丢失也能被跨会话 scrub 拦截。
+        visibility: fact.visibility ?? ((chatIsPrivate || isDirectMessage) ? "private" : "contextual"),
         sensitivity: fact.sensitivity ?? "low",
     };
 }

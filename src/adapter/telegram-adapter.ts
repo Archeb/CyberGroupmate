@@ -1041,21 +1041,16 @@ export class TelegramAdapter implements PlatformAdapter {
         }
 
         const rawArgs = args.slice(1);
-        if (rawArgs.some(arg => this.hasMtcuteLocalFileLikeArg(arg))) {
-            log.info("telegram.mtcute:prepareLocalFiles", { methodName });
-            const preparedArgs = await Promise.all(
-                rawArgs.map(arg => this.prepareMtcutePassthroughArg(arg, undefined, methodName)),
-            );
-            const result = await this.invokeMtcuteMethod(fn as (...callArgs: unknown[]) => unknown, preparedArgs);
-            return this.toSandboxMtcuteValue(result);
-        }
-
+        // native-first：先用「原样 hydrate」的参数直连 mtcute；本地文件路径（file:xxx / 相对路径）
+        // 仅在原生调用失败后，作为 fallback 再解析为绝对路径（requireExists）重试一次。
+        // 这样原生能直接吃的参数不被改写，且缺失文件等错误能如实抛出（见 tests/telegram-guides）。
         const primaryArgs = rawArgs.map(arg => this.hydrateMtcuteArg(arg));
 
         try {
             const result = await this.invokeMtcuteMethod(fn as (...callArgs: unknown[]) => unknown, primaryArgs);
             return this.toSandboxMtcuteValue(result);
         } catch (primaryErr) {
+            log.info("telegram.mtcute:prepareLocalFiles", { methodName });
             const fallbackArgs = await Promise.all(
                 rawArgs.map(arg => this.prepareMtcutePassthroughArg(arg, undefined, methodName)),
             );
@@ -1199,23 +1194,6 @@ export class TelegramAdapter implements PlatformAdapter {
     private isFileLikeKey(key?: string): boolean {
         if (!key) return false;
         return /^(file|media|thumb|thumbnail|videoCover|sticker|photo)$/i.test(key);
-    }
-
-    private hasMtcuteLocalFileLikeArg(value: unknown, key?: string): boolean {
-        if (typeof value === "string") {
-            if (!this.isFileLikeKey(key)) return false;
-            const normalized = this.normalizeMtcuteStringArg(value, key);
-            if (/^(https?:|data:)/i.test(String(normalized))) return false;
-            if (/^file:/i.test(String(normalized))) return true;
-            return this.isLikelyOutgoingLocalMediaPath(String(normalized));
-        }
-        if (!value || typeof value !== "object") return false;
-        if (value instanceof Date || Buffer.isBuffer(value) || value instanceof Uint8Array || Long.isLong(value)) return false;
-        if (Array.isArray(value)) return value.some(item => this.hasMtcuteLocalFileLikeArg(item, key));
-
-        const raw = value as Record<string, unknown>;
-        if (typeof raw[MTCUTE_OBJECT_REF_KEY] === "string") return false;
-        return Object.entries(raw).some(([childKey, childValue]) => this.hasMtcuteLocalFileLikeArg(childValue, childKey));
     }
 
     private normalizeInlineBotResults(raw: unknown): Record<string, unknown> {

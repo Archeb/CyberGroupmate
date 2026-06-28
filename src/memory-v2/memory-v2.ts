@@ -632,7 +632,7 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
             if (data.relatedTopicIds !== undefined) builder.set("related_topic_ids", toJSON(data.relatedTopicIds));
             if (data.associatedMemories !== undefined) builder.set("associated_memories", toJSON(data.associatedMemories));
             if (data.callbackPotential !== undefined) builder.set("callback_potential", data.callbackPotential);
-            if (data.embedding !== undefined) builder.set("embedding", Buffer.from(data.embedding.buffer));
+            if (data.embedding !== undefined) builder.set("embedding", embeddingToBuffer(data.embedding));
             builder.set("updated_at", ts);
             builder.where("id", existing.id);
 
@@ -684,7 +684,7 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
                 toJSON(data.relatedTopicIds),
                 toJSON(data.associatedMemories),
                 data.callbackPotential ?? 0,
-                data.embedding ? Buffer.from(data.embedding.buffer) : null,
+                data.embedding ? embeddingToBuffer(data.embedding) : null,
                 ts,
                 ts,
             );
@@ -726,7 +726,7 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
         if (data.relatedTopicIds !== undefined) builder.set("related_topic_ids", toJSON(data.relatedTopicIds));
         if (data.associatedMemories !== undefined) builder.set("associated_memories", toJSON(data.associatedMemories));
         if (data.callbackPotential !== undefined) builder.set("callback_potential", data.callbackPotential);
-        if (data.embedding !== undefined) builder.set("embedding", Buffer.from(data.embedding.buffer));
+        if (data.embedding !== undefined) builder.set("embedding", embeddingToBuffer(data.embedding));
         builder.set("updated_at", ts);
         builder.where("id", id);
 
@@ -773,7 +773,7 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
             this.db.prepare("DELETE FROM topics_vec WHERE topic_id = ?").run(topicId);
             this.db.prepare(
                 "INSERT INTO topics_vec(topic_id, chat_id, embedding) VALUES (?, ?, ?)"
-            ).run(topicId, chatId, Buffer.from(embedding.buffer));
+            ).run(topicId, chatId, embeddingToBuffer(embedding));
             log.debug("syncTopicVec", { topicId, chatId });
         } catch (err) {
             log.warn("syncTopicVec 失败", { topicId, error: String(err) });
@@ -787,7 +787,7 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
             this.db.prepare("DELETE FROM facts_vec WHERE fact_id = ?").run(factId);
             this.db.prepare(
                 "INSERT INTO facts_vec(fact_id, embedding) VALUES (?, ?)"
-            ).run(factId, Buffer.from(embedding.buffer));
+            ).run(factId, embeddingToBuffer(embedding));
             log.debug("syncFactVec", { factId });
         } catch (err) {
             log.warn("syncFactVec 失败", { factId, error: String(err) });
@@ -1433,7 +1433,7 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
         if (this.sqliteVecAvailable) {
             try {
                 let sql: string;
-                const params: unknown[] = [Buffer.from(queryEmbedding.buffer), limit];
+                const params: unknown[] = [embeddingToBuffer(queryEmbedding), limit];
 
                 if (chatId) {
                     sql = `SELECT topic_id, distance FROM topics_vec WHERE embedding MATCH ? AND k = ? AND chat_id = ? ORDER BY distance`;
@@ -1517,7 +1517,7 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
             try {
                 const sql = `SELECT fact_id, distance FROM facts_vec WHERE embedding MATCH ? AND k = ? ORDER BY distance`;
                 const vecRows = this.db.prepare(sql).all(
-                    Buffer.from(queryEmbedding.buffer), limit
+                    embeddingToBuffer(queryEmbedding), limit
                 ) as Array<{ fact_id: string; distance: number }>;
 
                 log.debug("vectorSearchFacts[vec0]: KNN 查询", { count: vecRows.length, limit });
@@ -1600,7 +1600,7 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
     /** 本地 SQLite 语义检索（向量 + FTS5 + LIKE 三级回退）。 */
     async recall(query: string, options?: RecallOptions): Promise<RecallResult> {
         const topicMap = new Map<string, TopicNode>();
-        const factMap = new Map<string, { content: string; category: FactCategory; subject: string; confidence: number }>();
+        const factMap = new Map<string, { content: string; category: FactCategory; subject: string; confidence: number; sourceChatId?: string | null; visibility?: "private" | "contextual" | "public" }>();
 
         const maxResults = options?.maxResults ?? 10;
         const chatIdFilter = options?.chatId;
@@ -1623,6 +1623,7 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
                         if (!factMap.has(f.id)) factMap.set(f.id, {
                             content: f.content, category: f.category,
                             subject: f.subject, confidence: f.confidence,
+                            sourceChatId: f.sourceChatId ?? null, visibility: f.visibility,
                         });
                     }
                     log.debug("recall: 向量搜索完成", { topics: vecTopics.length, facts: vecFacts.length });
@@ -1704,6 +1705,8 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
                     category: row.category as FactCategory,
                     subject: row.subject as string,
                     confidence: row.confidence as number,
+                    sourceChatId: (row.source_chat_id as string | null) ?? null,
+                    visibility: (row.visibility as "private" | "contextual" | "public") ?? undefined,
                 });
             }
         } catch (err) {
@@ -3399,7 +3402,7 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
             keywords: fromJSON(row.keywords as string, []),
             associatedMemories: fromJSON<AssociatedMemory[]>(row.associated_memories as string, []),
             callbackPotential: Number(row.callback_potential ?? 0),
-            embedding: row.embedding ? new Float32Array((row.embedding as Buffer).buffer) : undefined,
+            embedding: row.embedding ? bufferToEmbedding(row.embedding as Buffer) : undefined,
             createdAt: row.created_at as string,
             updatedAt: row.updated_at as string,
         };
