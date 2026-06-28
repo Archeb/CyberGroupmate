@@ -12,9 +12,17 @@
   >
 </h3>
 <p class="text-xs opacity-50 mb-3">
-  向量化提供者。切换后已有向量数据可能不兼容。
+  开启「启用」才做向量语义召回（关闭 → 关键词 FTS/LIKE 召回）。写入时异步算向量；切换 provider / 维度后需跑一次
+  <code>cli memory backfill-embeddings</code>，否则存量数据无向量。
 </p>
 <div class="cfg-grid-2">
+  <label class="cfg-check col-span-2"
+    ><input
+      type="checkbox"
+      class="toggle toggle-xs"
+      bind:checked={config.embedding.enabled}
+    /><span>启用向量检索</span></label
+  >
   <label class="cfg-field"
     ><span class="cfg-label">Provider</span>
     <select
