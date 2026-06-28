@@ -133,6 +133,12 @@ export interface LLMCallOptions {
     prefill?: string;
     /** Stop sequences — LLM 遇到这些字符串时停止生成 */
     stop?: string[];
+    /**
+     * 应用当前 profile 的 per-profile 补充提示词（LLMConfig.replyPrompt）：贴到最后一条 user 消息末尾
+     * （recency 最高，紧贴生成）。在 callLLM 入口按"实际选中的 profile"应用，使 fallback 切换 profile 时
+     * 用的是该 profile 自己的 replyPrompt，而非固定的 profile[0]。仅 reply 路径（session-runner）开启。
+     */
+    applyReplyPrompt?: boolean;
     /** 请求超时（毫秒）。来自 llmRouting.timeouts[component]，未设置则使用默认 60000 */
     timeoutMs?: number;
     /** Profile 名称（用于限速器按 profile 限速） */
@@ -249,11 +255,30 @@ function isAuthError(err: unknown): boolean {
  * @param options - 可选的调用参数覆盖
  * @returns LLM 响应（含生成文本和 token 用量）
  */
+/** 把 replyPrompt 追加到最后一条字符串内容的 user 消息末尾，返回新数组（不修改入参）。 */
+function appendReplyPrompt(messages: ChatMessage[], replyPrompt: string): ChatMessage[] {
+    for (let i = messages.length - 1; i >= 0; i--) {
+        const m = messages[i];
+        if (m.role === "user" && typeof m.content === "string") {
+            const copy = messages.slice();
+            copy[i] = { ...m, content: m.content ? `${m.content}\n\n${replyPrompt}` : replyPrompt };
+            return copy;
+        }
+    }
+    return messages;
+}
+
 export async function callLLM(
     messages: ChatMessage[],
     config: LLMConfig,
     options?: LLMCallOptions
 ): Promise<LLMResponse> {
+    // ── per-profile replyPrompt：按实际选中的 profile 追加到最后一条 user 消息（不改原数组） ──
+    // 放在 callLLM 入口，使 fallback 选中 configs[i] 时用的是 configs[i] 自己的 replyPrompt。
+    if (options?.applyReplyPrompt && config.replyPrompt) {
+        messages = appendReplyPrompt(messages, config.replyPrompt);
+    }
+
     // ── Pool 模式：委托给 callLLMWithPool ──
     if (config.pool && config.pool.members.length > 0) {
         return callLLMWithPool(messages, config, options);

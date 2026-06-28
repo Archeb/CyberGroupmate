@@ -568,6 +568,8 @@ export async function runCodeActSession(
         try {
             llmResponse = await callLLMWithFallback(messages, configs, {
                 caller: "session-runner",
+                // reply 路径：让实际选中的 profile 追加自己的 replyPrompt（fallback 时不会错用 profile[0] 的）。
+                applyReplyPrompt: true,
                 ...(prefill ? { prefill } : {}),
                 ...(stopSequences ? { stop: stopSequences } : {}),
                 ...(contextManifest ? { contextManifest } : {}),

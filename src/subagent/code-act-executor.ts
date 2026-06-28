@@ -794,10 +794,8 @@ export class CodeActExecutor {
             taskPrompt = taskPromptParts.join("\n\n");
         }
 
-        // 仅回复生成时注入：当前 session 主模型的 per-model 补充提示词（贴 task prompt 末尾，recency 最高，紧贴生成）。
-        // 不改 system prompt / persona；只影响 reply 路径。
-        const replyBoost = resolveComponentProfiles("session")[0]?.replyPrompt;
-        if (replyBoost) taskPrompt = (taskPrompt ? taskPrompt + "\n\n" : "") + replyBoost;
+        // per-profile replyPrompt 的注入已下沉到 LLM 调用层（session-runner → callLLM applyReplyPrompt），
+        // 按实际选中的 profile 在调用时追加，fallback 切换 profile 时也能用对自己的 replyPrompt。
 
         // ═══ Fix 2: 构建 messages 时注入历史 session 上下文 ═══
         const messages: ChatMessage[] = [
