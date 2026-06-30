@@ -20,7 +20,7 @@ import type {
 import type { FactSearchResult, InteractionSearchResult, MemoryStoreV2, RecentMessageEntry } from "../memory-v2/index.js";
 import { SandboxPool } from "../sandbox/sandbox-pool.js";
 import { NotificationCenter } from "../event/notification-center.js";
-import { runCodeActSession, SentMessageCollector, type SessionResult, type SentMessageRecord } from "../sandbox/session-runner.js";
+import { runCodeActSession, SentMessageCollector, isTimeoutError, type SessionResult, type SentMessageRecord } from "../sandbox/session-runner.js";
 import { loadModuleRegistry, lookupFullDocs, generateBriefOverview, gatePrivacyMarkSensitive, mergeModuleRegistries, type ModuleEntry } from "../sandbox/modules/module-registry.js";
 import { getMcpModuleEntries } from "../sandbox/modules/mcp-bridge/index.js";
 import { parseAllSkillDocs } from "../sandbox/skill-loader.js";
@@ -415,6 +415,23 @@ export function endReasonToTaskStatus(endReason: string | undefined): SubagentCa
 }
 
 /**
+ * 在 endReasonToTaskStatus 基础上叠加运行时信息，得出派发任务的最终终态：
+ *   - error 且错误为超时 → TIMEOUT（把执行/LLM 超时从泛 ERROR 中拆出来）
+ *   - 正常收尾（COMPLETED）但整轮没有任何对外动作（没发消息、没贴表态）→ SKIPPED
+ *     （"想过但决定不回复"——这是 end_turn，不是 interrupted，故 endReasonToTaskStatus 兜不住）
+ *   - 其余沿用 endReasonToTaskStatus（error→ERROR、interrupted→SKIPPED、end_turn/max_turns→COMPLETED）
+ */
+export function classifyDispatchedTaskStatus(
+    endReason: string | undefined,
+    opts: { producedOutput: boolean; error?: string | null },
+): SubagentCallback["status"] {
+    const base = endReasonToTaskStatus(endReason);
+    if (base === "ERROR" && isTimeoutError(opts.error)) return "TIMEOUT";
+    if (base === "COMPLETED" && !opts.producedOutput) return "SKIPPED";
+    return base;
+}
+
+/**
  * CodeActExecutor — per-group CodeAct 执行器
  *
  * 注意：Sandbox 实例由 SandboxPool 管理，此处只持有引用。
@@ -626,6 +643,10 @@ export class CodeActExecutor {
         } catch (err) {
             const durationMs = Date.now() - startTime;
             const cancelledByUser = this.cancelRequested;
+            const timedOut = !cancelledByUser && isTimeoutError(String(err));
+            const status: SubagentCallback["status"] = cancelledByUser
+                ? "SKIPPED"
+                : (timedOut ? "TIMEOUT" : "ERROR");
             const thinkingSummary = cancelledByUser
                 ? formatThinkingPlaceholder("执行已被用户取消，未保留可用的思考记录")
                 : formatThinkingPlaceholder("执行在 session 外层异常中断，未保留可用的思考记录");
@@ -635,10 +656,10 @@ export class CodeActExecutor {
                 chatTitle: task.contextSnapshot.chatTitle ?? task.contextSnapshot.groupModel?.chatTitle,
                 isDirectMessage: task.contextSnapshot.isDirectMessage,
                 executionType: "CODEACT",
-                status: cancelledByUser ? "SKIPPED" : "ERROR",
+                status,
                 summary: cancelledByUser
                     ? `Execution cancelled by user\n\n${thinkingSummary}`
-                    : `Execution failed: ${String(err)}\n\n${thinkingSummary}`,
+                    : `Execution ${timedOut ? "timed out" : "failed"}: ${String(err)}\n\n${thinkingSummary}`,
                 error: cancelledByUser ? undefined : String(err),
                 durationMs,
                 createdAt: new Date().toISOString(),
@@ -961,8 +982,13 @@ export class CodeActExecutor {
         });
 
         // 5. 构建 callback
-        // endReason → 终态映射（见 endReasonToTaskStatus）。
-        const status: SubagentCallback["status"] = endReasonToTaskStatus(sessionResult.endReason);
+        // 终态判定（见 classifyDispatchedTaskStatus）：endReason 映射 + 超时拆分 +
+        // "正常收尾但没发消息/没贴表态" 判为 SKIPPED（贴纸/媒体走 allSent，故 sticker-only 仍是 COMPLETED）。
+        const producedOutput = sentCollector.allSent.length > 0 || sentCollector.reactionCount > 0;
+        const status: SubagentCallback["status"] = classifyDispatchedTaskStatus(sessionResult.endReason, {
+            producedOutput,
+            error: sessionResult.error,
+        });
         const callback: SubagentCallback = {
             taskId: task.taskId,
             chatId: this.chatId,
