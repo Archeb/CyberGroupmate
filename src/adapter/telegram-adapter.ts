@@ -270,6 +270,8 @@ export class TelegramAdapter implements PlatformAdapter {
     // ─── /invisible & /mute 状态 ───
     private invisibleUsers: Set<string> = loadInvisibleUsers();
     private mutedChats: Map<string, number> = new Map();  // chatId → expiry timestamp (ms)
+    /** 本次进程已收到过消息的 chatId（用于识别「会话首条」，以丢弃 real bot 自动 /start） */
+    private seenChats: Set<string> = new Set();
 
     /** 白名单 ID 集合（配置加载时构建，与 rawId 比对） */
     private readonly whitelistGroupIds: Set<string>;
@@ -2051,6 +2053,10 @@ export class TelegramAdapter implements PlatformAdapter {
     ): Promise<boolean> {
         const text = normalized.text.trim();
 
+        // 记录「会话首条」：每条入站消息都标记一次 chatId（用于下方丢弃 real bot 自动 /start）
+        const isFirstInChat = !this.seenChats.has(normalized.chatId);
+        this.seenChats.add(normalized.chatId);
+
         // ── 检查命令目标：若带 @username，必须与自己的用户名匹配 ──
         const cmdMentionMatch = text.match(/^\/(\S+?)@(\S+)/);
         if (cmdMentionMatch) {
@@ -2109,7 +2115,26 @@ export class TelegramAdapter implements PlatformAdapter {
             return true;
         }
 
+        // ── Telegram real bot：用户首次打开 bot 时客户端会自动下发一条 /start ──
+        // 只丢「会话首条且恰为 /start」这一条（避免把这条机械的握手消息当普通消息处理）；
+        // 之后的 slash（含用户手动再发的 /start）大概率是主动行为，一律放行交给管线。
+        // userbot 模式没有这套自动 /start，故不拦截。可由 telegram.dropInitialStart 关闭。
+        if (
+            this.config.dropInitialStart &&
+            this.config.mode === "bot" &&
+            isFirstInChat &&
+            this.isStartCommand(text)
+        ) {
+            log.info("已忽略 real bot 首条自动 /start（不进入处理管线）", { chatId: normalized.chatId });
+            return true;
+        }
+
         return false;
+    }
+
+    /** 是否为 /start 命令（可带 @bot 与 deep-link payload）。@其它bot 的情况已在上方 cmdMentionMatch 放行。 */
+    private isStartCommand(text: string): boolean {
+        return /^\/start(?:@\S+)?(?:\s|$)/i.test(text);
     }
 
     /**

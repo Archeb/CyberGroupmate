@@ -37,6 +37,7 @@ function makeConfig(overrides: Partial<TelegramConfig> = {}): TelegramConfig {
         apiId: "12345",
         apiHash: "hash",
         phone: "",
+        dropInitialStart: true,
         ...overrides,
     };
 }
@@ -1393,5 +1394,80 @@ interface TelegramClient {
 
         await adapter.stop();
         nc.dispose();
+    });
+
+    // ─── 首条自动 /start 丢弃 ───
+    function makeStartHarness(configOverrides: Partial<TelegramConfig> = {}) {
+        const nc = makeNC();
+        const events = captureEvents(nc);
+        let handler: ((msg: unknown) => void | Promise<void>) | null = null;
+        const fakeClient = {
+            async start() { return { id: 99, displayName: "Bot", username: "MyBot", isBot: true }; },
+            onNewMessage: {
+                add(h: (msg: unknown) => void | Promise<void>) { handler = h; },
+                remove() { handler = null; },
+            },
+            async sendText(chatId: unknown, text: unknown) {
+                return { id: 1, text, date: new Date(), chat: { id: chatId, type: "private" }, sender: { id: 99, isBot: true } };
+            },
+            async destroy() {},
+        };
+        const adapter = new TelegramAdapter(
+            makeConfig(configOverrides), nc, async () => "", () => {},
+            async () => fakeClient as never,
+        );
+        const send = (text: string, opts: { id?: number; chatId?: number } = {}) =>
+            handler!({
+                id: opts.id ?? 1, text, date: new Date(),
+                chat: { id: opts.chatId ?? 555, title: "DM", type: "private" },
+                sender: { id: 7, displayName: "User", isBot: false },
+            });
+        return { events, adapter, start: () => adapter.start(), send, stop: async () => { await adapter.stop(); nc.dispose(); } };
+    }
+
+    it("drops the first auto /start in bot mode, lets a later /start through", async () => {
+        const h = makeStartHarness();
+        await h.start();
+        await h.send("/start", { id: 1 });
+        assert.equal(h.events.length, 0, "first /start should be dropped (no NC push)");
+        await h.send("/start", { id: 2 });
+        assert.equal(h.events.length, 1, "a later /start passes through to the pipeline");
+        await h.stop();
+    });
+
+    it("does not drop /start when it is not the chat's first message", async () => {
+        const h = makeStartHarness();
+        await h.start();
+        await h.send("hello", { id: 1 });   // first msg (not /start) → marks chat seen, pushed
+        await h.send("/start", { id: 2 });  // no longer first → not dropped
+        assert.equal(h.events.length, 2, "neither the greeting nor the later /start is dropped");
+        await h.stop();
+    });
+
+    it("does not drop the first /start in userbot mode", async () => {
+        const h = makeStartHarness({ mode: "userbot", botToken: "", phone: "+8613800000000" });
+        await h.start();
+        await h.send("/start", { id: 1 });
+        assert.equal(h.events.length, 1, "userbot has no auto /start → not dropped");
+        await h.stop();
+    });
+
+    it("does not drop the first /start when dropInitialStart is disabled", async () => {
+        const h = makeStartHarness({ dropInitialStart: false });
+        await h.start();
+        await h.send("/start", { id: 1 });
+        assert.equal(h.events.length, 1, "toggle off → first /start passes through");
+        await h.stop();
+    });
+
+    it("first /start drop is tracked per chat", async () => {
+        const h = makeStartHarness();
+        await h.start();
+        await h.send("/start", { id: 1, chatId: 100 });  // chat A first → dropped
+        await h.send("/start", { id: 2, chatId: 200 });  // chat B first → dropped
+        assert.equal(h.events.length, 0, "first /start in each distinct chat is dropped");
+        await h.send("/start", { id: 3, chatId: 100 });  // chat A second → passes
+        assert.equal(h.events.length, 1, "second /start in chat A passes");
+        await h.stop();
     });
 });

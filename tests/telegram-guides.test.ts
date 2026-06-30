@@ -20,6 +20,7 @@ function makeConfig(): TelegramConfig {
         apiId: "12345",
         apiHash: "hash",
         phone: "+8613800000000",
+        dropInitialStart: true,
     };
 }
 

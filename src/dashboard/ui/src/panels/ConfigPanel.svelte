@@ -142,7 +142,8 @@
       discordEnabled = !!config.discord?.botToken;
       onebotEnabled = !!(config.onebot?.wsUrl && config.onebot?.selfId);
       // 始终确保 UI 有空对象可绑定
-      if (!config.telegram) config.telegram = { mode: 'bot', botToken: '', apiId: '', apiHash: '', phone: '' };
+      if (!config.telegram) config.telegram = { mode: 'bot', botToken: '', apiId: '', apiHash: '', phone: '', dropInitialStart: true };
+      if (config.telegram.dropInitialStart == null) config.telegram.dropInitialStart = true;
       if (!config.telegram.whitelist) {
         config.telegram.whitelist = { enabled: false, groups: [], users: [] };
       }

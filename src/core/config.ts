@@ -166,6 +166,12 @@ export interface TelegramConfig {
     apiId: string;
     apiHash: string;
     phone: string;
+    /**
+     * 是否丢弃 Telegram 在用户首次打开 real bot 时自动下发的那条 `/start`。
+     * 仅作用于 bot 模式、且只丢一个会话里的第一条消息（恰为 /start 时）；
+     * 之后的 slash 大概率是用户主动发的，一律放行。默认 true。
+     */
+    dropInitialStart: boolean;
     /** 入站白名单（可选） */
     whitelist?: TelegramWhitelistConfig;
     /** bot 模式 mtcute pts 预热群列表（独立于白名单，用于无白名单时也能预热指定群） */
@@ -682,6 +688,8 @@ export function loadConfig(configPath?: string, forceReload?: boolean): AppConfi
             apiId: str(fileTG.api_id) ?? "",
             apiHash: str(fileTG.api_hash) ?? "",
             phone: str(fileTG.phone) ?? "",
+            // 默认 true：仅当显式写 false 才关闭
+            dropInitialStart: fileTG.drop_initial_start !== false,
             whitelist: parseTelegramWhitelist(fileTG),
             prewarm: parseTelegramPrewarm(fileTG),
             humanizedDelay: parseHumanizedDelay(fileTG),
@@ -1364,6 +1372,7 @@ export function serializeConfigToObject(config: AppConfig): Record<string, unkno
             api_id: config.telegram.apiId,
             api_hash: config.telegram.apiHash,
             phone: config.telegram.phone,
+            drop_initial_start: config.telegram.dropInitialStart,
         };
         if (config.telegram.humanizedDelay) {
             tg.humanized_delay = {

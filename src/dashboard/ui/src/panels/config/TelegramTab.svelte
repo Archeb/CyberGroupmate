@@ -80,6 +80,19 @@
       /></label
     >
   </div>
+  <div class="divider text-xs opacity-50 my-3">命令处理</div>
+  <label class="cfg-check mb-2">
+    <input
+      type="checkbox"
+      class="toggle toggle-sm"
+      bind:checked={config.telegram.dropInitialStart}
+    />
+    <span class="text-sm">丢弃首条自动 /start（仅 bot 模式）</span>
+  </label>
+  <p class="text-xs opacity-50 mb-3">
+    用户首次打开 bot 时 Telegram 会自动下发一条 /start。开启后只丢这一条「会话首条
+    /start」；之后的 slash 命令（含手动再发的 /start）照常进入处理管线。userbot 模式不受影响。
+  </p>
   <div class="divider text-xs opacity-50 my-3">拟人化发送延迟</div>
   <label class="cfg-check mb-2">
     <input
