@@ -335,4 +335,62 @@ describe("OneBotAdapter", () => {
 
         nc.dispose();
     });
+
+    it("should preserve fileName as OneBot file segment name", async () => {
+        const nc = makeNC();
+        const adapter = new OneBotAdapter(makeConfig(), nc);
+        const calls: Array<{ action: string; params: Record<string, unknown> }> = [];
+
+        // @ts-expect-error - override private method for payload inspection
+        adapter.callAction = async (action: string, params: Record<string, unknown>) => {
+            calls.push({ action, params });
+            return { message_id: 3 };
+        };
+
+        // @ts-expect-error - invoke private method for focused transport test
+        await adapter.sendMedia(
+            "onebot:group:979200391",
+            { type: "document", file: "media/report.pdf", fileName: "report.pdf" },
+            {},
+        );
+
+        assert.equal(calls.length, 1);
+        assert.equal(calls[0].action, "send_group_msg");
+        assert.equal(calls[0].params.group_id, 979200391);
+        assert.deepEqual(calls[0].params.message, [
+            { type: "file", data: { file: `file://${pathResolve(process.cwd(), "workspace", "media/report.pdf")}`, name: "report.pdf" } },
+        ]);
+
+        nc.dispose();
+    });
+
+    it("should fall back to file basename when fileName is omitted", async () => {
+        const nc = makeNC();
+        const adapter = new OneBotAdapter(makeConfig(), nc);
+        const calls: Array<{ action: string; params: Record<string, unknown> }> = [];
+
+        // @ts-expect-error - override private method for payload inspection
+        adapter.callAction = async (action: string, params: Record<string, unknown>) => {
+            calls.push({ action, params });
+            return { message_id: 4 };
+        };
+
+        // Mirrors how the agent actually sends files: sendMedia with a bare
+        // { type: "file", file } and no fileName. Without the basename fallback,
+        // NapCat drops the name and shows a UUID.
+        // @ts-expect-error - invoke private method for focused transport test
+        await adapter.sendMedia(
+            "onebot:private:1751431516",
+            { type: "file", file: "media/Hello World.txt" },
+            {},
+        );
+
+        assert.equal(calls.length, 1);
+        assert.equal(calls[0].action, "send_private_msg");
+        assert.deepEqual(calls[0].params.message, [
+            { type: "file", data: { file: `file://${pathResolve(process.cwd(), "workspace", "media/Hello World.txt")}`, name: "Hello World.txt" } },
+        ]);
+
+        nc.dispose();
+    });
 });

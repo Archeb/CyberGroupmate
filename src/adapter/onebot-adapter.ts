@@ -1115,9 +1115,15 @@ export class OneBotAdapter implements PlatformAdapter {
                 segments.push({ type: "record", data: { file: String(file ?? "") } });
                 break;
             case "document":
-            default:
-                segments.push({ type: "file", data: { file: String(file ?? "") } });
+            default: {
+                const data: Record<string, string> = { file: String(file ?? "") };
+                const name = this.resolveOutgoingFileName(media);
+                if (name) {
+                    data.name = name;
+                }
+                segments.push({ type: "file", data });
                 break;
+            }
         }
 
         const caption = typeof media.caption === "string" ? media.caption : undefined;
@@ -1125,6 +1131,26 @@ export class OneBotAdapter implements PlatformAdapter {
             segments.push({ type: "text", data: { text: caption } });
         }
         return segments;
+    }
+
+    /**
+     * 计算发出去的文件在 NapCat 侧显示的文件名。
+     * 优先用调用方显式给的 media.fileName（sendFile 会自动填 basename）；
+     * 若没有（比如 agent 直接 sendMedia 只给了 file 路径），则回退到原始
+     * media.file 的 basename，避免 NapCat 生成 UUID 风格文件名、丢掉后缀。
+     */
+    private resolveOutgoingFileName(media: Record<string, unknown>): string | undefined {
+        if (typeof media.fileName === "string" && media.fileName.trim()) {
+            return media.fileName.trim();
+        }
+        const raw = media.file;
+        if (typeof raw !== "string") return undefined;
+        let value = raw.trim();
+        if (!value || value.startsWith("base64://") || value.startsWith("data:")) return undefined;
+        value = value.replace(/^file:\/\//i, "");
+        value = value.split(/[?#]/, 1)[0];
+        const base = path.basename(value);
+        return base ? base : undefined;
     }
 
     private normalizeOutgoingMessageArg(value: unknown): OneBotOutgoingMessage {
