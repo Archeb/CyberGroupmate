@@ -413,7 +413,7 @@
         tool: {
           name: 'shell',
           ok: item.status === 'completed' && (item.exit_code == null || item.exit_code === 0),
-          output: item.aggregated_output ?? item.output ?? '',
+          output: stringifyContent(item.aggregated_output ?? item.output ?? ''),
         },
       }];
     }

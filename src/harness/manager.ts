@@ -653,7 +653,7 @@ export class HarnessManager {
                         record.resultSummary = item.text.slice(0, 500);
                     }
                 } else if (event.type === "turn.completed") {
-                    log.info("codex harness turn completed", { usage: event.usage });
+                    log.debug("codex harness turn completed", { usage: event.usage });
                     onResult?.();
                 }
             } catch {
