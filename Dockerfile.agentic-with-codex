@@ -1,0 +1,9 @@
+ARG BASE_IMAGE=ghcr.io/archeb/cybergroupmate:agentic
+FROM ${BASE_IMAGE}
+
+USER root
+
+# Install the official OpenAI Codex CLI package.
+RUN npm install -g @openai/codex \
+    && codex --version \
+    && codex exec --help >/dev/null

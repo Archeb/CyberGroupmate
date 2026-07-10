@@ -33,7 +33,7 @@
 
 - Background Agent 与 Meta Agent **平级**，共享同一套 Core 能力（memory、conversation、agents、notify、skills），通过 MCP 协议访问
 - 人格设定与 Miu 一致，能看到记忆、画像、session digest
-- 运行在外部 agent harness（Claude Code / GitHub Copilot CLI）中，拥有完整的开发环境
+- 运行在外部 agent harness（Claude Code / OpenAI Codex CLI / GitHub Copilot CLI）中，拥有完整的开发环境
 
 ---
 
@@ -371,11 +371,11 @@ Background Agent 通过 MCP 访问的 Core 能力：
 
 ## 12. 验证计划
 
-先用 Claude Code 和 GitHub Copilot CLI 两个 harness 验证：
+先用 Claude Code、OpenAI Codex CLI 和 GitHub Copilot CLI 三个 harness 验证：
 
-1. **MCP 连通**：两个 harness 都能连上 CyberGroupmate MCP server，调通 digest/notify
+1. **MCP 连通**：三个 harness 都能连上 CyberGroupmate MCP server，调通 digest/notify
 2. **长任务执行**：给一个"写 skill"的任务，对比质量和耗时
-3. **Prompt 兼容性**：同一份 prompt 在两个 harness 里表现是否一致
+3. **Prompt 兼容性**：同一份 prompt 在三个 harness 里表现是否一致
 
 ---
 

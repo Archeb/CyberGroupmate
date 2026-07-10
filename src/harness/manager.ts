@@ -535,6 +535,13 @@ export class HarnessManager {
                 }
                 if (typeof raw.result === "string") record.resultSummary = raw.result.slice(0, 500);
                 if (record.exitCode == null && raw.exitCode != null) record.exitCode = Number(raw.exitCode);
+            } else if (raw?.type === "item.completed") {
+                const item = raw.item && typeof raw.item === "object"
+                    ? raw.item as Record<string, unknown>
+                    : null;
+                if (item?.type === "agent_message" && typeof item.text === "string") {
+                    record.resultSummary = item.text.slice(0, 500);
+                }
             }
         }
         if (record.durationMs == null && record.endedAt != null) record.durationMs = record.endedAt - record.startedAt;
@@ -638,6 +645,16 @@ export class HarnessManager {
                     if (event.duration_ms != null) record.durationMs = Number(event.duration_ms);
                     if (event.result) record.resultSummary = String(event.result).slice(0, 500);
                     onResult?.();
+                } else if (event.type === "item.completed") {
+                    const item = event.item && typeof event.item === "object"
+                        ? event.item as Record<string, unknown>
+                        : null;
+                    if (item?.type === "agent_message" && typeof item.text === "string") {
+                        record.resultSummary = item.text.slice(0, 500);
+                    }
+                } else if (event.type === "turn.completed") {
+                    log.info("codex harness turn completed", { usage: event.usage });
+                    onResult?.();
                 }
             } catch {
                 log.debug("harness stdout", { line: line.slice(0, 200) });
@@ -698,6 +715,29 @@ function summarizeHarnessEvent(event: Record<string, unknown>): string {
         const cost = event.cost_usd != null ? ` cost=$${event.cost_usd}` : "";
         const duration = event.duration_ms != null ? ` duration=${event.duration_ms}ms` : "";
         return result ? `result:${cost}${duration} ${truncate(result, 500)}` : `result:${cost}${duration}`.trim();
+    }
+
+    if (type.startsWith("item.")) {
+        const item = event.item && typeof event.item === "object"
+            ? event.item as Record<string, unknown>
+            : null;
+        if (item?.type === "agent_message" && typeof item.text === "string") {
+            return `assistant: ${truncate(item.text, 700)}`;
+        }
+        if (item?.type === "reasoning" && typeof item.text === "string") {
+            return `reasoning: ${truncate(item.text, 700)}`;
+        }
+        if (item?.type === "command_execution") {
+            return truncate(`${type}: ${String(item.command ?? "command")} (${String(item.status ?? "")})`, 700);
+        }
+        if (item?.type === "mcp_tool_call") {
+            const tool = [item.server, item.tool].filter(Boolean).join(".") || "mcp";
+            return truncate(`${type}: ${tool} (${String(item.status ?? "")})`, 700);
+        }
+    }
+
+    if (type === "turn.completed" && event.usage && typeof event.usage === "object") {
+        return `turn.completed ${JSON.stringify(event.usage)}`;
     }
 
     const message = event.message;

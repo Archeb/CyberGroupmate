@@ -102,6 +102,7 @@ src/harness/
 ├─ manager.ts         — HarnessManager 类
 ├─ launchers/
 │   ├─ claude-code.ts — Claude Code 启动逻辑
+│   ├─ codex-cli.ts — Codex CLI 启动逻辑
 │   └─ copilot-cli.ts — Copilot CLI 启动逻辑（Phase 4）
 ├─ types.ts           — 接口定义
 └─ prompt.ts          — 固定层 prompt 生成
@@ -194,7 +195,7 @@ scheduler.registerBuiltinCron('background-dreaming', config.backgroundAgent?.sch
 
 ---
 
-## Phase 4: 第二 Harness + 打磨 ✅ 已完成
+## Phase 4: 额外 Harness + 打磨 ✅ 已完成
 
 ### 4.1 Copilot CLI Launcher ✅
 
@@ -208,7 +209,8 @@ scheduler.registerBuiltinCron('background-dreaming', config.backgroundAgent?.sch
 ### 4.2 配置扩展 ✅
 
 `backgroundAgent` 配置增加：
-- `harness`: `"claude-code" | "copilot"` 双 harness 支持
+- `harness`: `"claude-code" | "codex" | "copilot"` 三种 harness 支持
+- `codexPath`: Codex CLI 路径
 - `copilotPath`: Copilot CLI 路径
 - `harnessModel`: 通用模型名称（兼容旧 `claudeModel`）
 - `extraArgs`: 自定义启动参数（字符串数组）
@@ -216,7 +218,7 @@ scheduler.registerBuiltinCron('background-dreaming', config.backgroundAgent?.sch
 ### 4.3 Dashboard ✅
 
 - 状态面板：显示当前 harness 类型
-- 设置面板：harness 选择（Claude Code / Copilot CLI）、模型输入、路径配置、自定义启动参数
+- 设置面板：harness 选择（Claude Code / Codex CLI / Copilot CLI）、模型输入、路径配置、自定义启动参数
 
 **预计工作量**：2-3 天
 
@@ -230,7 +232,7 @@ Phase 1: MCP Server                     ✅ M1 已完成
 Phase 1.5: sandbox_call（sandbox 执行）  ✅ 已完成
 Phase 2: HarnessManager                 ✅ 已完成
 Phase 3: 系统集成（idle/reflection）     ✅ 已完成
-Phase 4: 第二 Harness + 打磨            ✅ 已完成
+Phase 4: 额外 Harness + 打磨            ✅ 已完成
 ```
 
 ---
@@ -244,4 +246,4 @@ Phase 4: 第二 Harness + 打磨            ✅ 已完成
 | M1.5: sandbox 执行 | Background Agent 能通过 sandbox_call 执行平台 API | ✅ |
 | M2: 首次做梦 | Background Agent 被手动拉起，执行一个完整任务并通过 notify 回传结果 | ✅ |
 | M3: 自动做梦 | 凌晨 3 点自动拉起，第二天早上有成果 | ✅ |
-| M4: 双 Harness | Claude Code 和 Copilot CLI 都能跑 | ✅ |
+| M4: 多 Harness | Claude Code、Codex CLI 和 Copilot CLI 都能跑 | ✅ |

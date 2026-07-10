@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 import { buildHarnessEnv, getHarnessHome, getHarnessInstructionPath, writeHarnessInstructions } from "../src/harness/home.js";
 import { HarnessManager } from "../src/harness/manager.js";
-import { serializeClaudeMcpConfig, serializeCopilotMcpConfig } from "../src/harness/mcp-config.js";
+import { serializeClaudeMcpConfig, serializeCodexMcpConfig, serializeCopilotMcpConfig } from "../src/harness/mcp-config.js";
 import { buildSystemPrompt, buildTaskPrompt } from "../src/harness/prompt.js";
 import type { HarnessMcpConfig } from "../src/harness/types.js";
 
@@ -75,7 +75,7 @@ describe("HarnessManager MCP config loading", () => {
 });
 
 describe("Harness MCP config serialization", () => {
-    it("keeps Claude Code streamable-http and maps Copilot to its MCP schema", () => {
+    it("maps each harness schema and escapes Codex TOML boundary values", () => {
         const config: HarnessMcpConfig = {
             mcpServers: {
                 "remote-http": {
@@ -86,8 +86,12 @@ describe("Harness MCP config serialization", () => {
                 "stdio-tool": {
                     type: "stdio",
                     command: "node",
-                    args: ["server.js"],
-                    env: { API_KEY: "secret" },
+                    args: ["server.js", "say \"hello\""],
+                    env: { API_KEY: "secret value" },
+                },
+                cybergroupmate: {
+                    type: "streamable-http",
+                    url: "http://127.0.0.1:3100/mcp?token=dream",
                 },
             },
         };
@@ -104,12 +108,24 @@ describe("Harness MCP config serialization", () => {
                 "stdio-tool": {
                     type: "local",
                     command: "node",
-                    args: ["server.js"],
-                    env: { API_KEY: "secret" },
+                    args: ["server.js", "say \"hello\""],
+                    env: { API_KEY: "secret value" },
+                    tools: ["*"],
+                },
+                cybergroupmate: {
+                    type: "http",
+                    url: "http://127.0.0.1:3100/mcp?token=dream",
                     tools: ["*"],
                 },
             },
         });
+
+        assert.equal(
+            serializeCodexMcpConfig(config),
+            '{ remote-http = { url = "http://127.0.0.1:9999/mcp", http_headers = { Authorization = "Bearer token" } }, '
+            + 'stdio-tool = { command = "node", args = ["server.js", "say \\"hello\\""], env = { API_KEY = "secret value" } }, '
+            + 'cybergroupmate = { url = "http://127.0.0.1:3100/mcp?token=dream", required = true } }',
+        );
     });
 });
 
@@ -145,17 +161,24 @@ describe("Harness prompt and user home handling", () => {
         try {
             const claudeHome = getHarnessHome({ HOME: join(root, "user-home") });
             const copilotHome = getHarnessHome({ HOME: join(root, "user-home") });
+            const codexHome = getHarnessHome({ HOME: join(root, "user-home") });
+            const codexEnv = { CODEX_HOME: join(root, "codex-home") };
             const claudePath = writeHarnessInstructions(claudeHome, "claude-code", "system for claude");
             const copilotPath = writeHarnessInstructions(copilotHome, "copilot", "system for copilot");
+            const codexPath = writeHarnessInstructions(codexHome, "codex", "system for codex", codexEnv);
 
             assert.equal(claudePath, getHarnessInstructionPath(claudeHome, "claude-code"));
             assert.equal(copilotPath, getHarnessInstructionPath(copilotHome, "copilot"));
+            assert.equal(codexPath, getHarnessInstructionPath(codexHome, "codex", codexEnv));
             assert.ok(claudePath.endsWith(join(".claude", "CLAUDE.md")));
             assert.ok(copilotPath.endsWith(join(".copilot", "copilot-instructions.md")));
+            assert.equal(codexPath, join(root, "codex-home", "AGENTS.override.md"));
             assert.equal(readFileSync(claudePath, "utf-8"), "system for claude\n");
             assert.equal(readFileSync(copilotPath, "utf-8"), "system for copilot\n");
+            assert.equal(readFileSync(codexPath, "utf-8"), "system for codex\n");
             assert.equal(existsSync(claudePath), true);
             assert.equal(existsSync(copilotPath), true);
+            assert.equal(existsSync(codexPath), true);
 
             const env = buildHarnessEnv({ HOME: "real-home", USERPROFILE: "real-profile" }, { CLAUDE_CODE_ENTRYPOINT: "background-agent" });
             assert.equal(env.HOME, "real-home");

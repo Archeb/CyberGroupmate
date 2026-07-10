@@ -1282,12 +1282,14 @@ async function main(): Promise<void> {
 
     // ─── Background Agent HarnessManager ───
     const bgHarness = appConfig.backgroundAgent?.harness;
-    if (mcpServerInstance && (bgHarness === "claude-code" || bgHarness === "copilot")) {
-        const { HarnessManager, ClaudeCodeLauncher, CopilotCliLauncher } = await import("./harness/index.js");
+    if (mcpServerInstance && (bgHarness === "claude-code" || bgHarness === "codex" || bgHarness === "copilot")) {
+        const { HarnessManager, ClaudeCodeLauncher, CodexCliLauncher, CopilotCliLauncher } = await import("./harness/index.js");
         const { buildDreamingDigest } = await import("./harness/dreaming-context.js");
         const launcher = bgHarness === "copilot"
             ? new CopilotCliLauncher(appConfig.backgroundAgent!.copilotPath)
-            : new ClaudeCodeLauncher(appConfig.backgroundAgent!.claudeCodePath);
+            : bgHarness === "codex"
+                ? new CodexCliLauncher(appConfig.backgroundAgent!.codexPath)
+                : new ClaudeCodeLauncher(appConfig.backgroundAgent!.claudeCodePath);
         const model = appConfig.backgroundAgent!.harnessModel ?? appConfig.backgroundAgent!.claudeModel;
         harnessManager = new HarnessManager({
             launcher,

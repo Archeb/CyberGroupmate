@@ -15,7 +15,7 @@
   <i class="fa-solid fa-moon opacity-50 mr-1"></i> Background Agent
 </h3>
 <p class="text-xs opacity-50 mb-3">
-  做梦系统配置。MCP Server 暴露内部 API 给外部 harness（Claude Code / Copilot CLI），harness 在后台执行任务。
+  做梦系统配置。MCP Server 暴露内部 API 给外部 harness（Claude Code / Codex CLI / Copilot CLI），harness 在后台执行任务。
 </p>
 
 <div class="cfg-grid-3">
@@ -44,6 +44,7 @@
     <select class="select select-xs select-bordered w-full" bind:value={config.backgroundAgent.harness}>
       <option value={undefined}>不启用</option>
       <option value="claude-code">Claude Code</option>
+      <option value="codex">Codex CLI</option>
       <option value="copilot">Copilot CLI</option>
     </select>
   </label>
@@ -51,7 +52,7 @@
     <span class="cfg-label">模型</span>
     <input type="text" class="input input-xs input-bordered w-full"
       bind:value={config.backgroundAgent.harnessModel}
-      placeholder={config.backgroundAgent.harness === "copilot" ? "gpt-5.2" : "claude-sonnet-4-6"} />
+      placeholder={config.backgroundAgent.harness === "claude-code" ? "claude-sonnet-4-6" : "gpt-5.2"} />
   </label>
   <label class="cfg-field">
     <span class="cfg-label">单次预算 (USD)</span>
@@ -66,6 +67,12 @@
       <span class="cfg-label">Claude CLI 路径</span>
       <input type="text" class="input input-xs input-bordered w-full"
         bind:value={config.backgroundAgent.claudeCodePath} placeholder="claude" />
+    </label>
+  {:else if config.backgroundAgent.harness === "codex"}
+    <label class="cfg-field">
+      <span class="cfg-label">Codex CLI 路径</span>
+      <input type="text" class="input input-xs input-bordered w-full"
+        bind:value={config.backgroundAgent.codexPath} placeholder="codex" />
     </label>
   {:else if config.backgroundAgent.harness === "copilot"}
     <label class="cfg-field">

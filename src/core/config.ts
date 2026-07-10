@@ -560,8 +560,9 @@ export interface AppConfig {
         enabled?: boolean;
         mcpPort?: number;
         mcpToken?: string;
-        harness?: "claude-code" | "copilot";
+        harness?: "claude-code" | "codex" | "copilot";
         claudeCodePath?: string;
+        codexPath?: string;
         copilotPath?: string;
         harnessModel?: string;
         schedule?: string;
@@ -1142,6 +1143,7 @@ function parseBackgroundAgentConfig(fileConfig: Record<string, unknown>): AppCon
     if (!raw || typeof raw !== "object") return undefined;
     const harnessStr = str(raw.harness);
     const harness = harnessStr === "claude-code" ? "claude-code" as const
+        : harnessStr === "codex" ? "codex" as const
         : harnessStr === "copilot" ? "copilot" as const
         : undefined;
     return {
@@ -1150,6 +1152,7 @@ function parseBackgroundAgentConfig(fileConfig: Record<string, unknown>): AppCon
         mcpToken: str(raw.mcp_token) ?? undefined,
         harness,
         claudeCodePath: str(raw.claude_code_path) ?? undefined,
+        codexPath: str(raw.codex_path) ?? undefined,
         copilotPath: str(raw.copilot_path) ?? undefined,
         harnessModel: str(raw.harness_model) ?? str(raw.claude_model) ?? undefined,
         claudeModel: str(raw.claude_model) ?? undefined,
@@ -1717,6 +1720,7 @@ export function serializeConfigToObject(config: AppConfig): Record<string, unkno
         if (config.backgroundAgent.mcpToken != null) ba.mcp_token = config.backgroundAgent.mcpToken;
         if (config.backgroundAgent.harness != null) ba.harness = config.backgroundAgent.harness;
         if (config.backgroundAgent.claudeCodePath != null) ba.claude_code_path = config.backgroundAgent.claudeCodePath;
+        if (config.backgroundAgent.codexPath != null) ba.codex_path = config.backgroundAgent.codexPath;
         if (config.backgroundAgent.copilotPath != null) ba.copilot_path = config.backgroundAgent.copilotPath;
         if (config.backgroundAgent.harnessModel != null) ba.harness_model = config.backgroundAgent.harnessModel;
         if (config.backgroundAgent.claudeModel != null) ba.claude_model = config.backgroundAgent.claudeModel;
