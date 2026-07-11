@@ -24,7 +24,6 @@ export class CodexCliLauncher implements HarnessLauncher {
             "--json",
             "--ephemeral",
             "--dangerously-bypass-approvals-and-sandbox",
-            "--ignore-user-config",
             "-c", `mcp_servers=${serializeCodexMcpConfig(options.mcpConfig)}`,
         ];
 
