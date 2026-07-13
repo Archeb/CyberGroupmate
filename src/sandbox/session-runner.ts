@@ -24,6 +24,7 @@ import {
     type ImagePart,
 } from "../core/llm.js";
 import type { LLMConfig } from "../core/config.js";
+import { resolveComponentTimeout } from "../core/config.js";
 import type { ContextManifest } from "../context-engine/types.js";
 import { ulid } from "ulid";
 import { createLogger } from "../core/logger.js";
@@ -568,6 +569,7 @@ export async function runCodeActSession(
         try {
             llmResponse = await callLLMWithFallback(messages, configs, {
                 caller: "session-runner",
+                timeoutMs: resolveComponentTimeout("session"),
                 // reply 路径：让实际选中的 profile 追加自己的 replyPrompt（fallback 时不会错用 profile[0] 的）。
                 applyReplyPrompt: true,
                 ...(prefill ? { prefill } : {}),
