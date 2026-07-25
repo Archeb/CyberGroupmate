@@ -16,6 +16,7 @@ import { createLogger } from "../core/logger.js";
 import { loadConfig, validateConfig, saveConfig } from "../core/config.js";
 import { DEFAULT_BANNED_WORDS } from "../core/banned-words.js";
 import { rateLimiter } from "../core/llm-rate-limiter.js";
+import { profileBreaker } from "../core/llm-profile-breaker.js";
 import { discoverSkills } from "../sandbox/skill-loader.js";
 import {
     listAllPrompts,
@@ -1731,6 +1732,11 @@ export function createApiRouter(deps: DashboardDeps, bridge: EventBridge): Route
     // ─── Rate Limiter Stats ───
     router.get("/rate-limiter/stats", (_req, res) => {
         res.json(rateLimiter.getStats());
+    });
+
+    // ─── Circuit Breaker Status ───
+    router.get("/circuit-breaker/status", (_req, res) => {
+        res.json(profileBreaker.getStatus());
     });
 
     // ─── Config Editor ───
