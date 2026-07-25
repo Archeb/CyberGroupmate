@@ -21,6 +21,7 @@
   import SystemPromptsTab from "./config/SystemPromptsTab.svelte";
   import GroundingTab from "./config/GroundingTab.svelte";
   import RateLimitingTab from "./config/RateLimitingTab.svelte";
+  import CircuitBreakerTab from "./config/CircuitBreakerTab.svelte";
   import BackgroundAgentTab from "./config/BackgroundAgentTab.svelte";
   import MetricsTab from "./config/MetricsTab.svelte";
   import ChatFilterTab from "./config/ChatFilterTab.svelte";
@@ -68,6 +69,7 @@
     { id: "systemPrompts", label: "System Prompts", icon: "fa-file-lines" },
     { id: "grounding", label: "Grounding", icon: "fa-globe" },
     { id: "rateLimiting", label: "请求限速", icon: "fa-gauge-high" },
+    { id: "circuitBreaker", label: "熔断器", icon: "fa-bolt-lightning" },
     { id: "backgroundAgent", label: "做梦系统", icon: "fa-moon" },
     { id: "chatFilter", label: "聊天过滤", icon: "fa-filter" },
     { id: "metrics", label: "Metrics", icon: "fa-chart-line" },
@@ -654,6 +656,8 @@
             <EnvVarsTab bind:config {pwFocus} {pwBlur} {addEnvVar} {removeEnvVar} />
           {:else if currentSection === "rateLimiting"}
             <RateLimitingTab bind:config profileNames={Object.keys(config.llmProfiles ?? {})} />
+          {:else if currentSection === "circuitBreaker"}
+            <CircuitBreakerTab bind:config />
           {:else if currentSection === "backgroundAgent"}
             <BackgroundAgentTab bind:config {pwFocus} {pwBlur} />
           {:else if currentSection === "chatFilter"}
