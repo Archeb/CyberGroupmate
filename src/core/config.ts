@@ -11,6 +11,7 @@
 import { readFileSync, existsSync, writeFileSync } from "node:fs";
 import { parse as parseYAML, stringify as stringifyYAML } from "yaml";
 import { clearAllPools } from "./llm-pool.js";
+import { profileBreaker, type CircuitBreakerConfig } from "./llm-profile-breaker.js";
 
 // ─── 类型定义 ───
 
@@ -33,6 +34,8 @@ export interface PoolConfig {
 }
 
 export interface LLMConfig {
+    /** Profile name（自动注入，用于熔断器身份标识；非用户配置字段） */
+    name?: string;
     provider: "anthropic" | "openai" | "openai_responses" | "google";
     baseUrl: string;
     apiKey: string;
@@ -559,6 +562,8 @@ export interface AppConfig {
     grounding?: GroundingConfig;
     /** LLM 请求限速配置 */
     rateLimiting?: import("./llm-rate-limiter.js").RateLimitConfig;
+    /** Profile 级熔断器配置 */
+    circuitBreaker: CircuitBreakerConfig;
     /** Background Agent 配置 */
     backgroundAgent?: {
         enabled?: boolean;
@@ -631,11 +636,13 @@ export function loadConfig(configPath?: string, forceReload?: boolean): AppConfi
     const fileProfiles = (fileConfig.llm_profiles ?? {}) as Record<string, Record<string, unknown>>;
 
     for (const [name, raw] of Object.entries(fileProfiles)) {
-        llmProfiles[name] = parseLLMProfile(raw);
+        const cfg = parseLLMProfile(raw);
+        cfg.name = name;
+        llmProfiles[name] = cfg;
     }
 
     if (Object.keys(llmProfiles).length === 0) {
-        llmProfiles["default"] = { ...DEFAULT_LLM };
+        llmProfiles["default"] = { ...DEFAULT_LLM, name: "default" };
     }
 
     // ─── LLM Routing（组件级路由） ───
@@ -762,10 +769,15 @@ export function loadConfig(configPath?: string, forceReload?: boolean): AppConfi
         mcpServers: parseMcpServersConfig(fileConfig),
         grounding: parseGroundingConfig(fileConfig),
         rateLimiting: parseRateLimitingConfig(fileConfig),
+        circuitBreaker: parseCircuitBreakerConfig(fileConfig),
         backgroundAgent: parseBackgroundAgentConfig(fileConfig),
     };
 
     _cached = config;
+
+    // 将熔断配置推入单例（避免 config.ts ↔ breaker 循环依赖：breaker 不反向 import config）
+    profileBreaker.setConfig(config.circuitBreaker);
+
     return config;
 }
 
@@ -827,6 +839,8 @@ export function clearConfigCache(): void {
     _cached = null;
     // Pool 实例与配置绑定，配置变更时需同步清理以保证新 pool 生效
     clearAllPools();
+    // 熔断状态与旧 profile 绑定，配置重载时需重置以免残留误判
+    profileBreaker.resetAll();
 }
 
 // ─── Embedding 配置解析 ───
@@ -1141,6 +1155,20 @@ function parseRateLimitingConfig(fileConfig: Record<string, unknown>): import(".
         maxConcurrency: num(raw.max_concurrency, 0),
         requestsPerMinute: num(raw.requests_per_minute, 0),
         perProfile: Object.keys(perProfile).length > 0 ? perProfile : undefined,
+    };
+}
+
+function parseCircuitBreakerConfig(fileConfig: Record<string, unknown>): CircuitBreakerConfig {
+    const raw = fileConfig.circuit_breaker as Record<string, unknown> | undefined;
+    if (!raw || typeof raw !== "object") {
+        return { enabled: true, failureThreshold: 5, cooldownBaseMs: 60_000, cooldownFactor: 1.5, cooldownMaxMs: 300_000 };
+    }
+    return {
+        enabled: raw.enabled !== false,
+        failureThreshold: num(raw.failure_threshold, 5),
+        cooldownBaseMs: num(raw.cooldown_base_ms, 60_000),
+        cooldownFactor: num(raw.cooldown_factor, 1.5),
+        cooldownMaxMs: num(raw.cooldown_max_ms, 300_000),
     };
 }
 
@@ -1716,6 +1744,17 @@ export function serializeConfigToObject(config: AppConfig): Record<string, unkno
             rl.per_profile = pp;
         }
         obj.rate_limiting = rl;
+    }
+
+    // circuit_breaker
+    if (config.circuitBreaker) {
+        obj.circuit_breaker = {
+            enabled: config.circuitBreaker.enabled,
+            failure_threshold: config.circuitBreaker.failureThreshold,
+            cooldown_base_ms: config.circuitBreaker.cooldownBaseMs,
+            cooldown_factor: config.circuitBreaker.cooldownFactor,
+            cooldown_max_ms: config.circuitBreaker.cooldownMaxMs,
+        };
     }
 
     // background_agent
