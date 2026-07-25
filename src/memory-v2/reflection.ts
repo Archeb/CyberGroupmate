@@ -292,6 +292,7 @@ export async function runReflection(
         try {
             const response = await callLLMWithFallback(messages, llmConfigs, {
                 caller: "reflection",
+                component: "reflection",
                 timeoutMs: reflectionTimeout,
                 // 不在单 profile 内重试同一超大 prompt（纯浪费 timeout）；
                 // 收缩回看范围 + profile fallback 才是真正的重试策略。
@@ -2125,6 +2126,7 @@ async function analyzeMergeWithLLM(
         ];
         const response = await callLLMWithFallback(messages, llmConfigs, {
             caller: "reflection",
+            component: "reflection",
             timeoutMs: resolveComponentTimeout("reflection"),
         });
 
@@ -2183,6 +2185,7 @@ async function analyzeCascadeMergeWithLLM(
         ];
         const response = await callLLMWithFallback(messages, llmConfigs, {
             caller: "reflection",
+            component: "reflection",
             timeoutMs: resolveComponentTimeout("reflection"),
         });
 

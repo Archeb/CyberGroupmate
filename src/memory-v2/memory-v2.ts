@@ -2136,7 +2136,7 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
             { role: "user", content: `查询：${query}\n\n相关记忆：\n${topicSummaries}\n${factSummaries}` },
         ];
 
-        const response = await callLLMWithFallback(messages, memoryConfigs, { caller: "memory", timeoutMs: resolveComponentTimeout("memory") });
+        const response = await callLLMWithFallback(messages, memoryConfigs, { caller: "memory", component: "memory", timeoutMs: resolveComponentTimeout("memory") });
         return response.content.trim();
     }
 
@@ -2304,7 +2304,7 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
             { role: "user", content: intent },
         ];
 
-        const response = await callLLMWithFallback(messages, memoryConfigs, { caller: "memory", timeoutMs: resolveComponentTimeout("memory") });
+        const response = await callLLMWithFallback(messages, memoryConfigs, { caller: "memory", component: "memory", timeoutMs: resolveComponentTimeout("memory") });
         try {
             const parsed = JSON.parse(response.content.replace(/```json?\s*/g, "").replace(/```/g, "").trim());
             return {
@@ -2341,7 +2341,7 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
             { role: "user", content: `问题：${intent}\n\n对话记录：\n${contextParts.join("\n\n---\n\n")}` },
         ];
 
-        const response = await callLLMWithFallback(messages, memoryConfigs, { caller: "memory", timeoutMs: resolveComponentTimeout("memory") });
+        const response = await callLLMWithFallback(messages, memoryConfigs, { caller: "memory", component: "memory", timeoutMs: resolveComponentTimeout("memory") });
         return response.content.trim();
     }
 

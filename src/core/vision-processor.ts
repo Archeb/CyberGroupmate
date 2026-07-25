@@ -847,8 +847,9 @@ export async function describeImage(
         },
     ];
 
-    const response = await callLLMWithFallback(messages, visionConfigs, { caller: "vision", timeoutMs: resolveComponentTimeout("vision") });
-    return normalizeVisionDescription(response.content);
+    const response = await callLLMWithFallback(messages, visionConfigs, { caller: "vision", component: "vision", timeoutMs: resolveComponentTimeout("vision") });
+    const collapseNewlines = !trimmedPrompt;
+    return normalizeVisionDescription(response.content, collapseNewlines);
 }
 
 /**
@@ -886,7 +887,7 @@ async function describeSticker(
         },
     ];
 
-    const response = await callLLMWithFallback(messages, visionConfigs, { caller: "vision" });
+    const response = await callLLMWithFallback(messages, visionConfigs, { caller: "vision", component: "vision" });
     const raw = response.content.trim();
 
     // 尝试解析 JSON（先直接解析，失败再从文本中抽取 {...} 片段救一把）

@@ -762,7 +762,7 @@ async function enrichWithOpenGraph(
                         imageParts: [{ url: dataUri }],
                     },
                 ];
-                const response = await callLLMWithFallback(visionMessages, visionLlmConfigs, { caller: "og-vision", timeoutMs: resolveComponentTimeout("vision") });
+                const response = await callLLMWithFallback(visionMessages, visionLlmConfigs, { caller: "og-vision", component: "vision", timeoutMs: resolveComponentTimeout("vision") });
                 const description = response.content.trim();
 
                 const entry = {

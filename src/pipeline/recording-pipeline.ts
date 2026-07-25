@@ -483,7 +483,7 @@ export class RecordingPipeline extends EventEmitter {
 
         let response;
         try {
-            response = await callLLMWithFallback(llmMessages, resolveComponentProfiles("recording_cluster"), { caller: "recording-cluster", timeoutMs: resolveComponentTimeout("recording_cluster") });
+            response = await callLLMWithFallback(llmMessages, resolveComponentProfiles("recording_cluster"), { caller: "recording-cluster", component: "recording_cluster", timeoutMs: resolveComponentTimeout("recording_cluster") });
         } catch (err) {
             // 保底回退：LLM 彻底失败（超时/网关，所有 profile+重试用尽）时不抛出，降级为本地单话题归类。
             // 关键：这样本批次仍被记录并从 buffer 排空，绝不把整批 unshift 回 buffer 头触发死亡螺旋。
@@ -642,7 +642,7 @@ export class RecordingPipeline extends EventEmitter {
 
         let response;
         try {
-            response = await callLLMWithFallback(llmMessages, resolveComponentProfiles("recording_triage"), { caller: "recording-triage", timeoutMs: resolveComponentTimeout("recording_triage") });
+            response = await callLLMWithFallback(llmMessages, resolveComponentProfiles("recording_triage"), { caller: "recording-triage", component: "recording_triage", timeoutMs: resolveComponentTimeout("recording_triage") });
         } catch (err) {
             // 保底回退：triage LLM 彻底失败时不抛出（否则 flush 进 catch → 回退 buffer → 死亡螺旋）。
             // 返回空 triage：话题仍按 clustering 落盘，仅缺 LLM 摘要（后续 reflection 可补）。
@@ -694,7 +694,7 @@ export class RecordingPipeline extends EventEmitter {
             ];
 
             try {
-                const retryResponse = await callLLMWithFallback(retryMessages, resolveComponentProfiles("recording_triage"), { caller: "recording-triage", timeoutMs: resolveComponentTimeout("recording_triage") });
+                const retryResponse = await callLLMWithFallback(retryMessages, resolveComponentProfiles("recording_triage"), { caller: "recording-triage", component: "recording_triage", timeoutMs: resolveComponentTimeout("recording_triage") });
                 const retryJson = retryResponse.content
                     .replace(/```json\s*/g, "")
                     .replace(/```\s*/g, "")

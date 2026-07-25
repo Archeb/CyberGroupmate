@@ -262,6 +262,7 @@ export async function runMetaSession(
         try {
             const response = await llmCaller(messages, llmConfigs, {
                 caller: "meta-session",
+                component: "meta",
                 stop: [META_SANDBOX_OBSERVATION_MARKER],
                 timeoutMs: config.llmTimeoutMs,
                 ...(config.contextManifest ? { contextManifest: config.contextManifest } : {}),

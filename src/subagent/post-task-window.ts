@@ -802,6 +802,7 @@ async function judgePostTaskFollowUpWithLLM(input: PostTaskFollowUpJudgeInput): 
     ];
     const response = await callLLMWithFallback(llmMessages, profiles, {
         caller: "post-task-followup",
+        component: hasDedicatedRoute ? "post_task_followup" : "recording_triage",
         timeoutMs,
     });
     return parseFollowUpJudgeResult(response.content);

@@ -99,6 +99,7 @@ export class StickerDetector {
 
         const response = await callLLMWithFallback(messages, this.deps.visionConfigs, {
             caller: "sticker-detector",
+            component: "vision",
         });
 
         const raw = response.content.trim();

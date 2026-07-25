@@ -524,7 +524,7 @@ async function generateBriefing(
     ];
 
     try {
-        const response = await callLLMWithFallback(briefingMessages, llmConfigs, { caller: "context-manager", timeoutMs: resolveComponentTimeout("compact") });
+        const response = await callLLMWithFallback(briefingMessages, llmConfigs, { caller: "context-manager", component: "compact", timeoutMs: resolveComponentTimeout("compact") });
         const briefing = response.content.trim();
 
         // 检查 briefing 是否超过预算
