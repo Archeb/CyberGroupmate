@@ -15,11 +15,12 @@ export { type LLMConfig } from "./config.js";
 // 从 llm/types.ts 重新导出类型，保持向后兼容
 export { type ImagePart, type ChatMessage, type LLMResponse } from "./llm/types.js";
 
-import type { LLMConfig } from "./config.js";
+import type { LLMConfig, RoutingComponentKey } from "./config.js";
 import type { ChatMessage, LLMResponse } from "./llm/types.js";
 import type { ContextManifest } from "../context-engine/types.js";
 import { getOrCreatePool } from "./llm-pool.js";
 import { rateLimiter } from "./llm-rate-limiter.js";
+import { profileBreaker } from "./llm-profile-breaker.js";
 import { loadConfig } from "./config.js";
 import { createLogger } from "./logger.js";
 import { sanitizePromptText } from "./text-safety.js";
@@ -153,6 +154,8 @@ export interface LLMCallOptions {
     contextManifest?: ContextManifest;
     /** 外部取消信号。用于上层在新消息到达时中断本次推理并重建 prompt。 */
     abortSignal?: AbortSignal;
+    /** 组件身份标识，用于 per-component 熔断器状态隔离 */
+    component?: RoutingComponentKey;
 }
 
 export const LLM_PENDING_MESSAGE_ABORT = "pending_message";
@@ -650,45 +653,67 @@ export async function callLLMWithFallback(
     if (configs.length === 0) {
         throw new Error("callLLMWithFallback: no LLM configs provided");
     }
-    if (configs.length === 1) {
-        return callLLM(messages, configs[0], options);
-    }
 
+    const component = options?.component;
+    const breakerOn = profileBreaker.getConfig().enabled && !!component;
+    let triedAny = false;
     let lastError: Error | null = null;
+
     for (let i = 0; i < configs.length; i++) {
+        const cfg = configs[i];
+        const profileName = cfg.name ?? `${cfg.model}:${cfg.baseUrl}`;
+        if (breakerOn && component) {
+            const acq = profileBreaker.tryAcquire(component, profileName);
+            if (!acq.try) continue; // open 或探针在途：跳过该 profile
+        }
         try {
-            return await callLLM(messages, configs[i], options);
+            const result = await callLLM(messages, cfg, options);
+            if (breakerOn && component) profileBreaker.recordSuccess(component, profileName);
+            return result;
         } catch (err) {
-            if (isLLMInterruptedByPendingMessage(err)) {
-                throw err;
-            }
+            // pending-message 中断：不计入熔断，立即上抛
+            if (isLLMInterruptedByPendingMessage(err)) throw err;
+            if (breakerOn && component) profileBreaker.recordFailure(component, profileName);
             lastError = err instanceof Error ? err : new Error(String(err));
+            triedAny = true;
 
-            // 最后一个 config 也失败 → 抛出
-            if (i === configs.length - 1) {
-                throw lastError;
+            // 分类仅用于日志（非最后一个 config 才记 "尝试下一个 profile"）
+            if (i < configs.length - 1) {
+                const msg = lastError.message;
+                const reason = (msg.includes("429") || msg.includes("quota") || msg.includes("RESOURCE_EXHAUSTED") ||
+                    msg.includes("rate limit") || msg.includes("overloaded") || msg.includes("402") ||
+                    msg.includes("payment") || msg.includes("insufficient"))
+                    ? "quota"
+                    : (msg.includes("401") || msg.includes("403") || msg.includes("PERMISSION_DENIED") ||
+                        msg.includes("billing") || msg.includes("Unauthorized") || msg.includes("Forbidden"))
+                        ? "auth"
+                        : "other";
+
+                log.warn("callLLMWithFallback: 错误，尝试下一个 profile", {
+                    failedModel: cfg.model,
+                    nextModel: configs[i + 1]?.model,
+                    attempt: i + 1,
+                    total: configs.length,
+                    reason,
+                    error: msg.slice(0, 150),
+                });
             }
-
-            // 分类仅用于日志
-            const msg = lastError.message;
-            const reason = (msg.includes("429") || msg.includes("quota") || msg.includes("RESOURCE_EXHAUSTED") ||
-                msg.includes("rate limit") || msg.includes("overloaded") || msg.includes("402") ||
-                msg.includes("payment") || msg.includes("insufficient"))
-                ? "quota"
-                : (msg.includes("401") || msg.includes("403") || msg.includes("PERMISSION_DENIED") ||
-                    msg.includes("billing") || msg.includes("Unauthorized") || msg.includes("Forbidden"))
-                    ? "auth"
-                    : "other";
-
-            log.warn("callLLMWithFallback: 错误，尝试下一个 profile", {
-                failedModel: configs[i].model,
-                nextModel: configs[i + 1]?.model,
-                attempt: i + 1,
-                total: configs.length,
-                reason,
-                error: msg.slice(0, 150),
-            });
         }
     }
+
+    // 所有 profile 均被熔断跳过且未尝试任何一个 → reset 后强制重试一轮（兜底，避免熔断自身导致服务不可用）
+    if (!triedAny && configs.length > 0) {
+        log.warn("callLLMWithFallback: 所有 profile 熔断中,reset 后强制重试一轮", { component });
+        profileBreaker.resetAll();
+        for (let i = 0; i < configs.length; i++) {
+            try {
+                return await callLLM(messages, configs[i], options);
+            } catch (err) {
+                if (isLLMInterruptedByPendingMessage(err)) throw err;
+                lastError = err instanceof Error ? err : new Error(String(err));
+            }
+        }
+    }
+
     throw lastError ?? new Error("callLLMWithFallback: unexpected state");
 }
