@@ -505,7 +505,7 @@ export class CodeActExecutor {
     /** Vision 配置 */
     private visionConfig: VisionConfig | undefined;
     /** Vision tier LLM 配置（独立 vision 模型，Path B 描述用） */
-    private visionLlmConfig: LLMConfig | undefined;
+    private visionLlmConfig: LLMConfig[] | undefined;
     /** 媒体下载函数（委托给 adapter） */
     private downloadFn: ((fileId: string) => Promise<Buffer>) | undefined;
     /** 平台无关的 typing 状态发送函数（由宿主注入，如 Telegram sendTyping） */
@@ -524,7 +524,7 @@ export class CodeActExecutor {
         visionConfig?: VisionConfig,
         downloadFn?: (fileId: string) => Promise<Buffer>,
         sendTyping?: (chatId: string) => Promise<void>,
-        visionLlmConfig?: LLMConfig,
+        visionLlmConfig?: LLMConfig[],
         mediaDownloader?: MediaDownloader,
         formatMention?: (rawUserId: string, username?: string) => string | undefined,
         globalState?: Pick<GlobalState, "getSessionDigests" | "updateDispatchedSubagentTask">,

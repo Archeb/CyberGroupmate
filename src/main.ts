@@ -1028,7 +1028,7 @@ async function main(): Promise<void> {
         const persona = currentConfig.persona;
         const visionConfig = currentConfig.vision;
         const visionLlmConfig = currentConfig.llmRouting.vision
-            ? resolveComponentProfiles("vision", currentConfig)[0]
+            ? resolveComponentProfiles("vision", currentConfig)
             : undefined;
         const chatAdapter = adapters.find((item) => chatId.startsWith(item.platform + ":"));
         const formatMention = chatAdapter
