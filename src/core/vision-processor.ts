@@ -829,13 +829,14 @@ async function processSingleSticker(
 }
 
 /**
- * 调用 Vision LLM 描述图片
+ * 按 model@baseUrl 去重，保留首次出现的顺序。
+ * 用于把主模型拼到 vision 链前面时，避免同一个 profile 被重试两遍。
  */
 function dedupConfigs(configs: LLMConfig[]): LLMConfig[] {
     const seen = new Set<string>();
     const out: LLMConfig[] = [];
     for (const c of configs) {
-        const id = c.name ?? `${c.model}@${c.baseUrl}`;
+        const id = `${c.model}@${c.baseUrl}`;
         if (seen.has(id)) continue;
         seen.add(id);
         out.push(c);
@@ -843,6 +844,9 @@ function dedupConfigs(configs: LLMConfig[]): LLMConfig[] {
     return out;
 }
 
+/**
+ * 调用 Vision LLM 描述图片
+ */
 export async function describeImage(
     imageBuffer: Buffer,
     mimeType: string,
