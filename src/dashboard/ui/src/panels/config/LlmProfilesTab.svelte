@@ -103,6 +103,7 @@
           <label class="cfg-check" title="勾选后不传 temperature 参数（适用于 gpt-5.5 等不支持的模型）"><input type="checkbox" class="checkbox checkbox-xs" bind:checked={p.omit_temperature} /><span>Omit Temperature</span></label>
           <label class="cfg-field"><span class="cfg-label">Max Tokens</span><input type="number" class="input input-xs input-bordered w-full" bind:value={p.maxTokens} min="1" /></label>
           <label class="cfg-field"><span class="cfg-label">Max Context Tokens</span><input type="number" class="input input-xs input-bordered w-full" bind:value={p.maxContextTokens} placeholder="(默认)" /></label>
+          <label class="cfg-check" title="勾选后忽略调用方设置的 stop sequences，不向模型 API 发送 stop 参数"><input type="checkbox" class="checkbox checkbox-xs" bind:checked={p.omit_stop_sequence} /><span>Omit Stop Sequence</span></label>
           <label class="cfg-field"><span class="cfg-label">Thinking Level</span>
             <select class="select select-xs select-bordered w-full" bind:value={p.thinkingLevel}>
               <option value={undefined}>无</option><option value="none">none</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option><option value="xhigh">xhigh</option>

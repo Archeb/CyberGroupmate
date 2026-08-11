@@ -462,7 +462,9 @@ async function _callLLMSingleKeyInner(
             const prefill = (options?.prefill && config.supportsPrefill !== false)
                 ? options.prefill
                 : undefined;
-            const stop = options?.stop;
+            // 某些模型或兼容网关不接受 stop 参数；由 profile 统一屏蔽，
+            // 这样 fallback chain 中每个 profile 都能按自身能力决定是否发送。
+            const stop = config.omit_stop_sequence ? undefined : options?.stop;
 
             // 创建本次 fetch 的 AbortSignal：合并超时 + 用户取消
             const timeoutSignal = AbortSignal.timeout(timeoutMs);
