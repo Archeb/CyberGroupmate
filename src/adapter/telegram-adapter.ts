@@ -14,6 +14,7 @@ import { ConnectionTracker } from "./connection-tracker.js";
 import { BACKFILL_FLAG, BACKFILL_STALE_FLAG, isNewerThanWatermark, resolveBackfillConfig, summarizeBackfillNotes } from "./backfill.js";
 import { composeChatId, parseChatId, isTelegram, isValidCompositeChatId, ensureCompositeId, getPlatform } from "../core/chat-id.js";
 import { createLogger } from "../core/logger.js";
+import { shouldDropInbound } from "../core/inbound-filter.js";
 import { userGate } from "./user-gate.js";
 import type { MediaDownloader } from "../core/media-downloader.js";
 import * as fs from "node:fs";
@@ -310,9 +311,8 @@ export class TelegramAdapter implements PlatformAdapter {
     // ─── /mute 状态（invisible/blocked 已迁移到跨平台 userGate） ───
     private mutedChats: Map<string, number> = new Map();  // chatId → expiry timestamp (ms)
 
-    /** 白名单 ID 集合（配置加载时构建，与 rawId 比对） */
-    private readonly whitelistGroupIds: Set<string>;
-    private readonly whitelistUserIds: Set<string>;
+    /** 旧白名单群组仍可作为 bot 模式 pts 预热来源。 */
+    private readonly legacyPrewarmGroupIds: Set<string>;
 
     constructor(
         private config: TelegramConfig,
@@ -322,9 +322,7 @@ export class TelegramAdapter implements PlatformAdapter {
         private createClient: TelegramClientFactory = defaultTelegramClientFactory,
         private mediaDownloader?: MediaDownloader,
     ) {
-        const wl = config.whitelist;
-        this.whitelistGroupIds = new Set((wl?.groups ?? []).map(normalizeWhitelistId));
-        this.whitelistUserIds = new Set((wl?.users ?? []).map(normalizeWhitelistId));
+        this.legacyPrewarmGroupIds = new Set((config.whitelist?.groups ?? []).map(normalizeWhitelistId));
     }
 
     async start(): Promise<void> {
@@ -399,7 +397,7 @@ export class TelegramAdapter implements PlatformAdapter {
         if (this.config.mode === "bot" && typeof client.getChat === "function") {
             const prewarmIds = this.config.prewarm?.groups?.length
                 ? new Set(this.config.prewarm.groups.map(normalizeWhitelistId))
-                : this.whitelistGroupIds;
+                : this.legacyPrewarmGroupIds;
             for (const rawId of prewarmIds) {
                 const numericId = Number(rawId);
                 if (!Number.isSafeInteger(numericId)) continue;
@@ -422,11 +420,13 @@ export class TelegramAdapter implements PlatformAdapter {
             });
             if (!normalized || !normalized.messageId || !normalized.text) return;
 
-            // ─── 入站白名单（开启时仅处理列出的群组或私聊） ───
-            if (!this.passesTelegramWhitelist(normalized)) {
-                log.debug("白名单拒绝", { chatId: normalized.chatId, isDirectMessage: normalized.isDirectMessage });
-                return;
-            }
+            // Commands are consumed inside the adapter, before nc.message reaches the
+            // coordinator, so apply the same shared filter here to prevent replies
+            // from chats that the global filter rejects.
+            if (shouldDropInbound(loadConfig().chatFilter, {
+                chatId: normalized.chatId,
+                userId: normalized.userId,
+            })) return;
 
             // ─── /invisible & /mute 命令拦截 ───
             // 补抓的历史命令不再执行（几小时前的 /mute 现在执行毫无意义），只当普通消息落盘。
@@ -668,7 +668,6 @@ export class TelegramAdapter implements PlatformAdapter {
                     const normalized = await this.normalizeIncomingMessage(raw, { skipMediaDownload });
                     if (!normalized || !normalized.messageId || !normalized.text) continue;
                     if (normalized.chatId !== chatId) continue;
-                    if (!this.passesTelegramWhitelist(normalized)) continue;
                     // 自己发的消息不需要补抓
                     if (selfCompositeId && normalized.userId === selfCompositeId) continue;
                     if (!isNewerThanWatermark(
@@ -2322,27 +2321,6 @@ export class TelegramAdapter implements PlatformAdapter {
             result.push({ chatId, expiry, remaining: this.getMuteRemainingHours(chatId) });
         }
         return result;
-    }
-
-    /**
-     * 入站白名单：enabled 时，群组消息仅当 chat rawId 在 groups 中通过；
-     * 私聊仅当 rawId 在 users 中通过。
-     */
-    private passesTelegramWhitelist(
-        normalized: NormalizedIncomingMessage,
-    ): boolean {
-        const wl = this.config.whitelist;
-        if (!wl?.enabled) return true;
-        let rawId: string;
-        try {
-            rawId = parseChatId(normalized.chatId).rawId;
-        } catch {
-            rawId = normalizeWhitelistId(normalized.chatId);
-        }
-        if (normalized.isDirectMessage) {
-            return this.whitelistUserIds.has(rawId);
-        }
-        return this.whitelistGroupIds.has(rawId);
     }
 
     /** 将指定聊天标记为已读（通过 Telegram readHistory） */

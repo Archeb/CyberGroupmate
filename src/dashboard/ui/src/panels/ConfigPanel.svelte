@@ -23,7 +23,7 @@
   import RateLimitingTab from "./config/RateLimitingTab.svelte";
   import BackgroundAgentTab from "./config/BackgroundAgentTab.svelte";
   import MetricsTab from "./config/MetricsTab.svelte";
-  import ChatFilterTab from "./config/ChatFilterTab.svelte";
+  import AccessControlTab from "./config/AccessControlTab.svelte";
 
   let config = null;
   let originalConfig = null;
@@ -69,7 +69,7 @@
     { id: "grounding", label: "Grounding", icon: "fa-globe" },
     { id: "rateLimiting", label: "请求限速", icon: "fa-gauge-high" },
     { id: "backgroundAgent", label: "做梦系统", icon: "fa-moon" },
-    { id: "chatFilter", label: "聊天过滤", icon: "fa-filter" },
+    { id: "accessControl", label: "访问控制", icon: "fa-shield-halved" },
     { id: "metrics", label: "Metrics", icon: "fa-chart-line" },
     { id: "envVars", label: "环境变量", icon: "fa-key" },
   ];
@@ -147,15 +147,9 @@
       onebotEnabled = !!(config.onebot?.wsUrl && config.onebot?.selfId);
       // 始终确保 UI 有空对象可绑定
       if (!config.telegram) config.telegram = { mode: 'bot', botToken: '', apiId: '', apiHash: '', phone: '' };
-      if (!config.telegram.whitelist) {
-        config.telegram.whitelist = { enabled: false, groups: [], users: [] };
-      }
       if (!config.discord) config.discord = { botToken: "", applicationId: "" };
       if (!config.onebot) config.onebot = { wsUrl: '', selfId: '', sendFileAsDataUrl: false };
       if (config.onebot.sendFileAsDataUrl == null) config.onebot.sendFileAsDataUrl = false;
-      if (!config.onebot.whitelist) {
-        config.onebot.whitelist = { enabled: false, groups: [], users: [] };
-      }
       if (!config.onebot.humanizedDelay) {
         config.onebot.humanizedDelay = {
           enabled: false,
@@ -194,16 +188,6 @@
       }
     }
     if (JSON.stringify(config.envVars) !== JSON.stringify(originalConfig.envVars)) return true;
-    if (
-      JSON.stringify(config.telegram?.whitelist) !==
-      JSON.stringify(originalConfig.telegram?.whitelist)
-    )
-      return true;
-    if (
-      JSON.stringify(config.onebot?.whitelist) !==
-      JSON.stringify(originalConfig.onebot?.whitelist)
-    )
-      return true;
     return false;
   }
 
@@ -658,8 +642,8 @@
             <RateLimitingTab bind:config profileNames={Object.keys(config.llmProfiles ?? {})} />
           {:else if currentSection === "backgroundAgent"}
             <BackgroundAgentTab bind:config {pwFocus} {pwBlur} />
-          {:else if currentSection === "chatFilter"}
-            <ChatFilterTab bind:config />
+          {:else if currentSection === "accessControl"}
+            <AccessControlTab bind:config />
           {:else if currentSection === "metrics"}
             <MetricsTab bind:config />
           {:else if currentSection === "grounding"}

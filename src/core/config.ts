@@ -154,7 +154,7 @@ export interface NotificationConfig {
     mentionKeywords: string[];
 }
 
-/** Telegram 入站白名单：仅当 enabled 为 true 时按群组 / 私聊 ID 过滤 */
+/** @deprecated 仅用于迁移旧配置；新配置统一使用 chat_filter */
 export interface TelegramWhitelistConfig {
     /** 是否启用白名单。false 时不拒绝任何聊天 */
     enabled: boolean;
@@ -170,7 +170,7 @@ export interface TelegramConfig {
     apiId: string;
     apiHash: string;
     phone: string;
-    /** 入站白名单（可选） */
+    /** @deprecated 旧版入站白名单，仅用于迁移和 prewarm 兼容 */
     whitelist?: TelegramWhitelistConfig;
     /** bot 模式 mtcute pts 预热群列表（独立于白名单，用于无白名单时也能预热指定群） */
     prewarm?: { groups: string[] };
@@ -199,7 +199,7 @@ export interface OneBotConfig {
     selfId: string;
     /** 是否将本地文件编码为 data URL 发送（跨机器部署时建议开启） */
     sendFileAsDataUrl?: boolean;
-    /** 入站白名单（可选） */
+    /** @deprecated 旧版入站白名单，仅用于迁移 */
     whitelist?: {
         enabled: boolean;
         /** 群号列表 */
@@ -429,7 +429,7 @@ export interface MetricsConfig {
     path?: string;
 }
 
-/** 聊天过滤配置：按 chatId 黑/白名单过滤入站消息 */
+/** 全平台入站过滤配置：按会话或发送者黑/白名单过滤消息 */
 export interface ChatFilterConfig {
     /** 是否启用。默认 false */
     enabled?: boolean;
@@ -438,8 +438,10 @@ export interface ChatFilterConfig {
      * whitelist（白名单）：仅列表内的 chatId 被处理，其余全部丢弃。
      */
     mode?: "blacklist" | "whitelist";
-    /** chatId 列表（composite 如 "telegram:-100..." 或 raw id 皆可匹配） */
+    /** chatId filter（支持 composite、raw ID 和 `*` 通配符） */
     chatIds?: string[];
+    /** sender userId filter（支持 composite、raw ID 和 `*` 通配符） */
+    userIds?: string[];
 }
 
 /**
@@ -917,16 +919,75 @@ function parseMetricsConfig(fileConfig: Record<string, unknown>): MetricsConfig 
 
 function parseChatFilterConfig(fileConfig: Record<string, unknown>): ChatFilterConfig | undefined {
     const raw = (fileConfig.chat_filter ?? fileConfig.chatFilter) as Record<string, unknown> | undefined;
-    if (!raw || typeof raw !== "object") return undefined;
-    const mode = str(raw.mode);
-    const idsRaw = raw.chat_ids ?? raw.chatIds;
-    return {
-        enabled: raw.enabled != null ? Boolean(raw.enabled) : undefined,
-        mode: mode === "whitelist" ? "whitelist" : mode === "blacklist" ? "blacklist" : undefined,
-        chatIds: Array.isArray(idsRaw)
-            ? idsRaw.map(v => String(v).trim()).filter(Boolean)
-            : undefined,
+    if (raw && typeof raw === "object") {
+        const mode = str(raw.mode);
+        const chatIdsRaw = raw.chat_ids ?? raw.chatIds;
+        const userIdsRaw = raw.user_ids ?? raw.userIds;
+        return {
+            enabled: raw.enabled != null ? Boolean(raw.enabled) : undefined,
+            mode: mode === "whitelist" ? "whitelist" : mode === "blacklist" ? "blacklist" : undefined,
+            chatIds: stringList(chatIdsRaw),
+            userIds: stringList(userIdsRaw),
+        };
+    }
+
+    return migrateLegacyWhitelists(fileConfig);
+}
+
+function stringList(value: unknown): string[] | undefined {
+    return Array.isArray(value)
+        ? value.map(item => String(item).trim()).filter(Boolean)
+        : undefined;
+}
+
+/** Convert adapter-local allowlists into one global whitelist on load. */
+function migrateLegacyWhitelists(fileConfig: Record<string, unknown>): ChatFilterConfig | undefined {
+    const telegram = (fileConfig.telegram ?? {}) as Record<string, unknown>;
+    const discord = (fileConfig.discord ?? {}) as Record<string, unknown>;
+    const onebot = (fileConfig.onebot ?? {}) as Record<string, unknown>;
+    const telegramWhitelist = telegram.whitelist as Record<string, unknown> | undefined;
+    const onebotWhitelist = onebot.whitelist as Record<string, unknown> | undefined;
+    const hasTelegramWhitelist = telegramWhitelist?.enabled === true;
+    const hasOneBotWhitelist = onebotWhitelist?.enabled === true;
+
+    if (!hasTelegramWhitelist && !hasOneBotWhitelist) return undefined;
+
+    const chatIds: string[] = [];
+    const add = (value: string) => {
+        if (value && !chatIds.includes(value)) chatIds.push(value);
     };
+    const prefixed = (platform: string, value: unknown) => {
+        const id = String(value).trim();
+        return id.startsWith(`${platform}:`) ? id : `${platform}:${id}`;
+    };
+
+    if (Object.keys(telegram).length > 0) {
+        if (hasTelegramWhitelist) {
+            for (const id of stringList(telegramWhitelist?.groups) ?? []) add(prefixed("telegram", id));
+            for (const id of stringList(telegramWhitelist?.users) ?? []) add(prefixed("telegram", id));
+        } else {
+            add("telegram:*");
+        }
+    }
+
+    if (Object.keys(onebot).length > 0) {
+        if (hasOneBotWhitelist) {
+            for (const rawId of stringList(onebotWhitelist?.groups) ?? []) {
+                const id = String(rawId).replace(/^onebot:/, "").replace(/^group:/, "");
+                add(`onebot:group:${id}`);
+            }
+            for (const rawId of stringList(onebotWhitelist?.users) ?? []) {
+                const id = String(rawId).replace(/^onebot:/, "").replace(/^private:/, "");
+                add(`onebot:private:${id}`);
+            }
+        } else {
+            add("onebot:*");
+        }
+    }
+
+    if (Object.keys(discord).length > 0) add("discord:*");
+
+    return { enabled: true, mode: "whitelist", chatIds, userIds: [] };
 }
 
 function parseBackfillConfig(fileConfig: Record<string, unknown>): BackfillConfig | undefined {
@@ -1487,15 +1548,19 @@ export function serializeConfigToObject(config: AppConfig): Record<string, unkno
                 max_delay: config.telegram.humanizedDelay.maxDelay,
             };
         }
-        if (config.telegram.whitelist) {
+        if (config.telegram.whitelist && !config.chatFilter) {
             tg.whitelist = {
                 enabled: config.telegram.whitelist.enabled,
                 groups: config.telegram.whitelist.groups,
                 users: config.telegram.whitelist.users,
             };
         }
-        if (config.telegram.prewarm) {
-            tg.prewarm = { groups: config.telegram.prewarm.groups };
+        const prewarmGroups = config.telegram.prewarm?.groups
+            ?? (config.chatFilter && config.telegram.whitelist?.enabled
+                ? config.telegram.whitelist.groups
+                : undefined);
+        if (prewarmGroups?.length) {
+            tg.prewarm = { groups: prewarmGroups };
         }
         obj.telegram = tg;
     }
@@ -1518,7 +1583,7 @@ export function serializeConfigToObject(config: AppConfig): Record<string, unkno
         if (config.onebot.sendFileAsDataUrl != null) {
             ob.send_file_as_data_url = config.onebot.sendFileAsDataUrl;
         }
-        if (config.onebot.whitelist) {
+        if (config.onebot.whitelist && !config.chatFilter) {
             ob.whitelist = {
                 enabled: config.onebot.whitelist.enabled,
                 groups: config.onebot.whitelist.groups,
@@ -1807,6 +1872,7 @@ export function serializeConfigToObject(config: AppConfig): Record<string, unkno
         if (config.chatFilter.enabled != null) cf.enabled = config.chatFilter.enabled;
         if (config.chatFilter.mode) cf.mode = config.chatFilter.mode;
         if (config.chatFilter.chatIds && config.chatFilter.chatIds.length > 0) cf.chat_ids = config.chatFilter.chatIds;
+        if (config.chatFilter.userIds && config.chatFilter.userIds.length > 0) cf.user_ids = config.chatFilter.userIds;
         if (Object.keys(cf).length > 0) obj.chat_filter = cf;
     }
 

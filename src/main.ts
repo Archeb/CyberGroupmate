@@ -13,6 +13,7 @@
 import { NotificationCenter, type NotificationEvent } from "./event/notification-center.js";
 import { ensureCompositeId, getRawId, getPlatform, getGroupModelKey } from "./core/chat-id.js";
 import { userGate } from "./adapter/user-gate.js";
+import { shouldDropInbound } from "./core/inbound-filter.js";
 import { SandboxPool } from "./sandbox/sandbox-pool.js";
 import type { ShellWakeEvent } from "./sandbox/sandbox.js";
 import { installSkillsDependencies } from "./sandbox/skill-loader.js";
@@ -299,7 +300,6 @@ async function main(): Promise<void> {
             apiId: appConfig.telegram.apiId ? "✓" : "✗",
             apiHash: appConfig.telegram.apiHash ? "✓" : "✗",
             botToken: appConfig.telegram.botToken ? "✓" : "✗",
-            whitelist: appConfig.telegram.whitelist?.enabled ? "on" : "off",
         });
     }
     if (appConfig.discord) {
@@ -312,9 +312,14 @@ async function main(): Promise<void> {
         log.info("OneBot 配置", {
             wsUrl: appConfig.onebot.wsUrl ? "✓" : "✗",
             selfId: appConfig.onebot.selfId ? "✓" : "✗",
-            whitelist: appConfig.onebot.whitelist?.enabled ? "on" : "off",
         });
     }
+    log.info("全平台入站 Filter", {
+        enabled: appConfig.chatFilter?.enabled === true,
+        mode: appConfig.chatFilter?.mode ?? "blacklist",
+        chats: appConfig.chatFilter?.chatIds?.length ?? 0,
+        users: appConfig.chatFilter?.userIds?.length ?? 0,
+    });
 
     initMcpBridge({
         persistPath: MCP_CONNECTIONS_PATH,
@@ -732,23 +737,25 @@ async function main(): Promise<void> {
         // 补抓（离线期间漏掉的历史消息）标记：过滤/落盘/聚类照常，唤醒走合并路径
         const isBackfilled = (event as Record<string, unknown>)[BACKFILL_FLAG] === true;
 
-        // ─── 聊天过滤（chatFilter）：按 chatId 黑/白名单丢弃入站消息 ───
+        const rawSenderId = String(event.userId ?? event.user_id ?? event.senderId ?? "").trim();
+        const senderUid = rawSenderId
+            ? ensureCompositeId(getPlatform(chatId), rawSenderId)
+            : "";
+
+        // ─── 全平台入站过滤：按会话 / 发送者 filter 丢弃消息 ───
         // 动态读取 loadConfig()（支持热重载，无需重启）。命中过滤则完全丢弃：
         // 不落盘、不进 Observer/RecordingPipeline、不触发任何后续处理。
         const chatFilter = loadConfig().chatFilter;
-        if (chatFilter?.enabled) {
-            const filterIds = chatFilter.chatIds ?? [];
-            const rawId = getRawId(chatId);
-            const listed = filterIds.some(id => id === chatId || id === rawId);
-            const dropped = (chatFilter.mode ?? "blacklist") === "whitelist" ? !listed : listed;
-            if (dropped) {
-                log.debug("chatFilter 丢弃入站消息", { chatId, mode: chatFilter.mode ?? "blacklist" });
-                return;
-            }
+        if (shouldDropInbound(chatFilter, { chatId, userId: senderUid })) {
+            log.debug("chatFilter 丢弃入站消息", {
+                chatId,
+                userId: senderUid,
+                mode: chatFilter?.mode ?? "blacklist",
+            });
+            return;
         }
 
         // ─── 跨平台用户闸门：隐身 / 紧急拉黑用户的消息直接丢弃（所有平台统一，无需重启） ───
-        const senderUid = ensureCompositeId(getPlatform(chatId), String(event.userId ?? event.user_id ?? event.senderId ?? ""));
         if (senderUid && userGate.shouldDrop(senderUid)) {
             log.debug("userGate 丢弃入站消息", { userId: senderUid, chatId });
             return;

@@ -1062,7 +1062,7 @@ interface TelegramClient {
         nc.dispose();
     });
 
-    it("should drop group messages when whitelist enabled and group not listed", async () => {
+    it("should leave legacy whitelist enforcement to the shared coordinator", async () => {
         const nc = makeNC();
         const events = captureEvents(nc);
         let newMessageHandler: ((msg: unknown) => void | Promise<void>) | null = null;
@@ -1104,7 +1104,8 @@ interface TelegramClient {
             sender: { id: 777, displayName: "Alice", isBot: false },
         });
 
-        assert.equal(events.length, 0);
+        assert.equal(events.length, 1);
+        assert.equal(events[0].type, "nc.message");
 
         await adapter.stop();
         nc.dispose();

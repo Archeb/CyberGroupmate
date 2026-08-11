@@ -1680,10 +1680,6 @@ export class OneBotAdapter implements PlatformAdapter {
             ? composeChatId("onebot", `group:${String(event.group_id ?? "")}`)
             : composeChatId("onebot", `private:${userId}`);
 
-        if (!this.isWhitelisted(messageType, String(event.group_id ?? ""), userId)) {
-            return null;
-        }
-
         const normalizedMessage = this.normalizeMessageSegments(event.message ?? event.raw_message ?? "");
         const displayName = event.sender?.card || event.sender?.nickname || userId;
         const messageId = String(event.message_id ?? "");
@@ -2065,13 +2061,6 @@ export class OneBotAdapter implements PlatformAdapter {
                     return `[${segment.type}]`;
             }
         }).join("");
-    }
-
-    private isWhitelisted(messageType: "private" | "group" | undefined, groupId: string, userId: string): boolean {
-        const wl = this.config.whitelist;
-        if (!wl?.enabled) return true;
-        if (messageType === "group") return wl.groups.includes(groupId);
-        return wl.users.includes(userId);
     }
 
     private async callAction(action: string, params: Record<string, unknown>): Promise<unknown> {

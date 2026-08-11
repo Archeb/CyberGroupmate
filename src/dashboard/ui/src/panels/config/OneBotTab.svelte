@@ -1,6 +1,5 @@
 <script>
   import { api } from '../../lib/api.js';
-  import MonacoEditor from '../../components/MonacoEditor.svelte';
 
   export let config;
   export let onebotEnabled = false;
@@ -104,50 +103,6 @@
       >
     </div>
   {/if}
-  <div class="divider text-xs opacity-50 my-3">
-    入站白名单 <span class="restart-hint"
-      ><i class="fa-solid fa-rotate-right"></i> 修改需重启</span
-    >
-  </div>
-  <p class="text-xs opacity-50 mb-2">启用后仅处理列表中的群聊或私聊；私聊按对方 QQ 号匹配。</p>
-  <label class="cfg-check mb-2">
-    <input
-      type="checkbox"
-      class="toggle toggle-xs"
-      bind:checked={config.onebot.whitelist.enabled}
-    />
-    <span>启用白名单</span>
-  </label>
-  <div class="cfg-grid-2">
-    <div class="cfg-field col-span-2"
-      ><span class="cfg-label">群号（每行一个）</span>
-      <MonacoEditor
-        language="plaintext"
-        height={120}
-        value={config.onebot.whitelist.groups.join("\n")}
-        on:change={(e) => {
-          config.onebot.whitelist.groups = e.detail.value
-            .split(/\r?\n/)
-            .map((s) => s.trim())
-            .filter(Boolean);
-        }}
-      /></div
-    >
-    <div class="cfg-field col-span-2"
-      ><span class="cfg-label">私聊 QQ 号（每行一个）</span>
-      <MonacoEditor
-        language="plaintext"
-        height={120}
-        value={config.onebot.whitelist.users.join("\n")}
-        on:change={(e) => {
-          config.onebot.whitelist.users = e.detail.value
-            .split(/\r?\n/)
-            .map((s) => s.trim())
-            .filter(Boolean);
-        }}
-      /></div
-    >
-  </div>
   <div class="divider text-xs opacity-50 my-3">
     偷表情包 <span class="restart-hint"><i class="fa-solid fa-rotate-right"></i> 修改需重启</span>
   </div>

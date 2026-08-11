@@ -195,6 +195,22 @@ backfill:
   # 需要时 agent 可以事后单独调平台 API 取。
   download_media: false
 
+# ─── 全平台入站访问控制 ───
+# 黑/白名单统一在消息进入协调器时执行，修改后热重载，无需重启。
+# chat_filter:
+#   enabled: false
+#   # blacklist: 丢弃命中项；whitelist: 仅处理命中项
+#   mode: blacklist
+#   # 会话 filter：支持 composite ID、raw ID 和 * 通配符
+#   chat_ids:
+#     - "telegram:-1001234567890"
+#     - "onebot:group:123456789"
+#     - "discord:*"
+#   # 发送者 filter：匹配用户在私聊或群聊中发出的消息
+#   user_ids:
+#     - "telegram:123456789"
+#     - "onebot:987654321"
+
 # ─── Telegram 设置 ───
 # 可选。telegram 和 discord 至少配置一个。
 telegram:
@@ -208,13 +224,6 @@ telegram:
   api_hash: ""
   # 手机号 (userbot 模式下使用；首次登录时会在终端提示输入 OTP / 2FA)
   phone: ""
-  # 入站白名单（可选）：enabled 为 true 时仅处理下列群组或私聊
-  # whitelist:
-  #   enabled: false
-  #   # 群组 / 超级群 / 频道 chat ID，每行一个（如 -1001234567890）
-  #   groups: []
-  #   # 私聊：对方用户 ID，每行一个
-  #   users: []
   # 拟人化发送延迟（多条消息连续发送时模拟打字速度）
   # humanized_delay:
   #   enabled: true
@@ -242,11 +251,6 @@ telegram:
 #   # 是否将本地文件编码为 data URL 后发送（跨机器部署建议开启）
 #   # 开启后，发送图片时会使用 data:image/png;base64,... 这类 payload，避免 file:// 路径不可达
 #   send_file_as_data_url: true
-#   # 入站白名单（可选）
-#   # whitelist:
-#   #   enabled: true
-#   #   groups: ["123456789"]
-#   #   users: []
 #   # 拟人化发送延迟（可选）
 #   # humanized_delay:
 #   #   enabled: true
