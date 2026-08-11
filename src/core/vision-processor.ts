@@ -399,7 +399,7 @@ export async function processMediaBatch(
             representative,
             config,
             isPathA || isPathB,
-            isPathA ? [llmConfig] : visionLlmConfigs,
+            isPathA ? dedupConfigs([llmConfig, ...(visionLlmConfigs ?? [])]) : visionLlmConfigs,
             downloadFn,
             stickerCache,
             mediaDownloader,
@@ -454,7 +454,7 @@ export async function processMediaBatch(
                 .catch(err => {
                     log.warn("路径 A 下载/转码失败，降级为描述", { fileId: photo.fileId, error: String(err) });
                     if (canDescribe) {
-                        const visionCfgs = isPathA ? [llmConfig] : visionLlmConfigs!;
+                        const visionCfgs = isPathA ? dedupConfigs([llmConfig, ...(visionLlmConfigs ?? [])]) : visionLlmConfigs!;
                         return describeWithCache(visionCfgs).catch(err2 => {
                             log.warn("降级描述也失败", { fileId: photo.fileId, error: String(err2) });
                             return { index: photo.messageIndex, description: "[📷 图片（加载失败）]" } as ProcessedMedia;
@@ -466,7 +466,7 @@ export async function processMediaBatch(
 
         if (canDescribe) {
             // 路径 A 溢出 或 路径 B: 调用 vision LLM 描述（带缓存）
-            const visionCfgs = isPathA ? [llmConfig] : visionLlmConfigs!;
+            const visionCfgs = isPathA ? dedupConfigs([llmConfig, ...(visionLlmConfigs ?? [])]) : visionLlmConfigs!;
             return describeWithCache(visionCfgs).catch(err => {
                 log.warn("Vision 描述失败，使用占位符", { fileId: photo.fileId, error: String(err) });
                 return { index: photo.messageIndex, description: "[📷 图片（加载失败）]" } as ProcessedMedia;
@@ -831,6 +831,18 @@ async function processSingleSticker(
 /**
  * 调用 Vision LLM 描述图片
  */
+function dedupConfigs(configs: LLMConfig[]): LLMConfig[] {
+    const seen = new Set<string>();
+    const out: LLMConfig[] = [];
+    for (const c of configs) {
+        const id = c.name ?? `${c.model}@${c.baseUrl}`;
+        if (seen.has(id)) continue;
+        seen.add(id);
+        out.push(c);
+    }
+    return out;
+}
+
 export async function describeImage(
     imageBuffer: Buffer,
     mimeType: string,
