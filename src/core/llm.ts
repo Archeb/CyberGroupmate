@@ -16,7 +16,7 @@ export { type LLMConfig } from "./config.js";
 export { type ImagePart, type LLMReasoning, type ChatMessage, type LLMResponse } from "./llm/types.js";
 
 import type { LLMConfig } from "./config.js";
-import type { ChatMessage, LLMResponse } from "./llm/types.js";
+import type { ChatMessage, LLMReasoning, LLMResponse } from "./llm/types.js";
 import type { ContextManifest } from "../context-engine/types.js";
 import { getOrCreatePool } from "./llm-pool.js";
 import { rateLimiter } from "./llm-rate-limiter.js";
@@ -85,12 +85,23 @@ export interface LLMResponseEvent {
     contentLength: number;
     /** token 用量 */
     usage?: LLMResponse["usage"];
+    /** Dashboard 可安全展示的推理信息；不包含密文、签名或续链 ID。 */
+    reasoning?: LLMReasoningLog;
     /** 耗时 ms */
     durationMs: number;
     /** 是否出错 */
     error?: string;
     /** 时间戳 */
     timestamp: string;
+}
+
+/** Dashboard 日志中的脱敏推理信息。 */
+export interface LLMReasoningLog {
+    provider?: LLMReasoning["provider"];
+    tokenCount?: number;
+    visibility: "plain" | "encrypted" | "unavailable";
+    /** Chat reasoning_content、Anthropic thinking 或 Responses summary。 */
+    content?: string;
 }
 
 /** LLM 重试事件数据 */
@@ -213,6 +224,67 @@ function summarizeMessages(messages: ChatMessage[]): LLMCallEvent["messageSummar
             imageUrls: imageUrls.length > 0 ? imageUrls : undefined,
         };
     });
+}
+
+/**
+ * 从 provider 原生推理状态生成 Dashboard 展示数据。
+ * 这里只挑选明确的明文字段，禁止透传 encrypted_content、signature、data 和续链 ID。
+ */
+export function toReasoningLog(
+    reasoning: LLMReasoning | undefined,
+    usageReasoningTokens?: number,
+): LLMReasoningLog | undefined {
+    const tokenCount = usageReasoningTokens ?? reasoning?.tokenCount;
+    if (!reasoning) {
+        return tokenCount != null && tokenCount > 0
+            ? { tokenCount, visibility: "unavailable" }
+            : undefined;
+    }
+
+    if (reasoning.provider === "openai_chat") {
+        return {
+            provider: reasoning.provider,
+            ...(tokenCount != null ? { tokenCount } : {}),
+            visibility: "plain",
+            ...(reasoning.content ? { content: reasoning.content } : {}),
+        };
+    }
+
+    if (reasoning.provider === "anthropic") {
+        const content = reasoning.blocks
+            .filter(block => block.type === "thinking" && typeof block.thinking === "string")
+            .map(block => String(block.thinking))
+            .filter(Boolean)
+            .join("\n\n");
+        const encrypted = reasoning.blocks.some(block => block.type === "redacted_thinking");
+        return {
+            provider: reasoning.provider,
+            ...(tokenCount != null ? { tokenCount } : {}),
+            visibility: encrypted ? "encrypted" : "plain",
+            ...(!encrypted && content ? { content } : {}),
+        };
+    }
+
+    const summaries: string[] = [];
+    let encrypted = false;
+    for (const item of reasoning.items) {
+        if (typeof item.encrypted_content === "string" && item.encrypted_content.length > 0) {
+            encrypted = true;
+        }
+        if (!Array.isArray(item.summary)) continue;
+        for (const summary of item.summary) {
+            if (!summary || typeof summary !== "object") continue;
+            const text = (summary as Record<string, unknown>).text;
+            if (typeof text === "string" && text) summaries.push(text);
+        }
+    }
+    const content = summaries.join("\n\n");
+    return {
+        provider: reasoning.provider,
+        ...(tokenCount != null ? { tokenCount } : {}),
+        visibility: encrypted ? "encrypted" : "plain",
+        ...(!encrypted && content ? { content } : {}),
+    };
 }
 
 function detectErrorContentPattern(content: string, patterns?: string[]): string | null {
@@ -506,6 +578,7 @@ async function _callLLMSingleKeyInner(
                     contentPreview: result.content,
                     contentLength: result.content.length,
                     usage: result.usage,
+                    reasoning: toReasoningLog(result.reasoning, result.usage?.reasoningTokens),
                     durationMs: Date.now() - startTime,
                     timestamp: new Date().toISOString(),
                 };

@@ -46,7 +46,24 @@
       cachedTokens,
       cacheCreationTokens,
       completionTokens: usage.completionTokens,
+      reasoningTokens: usage.reasoningTokens,
       showsExpandedAnthropicInput: isAnthropic && (cachedTokens > 0 || cacheCreationTokens > 0),
+    };
+  }
+
+  function getReasoningDisplay(response) {
+    if (!response) return null;
+    const reasoning = response.reasoning;
+    const tokenCount = reasoning?.tokenCount ?? response.usage?.reasoningTokens;
+    if (!reasoning && !(tokenCount > 0)) return null;
+    const content = reasoning?.visibility === "plain" && typeof reasoning.content === "string"
+      ? reasoning.content
+      : "";
+    return {
+      tokenCount,
+      content,
+      encrypted: reasoning?.visibility === "encrypted",
+      provider: reasoning?.provider,
     };
   }
 
@@ -62,6 +79,7 @@
 
   let expandedMsgs = {};
   let expandedResp = {};
+  let expandedReasoning = {};
   let autoExpand = false;
   let messageViewMode = "structured";
   let currentVisibleIdx = -1;
@@ -138,6 +156,11 @@
     expandedResp = expandedResp;
   }
 
+  function toggleReasoning(callId) {
+    expandedReasoning[callId] = !expandedReasoning[callId];
+    expandedReasoning = expandedReasoning;
+  }
+
   function toggleAutoExpand() {
     autoExpand = !autoExpand;
     if (autoExpand && selectedEntry) {
@@ -146,8 +169,10 @@
         expandedMsgs[`${selectedEntry.callId}-${i}`] = true;
       });
       expandedResp[selectedEntry.callId] = true;
+      expandedReasoning[selectedEntry.callId] = true;
       expandedMsgs = expandedMsgs;
       expandedResp = expandedResp;
+      expandedReasoning = expandedReasoning;
     }
   }
 
@@ -408,6 +433,7 @@
             clearLLMLogs();
             expandedMsgs = {};
             expandedResp = {};
+            expandedReasoning = {};
           }}>清空</button
         >
       </div>
@@ -454,6 +480,7 @@
           {@const fullTime = new Date(entry.timestamp).toLocaleString()}
           {@const msgCount = entry.messageSummaries?.length ?? 0}
           {@const usageDisplay = getUsageDisplay(r?.usage, entry.provider)}
+          {@const reasoningDisplay = getReasoningDisplay(r)}
           {@const hasImages = entry.messageSummaries?.some(
             (m) => m.imageCount > 0,
           )}
@@ -485,6 +512,19 @@
                   ? ` (${usageDisplay.totalTokens}tok)`
                   : ""}{@const cost = calculateCallCost(r.usage, entry.model, entry.provider)}{cost > 0 ? ` ${formatCost(cost)}` : ""}{:else}...{/if}
             </span>
+            {#if reasoningDisplay}
+              <span
+                class="llm-row-reasoning"
+                class:is-encrypted={reasoningDisplay.encrypted}
+                title={reasoningDisplay.encrypted
+                  ? `加密 reasoning · ${reasoningDisplay.tokenCount ?? "?"} tokens`
+                  : `Reasoning · ${reasoningDisplay.tokenCount ?? "?"} tokens`}
+              >
+                <i class="fa-solid fa-brain fa-xs"></i>
+                {reasoningDisplay.tokenCount ?? "?"}
+                {#if reasoningDisplay.encrypted}<i class="fa-solid fa-lock fa-2xs"></i>{/if}
+              </span>
+            {/if}
             {#if hasContextManifest(entry)}
               <span class="llm-row-manifest" title="{entry.contextManifest.engineId} · {entry.contextManifest.sections.length} sections">
                 <i class="fa-solid fa-layer-group fa-xs"></i>{entry.contextManifest.sections.length}
@@ -528,6 +568,7 @@
       {:else}
         {@const r = selectedEntry.response}
         {@const usageDisplay = getUsageDisplay(r?.usage, selectedEntry.provider)}
+        {@const reasoningDisplay = getReasoningDisplay(r)}
         {@const callerBadge =
           CALLER_COLORS[selectedEntry.caller] || "badge-ghost"}
         <!-- Header -->
@@ -554,6 +595,7 @@
                   {#if usageDisplay.cachedTokens}(cached:{usageDisplay.cachedTokens}){/if}
                   {#if usageDisplay.cacheCreationTokens}(创建:{usageDisplay.cacheCreationTokens}){/if}
                   / completion:{usageDisplay.completionTokens ?? "?"}
+                  {#if usageDisplay.reasoningTokens != null} / reasoning:{usageDisplay.reasoningTokens}{/if}
                   / total:{usageDisplay.totalTokens ?? "?"}
                 </span>
                 {@const detailCost = calculateCallCost(r.usage, selectedEntry.model, selectedEntry.provider)}
@@ -749,6 +791,41 @@
           </div>
         {/if}
 
+        <!-- Reasoning -->
+        {#if reasoningDisplay}
+          <div class="llm-detail-section">
+            <div class="llm-detail-section-title llm-reasoning-title">
+              <span>Reasoning</span>
+              <span class="llm-reasoning-token-count">
+                <i class="fa-solid fa-brain fa-xs"></i>
+                {reasoningDisplay.tokenCount ?? "?"} tokens
+              </span>
+            </div>
+            {#if reasoningDisplay.encrypted}
+              <div class="llm-reasoning-encrypted">
+                <i class="fa-solid fa-lock"></i>
+                <span>加密推理内容</span>
+              </div>
+            {:else if reasoningDisplay.content}
+              {@const reasoningExpanded = autoExpand || expandedReasoning[selectedEntry.callId]}
+              <button
+                type="button"
+                class="llm-reasoning-toggle"
+                aria-expanded={reasoningExpanded}
+                onclick={() => toggleReasoning(selectedEntry.callId)}
+              >
+                <span>{reasoningExpanded ? "收起推理内容" : "展开推理内容"}</span>
+                <i class="fa-solid fa-chevron-{reasoningExpanded ? 'up' : 'down'} fa-xs"></i>
+              </button>
+              {#if reasoningExpanded}
+                <div class="llm-detail-reasoning-body">{reasoningDisplay.content}</div>
+              {/if}
+            {:else}
+              <div class="llm-reasoning-unavailable">Provider 未返回可展示的推理文本</div>
+            {/if}
+          </div>
+        {/if}
+
         <!-- Response -->
         {#if r}
           <div class="llm-detail-section">
@@ -935,6 +1012,20 @@
     opacity: 0.5;
     margin-left: auto;
     flex-shrink: 0;
+  }
+
+  .llm-row-reasoning {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.2rem;
+    flex-shrink: 0;
+    color: var(--color-info);
+    font-size: 0.65rem;
+    font-weight: 700;
+  }
+
+  .llm-row-reasoning.is-encrypted {
+    color: var(--color-warning);
   }
 
   .llm-row-manifest {
@@ -1441,6 +1532,75 @@
     border-left: 3px solid var(--color-secondary);
   }
 
+  .llm-reasoning-title {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .llm-reasoning-token-count {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    color: var(--color-info);
+    font-family: ui-monospace, monospace;
+    font-size: 0.68rem;
+    text-transform: none;
+  }
+
+  .llm-reasoning-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    padding: 0.45rem 0.65rem;
+    border: 1px solid color-mix(in srgb, var(--color-info) 18%, transparent);
+    border-radius: 0.375rem;
+    background: color-mix(in srgb, var(--color-info) 7%, transparent);
+    color: var(--color-info);
+    cursor: pointer;
+    font-size: 0.72rem;
+    font-weight: 600;
+  }
+
+  .llm-reasoning-toggle:hover {
+    background: color-mix(in srgb, var(--color-info) 11%, transparent);
+  }
+
+  .llm-detail-reasoning-body {
+    margin-top: 0.3rem;
+    padding: 0.6rem 0.75rem;
+    border-left: 3px solid var(--color-info);
+    border-radius: 0.375rem;
+    background: color-mix(in srgb, var(--color-info) 6%, transparent);
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-family: ui-monospace, monospace;
+    font-size: 0.75rem;
+    line-height: 1.5;
+  }
+
+  .llm-reasoning-encrypted,
+  .llm-reasoning-unavailable {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    padding: 0.55rem 0.7rem;
+    border-radius: 0.375rem;
+    font-size: 0.72rem;
+  }
+
+  .llm-reasoning-encrypted {
+    color: var(--color-warning);
+    border: 1px solid color-mix(in srgb, var(--color-warning) 20%, transparent);
+    background: color-mix(in srgb, var(--color-warning) 7%, transparent);
+  }
+
+  .llm-reasoning-unavailable {
+    opacity: 0.55;
+    border: 1px dashed color-mix(in srgb, var(--color-base-content) 15%, transparent);
+  }
+
   /* ── Extra Body styles ── */
   .llm-extra-body-badge {
     font-size: 0.65rem;
@@ -1542,11 +1702,13 @@
     .llm-log-row { gap: 0.2rem; padding: 0.3rem 0.5rem; font-size: 0.65rem; }
     .llm-row-model { max-width: 80px; }
     .llm-row-duration { font-size: 0.6rem; }
+    .llm-row-reasoning { font-size: 0.58rem; }
     .llm-row-manifest { font-size: 0.58rem; }
     .llm-detail-header-top { font-size: 0.65rem; }
     .llm-detail-nav-bar { flex-wrap: wrap; }
     .llm-detail-msg-content { font-size: 0.7rem; }
     .llm-detail-response-body { font-size: 0.7rem; padding: 0.4rem 0.5rem; }
+    .llm-detail-reasoning-body { font-size: 0.68rem; padding: 0.4rem 0.5rem; }
     .llm-export-input { width: 130px; }
     .llm-manifest-grid { grid-template-columns: 1fr; }
     .llm-manifest-hover { width: min(300px, 75vw); }
