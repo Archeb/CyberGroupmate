@@ -354,6 +354,11 @@ export class OneBotAdapter implements PlatformAdapter {
         if (ws) {
             // 换掉 close 监听，避免旧连接的 close 又排一次自动重连
             ws.removeAllListeners();
+            // ws 在 CONNECTING 状态 terminate() 时会异步发出 error；必须保留消费器，
+            // 否则 Dashboard 手动重连会触发进程级 unhandled error。
+            ws.once("error", (err) => {
+                log.debug("OneBotAdapter 手动重连时旧连接关闭", { error: String(err) });
+            });
             try {
                 ws.terminate();
             } catch (err) {

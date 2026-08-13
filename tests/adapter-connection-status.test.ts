@@ -10,6 +10,8 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { createServer } from "node:http";
+import type { Duplex } from "node:stream";
 import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -167,5 +169,45 @@ describe("OneBotAdapter 自动重连", () => {
         assert.ok(status.nextRetryAt, "应排程重连");
 
         await adapter.stop();
+    });
+
+    it("手动重连可以安全终止仍在握手的旧连接", async () => {
+        const httpServer = createServer();
+        const websocketServer = new WebSocketServer({ noServer: true });
+        let upgradeCount = 0;
+        let stalledUpgradeSocket: Duplex | undefined;
+        httpServer.on("upgrade", (request, socket, head) => {
+            upgradeCount++;
+            if (upgradeCount === 1) {
+                stalledUpgradeSocket = socket;
+                return;
+            }
+            websocketServer.handleUpgrade(request, socket, head, client => {
+                websocketServer.emit("connection", client, request);
+            });
+        });
+        await new Promise<void>(resolve => httpServer.listen(0, "127.0.0.1", resolve));
+        const port = (httpServer.address() as { port: number }).port;
+        const nc = makeNC();
+        const adapter = new OneBotAdapter(
+            { wsUrl: `ws://127.0.0.1:${port}/onebot`, selfId: "123" },
+            nc,
+        );
+        (adapter as unknown as { prefetchWhitelistedGroups: () => void }).prefetchWhitelistedGroups = () => {};
+
+        const initialStart = adapter.start();
+        void initialStart.catch(() => {});
+        await waitFor(() => upgradeCount === 1);
+        try {
+            await adapter.reconnect();
+            assert.equal(upgradeCount, 2);
+            assert.equal(adapter.getConnectionStatus().state, "connected");
+        } finally {
+            await adapter.stop();
+            stalledUpgradeSocket?.destroy();
+            for (const client of websocketServer.clients) client.terminate();
+            await new Promise<void>(resolve => websocketServer.close(() => resolve()));
+            await new Promise<void>(resolve => httpServer.close(() => resolve()));
+        }
     });
 });
