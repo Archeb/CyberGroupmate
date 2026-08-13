@@ -106,7 +106,7 @@
           <label class="cfg-check" title="勾选后忽略调用方设置的 stop sequences，不向模型 API 发送 stop 参数"><input type="checkbox" class="checkbox checkbox-xs" bind:checked={p.omit_stop_sequence} /><span>Omit Stop Sequence</span></label>
           <label class="cfg-field"><span class="cfg-label">Thinking Level</span>
             <select class="select select-xs select-bordered w-full" bind:value={p.thinkingLevel}>
-              <option value={undefined}>无</option><option value="none">none</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option><option value="xhigh">xhigh</option>
+              <option value={undefined}>无</option><option value="none">none</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option><option value="xhigh">xhigh</option><option value="max">max</option>
             </select></label>
           <label class="cfg-check"><input type="checkbox" class="checkbox checkbox-xs" bind:checked={p.vision} /><span>Vision</span></label>
           <label class="cfg-check"><input
@@ -125,8 +125,10 @@
               <select class="select select-xs select-bordered w-full" bind:value={p.responsesRequestMode}>
                 <option value="non_stream">non_stream（默认）</option>
                 <option value="stream">stream（后台聚合完整输出）</option>
+                <option value="websocket">websocket（连接内增量续链）</option>
               </select>
             </label>
+            <label class="cfg-check" title="不发送 max_output_tokens；用于不接受该字段的 Responses 兼容网关"><input type="checkbox" class="checkbox checkbox-xs" bind:checked={p.omit_max_output_tokens} /><span>Omit Max Output Tokens</span></label>
           </div>
         {/if}
         {#if p.provider === "google"}

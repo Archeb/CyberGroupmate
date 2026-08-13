@@ -288,7 +288,11 @@ export async function runMetaSession(
             turns.push(turnRecord);
             const assistantHistoryContent = buildAssistantHistoryContent(assistantMessage);
             if (assistantHistoryContent) {
-                messages.push({ role: "assistant", content: assistantHistoryContent });
+                messages.push({
+                    role: "assistant",
+                    content: assistantHistoryContent,
+                    ...(response.reasoning ? { reasoning: response.reasoning } : {}),
+                });
             }
             syncMetaCodeActState(sessionId, messages, turns, true);
             emitMetaProgress(sessionId, {

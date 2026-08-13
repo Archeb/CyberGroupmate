@@ -645,7 +645,11 @@ export async function runCodeActSession(
                 discarded: rawAssistantText.length - assistantText.length,
             });
         }
-        messages.push({ role: "assistant", content: assistantText });
+        messages.push({
+            role: "assistant",
+            content: assistantText,
+            ...(llmResponse.reasoning ? { reasoning: llmResponse.reasoning } : {}),
+        });
 
         // ─── 解析 response ───
         const { thinking, codeBlocks } = parseResponse(assistantText);

@@ -44,7 +44,7 @@ llm_profiles:
     temperature: 1
     max_tokens: 8192
     # max_context_tokens: 500000
-    thinking_level: medium  # none | low | medium | high | xhigh（Gemini 特有）
+    thinking_level: medium  # none | low | medium | high | xhigh | max（按 provider/model 支持情况透传）
     # pricing:
     #   input: 1.25
     #   output: 10.00
@@ -57,6 +57,7 @@ llm_profiles:
   #   api_key: ""
   #   model: claude-sonnet-4-20250514
   #   temperature: 0.7
+  #   thinking_level: high  # 启用 adaptive thinking；启用后框架会自动禁用 assistant prefill
   #   max_context_tokens: 180000  # Claude 200K 窗口，预留输出空间
   #   max_tokens: 4096
   #   pricing:
@@ -78,6 +79,18 @@ llm_profiles:
   #     input: 2.50
   #     output: 10.00
   #     cached_input: 1.25
+
+  # 示例：OpenAI Responses WebSocket（长链路增量续传）
+  # openai-responses-ws:
+  #   provider: openai_responses
+  #   base_url: https://api.openai.com/v1
+  #   api_key: ""
+  #   model: gpt-5.6
+  #   temperature: 1
+  #   max_tokens: 8192
+  #   thinking_level: medium
+  #   responses_request_mode: websocket
+  #   # omit_max_output_tokens: true  # 仅兼容不接受该字段的第三方网关时开启
 
   # 示例：Moonshot (OpenAI 兼容)
   # moonshot:

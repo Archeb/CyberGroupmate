@@ -117,6 +117,20 @@ describe("estimateMessagesTokens", () => {
         assert.ok(tokens > 0, `总 tokens ${tokens} > 0`);
         assert.ok(tokens <= 100, `总 tokens ${tokens} <= 100`);
     });
+
+    it("includes native reasoning token usage", () => {
+        const visibleOnly = estimateMessagesTokens([{ role: "assistant", content: "ok" }]);
+        const withReasoning = estimateMessagesTokens([{
+            role: "assistant",
+            content: "ok",
+            reasoning: {
+                provider: "openai_responses",
+                items: [{ type: "reasoning", encrypted_content: "opaque" }],
+                tokenCount: 123,
+            },
+        }]);
+        assert.equal(withReasoning, visibleOnly + 123);
+    });
 });
 
 // ─── 3. shouldCompact ───

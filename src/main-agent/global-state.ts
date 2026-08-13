@@ -285,7 +285,7 @@ export class GlobalState {
     }
 
     appendMetaSessionHistory(
-        messages: Array<Pick<MetaSessionHistoryEntry, "role" | "content"> & Partial<Pick<MetaSessionHistoryEntry, "timestamp">>>,
+        messages: Array<Pick<MetaSessionHistoryEntry, "role" | "content"> & Partial<Pick<MetaSessionHistoryEntry, "reasoning" | "timestamp">>>,
     ): void {
         let appended = 0;
 
@@ -302,6 +302,7 @@ export class GlobalState {
             this.state.metaSessionHistory.push({
                 role: message.role,
                 content,
+                ...(message.reasoning ? { reasoning: message.reasoning } : {}),
                 timestamp: message.timestamp ?? new Date().toISOString(),
             });
             appended += 1;

@@ -47,6 +47,13 @@ export async function callOpenAI(
             }
             return { role: m.role, content: parts };
         }
+        if (m.role === "assistant" && m.reasoning?.provider === "openai_chat") {
+            return {
+                role: m.role,
+                content: m.content,
+                reasoning_content: m.reasoning.content,
+            };
+        }
         return { role: m.role, content: m.content };
     });
 
@@ -83,7 +90,13 @@ export async function callOpenAI(
     }
 
     const data = (await response.json()) as {
-        choices: Array<{ message: { content: string } }>;
+        choices: Array<{
+            message: {
+                content: string;
+                reasoning_content?: string;
+                reasoning?: string;
+            };
+        }>;
         usage?: {
             prompt_tokens?: number;
             completion_tokens?: number;
@@ -91,22 +104,35 @@ export async function callOpenAI(
             prompt_tokens_details?: {
                 cached_tokens?: number;
             };
+            completion_tokens_details?: {
+                reasoning_tokens?: number;
+            };
         };
     };
 
-    const content = data.choices?.[0]?.message?.content ?? "";
+    const responseMessage = data.choices?.[0]?.message;
+    const content = responseMessage?.content ?? "";
+    const reasoningContent = responseMessage?.reasoning_content ?? responseMessage?.reasoning;
     if (!content) {
         throw new Error(`LLM returned empty response (0 chars) from model ${model}`);
     }
 
     return {
         content,
+        reasoning: reasoningContent
+            ? {
+                provider: "openai_chat",
+                content: reasoningContent,
+                tokenCount: data.usage?.completion_tokens_details?.reasoning_tokens,
+            }
+            : undefined,
         usage: data.usage
             ? {
                 promptTokens: data.usage.prompt_tokens,
                 completionTokens: data.usage.completion_tokens,
                 totalTokens: data.usage.total_tokens,
                 cachedTokens: data.usage.prompt_tokens_details?.cached_tokens,
+                reasoningTokens: data.usage.completion_tokens_details?.reasoning_tokens,
             }
             : undefined,
     };

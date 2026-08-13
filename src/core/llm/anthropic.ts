@@ -14,7 +14,7 @@ export async function callAnthropic(
     model: string,
     temperature: number,
     maxTokens: number,
-    _thinkingLevel?: string,
+    thinkingLevel?: string,
     prefill?: string,
     stop?: string[],
     signal?: AbortSignal,
@@ -30,6 +30,8 @@ export async function callAnthropic(
         "anthropic-version": "2023-06-01",
         ...(config.customHeaders ?? {}),
     };
+
+    const thinkingEnabled = Boolean(thinkingLevel && thinkingLevel !== "none");
 
     // 组装 API 消息列表
     const apiMessages = nonSystemMsgs.map((m) => {
@@ -70,6 +72,17 @@ export async function callAnthropic(
             return { role: m.role, content: parts };
         }
 
+        if (m.role === "assistant" && m.reasoning?.provider === "anthropic") {
+            const parts: Array<Record<string, unknown>> = [
+                ...m.reasoning.blocks.map((block) => ({ ...block })),
+                { type: "text", text: m.content },
+            ];
+            if (hasCacheBreakpoint) {
+                parts[parts.length - 1].cache_control = { type: "ephemeral" };
+            }
+            return { role: m.role, content: parts };
+        }
+
         if (hasCacheBreakpoint) {
             return {
                 role: m.role,
@@ -85,7 +98,9 @@ export async function callAnthropic(
     });
 
     // Prefill: 追加 assistant 消息作为生成起点
-    if (prefill) {
+    // Anthropic 不允许 assistant prefill 与 extended/adaptive thinking 同时使用。
+    // callLLM 外层仍会把 prefill 拼回最终 content，保持调用方返回值语义不变。
+    if (prefill && !thinkingEnabled) {
         apiMessages.push({ role: "assistant", content: prefill });
     }
 
@@ -94,6 +109,10 @@ export async function callAnthropic(
         messages: apiMessages,
         ...(config.omit_temperature ? {} : { temperature }),
         max_tokens: maxTokens,
+        ...(thinkingEnabled ? {
+            thinking: { type: "adaptive" },
+            output_config: { effort: toAnthropicEffort(thinkingLevel) },
+        } : {}),
         // Stop sequences（Anthropic 使用 stop_sequences 字段）
         ...(stop && stop.length > 0 ? { stop_sequences: stop } : {}),
         // Extra body（用户自定义额外字段）
@@ -123,19 +142,26 @@ export async function callAnthropic(
     }
 
     const data = (await response.json()) as {
-        content: Array<{ type: string; text: string }>;
+        content: Array<Record<string, unknown> & { type: string; text?: string }>;
         usage?: {
             input_tokens?: number;
             output_tokens?: number;
             cache_read_input_tokens?: number;
             cache_creation_input_tokens?: number;
+            output_tokens_details?: {
+                thinking_tokens?: number;
+            };
         };
     };
 
     const text = data.content
         ?.filter((c) => c.type === "text")
-        .map((c) => c.text)
+        .map((c) => c.text ?? "")
         .join("");
+
+    const thinkingBlocks = data.content
+        ?.filter((c) => c.type === "thinking" || c.type === "redacted_thinking")
+        .map((c) => ({ ...c }));
 
     if (!text) {
         throw new Error(`LLM returned empty response (0 chars) from model ${model}`);
@@ -143,6 +169,13 @@ export async function callAnthropic(
 
     return {
         content: text,
+        reasoning: thinkingBlocks?.length
+            ? {
+                provider: "anthropic",
+                blocks: thinkingBlocks,
+                tokenCount: data.usage?.output_tokens_details?.thinking_tokens,
+            }
+            : undefined,
         usage: data.usage
             ? {
                 promptTokens: data.usage.input_tokens,
@@ -151,7 +184,14 @@ export async function callAnthropic(
                     (data.usage.input_tokens ?? 0) + (data.usage.output_tokens ?? 0),
                 cachedTokens: data.usage.cache_read_input_tokens,
                 cacheCreationTokens: data.usage.cache_creation_input_tokens,
+                reasoningTokens: data.usage.output_tokens_details?.thinking_tokens,
             }
             : undefined,
     };
+}
+
+function toAnthropicEffort(value?: string): "low" | "medium" | "high" | "max" {
+    if (value === "low" || value === "high" || value === "max") return value;
+    if (value === "xhigh") return "max";
+    return "medium";
 }

@@ -13,7 +13,7 @@
 export { type LLMConfig } from "./config.js";
 
 // 从 llm/types.ts 重新导出类型，保持向后兼容
-export { type ImagePart, type ChatMessage, type LLMResponse } from "./llm/types.js";
+export { type ImagePart, type LLMReasoning, type ChatMessage, type LLMResponse } from "./llm/types.js";
 
 import type { LLMConfig } from "./config.js";
 import type { ChatMessage, LLMResponse } from "./llm/types.js";
@@ -121,7 +121,7 @@ export interface LLMCallOptions {
     maxTokens?: number;
     /** 覆盖默认 model */
     model?: string;
-    /** Gemini thinking level: "none" | "low" | "medium" | "high" */
+    /** Provider reasoning effort: "none" | "low" | "medium" | "high" | "xhigh" | "max" */
     thinkingLevel?: string;
     /** 调用方模块标识（用于 Dashboard 日志显示） */
     caller?: string;
@@ -459,9 +459,12 @@ async function _callLLMSingleKeyInner(
 
         try {
             // ── 解析 prefill（仅当 config 支持时应用） ──
-            const prefill = (options?.prefill && config.supportsPrefill !== false)
-                ? options.prefill
-                : undefined;
+            const thinkingEnabled = Boolean(thinkingLevel && thinkingLevel !== "none");
+            const prefill = (
+                options?.prefill
+                && config.supportsPrefill !== false
+                && !(config.provider === "anthropic" && thinkingEnabled)
+            ) ? options.prefill : undefined;
             // 某些模型或兼容网关不接受 stop 参数；由 profile 统一屏蔽，
             // 这样 fallback chain 中每个 profile 都能按自身能力决定是否发送。
             const stop = config.omit_stop_sequence ? undefined : options?.stop;

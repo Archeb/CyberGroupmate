@@ -185,7 +185,25 @@ export function estimateTokensFallback(text: string): number {
  * 批量估算消息数组的 token 总数
  */
 export function estimateMessagesTokens(messages: ChatMessage[]): number {
-    return messages.reduce((sum, m) => sum + estimateTokens(m.content), 0);
+    return messages.reduce((sum, message) => sum + estimateMessageTokens(message), 0);
+}
+
+function estimateMessageTokens(message: ChatMessage): number {
+    const reasoning = message.reasoning;
+    if (!reasoning) return estimateTokens(message.content);
+    if (reasoning.tokenCount != null) {
+        return estimateTokens(message.content) + reasoning.tokenCount;
+    }
+    if (reasoning.provider === "openai_chat") {
+        return estimateTokens(message.content) + estimateTokens(reasoning.content);
+    }
+    if (reasoning.provider === "anthropic") {
+        const thinkingText = reasoning.blocks
+            .map((block) => typeof block.thinking === "string" ? block.thinking : "")
+            .join("");
+        return estimateTokens(message.content) + estimateTokens(thinkingText);
+    }
+    return estimateTokens(message.content);
 }
 
 // ─── Compaction 判断 ───
@@ -300,7 +318,7 @@ export function classifyMessages(
     let recentTokens = 0;
 
     for (let i = remaining.length - 1; i >= 0; i--) {
-        const msgTokens = estimateTokens(remaining[i].content);
+        const msgTokens = estimateMessageTokens(remaining[i]);
         if (recentCount >= budget.minRecentMessages && recentTokens + msgTokens > recentTokenBudget) {
             break;
         }
@@ -471,8 +489,8 @@ export function forceTrim(
     }
 
     let recent = classified.recent.map(weigh);
-    const headTokens = (classified.systemPrompt ? estimateTokens(classified.systemPrompt.content) : 0)
-        + (classified.briefing ? estimateTokens(classified.briefing.content) : 0);
+    const headTokens = (classified.systemPrompt ? estimateMessageTokens(classified.systemPrompt) : 0)
+        + (classified.briefing ? estimateMessageTokens(classified.briefing) : 0);
     let bodyTokens = sumTokens(middle) + sumTokens(recent);
     const overBudget = () => headTokens + bodyTokens + FORCE_TRIM_NOTE_RESERVE > limit;
 
@@ -544,7 +562,7 @@ interface WeightedMessage {
 }
 
 function weigh(message: ChatMessage): WeightedMessage {
-    return { message, tokens: estimateTokens(message.content) };
+    return { message, tokens: estimateMessageTokens(message) };
 }
 
 function sumTokens(entries: WeightedMessage[]): number {
@@ -581,8 +599,11 @@ function shrinkMessagesToFit(
     const result = entries.map((entry) => {
         if (entry.tokens <= perMessage) return entry;
         truncated = true;
-        const content = truncateContentToTokens(entry.message.content, perMessage, entry.tokens);
-        return { message: { ...entry.message, content }, tokens: estimateTokens(content) };
+        const content = truncateContentToTokens(entry.message.content, perMessage);
+        return {
+            message: { ...entry.message, content, reasoning: undefined },
+            tokens: estimateTokens(content),
+        };
     });
 
     return { messages: result, truncated };

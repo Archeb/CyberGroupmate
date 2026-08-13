@@ -29,6 +29,7 @@ import {
     type EnvironmentVariable,
 } from "./core/config.js";
 import { describeImage, ensureSupportedFormat } from "./core/vision-processor.js";
+import { closeOpenAIResponsesWebSockets } from "./core/llm/openai-responses.js";
 import { normalizeMessageMediaFields, resolveEventTimestamp } from "./core/message-enricher.js";
 import { TopicRegistry } from "./pipeline/index.js";
 import {
@@ -1763,6 +1764,7 @@ async function main(): Promise<void> {
             log.warn("Dashboard stop 失败", { error: String(err) });
         }
         _metricsStopFn?.();
+        closeOpenAIResponsesWebSockets();
 
         // 保存全局状态并释放其自动保存计时器
         accumulator.dispose();

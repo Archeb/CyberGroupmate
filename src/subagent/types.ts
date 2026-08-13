@@ -539,6 +539,8 @@ export interface SessionDigestEntry {
 export interface MetaSessionHistoryEntry {
     role: "user" | "assistant";
     content: string;
+    /** 与 assistant turn 一起持久化的 provider 原生推理状态。 */
+    reasoning?: import("../core/llm/types.js").LLMReasoning;
     timestamp: string;
 }
 

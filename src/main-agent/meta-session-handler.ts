@@ -24,7 +24,7 @@ const log = createLogger("meta-session-handler");
 const DEFAULT_BASE_SKILLS = ["runtime", "fs", "skills", "mcp", "cron", "todo", "memory", "privacy", "dispatch", "vision", "shell"];
 const META_END_TURN_MARKER = "<end_turn>";
 const META_RUNNER_NOTICE_PREFIX = "[Meta runner notice]";
-type MetaHistoryMessage = Pick<MetaSessionHistoryEntry, "role" | "content">;
+type MetaHistoryMessage = Pick<MetaSessionHistoryEntry, "role" | "content" | "reasoning">;
 export interface MetaSessionHandler {
     (entries: AttentionQueueEntry[], callbacks: SubagentCallback[]): Promise<(MetaSessionResult & { attendResults?: AttendResult[] }) | null>;
     resetMetaSessionContext?: () => void;
@@ -160,7 +160,11 @@ function loadMetaSessionHistory(deps: MetaSessionHandlerDeps): ChatMessage[] {
         if (!content) {
             return [];
         }
-        return [{ role: message.role, content }];
+        return [{
+            role: message.role,
+            content,
+            ...(message.reasoning ? { reasoning: message.reasoning } : {}),
+        }];
     });
     trimMetaSessionHistoryWindow(sessionHistory);
     return sessionHistory;
@@ -340,7 +344,11 @@ function collectMetaSessionHistory(messages: ChatMessage[]): MetaHistoryMessage[
         if (!content) {
             return [];
         }
-        return [{ role: message.role, content }];
+        return [{
+            role: message.role,
+            content,
+            ...(message.reasoning ? { reasoning: message.reasoning } : {}),
+        }];
     });
 }
 

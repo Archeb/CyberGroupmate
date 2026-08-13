@@ -45,7 +45,7 @@ export interface LLMConfig {
     maxTokens: number;
     /** 模型允许的最大上下文输入 token 数。用于触发 compact。未设置则使用 context_budget.effective_context_window（默认 32000） */
     maxContextTokens?: number;
-    /** Gemini thinking level: "none" | "low" | "medium" | "high" */
+    /** Provider reasoning effort: "none" | "low" | "medium" | "high" | "xhigh" | "max" */
     thinkingLevel?: string;
     /** 此 profile 是否支持多模态图片输入。默认 false */
     vision?: boolean;
@@ -80,8 +80,10 @@ export interface LLMConfig {
      * 适用于某些 API 在出错时返回 200 但 content 包含错误信息的情况。
      */
     errorContentPatterns?: string[];
-    /** OpenAI Responses API 请求模式：stream / non_stream。仅 provider=openai_responses 时生效，默认 non_stream。 */
-    responsesRequestMode?: "stream" | "non_stream";
+    /** OpenAI Responses API 请求模式。仅 provider=openai_responses 时生效，默认 non_stream。 */
+    responsesRequestMode?: "stream" | "non_stream" | "websocket";
+    /** 不发送 max_output_tokens。用于不接受该字段的 Responses 兼容网关。 */
+    omit_max_output_tokens?: boolean;
     /**
      * 仅在「生成回复」时（session/executor reply 路径）注入的额外提示词，贴在 task prompt 最末尾（recency 最高，紧贴生成）。
      * 不影响 memory / meta / 决策路由等其它用途；system prompt 与 persona 均不改动。
@@ -1373,7 +1375,8 @@ function parseLLMProfile(raw: Record<string, unknown>): LLMConfig {
         errorContentPatterns: (Array.isArray(raw.error_content_patterns) && raw.error_content_patterns.length > 0)
             ? raw.error_content_patterns.map(String)
             : undefined,
-        responsesRequestMode: (str(raw.responses_request_mode) as "stream" | "non_stream" | undefined),
+        responsesRequestMode: (str(raw.responses_request_mode) as "stream" | "non_stream" | "websocket" | undefined),
+        omit_max_output_tokens: Boolean(raw.omit_max_output_tokens),
         replyPrompt: str(raw.reply_prompt),
     };
 }
@@ -1483,6 +1486,7 @@ export function serializeConfigToObject(config: AppConfig): Record<string, unkno
         if (p.customHeaders && Object.keys(p.customHeaders).length > 0) entry.custom_headers = p.customHeaders;
         if (p.errorContentPatterns && p.errorContentPatterns.length > 0) entry.error_content_patterns = p.errorContentPatterns;
         if (p.responsesRequestMode) entry.responses_request_mode = p.responsesRequestMode;
+        if (p.omit_max_output_tokens === true) entry.omit_max_output_tokens = true;
         if (p.replyPrompt) entry.reply_prompt = p.replyPrompt;
         if (p.supportsPrefill === false) entry.supports_prefill = false;
         if (p.omit_temperature === true) entry.omit_temperature = true;

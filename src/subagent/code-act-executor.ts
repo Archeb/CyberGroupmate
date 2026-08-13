@@ -359,6 +359,8 @@ export interface SessionMessage {
     role: "system" | "user" | "assistant";
     content: string;
     timestamp: string;
+    /** 与 assistant turn 一起持久化的 provider 原生推理状态。 */
+    reasoning?: ChatMessage["reasoning"];
 }
 
 /** 每次 session 执行中发出的消息记录（用于 compact 时保留） */
@@ -575,6 +577,7 @@ export class CodeActExecutor {
                     ? collapseExecutorTaskPrompt(msg.content)
                     : msg.content,
             ),
+            ...(msg.reasoning ? { reasoning: msg.reasoning } : {}),
             ...(index === this.session.length - 1 ? { cacheBreakpoint: true } : {}),
         }));
     }
@@ -688,7 +691,11 @@ export class CodeActExecutor {
         if (this.session.length > this.config.maxSessionMessages) return true;
         if (this.session.length === 0) return false;
         try {
-            const chatMessages: ChatMessage[] = this.session.map(m => ({ role: m.role, content: m.content }));
+            const chatMessages: ChatMessage[] = this.session.map(m => ({
+                role: m.role,
+                content: m.content,
+                ...(m.reasoning ? { reasoning: m.reasoning } : {}),
+            }));
             return shouldCompact(chatMessages, undefined, resolveComponentProfiles("session")[0]);
         } catch (err) {
             log.debug("needsCompaction: token 预算检查失败", { chatId: this.chatId, error: String(err) });
@@ -702,7 +709,11 @@ export class CodeActExecutor {
      */
     private forceTrimSession(reason: string): void {
         const targetSessionConfig = resolveComponentProfiles("session")[0];
-        const chatMessages: ChatMessage[] = this.session.map(m => ({ role: m.role, content: m.content }));
+        const chatMessages: ChatMessage[] = this.session.map(m => ({
+            role: m.role,
+            content: m.content,
+            ...(m.reasoning ? { reasoning: m.reasoning } : {}),
+        }));
         const trimmed = contextManagerForceTrim(chatMessages, undefined, {
             targetLlmConfig: targetSessionConfig,
             reason,
@@ -998,6 +1009,7 @@ export class CodeActExecutor {
             this.session.push({
                 role: msg.role as "system" | "user" | "assistant",
                 content: sanitizePromptTimestamps(msg.content),
+                ...(msg.reasoning ? { reasoning: msg.reasoning } : {}),
                 timestamp: new Date().toISOString(),
             });
         }
@@ -1782,6 +1794,7 @@ export class CodeActExecutor {
         const chatMessages: ChatMessage[] = this.session.map(m => ({
             role: m.role,
             content: m.content,
+            ...(m.reasoning ? { reasoning: m.reasoning } : {}),
         }));
         if (!shouldCompact(chatMessages, undefined, targetSessionConfig)) {
             return;
@@ -1805,6 +1818,7 @@ export class CodeActExecutor {
             this.session = compacted.map(m => ({
                 role: m.role as SessionMessage["role"],
                 content: m.content,
+                ...(m.reasoning ? { reasoning: m.reasoning } : {}),
                 timestamp: new Date().toISOString(),
             }));
             log.info("compactSession Layer 2 完成", {
