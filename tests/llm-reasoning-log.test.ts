@@ -77,4 +77,14 @@ describe("Dashboard reasoning log redaction", () => {
             visibility: "unavailable",
         });
     });
+
+    it("ignores Responses continuation anchors without reasoning", () => {
+        assert.equal(toReasoningLog({
+            provider: "openai_responses",
+            items: [],
+            tokenCount: 0,
+            responseId: "resp-anchor",
+            websocketSessionId: "ws-anchor",
+        }, 0), undefined);
+    });
 });

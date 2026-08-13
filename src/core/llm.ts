@@ -265,6 +265,12 @@ export function toReasoningLog(
         };
     }
 
+    // WebSocket continuation can carry only response/session anchors without a reasoning item.
+    // Do not turn that transport state into a visible "0 reasoning tokens" badge.
+    if (reasoning.items.length === 0 && !(tokenCount != null && tokenCount > 0)) {
+        return undefined;
+    }
+
     const summaries: string[] = [];
     let encrypted = false;
     for (const item of reasoning.items) {
