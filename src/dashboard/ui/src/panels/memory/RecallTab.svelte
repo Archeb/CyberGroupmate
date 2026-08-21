@@ -1,6 +1,5 @@
 <script>
-  import { onMount } from 'svelte';
-  import { activeTab, topicDetailId } from '../../lib/stores.js';
+  import { activeTab, topicDetailId, pendingMemoryLink } from '../../lib/stores.js';
   import { api } from '../../lib/api.js';
   import { escapeHtml, shortId, getGroupLabel, renderJsonHighlighted } from '../../lib/utils.js';
 
@@ -14,24 +13,17 @@
   let recallChatId = '';
   let recallResults = null;
 
-  // Listen for quick query events
-  onMount(() => {
-    function onQuickUser(e) {
-      userInput = e.detail.userId;
-      userChat = e.detail.chatId || '';
-      queryUser();
-    }
-    function onQuickGroup(e) {
-      groupInput = e.detail.chatId;
+  // Consume cross-panel navigation payload (works whether or not this tab was already mounted)
+  $: if ($pendingMemoryLink?.tab === 'm-recall') {
+    const p = $pendingMemoryLink;
+    pendingMemoryLink.set(null);
+    if (p.kind === 'group') {
+      groupInput = p.chatId || '';
       queryGroup();
+    } else {
+      quickQueryUser(p.userId, p.chatId);
     }
-    window.addEventListener('quickQueryUser', onQuickUser);
-    window.addEventListener('quickQueryGroup', onQuickGroup);
-    return () => {
-      window.removeEventListener('quickQueryUser', onQuickUser);
-      window.removeEventListener('quickQueryGroup', onQuickGroup);
-    };
-  });
+  }
 
   async function queryUser() {
     if (!userInput) return;

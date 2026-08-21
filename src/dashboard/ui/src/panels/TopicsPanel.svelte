@@ -1,5 +1,5 @@
 <script>
-  import { appState, activeTab, topicDetailId } from '../lib/stores.js';
+  import { appState, activeTab, topicDetailId, pendingMemoryLink, activeMemoryTab } from '../lib/stores.js';
   import { api } from '../lib/api.js';
   import { escapeHtml, shortId, getGroupLabel, getPlatform, platformLabel } from '../lib/utils.js';
 
@@ -71,8 +71,10 @@
   }
 
   function quickQueryUser(userId, chatId) {
+    // payload 先写入 store，再由 RecallTab 消费（组件可能尚未挂载）
+    pendingMemoryLink.set({ tab: 'm-recall', kind: 'user', userId, chatId });
+    activeMemoryTab.set('m-recall');
     activeTab.set('memory');
-    window.dispatchEvent(new CustomEvent('quickQueryUser', { detail: { userId, chatId } }));
   }
 
   function callbackBadge(score) {

@@ -5,6 +5,8 @@
     selectedChatId,
     appState,
     activeTab,
+    pendingMemoryLink,
+    activeMemoryTab,
   } from "../lib/stores.js";
   import { api } from "../lib/api.js";
   import {
@@ -208,12 +210,10 @@
   }
 
   function quickQueryUser(userId, chatId) {
+    // payload 先写入 store，再由 RecallTab 消费（组件可能尚未挂载）
+    pendingMemoryLink.set({ tab: "m-recall", kind: "user", userId, chatId });
+    activeMemoryTab.set("m-recall");
     activeTab.set("memory");
-    // will be handled by MemoryPanel
-    window.__quickQueryUser = { userId, chatId };
-    window.dispatchEvent(
-      new CustomEvent("quickQueryUser", { detail: { userId, chatId } }),
-    );
   }
 
   function editChatTitle(chatId) {
