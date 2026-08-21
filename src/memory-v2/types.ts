@@ -151,6 +151,10 @@ export interface PersonGroupProfile {
     userId: string;
     /** 群组 ID（联合主键） */
     chatId: string;
+    /** 用户显示名（JOIN person_identities，列表展示用） */
+    displayName?: string;
+    /** 群组标题（JOIN group_models，列表展示用） */
+    chatTitle?: string;
     /** 邓巴分层 1=核心<=15, 2=熟悉<=50, 3=认识<=150, 4=陌生 */
     dunbarTier: 1 | 2 | 3 | 4;
     /** LLM 给出的分层理由 */
@@ -796,6 +800,9 @@ export interface IMemoryStoreV2 {
     /** 获取指定 chatId 的所有群内画像 */
     getProfilesForChat(chatId: string): PersonGroupProfile[];
 
+    /** 获取指定 userId 在所有群的群内画像 */
+    getProfilesForUser(userId: string): PersonGroupProfile[];
+
     /** 获取指定 chatId 最近的原始消息 */
     getRecentMessages(chatId: string, limit?: number): RecentMessageEntry[];
 
@@ -842,14 +849,15 @@ export interface IMemoryStoreV2 {
     /** 获取近期交互日志 */
     getRecentInteractions(chatId?: string | null, userId?: string, limit?: number): InteractionSearchResult[];
 
-    /** 分页列出全部 person identities */
-    listPersonIdentities(limit?: number, offset?: number): { items: PersonIdentity[]; total: number };
+    /** 分页列出全部 person identities（q 可选，模糊匹配 userId / 显示名 / username） */
+    listPersonIdentities(limit?: number, offset?: number, q?: string): { items: PersonIdentity[]; total: number };
 
     /** 分页列出全部全局 person profiles */
     listPersonProfiles(limit?: number, offset?: number): { items: PersonProfile[]; total: number };
 
     /** 列出全部群组画像 */
-    listGroupModels(): GroupModel[];
+    /** 列出全部群组画像（q 可选，模糊匹配 chatId / 群名） */
+    listGroupModels(q?: string): GroupModel[];
 
     /** 列出指定 binding/chat 的 todo */
     todoList(chatId: string, options?: { includeExpired?: boolean }): Array<{

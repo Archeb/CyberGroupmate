@@ -2,13 +2,27 @@
   import { activeTab, activeMemoryTab, pendingMemoryLink } from '../../lib/stores.js';
   import { api } from '../../lib/api.js';
   import { shortId, escapeHtml, getPlatform, platformLabel, getChatTypeLabel } from '../../lib/utils.js';
+  import { onMount } from 'svelte';
+  import { get } from 'svelte/store';
 
   let groups = [];
+  let searchInput = '';
 
   $: if ($activeTab === 'memory' && $activeMemoryTab === 'm-groups') load();
 
+  onMount(() => {
+    const pending = get(pendingMemoryLink);
+    if (pending?.tab === 'm-groups') {
+      if (pending.search) searchInput = pending.search;
+      pendingMemoryLink.set(null);
+      if (searchInput) load();
+    }
+  });
+
   async function load() {
-    groups = await api('/memory/groups');
+    let url = '/memory/groups';
+    if (searchInput.trim()) url += `?q=${encodeURIComponent(searchInput.trim())}`;
+    groups = await api(url);
   }
 
   function editGroup(chatId) {
@@ -30,7 +44,12 @@
   <div class="card-body p-4">
     <div class="flex justify-between items-center mb-2">
       <h3 class="card-title text-sm">群组画像 (GroupModel)</h3>
-      <button class="btn btn-xs btn-primary" onclick={load}>刷新</button>
+      <div class="flex gap-2 items-center">
+        <input type="text" placeholder="搜索 chatId / 群名" class="input input-sm input-bordered w-48"
+               bind:value={searchInput} onkeydown={(e) => e.key === 'Enter' && load()} />
+        <button class="btn btn-xs btn-primary" onclick={load}>搜索</button>
+        <button class="btn btn-xs btn-ghost" onclick={() => { searchInput = ''; load(); }}>清除</button>
+      </div>
     </div>
     <div class="overflow-x-auto">
       <table class="table table-xs">

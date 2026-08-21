@@ -1039,6 +1039,11 @@ export function createApiRouter(deps: DashboardDeps, bridge: EventBridge): Route
         }
     });
 
+    router.get("/memory/user/:userId/profiles", (req, res) => {
+        const profiles = deps.memory.getProfilesForUser(req.params.userId);
+        res.json(profiles);
+    });
+
     router.get("/memory/group/:chatId", (req, res) => {
         const chatId = req.params.chatId;
         const model = deps.memory.getGroupModel(chatId);
@@ -1543,7 +1548,8 @@ export function createApiRouter(deps: DashboardDeps, bridge: EventBridge): Route
     router.get("/memory/persons", (req, res) => {
         const limit = Math.min(parseInt(qs(req.query.limit)) || 50, 200);
         const offset = Math.max(parseInt(qs(req.query.offset)) || 0, 0);
-        res.json(deps.memory.listPersonIdentities(limit, offset));
+        const q = qs(req.query.q) || undefined;
+        res.json(deps.memory.listPersonIdentities(limit, offset, q));
     });
 
     router.put("/memory/person/:userId", (req, res) => {
@@ -1582,8 +1588,8 @@ export function createApiRouter(deps: DashboardDeps, bridge: EventBridge): Route
     });
 
     // Group Models
-    router.get("/memory/groups", (_req, res) => {
-        res.json(deps.memory.listGroupModels());
+    router.get("/memory/groups", (req, res) => {
+        res.json(deps.memory.listGroupModels(qs(req.query.q) || undefined));
     });
 
     router.put("/memory/group/:chatId", (req, res) => {
