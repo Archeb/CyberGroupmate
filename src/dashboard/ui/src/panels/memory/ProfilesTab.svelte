@@ -1,26 +1,39 @@
 <script>
   import { activeMemoryTab, pendingMemoryLink } from '../../lib/stores.js';
   import { api } from '../../lib/api.js';
-  import { shortId, escapeHtml, getPlatform, platformLabel, stripPlatform } from '../../lib/utils.js';
+  import { shortId, escapeHtml, getPlatform, platformLabel, stripPlatform, getGroupLabel } from '../../lib/utils.js';
   import { onMount } from 'svelte';
   import { get } from 'svelte/store';
 
   let chatIdInput = '';
+  let userInput = '';
   let profiles = [];
+  // 非空表示当前列表是"该用户在所有群的画像"（仅按 userId 查询时）
+  let queryUserId = '';
 
   onMount(() => {
     const pending = get(pendingMemoryLink);
     if (pending?.tab === 'm-profiles') {
-      if (pending.userId) chatIdInput = '';
+      if (pending.userId) userInput = pending.userId;
       if (pending.chatId) chatIdInput = pending.chatId;
       pendingMemoryLink.set(null);
-      if (chatIdInput) load();
+      if (userInput || chatIdInput) load();
     }
   });
 
   export async function load() {
-    if (!chatIdInput.trim()) { alert('请输入 chatId'); return; }
-    profiles = await api(`/memory/profiles/${chatIdInput.trim()}`);
+    const chat = chatIdInput.trim();
+    const user = userInput.trim();
+    if (!chat && !user) { alert('请输入 userId 或 chatId'); return; }
+    if (chat) {
+      queryUserId = '';
+      let rows = await api(`/memory/profiles/${chat}`);
+      if (user) rows = rows.filter((p) => p.userId.includes(user));
+      profiles = rows;
+    } else {
+      queryUserId = user;
+      profiles = await api(`/memory/user/${encodeURIComponent(user)}/profiles`);
+    }
   }
 
   function editProfile(userId, chatId) {
@@ -34,7 +47,13 @@
   }
 
   function jumpToPersons(userId) {
+    pendingMemoryLink.set({ tab: 'm-persons', search: userId });
     activeMemoryTab.set('m-persons');
+  }
+
+  function jumpToGroup(chatId) {
+    pendingMemoryLink.set({ tab: 'm-groups', search: chatId });
+    activeMemoryTab.set('m-groups');
   }
 
   function jumpToChatLog(userId, chatId) {
@@ -95,8 +114,15 @@
   <div class="card-body p-4">
     <div class="flex justify-between items-center mb-2">
       <h3 class="card-title text-sm">群内画像 (PersonGroupProfile)</h3>
+      {#if queryUserId}
+        <span class="badge badge-sm badge-ghost" title={queryUserId}>
+          {stripPlatform(queryUserId)} · {profiles.length} 个群
+        </span>
+      {/if}
       <div class="flex gap-2 items-center">
-        <input type="text" placeholder="输入 chatId 查询" class="input input-sm input-bordered w-48"
+        <input type="text" placeholder="userId 搜索（可单独用）" class="input input-sm input-bordered w-44"
+               bind:value={userInput} onkeydown={(e) => e.key === 'Enter' && load()} />
+        <input type="text" placeholder="chatId (可选)" class="input input-sm input-bordered w-48"
                bind:value={chatIdInput} onkeydown={(e) => e.key === 'Enter' && load()} />
         <button class="btn btn-xs btn-primary" onclick={load}>查询</button>
       </div>
@@ -104,7 +130,7 @@
     <div class="overflow-x-auto">
       <table class="table table-xs">
         <thead><tr>
-          <th>UserId</th><th>ChatId</th><th>邓巴层</th><th>好感度</th><th>Traits</th><th>沟通风格</th><th>与Agent关系</th><th>消息数</th><th>最后活跃</th><th>操作</th>
+          <th>显示名</th><th>群组</th><th>邓巴层</th><th>好感度</th><th>Traits</th><th>沟通风格</th><th>与Agent关系</th><th>消息数</th><th>最后活跃</th><th>操作</th>
         </tr></thead>
         <tbody>
           {#if !profiles.length}
@@ -112,13 +138,13 @@
           {:else}
             {#each profiles as p}
               <tr>
-                <td class="font-mono text-xs">
+                <td class="max-w-36 truncate whitespace-nowrap" title={p.userId}>
                   {#if getPlatform(p.userId)}<span class="platform-badge platform-{getPlatform(p.userId)}">{platformLabel(getPlatform(p.userId))}</span>{/if}
-                  <button class="clickable-link" onclick={() => jumpToPersons(p.userId)}>{stripPlatform(p.userId)}</button>
+                  <button class="clickable-link" onclick={() => jumpToPersons(p.userId)}>{p.displayName || stripPlatform(p.userId)}</button>
                 </td>
-                <td class="font-mono text-xs">
+                <td class="max-w-40 truncate whitespace-nowrap" title={p.chatId}>
                   {#if getPlatform(p.chatId)}<span class="platform-badge platform-{getPlatform(p.chatId)}">{platformLabel(getPlatform(p.chatId))}</span>{/if}
-                  {shortId(p.chatId)}
+                  <button class="clickable-link" onclick={() => jumpToGroup(p.chatId)}>{p.chatTitle || getGroupLabel(p.chatId)}</button>
                 </td>
                 <td>
                   <span class="badge badge-xs cursor-help" title={tierTooltip(p)}>T{p.dunbarTier}</span>

@@ -1,6 +1,6 @@
 <script>
   import { onDestroy, tick } from 'svelte';
-  import { activeTab } from '../lib/stores.js';
+  import { activeTab, pendingMemoryLink, activeMemoryTab } from '../lib/stores.js';
   import { api } from '../lib/api.js';
   import { isAtBottom, scrollToBottom, getGroupLabel, getPlatform, platformLabel } from '../lib/utils.js';
 
@@ -38,8 +38,10 @@
   function onScrollD() { if (decisionsEl) wasBottomD = isAtBottom(decisionsEl); }
 
   function quickQueryGroup(chatId) {
+    // payload 先写入 store，再由 RecallTab 消费（组件可能尚未挂载）
+    pendingMemoryLink.set({ tab: 'm-recall', kind: 'group', chatId });
+    activeMemoryTab.set('m-recall');
     activeTab.set('memory');
-    window.dispatchEvent(new CustomEvent('quickQueryGroup', { detail: { chatId } }));
   }
 
   /** 决策类型分析（从 decision 文本中提取） */

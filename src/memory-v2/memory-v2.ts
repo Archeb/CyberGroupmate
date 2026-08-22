@@ -2440,13 +2440,12 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
         return result;
     }
 
-    getProfilesForChat(chatId: string): PersonGroupProfile[] {
-        const rows = this.db.prepare(
-            "SELECT * FROM person_group_profiles WHERE chat_id = ? ORDER BY message_count DESC"
-        ).all(chatId) as Record<string, unknown>[];
-        const profiles = rows.map(r => ({
+    private profileRowToObj(r: Record<string, unknown>): PersonGroupProfile {
+        return {
             userId: r.user_id as string,
             chatId: r.chat_id as string,
+            displayName: (r.display_name as string) || "",
+            chatTitle: (r.chat_title as string) || "",
             dunbarTier: (r.dunbar_tier as PersonGroupProfile["dunbarTier"]) ?? 4,
             dunbarReason: (r.dunbar_reason as string) ?? "",
             affinityScore: (r.affinity_score as number) ?? 0,
@@ -2461,8 +2460,32 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
             activeHours: fromJSON<number[]>(r.active_hours as string, []),
             firstSeenAt: (r.first_seen_at as string) ?? "",
             updatedAt: (r.updated_at as string) ?? "",
-        }));
+        };
+    }
+
+    getProfilesForChat(chatId: string): PersonGroupProfile[] {
+        const rows = this.db.prepare(
+            `SELECT p.*, i.display_name, gm.chat_title
+             FROM person_group_profiles p
+             LEFT JOIN person_identities i ON i.user_id = p.user_id
+             LEFT JOIN group_models gm ON gm.chat_id = p.chat_id
+             WHERE p.chat_id = ? ORDER BY p.message_count DESC`
+        ).all(chatId) as Record<string, unknown>[];
+        const profiles = rows.map(r => this.profileRowToObj(r));
         log.debug("getProfilesForChat", { chatId, count: profiles.length });
+        return profiles;
+    }
+
+    getProfilesForUser(userId: string): PersonGroupProfile[] {
+        const rows = this.db.prepare(
+            `SELECT p.*, i.display_name, gm.chat_title
+             FROM person_group_profiles p
+             LEFT JOIN person_identities i ON i.user_id = p.user_id
+             LEFT JOIN group_models gm ON gm.chat_id = p.chat_id
+             WHERE p.user_id = ? ORDER BY p.message_count DESC`
+        ).all(userId) as Record<string, unknown>[];
+        const profiles = rows.map(r => this.profileRowToObj(r));
+        log.debug("getProfilesForUser", { userId, count: profiles.length });
         return profiles;
     }
 
@@ -3237,11 +3260,20 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
     // ── Dashboard CRUD 方法 ──
 
     /** 分页列出全部 person_identities */
-    listPersonIdentities(limit = 50, offset = 0): { items: PersonIdentity[]; total: number } {
-        const total = (this.db.prepare("SELECT COUNT(*) as cnt FROM person_identities").get() as { cnt: number }).cnt;
+    listPersonIdentities(limit = 50, offset = 0, q?: string): { items: PersonIdentity[]; total: number } {
+        let totalSql = "SELECT COUNT(*) as cnt FROM person_identities";
+        let rowsSql = "SELECT * FROM person_identities";
+        let where = "";
+        const args: unknown[] = [];
+        if (q && q.trim()) {
+            where = " WHERE user_id LIKE ? OR display_name LIKE ? OR IFNULL(username, '') LIKE ?";
+            const like = `%${q.trim()}%`;
+            args.push(like, like, like);
+        }
+        const total = (this.db.prepare(totalSql + where).get(...args) as { cnt: number }).cnt;
         const rows = this.db.prepare(
-            "SELECT * FROM person_identities ORDER BY last_seen_at DESC LIMIT ? OFFSET ?"
-        ).all(limit, offset) as Record<string, unknown>[];
+            rowsSql + where + " ORDER BY last_seen_at DESC LIMIT ? OFFSET ?"
+        ).all(...args, limit, offset) as Record<string, unknown>[];
         return {
             total,
             items: rows.map(row => ({
@@ -3300,10 +3332,16 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
     }
 
     /** 列出全部群组画像 */
-    listGroupModels(): GroupModel[] {
-        const rows = this.db.prepare(
-            "SELECT * FROM group_models ORDER BY updated_at DESC"
-        ).all() as Record<string, unknown>[];
+    listGroupModels(q?: string): GroupModel[] {
+        let sql = "SELECT * FROM group_models";
+        const args: unknown[] = [];
+        if (q && q.trim()) {
+            sql += " WHERE chat_id LIKE ? OR chat_title LIKE ?";
+            const like = `%${q.trim()}%`;
+            args.push(like, like);
+        }
+        sql += " ORDER BY updated_at DESC";
+        const rows = this.db.prepare(sql).all(...args) as Record<string, unknown>[];
         return rows.map(row => ({
             chatId: row.chat_id as string,
             chatTitle: row.chat_title as string,

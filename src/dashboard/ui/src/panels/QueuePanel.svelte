@@ -1,5 +1,5 @@
 <script>
-  import { appState, activeTab } from "../lib/stores.js";
+  import { appState, activeTab, pendingMemoryLink, activeMemoryTab } from "../lib/stores.js";
   import { api } from "../lib/api.js";
   import { shortId, getPlatform, platformLabel } from "../lib/utils.js";
 
@@ -21,10 +21,10 @@
   }
 
   function quickQueryGroup(chatId) {
+    // payload 先写入 store，再由 RecallTab 消费（组件可能尚未挂载）
+    pendingMemoryLink.set({ tab: "m-recall", kind: "group", chatId });
+    activeMemoryTab.set("m-recall");
     activeTab.set("memory");
-    window.dispatchEvent(
-      new CustomEvent("quickQueryGroup", { detail: { chatId } }),
-    );
   }
 
   function showEnqueueModal() {

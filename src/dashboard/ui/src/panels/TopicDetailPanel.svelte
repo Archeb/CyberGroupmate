@@ -1,5 +1,5 @@
 <script>
-  import { topicDetailId, activeTab } from '../lib/stores.js';
+  import { topicDetailId, activeTab, pendingMemoryLink, activeMemoryTab } from '../lib/stores.js';
   import { api } from '../lib/api.js';
   import { escapeHtml, getGroupLabel } from '../lib/utils.js';
 
@@ -20,8 +20,10 @@
   }
 
   function quickQueryUser(userId, chatId) {
+    // payload 先写入 store，再由 RecallTab 消费（组件可能尚未挂载）
+    pendingMemoryLink.set({ tab: 'm-recall', kind: 'user', userId, chatId });
+    activeMemoryTab.set('m-recall');
     activeTab.set('memory');
-    window.dispatchEvent(new CustomEvent('quickQueryUser', { detail: { userId, chatId } }));
   }
 
   function callbackTone(score) {

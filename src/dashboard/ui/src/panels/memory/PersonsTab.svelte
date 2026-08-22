@@ -2,16 +2,30 @@
   import { activeMemoryTab, activeTab, pendingMemoryLink } from '../../lib/stores.js';
   import { api } from '../../lib/api.js';
   import { escapeHtml, getPlatform, platformLabel, stripPlatform } from '../../lib/utils.js';
+  import { onMount } from 'svelte';
+  import { get } from 'svelte/store';
 
   let items = [];
   let total = 0;
   let page = 0;
+  let searchInput = '';
 
   $: if ($activeTab === 'memory' && $activeMemoryTab === 'm-persons') load();
 
+  onMount(() => {
+    const pending = get(pendingMemoryLink);
+    if (pending?.tab === 'm-persons') {
+      if (pending.search) searchInput = pending.search;
+      pendingMemoryLink.set(null);
+      if (searchInput) load(0);
+    }
+  });
+
   async function load(p) {
     if (p !== undefined) page = p;
-    const data = await api(`/memory/persons?limit=50&offset=${page * 50}`);
+    let url = `/memory/persons?limit=50&offset=${page * 50}`;
+    if (searchInput.trim()) url += `&q=${encodeURIComponent(searchInput.trim())}`;
+    const data = await api(url);
     items = data.items || [];
     total = data.total || 0;
   }
@@ -49,8 +63,11 @@
     <div class="flex justify-between items-center mb-2">
       <h3 class="card-title text-sm">用户画像 (PersonIdentity)</h3>
       <div class="flex gap-2 items-center">
+        <input type="text" placeholder="搜索 userId / 显示名 / username" class="input input-sm input-bordered w-56"
+               bind:value={searchInput} onkeydown={(e) => e.key === 'Enter' && load(0)} />
+        <button class="btn btn-xs btn-primary" onclick={() => load(0)}>搜索</button>
+        <button class="btn btn-xs btn-ghost" onclick={() => { searchInput = ''; load(0); }}>清除</button>
         <span class="badge badge-sm badge-ghost">{total}</span>
-        <button class="btn btn-xs btn-primary" onclick={() => load()}>刷新</button>
       </div>
     </div>
     <div class="overflow-x-auto">
