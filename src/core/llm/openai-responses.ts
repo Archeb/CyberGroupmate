@@ -14,7 +14,10 @@ import type {
 } from "openai/resources/responses/responses.js";
 import WebSocket, { type RawData } from "ws";
 import type { LLMConfig } from "../config.js";
+import { createLogger } from "../logger.js";
 import type { ChatMessage, LLMResponse } from "./types.js";
+
+const log = createLogger("openai-responses");
 
 type ResponsesUsage = NonNullable<Response["usage"]>;
 type ResponsesResult = Pick<Response, "output_text" | "usage" | "output"> & { id?: string };
@@ -88,16 +91,30 @@ export async function callOpenAIResponses(
 
     const requestMode = config.responsesRequestMode ?? "non_stream";
     let websocketSessionId: string | undefined;
-    const response = requestMode === "websocket"
-        ? await callOpenAIResponsesWebSocket(messages, config, requestBody, prefill, signal).then(result => {
+    let response: ResponsesResult;
+    if (requestMode === "websocket") {
+        try {
+            const result = await callOpenAIResponsesWebSocket(messages, config, requestBody, prefill, signal);
             websocketSessionId = result.sessionId;
-            return result.response;
-        })
-        : requestMode === "stream"
-            ? await collectResponseFromStream(
+            response = result.response;
+        } catch (error) {
+            if (signal?.aborted || !isRetryableResponsesWebSocketError(error)) throw error;
+
+            // Responses 的 encrypted reasoning 同样能通过普通 HTTP 往返；WS 只负责
+            // 连接内 previous_response_id 续链。上游 WS 代理繁忙时直接用完整 input
+            // 降级到 HTTP，既保留 reasoning，也避免反复撞同一个 WS 入口。
+            log.warn("Responses WebSocket unavailable; falling back to HTTP", {
+                error: error instanceof Error ? error.message : String(error),
+            });
+            response = await client.responses.create(requestBody, { signal }) as ResponsesResult;
+        }
+    } else if (requestMode === "stream") {
+        response = await collectResponseFromStream(
             await client.responses.create({ ...requestBody, stream: true }, { signal }),
-        )
-            : await client.responses.create(requestBody, { signal }) as ResponsesResult;
+        );
+    } else {
+        response = await client.responses.create(requestBody, { signal }) as ResponsesResult;
+    }
 
     const content = response.output_text ?? "";
     const reasoningItems = response.output
@@ -387,6 +404,14 @@ function closeResponsesWebSocketSession(session: ResponsesWebSocketSession, code
 function websocketCloseError(code: number, reason: Buffer): Error {
     const suffix = reason.length > 0 ? `: ${reason.toString()}` : "";
     return new Error(`Responses WebSocket closed (${code})${suffix}`);
+}
+
+/** WS 代理或上游暂时不可用时，允许用同一份完整 input 改走 HTTP。 */
+export function isRetryableResponsesWebSocketError(error: unknown): boolean {
+    if (!(error instanceof Error)) return false;
+    return /Responses WebSocket closed \((?:1011|1012|1013)\)/.test(error.message)
+        || /Unexpected server response: (?:429|5\d\d)/i.test(error.message)
+        || /(?:ECONNRESET|ECONNREFUSED|ETIMEDOUT|socket hang up)/i.test(error.message);
 }
 
 function abortError(signal?: AbortSignal): Error {

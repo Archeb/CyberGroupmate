@@ -80,8 +80,8 @@ llm_profiles:
   #     output: 10.00
   #     cached_input: 1.25
 
-  # 示例：OpenAI Responses WebSocket（长链路增量续传）
-  # openai-responses-ws:
+  # 示例：OpenAI Responses（普通 HTTP；同样支持 encrypted reasoning 回传）
+  # openai-responses:
   #   provider: openai_responses
   #   base_url: https://api.openai.com/v1
   #   api_key: ""
@@ -89,7 +89,8 @@ llm_profiles:
   #   temperature: 1
   #   max_tokens: 8192
   #   thinking_level: medium
-  #   responses_request_mode: websocket
+  #   responses_request_mode: non_stream
+  #   # 可选 websocket：启用连接内增量续链；1011/1012/1013 时会自动降级 HTTP
   #   # omit_max_output_tokens: true  # 仅兼容不接受该字段的第三方网关时开启
 
   # 示例：Moonshot (OpenAI 兼容)

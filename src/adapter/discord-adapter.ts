@@ -24,8 +24,8 @@ const MEDIA_DOWNLOAD_TIMEOUT_MS = 15_000;
 const MEDIA_SEND_TIMEOUT_MS = 25_000;
 const DISCORD_API_BASE = "https://discord.com/api/v10";
 const DISCORD_RECONNECT_BASE_MS = 1000;
-const DISCORD_RECONNECT_MAX_MS = 30_000;
-const DISCORD_GATEWAY_RECOVERY_TIMEOUT_MS = 120_000;
+const DISCORD_RECONNECT_MAX_MS = 60_000;
+const DISCORD_GATEWAY_RECOVERY_TIMEOUT_MS = 60_000;
 
 type ParsedDiscordTarget = {
     raw: string;
@@ -156,7 +156,15 @@ export class DiscordAdapter implements PlatformAdapter {
         this.reconnectAttempts = 0;
         this.clearReconnectTimer();
         this.clearGatewayRecoveryWatchdog();
-        return this.connect(false);
+        try {
+            await this.connect(false);
+        } catch (err) {
+            // discord.js 只能在已建立 gateway session 后自行恢复；首次登录失败
+            // 必须由 adapter 排程，否则主进程虽然继续运行，Discord 会永久离线。
+            this.connection.markDisconnected(String(err));
+            this.scheduleReconnect("initialConnectFailed", { error: String(err) });
+            throw err;
+        }
     }
 
     async stop(): Promise<void> {
@@ -192,7 +200,13 @@ export class DiscordAdapter implements PlatformAdapter {
         if (this.connecting) {
             await this.connecting.catch(() => undefined);
         }
-        await this.connect(true);
+        try {
+            await this.connect(true);
+        } catch (err) {
+            this.connection.markDisconnected(String(err));
+            this.scheduleReconnect("manualReconnectFailed", { error: String(err) });
+            throw err;
+        }
     }
 
     private connect(isReconnect: boolean): Promise<void> {
@@ -282,6 +296,10 @@ export class DiscordAdapter implements PlatformAdapter {
             log.info("Discord shard ready", { shardId });
         });
         client.on("shardError", (err: Error, shardId: number) => {
+            if (this.client === client) {
+                this.connection.noteError(String(err));
+                this.armGatewayRecoveryWatchdog(client, shardId);
+            }
             log.warn("Discord shard error", { shardId, error: String(err) });
         });
         client.on("error", (err: Error) => {

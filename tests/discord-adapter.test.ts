@@ -86,6 +86,41 @@ async function waitFor(assertion: () => boolean, timeoutMs = 500): Promise<void>
 }
 
 describe("DiscordAdapter", () => {
+    it("should keep retrying initial login failures with a delay capped at one minute", async () => {
+        const nc = makeNC();
+        const clients: FakeDiscordClient[] = [];
+        const adapter = new DiscordAdapter({ botToken: "token" }, nc, undefined, async () => {
+            const client = new FakeDiscordClient(`bot-${clients.length + 1}`);
+            if (clients.length === 0) {
+                client.login = async () => {
+                    client.loginCalls++;
+                    throw new Error("gateway unavailable");
+                };
+            }
+            clients.push(client);
+            return client;
+        });
+
+        try {
+            assert.equal((adapter as any).getReconnectDelayMs(1), 1_000);
+            assert.equal((adapter as any).getReconnectDelayMs(7), 60_000);
+            assert.equal((adapter as any).getReconnectDelayMs(20), 60_000);
+            (adapter as any).getReconnectDelayMs = () => 1;
+
+            await assert.rejects(adapter.start(), /gateway unavailable/);
+            const status = adapter.getConnectionStatus();
+            assert.equal(status.state, "disconnected");
+            assert.equal(status.reconnectAttempts, 1);
+            assert.ok(status.nextRetryAt);
+
+            await waitFor(() => clients.length === 2 && clients[1].loginCalls === 1);
+            assert.equal(adapter.getConnectionStatus().state, "connected");
+        } finally {
+            await adapter.stop();
+            nc.dispose();
+        }
+    });
+
     it("should recreate the Discord client after session invalidation", async () => {
         const nc = makeNC();
         const clients: FakeDiscordClient[] = [];
@@ -106,6 +141,34 @@ describe("DiscordAdapter", () => {
 
             await waitFor(() => clients.length === 2 && clients[1].loginCalls === 1);
             assert.equal(clients[0].destroyCalls, 1);
+        } finally {
+            await adapter.stop();
+            nc.dispose();
+        }
+    });
+
+    it("should arm forced recovery when a shard errors without reconnecting", async () => {
+        const nc = makeNC();
+        const clients: FakeDiscordClient[] = [];
+        const adapter = new DiscordAdapter({ botToken: "token" }, nc, undefined, async () => {
+            const client = new FakeDiscordClient(`bot-${clients.length + 1}`);
+            clients.push(client);
+            return client;
+        });
+        let watchdogClient: FakeDiscordClient | undefined;
+        let watchdogShardId: number | undefined;
+        (adapter as any).armGatewayRecoveryWatchdog = (client: FakeDiscordClient, shardId: number) => {
+            watchdogClient = client;
+            watchdogShardId = shardId;
+        };
+
+        try {
+            await adapter.start();
+            clients[0].emit("shardError", new Error("gateway socket failed"), 3);
+
+            assert.equal(watchdogClient, clients[0]);
+            assert.equal(watchdogShardId, 3);
+            assert.equal(adapter.getConnectionStatus().lastError, "Error: gateway socket failed");
         } finally {
             await adapter.stop();
             nc.dispose();

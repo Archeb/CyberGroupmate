@@ -123,9 +123,9 @@
           <div class="cfg-grid-2 mt-2">
             <label class="cfg-field"><span class="cfg-label">Responses 请求模式</span>
               <select class="select select-xs select-bordered w-full" bind:value={p.responsesRequestMode}>
-                <option value="non_stream">non_stream（默认）</option>
-                <option value="stream">stream（后台聚合完整输出）</option>
-                <option value="websocket">websocket（连接内增量续链）</option>
+                <option value="non_stream">non_stream（推荐，HTTP）</option>
+                <option value="stream">stream（HTTP，后台聚合完整输出）</option>
+                <option value="websocket">websocket（增量续链，断线降级 HTTP）</option>
               </select>
             </label>
             <label class="cfg-check" title="不发送 max_output_tokens；用于不接受该字段的 Responses 兼容网关"><input type="checkbox" class="checkbox checkbox-xs" bind:checked={p.omit_max_output_tokens} /><span>Omit Max Output Tokens</span></label>
