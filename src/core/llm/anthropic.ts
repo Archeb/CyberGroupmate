@@ -3,6 +3,7 @@
  */
 
 import type { LLMConfig } from "../config.js";
+import { reasoningOriginKey } from "./reasoning-origin.js";
 import type { ChatMessage, LLMResponse } from "./types.js";
 
 /**
@@ -20,6 +21,7 @@ export async function callAnthropic(
     signal?: AbortSignal,
 ): Promise<LLMResponse> {
     const url = `${config.baseUrl.replace(/\/$/, "")}/messages`;
+    const originKey = reasoningOriginKey(config, model);
 
     const systemMsg = messages.find((m) => m.role === "system");
     const nonSystemMsgs = messages.filter((m) => m.role !== "system");
@@ -72,7 +74,8 @@ export async function callAnthropic(
             return { role: m.role, content: parts };
         }
 
-        if (m.role === "assistant" && m.reasoning?.provider === "anthropic") {
+        // 只回传本 profile 自己签发的 thinking block：signature 只对签发它的上游有效。
+        if (m.role === "assistant" && m.reasoning?.provider === "anthropic" && m.reasoning.originKey === originKey) {
             const parts: Array<Record<string, unknown>> = [
                 ...m.reasoning.blocks.map((block) => ({ ...block })),
                 { type: "text", text: m.content },
@@ -173,6 +176,7 @@ export async function callAnthropic(
             ? {
                 provider: "anthropic",
                 blocks: thinkingBlocks,
+                originKey,
                 tokenCount: data.usage?.output_tokens_details?.thinking_tokens,
             }
             : undefined,

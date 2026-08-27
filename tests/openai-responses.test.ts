@@ -10,6 +10,7 @@ import {
     collectResponseFromStream,
     isRetryableResponsesWebSocketError,
 } from "../src/core/llm/openai-responses.js";
+import { reasoningOriginKey } from "../src/core/llm/reasoning-origin.js";
 import type { ChatMessage } from "../src/core/llm/types.js";
 
 const websocketServers: WebSocketServer[] = [];
@@ -238,6 +239,7 @@ describe("OpenAI Responses WebSocket mode", () => {
         assert.deepEqual(result.reasoning, {
             provider: "openai_responses",
             items: [reasoningItem],
+            originKey: reasoningOriginKey(profile, profile.model),
             tokenCount: 4,
         });
         assert.equal(httpRequests.length, 1);
@@ -305,6 +307,42 @@ describe("OpenAI Responses WebSocket mode", () => {
         assert.equal(requests[2].previous_response_id, undefined);
         assert.equal(requests[2].input.some((item: Record<string, unknown>) => item.type === "reasoning"), false);
         assert.deepEqual(requests[2].input.map((item: Record<string, unknown>) => item.role), [
+            "user", "assistant", "user", "assistant", "user",
+        ]);
+    });
+
+    it("does not continue from a response id issued to another profile", async () => {
+        const { baseUrl, requests } = await startResponsesWebSocketServer();
+        const profile = websocketConfig(baseUrl);
+        const first = await callOpenAIResponses(
+            [{ role: "user", content: "first" }],
+            profile, profile.model, 1, 1024, "high",
+        );
+
+        // 更近的一轮由别的 profile 应答：它的 responseId 不在本连接的命名空间里。
+        await callOpenAIResponses([
+            { role: "user", content: "first" },
+            { role: "assistant", content: first.content, reasoning: first.reasoning },
+            { role: "user", content: "second" },
+            {
+                role: "assistant",
+                content: "answer from elsewhere",
+                reasoning: {
+                    provider: "openai_responses",
+                    items: [{ id: "item_from_another_gateway", type: "reasoning", summary: [] }],
+                    responseId: "resp_elsewhere",
+                    originKey: "another-profile",
+                },
+            },
+            { role: "user", content: "third" },
+        ], profile, profile.model, 1, 1024, "high");
+
+        assert.equal(requests[1].previous_response_id, undefined);
+        assert.equal(
+            requests[1].input.some((item: Record<string, unknown>) => item.type === "reasoning"),
+            false,
+        );
+        assert.deepEqual(requests[1].input.map((item: Record<string, unknown>) => item.role), [
             "user", "assistant", "user", "assistant", "user",
         ]);
     });

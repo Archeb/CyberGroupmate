@@ -15,6 +15,7 @@ import type {
 import WebSocket, { type RawData } from "ws";
 import type { LLMConfig } from "../config.js";
 import { createLogger } from "../logger.js";
+import { reasoningOriginKey } from "./reasoning-origin.js";
 import type { ChatMessage, LLMResponse } from "./types.js";
 
 const log = createLogger("openai-responses");
@@ -64,7 +65,8 @@ export async function callOpenAIResponses(
         .map(m => m.content.trim())
         .filter(Boolean);
 
-    const input = buildResponsesInput(messages);
+    const originKey = reasoningOriginKey(config, model);
+    const input = buildResponsesInput(messages, originKey);
 
     if (prefill) {
         input.push({
@@ -94,7 +96,7 @@ export async function callOpenAIResponses(
     let response: ResponsesResult;
     if (requestMode === "websocket") {
         try {
-            const result = await callOpenAIResponsesWebSocket(messages, config, requestBody, prefill, signal);
+            const result = await callOpenAIResponsesWebSocket(messages, config, requestBody, originKey, prefill, signal);
             websocketSessionId = result.sessionId;
             response = result.response;
         } catch (error) {
@@ -130,6 +132,7 @@ export async function callOpenAIResponses(
             ? {
                 provider: "openai_responses",
                 items: reasoningItems ?? [],
+                originKey,
                 tokenCount: response.usage?.output_tokens_details?.reasoning_tokens,
                 ...(websocketSessionId && response.id ? { responseId: response.id } : {}),
                 ...(websocketSessionId ? { websocketSessionId } : {}),
@@ -147,10 +150,22 @@ export async function callOpenAIResponses(
     };
 }
 
-function buildResponsesInput(messages: ChatMessage[], includeReasoning = true): ResponseInput {
+/**
+ * @param originKey 当前 profile 的推理来源指纹；只回传指纹一致的 reasoning item，
+ *   别的 profile（哪怕同为 Responses 协议）的 item id 会被上游判为非法格式。
+ */
+function buildResponsesInput(
+    messages: ChatMessage[],
+    originKey: string,
+    includeReasoning = true,
+): ResponseInput {
     const input: ResponseInput = [];
     for (const m of messages.filter(m => m.role !== "system")) {
-        if (includeReasoning && m.role === "assistant" && m.reasoning?.provider === "openai_responses") {
+        if (
+            includeReasoning && m.role === "assistant"
+            && m.reasoning?.provider === "openai_responses"
+            && m.reasoning.originKey === originKey
+        ) {
             input.push(...m.reasoning.items as unknown as ResponseInputItem[]);
         }
         if (m.imageParts && m.imageParts.length > 0 && m.role === "user") {
@@ -177,10 +192,6 @@ function buildResponsesInput(messages: ChatMessage[], includeReasoning = true): 
     return input;
 }
 
-function responsesWebSocketProfileKey(config: LLMConfig, model: unknown): string {
-    return `${config.baseUrl}\n${String(model)}\n${config.apiKey}`;
-}
-
 function findWebSocketContinuation(
     messages: ChatMessage[],
     profileKey: string,
@@ -188,6 +199,9 @@ function findWebSocketContinuation(
     for (let index = messages.length - 1; index >= 0; index--) {
         const reasoning = messages[index].reasoning;
         if (messages[index].role !== "assistant" || reasoning?.provider !== "openai_responses") continue;
+        // 最近一轮由别的 profile 产出：它的 responseId 不在本 profile 的命名空间里，
+        // 无法续链，只能退回完整 input（且那一轮的 reasoning item 会被丢弃）。
+        if (reasoning.originKey !== profileKey) return undefined;
         if (!reasoning.responseId || !reasoning.websocketSessionId) return undefined;
         const session = websocketSessions.get(reasoning.websocketSessionId);
         if (!session || session.pending || session.profileKey !== profileKey || session.socket.readyState !== WebSocket.OPEN) {
@@ -196,7 +210,7 @@ function findWebSocketContinuation(
         return {
             session,
             responseId: reasoning.responseId,
-            input: buildResponsesInput(messages.slice(index + 1)),
+            input: buildResponsesInput(messages.slice(index + 1), profileKey),
         };
     }
     return undefined;
@@ -206,12 +220,12 @@ async function callOpenAIResponsesWebSocket(
     messages: ChatMessage[],
     config: LLMConfig,
     requestBody: Record<string, unknown>,
+    profileKey: string,
     prefill?: string,
     signal?: AbortSignal,
 ): Promise<{ response: ResponsesResult; sessionId: string }> {
-    const profileKey = responsesWebSocketProfileKey(config, requestBody.model);
     const continuation = findWebSocketContinuation(messages, profileKey);
-    const incrementalInput = continuation?.input ?? buildResponsesInput(messages, false);
+    const incrementalInput = continuation?.input ?? buildResponsesInput(messages, profileKey, false);
     if (prefill) incrementalInput.push({ role: "assistant", content: prefill });
 
     let session: ResponsesWebSocketSession | undefined;

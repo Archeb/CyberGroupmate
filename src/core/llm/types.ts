@@ -16,10 +16,17 @@ export interface ImagePart {
  *
  * 这些字段必须和对应的 assistant turn 一起原样回传，模型才能在下一轮
  * 继续先前的推理。不同协议的状态不可互换；fallback 到其他 provider 时会忽略。
+ * 同一协议下的不同 profile 之间也不可互换，靠 originKey 区分。
  */
 export type LLMReasoning = {
     /** 本轮内部推理 token 数；用于上下文预算，避免把密文长度误当 token 数。 */
     tokenCount?: number;
+    /**
+     * 产出这段状态的 profile 指纹（见 reasoning-origin.ts）。
+     * 只有当前调用的 profile 指纹一致时才回传 opaque 状态；不一致或缺失
+     * （历史持久化数据）时整段丢弃——少一轮推理续链，好过整个请求 400。
+     */
+    originKey?: string;
 } & (
     | {
         provider: "openai_responses";

@@ -3,6 +3,7 @@
  */
 
 import type { LLMConfig } from "../config.js";
+import { reasoningOriginKey } from "./reasoning-origin.js";
 import type { ChatMessage, LLMResponse } from "./types.js";
 
 /**
@@ -20,6 +21,7 @@ export async function callOpenAI(
     signal?: AbortSignal,
 ): Promise<LLMResponse> {
     const url = `${config.baseUrl.replace(/\/$/, "")}/chat/completions`;
+    const originKey = reasoningOriginKey(config, model);
 
     const headers: Record<string, string> = {
         "Content-Type": "application/json",
@@ -47,7 +49,9 @@ export async function callOpenAI(
             }
             return { role: m.role, content: parts };
         }
-        if (m.role === "assistant" && m.reasoning?.provider === "openai_chat") {
+        // reasoning_content 虽然是明文、不像 Responses item id 那样会被判非法格式，
+        // 但部分上游（如 DeepSeek）明确拒绝 input 里带该字段，同样按 profile 隔离。
+        if (m.role === "assistant" && m.reasoning?.provider === "openai_chat" && m.reasoning.originKey === originKey) {
             return {
                 role: m.role,
                 content: m.content,
@@ -123,6 +127,7 @@ export async function callOpenAI(
             ? {
                 provider: "openai_chat",
                 content: reasoningContent,
+                originKey,
                 tokenCount: data.usage?.completion_tokens_details?.reasoning_tokens,
             }
             : undefined,
