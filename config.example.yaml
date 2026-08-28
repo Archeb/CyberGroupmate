@@ -213,7 +213,7 @@ backfill:
 # 黑/白名单统一在消息进入协调器时执行，修改后热重载，无需重启。
 # chat_filter:
 #   enabled: false
-#   # blacklist: 丢弃命中项；whitelist: 仅处理命中项
+#   # blacklist: 拦截命中项；whitelist: 仅处理命中项
 #   mode: blacklist
 #   # 会话 filter：支持 composite ID、raw ID 和 * 通配符
 #   chat_ids:
@@ -224,6 +224,8 @@ backfill:
 #   user_ids:
 #     - "telegram:123456789"
 #     - "onebot:987654321"
+#   # blacklist 通配规则下的单会话放行例外（通常由 Dashboard 自动维护）
+#   allowed_chat_ids: []
 
 # ─── Telegram 设置 ───
 # 可选。telegram 和 discord 至少配置一个。

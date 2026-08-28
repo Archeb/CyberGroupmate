@@ -743,18 +743,12 @@ async function main(): Promise<void> {
             ? ensureCompositeId(getPlatform(chatId), rawSenderId)
             : "";
 
-        // ─── 全平台入站过滤：按会话 / 发送者 filter 丢弃消息 ───
-        // 动态读取 loadConfig()（支持热重载，无需重启）。命中过滤则完全丢弃：
-        // 不落盘、不进 Observer/RecordingPipeline、不触发任何后续处理。
+        // ─── 全平台入站过滤：按会话 / 发送者判断访问控制状态 ───
+        // 动态读取 loadConfig()（支持热重载，无需重启）。命中的消息仍会在下方
+        // 即时落盘，供 Dashboard 查看；落盘后立即返回，不进入任何处理 pipeline。
         const chatFilter = loadConfig().chatFilter;
-        if (shouldDropInbound(chatFilter, { chatId, userId: senderUid })) {
-            log.debug("chatFilter 丢弃入站消息", {
-                chatId,
-                userId: senderUid,
-                mode: chatFilter?.mode ?? "blacklist",
-            });
-            return;
-        }
+        const accessControlBlocked = shouldDropInbound(chatFilter, { chatId, userId: senderUid });
+        (event as Record<string, unknown>).accessControlBlocked = accessControlBlocked;
 
         // ─── 跨平台用户闸门：隐身 / 紧急拉黑用户的消息直接丢弃（所有平台统一，无需重启） ───
         if (senderUid && userGate.shouldDrop(senderUid)) {
@@ -782,26 +776,14 @@ async function main(): Promise<void> {
                 timestamp: resolveEventTimestamp(event),
                 mediaType: (event as any).mediaInfo?.type ?? undefined,
                 mediaInfo: (event as any).mediaInfo ? JSON.stringify((event as any).mediaInfo) : undefined,
+                accessControlBlocked,
             }]);
         } catch (err) {
             log.warn("即时消息落盘失败", { chatId, error: String(err) });
         }
 
-        // ─── username 持久化到 PersonIdentity（供 attend-handler activePersons 使用） ───
-        const eventUsername = event.username as string | undefined;
-        if (eventUsername) {
-            const eventUserId = String(event.userId ?? event.user_id ?? event.senderId ?? "");
-            if (eventUserId) {
-                try {
-                    const compositeUid2 = ensureCompositeId(getPlatform(chatId), eventUserId);
-                    memory.upsertPersonIdentity(compositeUid2, { username: eventUsername });
-                } catch { /* 非关键路径 */ }
-            }
-        }
-
-        // ─── chatTitle 持久化：确保 group_models 表有群名/私聊对象名 ───
-        // 群聊: event.chatTitle 来自 chat.title
-        // 私聊: chatTitle 为对方 displayName（normalizeChat fallback），也可以用 event.displayName
+        // ─── chatTitle 持久化：被访问控制拦截的会话也要能在 Dashboard 中辨认 ───
+        // 群聊: event.chatTitle 来自 chat.title；私聊则优先使用对方 displayName。
         const isDMChat = !!event.isDirectMessage;
         const incomingTitle = isDMChat
             ? String(event.displayName ?? event.chatTitle ?? "")
@@ -815,6 +797,27 @@ async function main(): Promise<void> {
                 }
             } catch (err) {
                 log.warn("chatTitle 持久化失败", { chatId, error: String(err) });
+            }
+        }
+
+        if (accessControlBlocked) {
+            log.debug("chatFilter 拦截入站消息（已落盘）", {
+                chatId,
+                userId: senderUid,
+                mode: chatFilter?.mode ?? "blacklist",
+            });
+            return;
+        }
+
+        // ─── username 持久化到 PersonIdentity（供 attend-handler activePersons 使用） ───
+        const eventUsername = event.username as string | undefined;
+        if (eventUsername) {
+            const eventUserId = String(event.userId ?? event.user_id ?? event.senderId ?? "");
+            if (eventUserId) {
+                try {
+                    const compositeUid2 = ensureCompositeId(getPlatform(chatId), eventUserId);
+                    memory.upsertPersonIdentity(compositeUid2, { username: eventUsername });
+                } catch { /* 非关键路径 */ }
             }
         }
 
@@ -980,6 +983,7 @@ async function main(): Promise<void> {
     // Track chat activity for reflection
     nc.onPush(event => {
         if (shuttingDown) return;
+        if (event.accessControlBlocked === true) return;
         const chatId = String(event.chatId ?? "");
         if (chatId) lastActivityPerChat.set(chatId, Date.now());
     });

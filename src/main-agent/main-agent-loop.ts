@@ -600,6 +600,7 @@ export class MainAgentLoop {
                 if (!subagent) return null;
                 entry = subagent.buildQueueEntry("DIRECT_ADDRESS");
                 {
+                    applyEmbeddedQueueEntry(entry, item.payload);
                     const directAddress = extractDirectAddressPayload(item.payload, item.chatId);
                     entry.directAddressReason = directAddress.reason;
                     if (directAddress.messageIds.length > 0) {
@@ -814,6 +815,31 @@ function extractDirectAddressPayload(payload: unknown, chatId: string): { reason
             ? [ensureCompositeId(platform, String(userId))]
             : [],
     };
+}
+
+/**
+ * Dashboard approval and other consolidated wakeups may carry a bounded
+ * historical snapshot. Only merge the context fields needed by attend; never
+ * trust payload data to replace chat identity, source, or queue state.
+ */
+function applyEmbeddedQueueEntry(entry: AttentionQueueEntry, payload: unknown): void {
+    if (!payload || typeof payload !== "object") return;
+    const raw = (payload as Record<string, unknown>).queueEntry;
+    if (!raw || typeof raw !== "object") return;
+    const embedded = raw as Partial<AttentionQueueEntry>;
+
+    if (Array.isArray(embedded.recentMessages)) {
+        entry.recentMessages = embedded.recentMessages;
+    }
+    if (typeof embedded.newMessageCount === "number" && Number.isFinite(embedded.newMessageCount)) {
+        entry.newMessageCount = Math.max(0, Math.floor(embedded.newMessageCount));
+    }
+    if (Array.isArray(embedded.directAddressMessageIds)) {
+        entry.directAddressMessageIds = embedded.directAddressMessageIds.map(String);
+    }
+    if (Array.isArray(embedded.directAddressUserIds)) {
+        entry.directAddressUserIds = embedded.directAddressUserIds.map(String);
+    }
 }
 
 function createSyntheticMetaEntry(item: AttentionItem): AttentionQueueEntry {

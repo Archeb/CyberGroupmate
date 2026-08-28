@@ -68,6 +68,17 @@ function handleEvent(event) {
       });
       break;
     }
+    case 'access-control:update': {
+      appState.update(s => {
+        const group = s.groups.find(g => g.chatId === event.data.chatId);
+        if (group) {
+          group.accessControlBlocked = !!event.data.blocked;
+          group.pendingBlockedMessages = event.data.pendingMessageCount ?? 0;
+        }
+        return s;
+      });
+      break;
+    }
     case 'adapters:connection': {
       appState.update(s => {
         s.adapters = event.data.adapters;

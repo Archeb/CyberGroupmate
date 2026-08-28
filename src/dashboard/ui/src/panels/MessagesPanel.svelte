@@ -30,6 +30,60 @@
   let globalMuteLoading = false;
   let chatMuteLoading = false;
 
+  // ─── 访问控制放行 ───
+  let accessControlByChat = {};
+  let releaseLoading = false;
+
+  async function loadAccessControlStatus(chatId) {
+    if (!chatId) return;
+    try {
+      const status = await api(`/access-control/chats/${encodeURIComponent(chatId)}`);
+      accessControlByChat = { ...accessControlByChat, [chatId]: status };
+    } catch { /* ignore */ }
+  }
+
+  $: if ($selectedChatId) loadAccessControlStatus($selectedChatId);
+  $: currentAccessControl = $selectedChatId
+    ? (accessControlByChat[$selectedChatId]
+      ?? $appState.groups.find((group) => group.chatId === $selectedChatId)
+      ?? {})
+    : {};
+  $: currentAccessControlGroup = $selectedChatId
+    ? ($appState.groups.find((group) => group.chatId === $selectedChatId) ?? {})
+    : {};
+  $: isCurrentChatAccessBlocked = !!currentAccessControl.blocked || !!currentAccessControl.accessControlBlocked
+    || !!currentAccessControlGroup.accessControlBlocked;
+
+  async function releaseCurrentChat() {
+    if (!$selectedChatId || releaseLoading) return;
+    const chatId = $selectedChatId;
+    releaseLoading = true;
+    try {
+      const result = await api(`/access-control/chats/${encodeURIComponent(chatId)}/release`, { method: "POST" });
+      if (!result.ok) throw new Error(result.error ?? "unknown error");
+      accessControlByChat = {
+        ...accessControlByChat,
+        [chatId]: { ...currentAccessControl, blocked: false, accessControlBlocked: false, pendingMessageCount: 0 },
+      };
+      appState.update((state) => {
+        const group = state.groups.find((item) => item.chatId === chatId);
+        if (group) {
+          group.accessControlBlocked = false;
+          group.pendingBlockedMessages = 0;
+        }
+        return state;
+      });
+      const omitted = result.omittedMessageCount > 0
+        ? `（另有 ${result.omittedMessageCount} 条超过上限，仅保留落盘）`
+        : "";
+      alert(`已放行；${result.enqueuedMessageCount ?? 0} 条历史消息已进入注意力队列${omitted}`);
+    } catch (error) {
+      alert("放行失败: " + error.message);
+    } finally {
+      releaseLoading = false;
+    }
+  }
+
   async function fetchMuteStatus() {
     try {
       const res = await api("/mute/status");
@@ -179,7 +233,7 @@
     showSidebar = false;
     if (chatId) {
       try {
-        const history = await api(`/messages/${chatId}?limit=100`);
+        const history = await api(`/messages/${encodeURIComponent(chatId)}?limit=100`);
         if (Array.isArray(history) && history.length > 0) {
           messages.update((msgs) => {
             const existingIds = new Set(msgs.map((m) => m.messageId || m.id));
@@ -192,6 +246,7 @@
                 displayName: m.displayName,
                 text: m.text,
                 timestamp: m.timestamp,
+                accessControlBlocked: !!m.accessControlBlocked,
               }));
             if (newMsgs.length > 0) {
               msgs.push(...newMsgs);
@@ -281,6 +336,7 @@
                   <i class="fa-solid fa-pen" style="font-size:0.55rem"></i>
                 </span>
                 {#if mutedChatIds.has(chatId)}<span title="禁言中"><i class="fa-solid fa-volume-xmark" style="font-size:0.65rem;color:var(--color-warning)"></i></span>{/if}
+                {#if $appState.groups.find((group) => group.chatId === chatId)?.accessControlBlocked}<span title="访问控制已拦截，可进入会话后放行"><i class="fa-solid fa-user-lock" style="font-size:0.65rem;color:var(--color-error)"></i></span>{/if}
                 <span class="badge badge-sm">{count}</span>
               </span>
             </button>
@@ -311,6 +367,17 @@
           </h3>
           {#if $selectedChatId}
             <div class="flex gap-1">
+              {#if isCurrentChatAccessBlocked}
+                <button
+                  class="btn btn-xs btn-success"
+                  title={`放行该会话，并将最近 ${currentAccessControl.pendingMessageCount ?? currentAccessControl.pendingBlockedMessages ?? 0} 条积压消息（受默认上限约束）送入注意力队列`}
+                  disabled={releaseLoading}
+                  onclick={releaseCurrentChat}
+                >
+                  {#if releaseLoading}<span class="loading loading-spinner loading-xs"></span>{:else}<i class="fa-solid fa-user-plus"></i>{/if}
+                  放行
+                </button>
+              {/if}
               <button
                 class="btn btn-xs {isCurrentChatMuted ? 'btn-warning' : 'btn-ghost'}"
                 title={isCurrentMutedByGlobal ? '全局禁言中，请先在「全部」视图解除全局禁言' : isCurrentChatMuted ? `已禁言（剩余 ${muteRemaining[$selectedChatId] ?? '?'}），点击解除` : '禁言 1 小时（Bot 不发消息）'}
@@ -394,6 +461,7 @@
               class:is-mention={isMention}
             >
               <span class="msg-time">{time}</span>
+              {#if m.accessControlBlocked}<span class="badge badge-error badge-xs" title="此消息到达时被访问控制拦截，未进入任何 pipeline">已拦截</span>{/if}
               {#if !$selectedChatId}
                 <span class="msg-group-tag" title={m.chatId}>
                   {#if getPlatform(m.chatId)}<span

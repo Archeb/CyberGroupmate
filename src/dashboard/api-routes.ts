@@ -35,6 +35,8 @@ import {
 } from "../meta-sandbox/meta-session-runner.js";
 import { getMetaHistoryWindowStatus } from "../main-agent/meta-history-retention.js";
 import { getPlatform } from "../core/chat-id.js";
+import { releaseChatFromFilter, shouldDropInbound } from "../core/inbound-filter.js";
+import { resolveBackfillConfig } from "../adapter/backfill.js";
 import { extractAnimatedStickerFrames } from "../core/vision-processor.js";
 import type { MainAgentGlobalState, SchedulerEvent, SessionDigestEntry } from "../subagent/types.js";
 import { createCronApi, createReminderApi } from "../meta-sandbox/meta-api/scheduler.js";
@@ -583,6 +585,110 @@ export function createApiRouter(deps: DashboardDeps, bridge: EventBridge): Route
         const limit = Math.min(parseInt(qs(req.query.limit)) || 50, 200);
         const messages = deps.memory.getRecentMessages(req.params.chatId, limit);
         res.json(messages);
+    });
+
+    // ─── Access Control: blocked chat approval ───
+    router.get("/access-control/chats/:chatId", (req, res) => {
+        const chatId = req.params.chatId;
+        const config = loadConfig();
+        const pendingMessageCount = deps.memory.countPendingAccessControlMessages(chatId);
+        res.json({
+            chatId,
+            enabled: config.chatFilter?.enabled === true,
+            mode: config.chatFilter?.mode ?? "blacklist",
+            blocked: shouldDropInbound(config.chatFilter, { chatId }) || pendingMessageCount > 0,
+            pendingMessageCount,
+        });
+    });
+
+    router.post("/access-control/chats/:chatId/release", async (req, res) => {
+        const chatId = req.params.chatId.trim();
+        if (!chatId) { res.status(400).json({ ok: false, error: "chatId required" }); return; }
+
+        try {
+            const currentConfig = loadConfig("config.yaml", true);
+            const pendingMessageCount = deps.memory.countPendingAccessControlMessages(chatId);
+            const currentlyBlocked = shouldDropInbound(currentConfig.chatFilter, { chatId }) || pendingMessageCount > 0;
+            if (!currentlyBlocked) {
+                res.json({ ok: true, chatId, alreadyReleased: true, enqueuedMessageCount: 0 });
+                return;
+            }
+
+            let updatedConfig = currentConfig;
+            if (currentConfig.chatFilter?.enabled) {
+                updatedConfig = {
+                    ...currentConfig,
+                    chatFilter: releaseChatFromFilter(currentConfig.chatFilter, chatId),
+                };
+                const saveResult = saveConfig(updatedConfig);
+                if (!saveResult.ok) {
+                    res.status(500).json({ ok: false, error: saveResult.error ?? "config save failed" });
+                    return;
+                }
+                if (deps.onConfigSaved) {
+                    await deps.onConfigSaved(updatedConfig);
+                }
+            }
+
+            const historyLimit = resolveBackfillConfig(updatedConfig.backfill).maxMessagesPerChat;
+            const history = deps.memory.getPendingAccessControlMessages(chatId, historyLimit).reverse();
+            if (history.length > 0) {
+                const sub = deps.subagentManager.getOrCreate(chatId);
+                const queueEntry = sub.buildQueueEntry("DIRECT_ADDRESS");
+                queueEntry.newMessageCount = history.length;
+                queueEntry.recentMessages = history.map((message) => ({
+                    messageId: message.messageId,
+                    userId: message.userId,
+                    displayName: message.displayName,
+                    text: message.text,
+                    timestamp: message.timestamp,
+                    replyToMessageId: message.replyToMessageId,
+                    mediaType: message.mediaType,
+                    mediaInfo: message.mediaInfo,
+                }));
+                queueEntry.directAddressMessageIds = history.map((message) => message.messageId);
+                queueEntry.directAddressUserIds = [...new Set(history.map((message) => message.userId).filter(Boolean))];
+
+                deps.accumulator.ingest(0, {
+                    chatId,
+                    source: "DIRECT_ADDRESS",
+                    payload: {
+                        reason: `access-control-release（Dashboard 已放行，补看 ${history.length} 条积压消息）`,
+                        queueEntry,
+                    },
+                    enqueuedAt: Date.now(),
+                    pressure: 100,
+                });
+            }
+
+            const releasedMessageCount = deps.memory.markAccessControlMessagesReleased(chatId);
+            const queueSnapshot = deps.accumulator.getSnapshot();
+            bridge.broadcast({ type: "queue:update", timestamp: new Date().toISOString(), data: queueSnapshot });
+            bridge.broadcast({
+                type: "access-control:update",
+                timestamp: new Date().toISOString(),
+                data: { chatId, blocked: false, pendingMessageCount: 0 },
+            });
+            log.info("Dashboard 放行访问控制会话", {
+                chatId,
+                mode: currentConfig.chatFilter?.mode ?? "blacklist",
+                releasedMessageCount,
+                enqueuedMessageCount: history.length,
+                historyLimit,
+            });
+            res.json({
+                ok: true,
+                chatId,
+                mode: currentConfig.chatFilter?.mode ?? "blacklist",
+                releasedMessageCount,
+                enqueuedMessageCount: history.length,
+                omittedMessageCount: Math.max(0, pendingMessageCount - history.length),
+                historyLimit,
+            });
+        } catch (err) {
+            log.warn("Dashboard 放行访问控制会话失败", { chatId, error: String(err) });
+            res.status(500).json({ ok: false, error: String(err) });
+        }
     });
 
     // ─── Topics ───

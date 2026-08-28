@@ -444,6 +444,8 @@ export interface ChatFilterConfig {
     chatIds?: string[];
     /** sender userId filter（支持 composite、raw ID 和 `*` 通配符） */
     userIds?: string[];
+    /** blacklist 模式下的会话级放行例外（Dashboard 放行通配符命中的会话时使用） */
+    allowedChatIds?: string[];
 }
 
 /**
@@ -925,11 +927,13 @@ function parseChatFilterConfig(fileConfig: Record<string, unknown>): ChatFilterC
         const mode = str(raw.mode);
         const chatIdsRaw = raw.chat_ids ?? raw.chatIds;
         const userIdsRaw = raw.user_ids ?? raw.userIds;
+        const allowedChatIdsRaw = raw.allowed_chat_ids ?? raw.allowedChatIds;
         return {
             enabled: raw.enabled != null ? Boolean(raw.enabled) : undefined,
             mode: mode === "whitelist" ? "whitelist" : mode === "blacklist" ? "blacklist" : undefined,
             chatIds: stringList(chatIdsRaw),
             userIds: stringList(userIdsRaw),
+            allowedChatIds: stringList(allowedChatIdsRaw),
         };
     }
 
@@ -1877,6 +1881,7 @@ export function serializeConfigToObject(config: AppConfig): Record<string, unkno
         if (config.chatFilter.mode) cf.mode = config.chatFilter.mode;
         if (config.chatFilter.chatIds && config.chatFilter.chatIds.length > 0) cf.chat_ids = config.chatFilter.chatIds;
         if (config.chatFilter.userIds && config.chatFilter.userIds.length > 0) cf.user_ids = config.chatFilter.userIds;
+        if (config.chatFilter.allowedChatIds && config.chatFilter.allowedChatIds.length > 0) cf.allowed_chat_ids = config.chatFilter.allowedChatIds;
         if (Object.keys(cf).length > 0) obj.chat_filter = cf;
     }
 

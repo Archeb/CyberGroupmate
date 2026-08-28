@@ -655,6 +655,8 @@ export interface MessageLogEntry {
     mediaType?: string;
     /** 媒体元数据 JSON（含 fileId, uniqueFileId, emoji 等） */
     mediaInfo?: string;
+    /** 消息到达时是否被全局访问控制拦截 */
+    accessControlBlocked?: boolean;
 }
 
 export interface RecentMessageEntry {
@@ -669,6 +671,8 @@ export interface RecentMessageEntry {
     mediaType?: string;
     /** 媒体元数据 JSON */
     mediaInfo?: string;
+    /** 消息到达时是否被全局访问控制拦截 */
+    accessControlBlocked?: boolean;
 }
 
 // ─── MemoryStoreV2 接口 ───
@@ -805,6 +809,15 @@ export interface IMemoryStoreV2 {
 
     /** 获取指定 chatId 最近的原始消息 */
     getRecentMessages(chatId: string, limit?: number): RecentMessageEntry[];
+
+    /** 获取尚未通过 Dashboard 放行的访问控制积压消息（最新在前） */
+    getPendingAccessControlMessages(chatId: string, limit?: number): RecentMessageEntry[];
+
+    /** 尚未放行的访问控制积压消息数量 */
+    countPendingAccessControlMessages(chatId: string): number;
+
+    /** 将会话的访问控制积压消息标记为已放行，返回更新行数 */
+    markAccessControlMessagesReleased(chatId: string): number;
 
     /** 补抓水位线：该会话本地已知的最新消息 */
     getBackfillWatermark(chatId: string, ordering?: "numeric-id" | "timestamp"): { messageId: string; timestamp: string } | null;

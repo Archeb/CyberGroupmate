@@ -420,17 +420,18 @@ export class TelegramAdapter implements PlatformAdapter {
             });
             if (!normalized || !normalized.messageId || !normalized.text) return;
 
-            // Commands are consumed inside the adapter, before nc.message reaches the
-            // coordinator, so apply the same shared filter here to prevent replies
-            // from chats that the global filter rejects.
-            if (shouldDropInbound(loadConfig().chatFilter, {
+            // Commands are consumed inside the adapter before nc.message reaches the
+            // coordinator. A blocked command must not execute, but the original
+            // message still has to reach the coordinator so it can be persisted and
+            // shown in Dashboard without entering any processing pipeline.
+            const accessControlBlocked = shouldDropInbound(loadConfig().chatFilter, {
                 chatId: normalized.chatId,
-                userId: normalized.userId,
-            })) return;
+                userId: ensureCompositeId("telegram", normalized.userId),
+            });
 
             // ─── /invisible & /mute 命令拦截 ───
             // 补抓的历史命令不再执行（几小时前的 /mute 现在执行毫无意义），只当普通消息落盘。
-            if (!isCatchUp) {
+            if (!isCatchUp && !accessControlBlocked) {
                 const cmdHandled = await this.handleBotCommand(normalized, msg);
                 if (cmdHandled) return;  // 命令消息不进入 NC
             }

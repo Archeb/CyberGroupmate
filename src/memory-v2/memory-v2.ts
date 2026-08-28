@@ -487,6 +487,10 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
                 text TEXT NOT NULL DEFAULT '',
                 reply_to_message_id TEXT,
                 timestamp TEXT NOT NULL,
+                media_type TEXT,
+                media_info TEXT,
+                access_control_blocked INTEGER NOT NULL DEFAULT 0,
+                access_control_released INTEGER NOT NULL DEFAULT 0,
                 PRIMARY KEY (chat_id, message_id)
             );
             CREATE INDEX IF NOT EXISTS idx_msglog_chat_time ON message_log(chat_id, timestamp);
@@ -557,6 +561,8 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
         // message_log 新增 media 列（兼容旧数据库）
         try { this.db.exec(`ALTER TABLE message_log ADD COLUMN media_type TEXT`); } catch { /* 列已存在 */ }
         try { this.db.exec(`ALTER TABLE message_log ADD COLUMN media_info TEXT`); } catch { /* 列已存在 */ }
+        try { this.db.exec(`ALTER TABLE message_log ADD COLUMN access_control_blocked INTEGER NOT NULL DEFAULT 0`); } catch { /* 列已存在 */ }
+        try { this.db.exec(`ALTER TABLE message_log ADD COLUMN access_control_released INTEGER NOT NULL DEFAULT 0`); } catch { /* 列已存在 */ }
 
         // Sticker 描述缓存表
         this.db.exec(`
@@ -985,8 +991,9 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
 
         const insert = this.db.prepare(`
             INSERT OR IGNORE INTO message_log
-                (message_id, chat_id, user_id, display_name, text, reply_to_message_id, timestamp, media_type, media_info)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (message_id, chat_id, user_id, display_name, text, reply_to_message_id, timestamp, media_type, media_info,
+                 access_control_blocked, access_control_released)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
         `);
 
         const batch = this.db.transaction((msgs: MessageLogEntry[]) => {
@@ -995,6 +1002,7 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
                     m.messageId, m.chatId, m.userId, m.displayName,
                     m.text, m.replyToMessageId ?? null, m.timestamp,
                     m.mediaType ?? null, m.mediaInfo ?? null,
+                    m.accessControlBlocked ? 1 : 0,
                 );
             }
         });
@@ -2491,7 +2499,8 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
 
     getRecentMessages(chatId: string, limit: number = 5): RecentMessageEntry[] {
         const rows = this.db.prepare(
-            `SELECT message_id, chat_id, user_id, display_name, text, reply_to_message_id, timestamp, media_type, media_info
+            `SELECT message_id, chat_id, user_id, display_name, text, reply_to_message_id, timestamp, media_type, media_info,
+                    access_control_blocked
              FROM message_log
              WHERE chat_id = ?
              ORDER BY timestamp DESC
@@ -2508,7 +2517,49 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
             timestamp: row.timestamp as string,
             mediaType: (row.media_type as string) ?? undefined,
             mediaInfo: (row.media_info as string) ?? undefined,
+            accessControlBlocked: Number(row.access_control_blocked) === 1,
         }));
+    }
+
+    getPendingAccessControlMessages(chatId: string, limit: number = 50): RecentMessageEntry[] {
+        const boundedLimit = Math.max(1, Math.floor(limit));
+        const rows = this.db.prepare(
+            `SELECT message_id, chat_id, user_id, display_name, text, reply_to_message_id, timestamp, media_type, media_info,
+                    access_control_blocked
+             FROM message_log
+             WHERE chat_id = ? AND access_control_blocked = 1 AND access_control_released = 0
+             ORDER BY timestamp DESC
+             LIMIT ?`
+        ).all(chatId, boundedLimit) as Record<string, unknown>[];
+
+        return rows.map((row) => ({
+            messageId: row.message_id as string,
+            chatId: row.chat_id as string,
+            userId: row.user_id as string,
+            displayName: (row.display_name as string) ?? "",
+            text: (row.text as string) ?? "",
+            replyToMessageId: (row.reply_to_message_id as string) ?? undefined,
+            timestamp: row.timestamp as string,
+            mediaType: (row.media_type as string) ?? undefined,
+            mediaInfo: (row.media_info as string) ?? undefined,
+            accessControlBlocked: true,
+        }));
+    }
+
+    countPendingAccessControlMessages(chatId: string): number {
+        const row = this.db.prepare(
+            `SELECT COUNT(*) AS cnt FROM message_log
+             WHERE chat_id = ? AND access_control_blocked = 1 AND access_control_released = 0`
+        ).get(chatId) as { cnt?: number } | undefined;
+        return Number(row?.cnt ?? 0);
+    }
+
+    markAccessControlMessagesReleased(chatId: string): number {
+        const result = this.db.prepare(
+            `UPDATE message_log SET access_control_released = 1
+             WHERE chat_id = ? AND access_control_blocked = 1 AND access_control_released = 0`
+        ).run(chatId);
+        return result.changes;
     }
 
     /**

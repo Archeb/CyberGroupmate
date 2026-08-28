@@ -16,10 +16,60 @@ export function shouldDropInbound(
 ): boolean {
     if (!config?.enabled) return false;
 
-    const listed = matchesFilterList(config.chatIds, chatIdCandidates(target.chatId))
+    const chatCandidates = chatIdCandidates(target.chatId);
+    if (
+        (config.mode ?? "blacklist") === "blacklist"
+        && matchesFilterList(config.allowedChatIds, chatCandidates)
+    ) {
+        return false;
+    }
+
+    const listed = matchesFilterList(config.chatIds, chatCandidates)
         || matchesFilterList(config.userIds, idCandidates(target.userId));
 
     return (config.mode ?? "blacklist") === "whitelist" ? !listed : listed;
+}
+
+/**
+ * Return a copy of the filter config that releases one whole chat.
+ *
+ * Exact blacklist entries are removed. If a wildcard or sender rule would
+ * still block the chat, an explicit chat-level exception is added instead of
+ * deleting the broader rule.
+ */
+export function releaseChatFromFilter(
+    config: ChatFilterConfig,
+    chatId: string,
+): ChatFilterConfig {
+    const normalizedChatId = chatId.trim();
+    if (!normalizedChatId) return { ...config };
+
+    const next: ChatFilterConfig = {
+        ...config,
+        chatIds: [...(config.chatIds ?? [])],
+        userIds: [...(config.userIds ?? [])],
+        allowedChatIds: [...(config.allowedChatIds ?? [])],
+    };
+
+    if ((next.mode ?? "blacklist") === "whitelist") {
+        if (!next.chatIds!.includes(normalizedChatId)) {
+            next.chatIds!.push(normalizedChatId);
+        }
+        return next;
+    }
+
+    const candidates = chatIdCandidates(normalizedChatId);
+    next.chatIds = next.chatIds!.filter((pattern) => {
+        const trimmed = pattern.trim();
+        return trimmed.includes("*") || !matchesFilterList([trimmed], candidates);
+    });
+
+    if ((next.userIds?.length ?? 0) > 0 || shouldDropInbound(next, { chatId: normalizedChatId })) {
+        if (!next.allowedChatIds!.includes(normalizedChatId)) {
+            next.allowedChatIds!.push(normalizedChatId);
+        }
+    }
+    return next;
 }
 
 export function matchesFilterList(

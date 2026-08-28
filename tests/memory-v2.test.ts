@@ -213,6 +213,24 @@ describe("storeMessageBatch", () => {
         assert.equal(row.reply_to_message_id, "2");
     });
 
+    it("tracks and releases access-control-blocked message backlog", () => {
+        mem.storeMessageBatch([
+            { messageId: "b1", chatId: "telegram:blocked", userId: "u1", displayName: "alice", text: "first", timestamp: "2026-01-01T10:00:00Z", accessControlBlocked: true },
+            { messageId: "b2", chatId: "telegram:blocked", userId: "u1", displayName: "alice", text: "second", timestamp: "2026-01-01T10:01:00Z", accessControlBlocked: true },
+            { messageId: "b3", chatId: "telegram:blocked", userId: "u2", displayName: "bob", text: "third", timestamp: "2026-01-01T10:02:00Z", accessControlBlocked: true },
+        ]);
+
+        assert.equal(mem.countPendingAccessControlMessages("telegram:blocked"), 3);
+        assert.deepEqual(
+            mem.getPendingAccessControlMessages("telegram:blocked", 2).map((message) => message.messageId),
+            ["b3", "b2"],
+        );
+        assert.equal(mem.getRecentMessages("telegram:blocked", 1)[0]?.accessControlBlocked, true);
+        assert.equal(mem.markAccessControlMessagesReleased("telegram:blocked"), 3);
+        assert.equal(mem.countPendingAccessControlMessages("telegram:blocked"), 0);
+        assert.equal(mem.getRecentMessages("telegram:blocked", 1)[0]?.accessControlBlocked, true, "historical badge remains after release");
+    });
+
     it("getMessagesBetweenIds returns the full chronological window", () => {
         mem.storeMessageBatch(baseMsgs);
         const rows = mem.getMessagesBetweenIds("-100", "1", "3");

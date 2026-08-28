@@ -495,6 +495,48 @@ describe("MainAgentLoop meta session path", () => {
         globalState.dispose();
     });
 
+    it("carries a bounded access-control backlog through direct attention", async () => {
+        const dir = tempDir();
+        const globalState = new GlobalState({
+            filePath: join(dir, "global-state.json"),
+            autoSaveInterval: 0,
+        });
+        const accumulator = new AttentionAccumulator(globalState, { windowMs: 0 });
+        const callbackQueue = new CallbackQueue();
+        const subagentManager = new SubagentManager({ sessionsDir: join(dir, "sessions") });
+        const loop = new MainAgentLoop(accumulator, callbackQueue, subagentManager, {}, globalState);
+        const sub = subagentManager.getOrCreate("telegram:new-friend");
+        const queueEntry = sub.buildQueueEntry("DIRECT_ADDRESS");
+        queueEntry.newMessageCount = 2;
+        queueEntry.recentMessages = [
+            { messageId: "old-1", userId: "telegram:u1", displayName: "Alice", text: "你好", timestamp: "2026-01-01T10:00:00Z" },
+            { messageId: "old-2", userId: "telegram:u1", displayName: "Alice", text: "可以认识一下吗", timestamp: "2026-01-01T10:01:00Z" },
+        ];
+        queueEntry.directAddressMessageIds = ["old-1", "old-2"];
+        queueEntry.directAddressUserIds = ["telegram:u1"];
+
+        accumulator.ingest(0, createDirectAddressItem("telegram:new-friend", {
+            reason: "access-control-release",
+            queueEntry,
+        }, 1));
+
+        let receivedEntries: AttentionQueueEntry[] = [];
+        loop.setMetaSessionHandler(async (entries) => {
+            receivedEntries = entries;
+            return { endReason: "end_turn" };
+        });
+
+        await loop.tick();
+
+        assert.equal(receivedEntries[0]?.directAddressReason, "access-control-release");
+        assert.equal(receivedEntries[0]?.newMessageCount, 2);
+        assert.deepEqual(receivedEntries[0]?.recentMessages?.map((message) => message.messageId), ["old-1", "old-2"]);
+        assert.deepEqual(receivedEntries[0]?.directAddressMessageIds, ["old-1", "old-2"]);
+        assert.deepEqual(receivedEntries[0]?.directAddressUserIds, ["telegram:u1"]);
+
+        globalState.dispose();
+    });
+
     it("wakes synthetic __meta__ turns for scheduler and proactive idle sources", async () => {
         const dir = tempDir();
         const globalState = new GlobalState({

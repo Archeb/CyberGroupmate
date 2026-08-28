@@ -12,7 +12,10 @@ import { llmEvents, type LLMCallEvent, type LLMResponseEvent, type LLMRetryEvent
 import { codeActEvents, type CodeActProgressEvent } from "../sandbox/session-runner.js";
 import { contextEvents } from "../context-engine/context-engine.js";
 import type { ContextManifest } from "../context-engine/types.js";
-import { getGroupModelKey } from "../core/chat-id.js";
+import { ensureCompositeId, getGroupModelKey, getPlatform } from "../core/chat-id.js";
+import { loadConfig } from "../core/config.js";
+import { shouldDropInbound } from "../core/inbound-filter.js";
+import { resolveEventTimestamp } from "../core/message-enricher.js";
 import { getMetaCodeActState } from "../meta-sandbox/meta-session-runner.js";
 import { getMetaHistoryWindowStatus } from "../main-agent/meta-history-retention.js";
 import { collectAdapterStatuses } from "./api-routes.js";
@@ -253,18 +256,26 @@ export class EventBridge {
             }
 
             if (type !== "nc.message") return;
+            const chatId = String(event.chatId ?? "");
+            const rawUserId = String(event.userId ?? event.user_id ?? event.senderId ?? "").trim();
+            const userId = rawUserId ? ensureCompositeId(getPlatform(chatId), rawUserId) : "";
+            const accessControlBlocked = typeof event.accessControlBlocked === "boolean"
+                ? event.accessControlBlocked
+                : shouldDropInbound(loadConfig().chatFilter, { chatId, userId });
             this.broadcast({
                 type: "nc:message",
                 timestamp: new Date().toISOString(),
                 data: {
-                    chatId: String(event.chatId ?? ""),
+                    chatId,
                     messageId: String(event.messageId ?? event.id ?? ""),
                     userId: String(event.userId ?? event.user_id ?? event.senderId ?? ""),
                     displayName: String(event.displayName ?? event.senderName ?? event.userName ?? ""),
                     text: String(event.text ?? event.message ?? ""),
+                    timestamp: resolveEventTimestamp(event),
                     isDirectMessage: !!event.isDirectMessage,
                     mentionsAgent: !!event.mentionsAgent,
                     chatTitle: String(event.chatTitle ?? ""),
+                    accessControlBlocked,
                 },
             });
         });
@@ -457,12 +468,15 @@ export class EventBridge {
 
     buildSnapshot(): Record<string, unknown> {
         const { subagentManager, accumulator, q5, mainLoop, globalState, sandboxPool } = this.deps;
+        const chatFilter = loadConfig().chatFilter;
 
         // 群组概览
         const groups: Record<string, unknown>[] = [];
+        const includedChatIds = new Set<string>();
         for (const sub of subagentManager.getAllSubagents()) {
             const gm = this.deps.memory.getGroupModel(getGroupModelKey(sub.chatId));
             const lastMessageAt = this.deps.memory.getRecentMessages(sub.chatId, 1)[0]?.timestamp ?? "";
+            const pendingBlockedMessages = this.deps.memory.countPendingAccessControlMessages(sub.chatId);
             groups.push({
                 chatId: sub.chatId,
                 chatTitle: gm?.chatTitle || "",
@@ -480,6 +494,37 @@ export class EventBridge {
                 codeActSessionSize: (sub.codeActExecutor as any)?.getSessionSize?.() ?? 0,
                 dispatchedTopicIds: [...sub.getDispatchedTopicIds()],
                 lastCallbacks: sub.lastCallbacks,
+                accessControlBlocked: shouldDropInbound(chatFilter, { chatId: sub.chatId }) || pendingBlockedMessages > 0,
+                pendingBlockedMessages,
+            });
+            includedChatIds.add(sub.chatId);
+        }
+
+        // 被访问控制拦截的会话不会创建 Subagent，但仍需在 Dashboard 重连/重启后出现。
+        for (const chatId of this.deps.memory.listKnownChatIds()) {
+            if (includedChatIds.has(chatId)) continue;
+            const gm = this.deps.memory.getGroupModel(getGroupModelKey(chatId));
+            const lastMessageAt = this.deps.memory.getRecentMessages(chatId, 1)[0]?.timestamp ?? "";
+            const pendingBlockedMessages = this.deps.memory.countPendingAccessControlMessages(chatId);
+            groups.push({
+                chatId,
+                chatTitle: gm?.chatTitle || "",
+                isDirectMessage: !!gm?.isDirectMessage,
+                lastMessageAt,
+                engagement: 0,
+                bufferSize: 0,
+                topicCount: 0,
+                stickiness: "STRANGER",
+                lastAttendedAt: null,
+                attendCount: 0,
+                lastAgentReplyAt: 0,
+                codeActQueueSize: 0,
+                codeActProcessing: false,
+                codeActSessionSize: 0,
+                dispatchedTopicIds: [],
+                lastCallbacks: [],
+                accessControlBlocked: shouldDropInbound(chatFilter, { chatId }) || pendingBlockedMessages > 0,
+                pendingBlockedMessages,
             });
         }
         groups.sort((a, b) => {

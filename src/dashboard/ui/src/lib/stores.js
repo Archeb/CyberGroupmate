@@ -67,6 +67,8 @@ export function addMessage(data, timestamp) {
         chatTitle: data.chatTitle || '',
         isDirectMessage: !!data.isDirectMessage,
         lastMessageAt: messageTimestamp,
+        accessControlBlocked: !!data.accessControlBlocked,
+        pendingBlockedMessages: data.accessControlBlocked ? 1 : 0,
       });
     } else {
       // 如果收到的 chatTitle 比现有更完整，更新它
@@ -78,6 +80,10 @@ export function addMessage(data, timestamp) {
       }
       if (isNewerTimestamp(messageTimestamp, existing.lastMessageAt)) {
         existing.lastMessageAt = messageTimestamp;
+      }
+      if (data.accessControlBlocked) {
+        existing.accessControlBlocked = true;
+        existing.pendingBlockedMessages = (existing.pendingBlockedMessages ?? 0) + 1;
       }
     }
     s.groups = sortGroupsByLastMessage(s.groups);

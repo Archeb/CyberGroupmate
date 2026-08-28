@@ -15,6 +15,7 @@
   }
   $: if (!config.chatFilter.chatIds) config.chatFilter.chatIds = [];
   $: if (!config.chatFilter.userIds) config.chatFilter.userIds = [];
+  $: if (!config.chatFilter.allowedChatIds) config.chatFilter.allowedChatIds = [];
   $: if (!config.emergencyBlock) config.emergencyBlock = { message: "" };
 
   let invisibleText = "";
@@ -78,7 +79,7 @@
   <i class="fa-solid fa-shield-halved opacity-50 mr-1"></i> 访问控制
 </h3>
 <p class="text-xs opacity-50 mb-3">
-  所有平台的入站消息在同一入口执行 filter；被丢弃的消息不会落盘，也不会进入 pipeline 或 LLM。
+  所有平台的入站消息在同一入口执行 filter；被拦截的消息仍会落盘并显示在消息流，但不会进入 pipeline 或 LLM，可在消息流中手动放行会话。
 </p>
 
 <div class="divider text-xs opacity-50 my-3">全平台入站 Filter</div>
@@ -103,7 +104,7 @@
     <input
       type="number"
       class="input input-xs input-bordered w-full"
-      value={(config.chatFilter.chatIds?.length ?? 0) + (config.chatFilter.userIds?.length ?? 0)}
+      value={(config.chatFilter.chatIds?.length ?? 0) + (config.chatFilter.userIds?.length ?? 0) + (config.chatFilter.allowedChatIds?.length ?? 0)}
       disabled
     />
   </label>
@@ -132,6 +133,19 @@
     />
   </div>
 </div>
+
+{#if config.chatFilter.mode === "blacklist" && config.chatFilter.allowedChatIds.length > 0}
+  <div class="cfg-field mt-3">
+    <span class="cfg-label">已放行会话例外（每行一个）</span>
+    <p class="text-xs opacity-50 mb-2">用于在保留通配符或发送者黑名单的同时放行指定会话；消息流中的“放行”按钮会自动维护此列表。</p>
+    <MonacoEditor
+      language="plaintext"
+      height={100}
+      value={config.chatFilter.allowedChatIds.join("\n")}
+      on:change={(event) => (config.chatFilter.allowedChatIds = parseLines(event.detail.value))}
+    />
+  </div>
+{/if}
 
 <div class="divider text-xs opacity-50 my-3">隐身用户（全平台）</div>
 <p class="text-xs opacity-50 mb-2">
