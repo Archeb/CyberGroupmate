@@ -1147,9 +1147,10 @@ function buildReflectionPrompt(
                 return `- **${formatUserLabel(memory, p.userId)}**: traits=[${global.traits.join(", ")}], interests=[${global.interests.join(", ")}], ` +
                     `style="${global.communicationStyle}", relation="${global.relationToAgent}", ` +
                     `patterns=[${global.stablePatterns.join("；")}], hints=[${global.agentPolicyHints.join("；")}], ` +
+                    `candidates=[${global.followupCandidates.join("；")}], ` +
                     `sources=[${global.sourceChatIds.join(", ")}], confidence=${global.confidence}`;
             }).join("\n");
-            sections.push(`## 全局画像 (${profiles.length} 人，跨群共享)\n\n${globalLines}`);
+            sections.push(`## 全局画像 (${profiles.length} 人，跨群共享；list 条目按新旧排序，已被本轮证据推翻的条目可在 globalPersonUpdates 对应字段用 ~ 前缀原样输出以撤回)\n\n${globalLines}`);
         }
 
         const profileLines = profiles.map(p => {
@@ -1222,32 +1223,34 @@ function formatChatLabel(memory: MemoryStoreV2 | undefined, chatId: string, fall
     return `${title}(${chatId})`;
 }
 
-function mergeGlobalPersonProfile(
+export function mergeGlobalPersonProfile(
     existing: PersonProfile | null,
     update: NonNullable<ReflectionLLMOutput["globalPersonUpdates"]>[number],
     chatId: string,
     reflectedAt: string,
 ): Partial<PersonProfile> {
+    const caps = GLOBAL_PROFILE_LIST_CAPS;
     return {
-        traits: dedupeStrings([...(existing?.traits ?? []), ...(update.traits ?? [])]).slice(0, 16),
-        interests: dedupeStrings([...(existing?.interests ?? []), ...(update.interests ?? [])]).slice(0, 24),
-        communicationStyle: chooseStableProfileText(existing?.communicationStyle, update.communicationStyle),
-        relationToAgent: chooseStableProfileText(existing?.relationToAgent, update.relationToAgent),
-        stablePatterns: dedupeStrings([...(existing?.stablePatterns ?? []), ...(update.stablePatterns ?? [])]).slice(0, 16),
-        agentPolicyHints: dedupeStrings([...(existing?.agentPolicyHints ?? []), ...(update.agentPolicyHints ?? [])]).slice(0, 16),
-        followupCandidates: dedupeStrings([...(existing?.followupCandidates ?? []), ...(update.followupCandidates ?? [])]).slice(0, 12),
+        traits: mergeProfileList(existing?.traits, update.traits, caps.traits),
+        interests: mergeProfileList(existing?.interests, update.interests, caps.interests),
+        communicationStyle: chooseProfileText(existing?.communicationStyle, update.communicationStyle),
+        relationToAgent: chooseProfileText(existing?.relationToAgent, update.relationToAgent),
+        stablePatterns: mergeProfileList(existing?.stablePatterns, update.stablePatterns, caps.stablePatterns),
+        agentPolicyHints: mergeProfileList(existing?.agentPolicyHints, update.agentPolicyHints, caps.agentPolicyHints),
+        followupCandidates: mergeProfileList(existing?.followupCandidates, update.followupCandidates, caps.followupCandidates),
         sourceChatIds: dedupeStrings([...(existing?.sourceChatIds ?? []), chatId]),
-        confidence: Math.max(existing?.confidence ?? 0, clamp01(update.confidence ?? 0.75)),
+        // 只有 LLM 显式给出估计时才替换，允许下降；未给出时沿用既有值而不是回落到默认
+        confidence: typeof update.confidence === "number"
+            ? clamp01(update.confidence)
+            : (existing?.confidence ?? 0.75),
         lastReflectedAt: reflectedAt,
     };
 }
 
-function chooseStableProfileText(existing?: string, incoming?: string): string {
-    const current = existing?.trim() ?? "";
+/** 文本字段：本轮给出非空值即视为最新认知，直接替换；为空则保留既有 */
+function chooseProfileText(existing?: string, incoming?: string): string {
     const next = incoming?.trim() ?? "";
-    if (!current) return next;
-    if (!next) return current;
-    return next.length > current.length * 1.15 ? next : current;
+    return next || (existing?.trim() ?? "");
 }
 
 function formatRelationshipMemoryBrief(profile: PersonGroupProfile): string {
@@ -1714,6 +1717,10 @@ export async function mergeEpisodes(
 
     let mergedCount = toMerge.length;
     const newMergedList = [...existingMerged];
+    // 本轮从 recentEpisodes 新生成的 week 条目；只有这些提升到全局画像。
+    // 历史条目在生成当时已提升过；级联合并只是 per-chat 记忆的压缩，不构成新证据，
+    // 若也提升会把已被后续 reflection 修正/淘汰的旧内容原样灌回全局行。
+    const newWeekEntries: MergedMemory[] = [];
     const baseMemoryContext = buildExistingMemoryContext({
         userId,
         chatId,
@@ -1749,7 +1756,7 @@ export async function mergeEpisodes(
                 ? await analyzeMergeWithLLM(userId, items, baseMemoryContext, llmConfigs, reflectionConfig)
                 : null;
 
-            newMergedList.push({
+            const weekEntry: MergedMemory = {
                 periodStart: dates[0],
                 periodEnd: dates[dates.length - 1],
                 granularity: "week",
@@ -1760,7 +1767,9 @@ export async function mergeEpisodes(
                     ?? items.filter(i => i.significance > 0.7).map(i => i.summary),
                 relationshipTrend: llmResult?.relationshipTrend ?? "",
                 ...buildMergedMemoryMetadata(items, llmResult),
-            });
+            };
+            newMergedList.push(weekEntry);
+            newWeekEntries.push(weekEntry);
         }
     }
 
@@ -1804,7 +1813,7 @@ export async function mergeEpisodes(
         recentEpisodes: kept,
         mergedMemory: newMergedList,
     });
-    promoteMergedMemoryToGlobalProfile(userId, chatId, newMergedList, memory);
+    promoteMergedMemoryToGlobalProfile(userId, chatId, newWeekEntries, memory);
 
     if (mergedCount > 0) {
         log.debug("mergeEpisodes 完成", {
@@ -1924,40 +1933,35 @@ function buildCascadedMemoryMetadata(
     };
 }
 
+/**
+ * 把本轮从 recentEpisodes 新生成的 week MergedMemory 提升进全局画像。
+ * 每份证据只在此时提升一次：历史条目已在生成当时提升过，级联压缩产物只是
+ * 旧内容的再摘要——重复提升会把已被后续 reflection 修正/淘汰的旧内容原样灌回全局行。
+ */
 function promoteMergedMemoryToGlobalProfile(
     userId: string,
     chatId: string,
-    mergedMemory: MergedMemory[],
+    newlyMerged: MergedMemory[],
     memory: MemoryStoreV2,
 ): void {
-    if (mergedMemory.length === 0) return;
+    if (newlyMerged.length === 0) return;
     const existing = memory.getPersonProfile(userId);
-    const sorted = [...mergedMemory].sort((a, b) =>
+    const sorted = [...newlyMerged].sort((a, b) =>
         new Date(b.periodEnd).getTime() - new Date(a.periodEnd).getTime()
     );
     const strongest = sorted.find(m => m.granularity === "month" || m.granularity === "quarter" || m.granularity === "year")
         ?? sorted[0];
+    const caps = GLOBAL_PROFILE_LIST_CAPS;
 
     memory.upsertPersonProfile(userId, {
-        interests: dedupeStrings([
-            ...(existing?.interests ?? []),
-            ...sorted.flatMap(m => m.userPreferences ?? []),
-        ]).slice(0, 24),
+        interests: mergeProfileList(existing?.interests, sorted.flatMap(m => m.userPreferences ?? []), caps.interests),
         relationToAgent: existing?.relationToAgent || strongest.relationshipTrend || "",
-        stablePatterns: dedupeStrings([
-            ...(existing?.stablePatterns ?? []),
-            ...sorted.flatMap(m => m.stablePatterns ?? []),
-        ]).slice(0, 16),
-        agentPolicyHints: dedupeStrings([
-            ...(existing?.agentPolicyHints ?? []),
-            ...sorted.flatMap(m => m.agentPolicyHints ?? []),
-        ]).slice(0, 16),
-        followupCandidates: dedupeStrings([
-            ...(existing?.followupCandidates ?? []),
-            ...sorted.flatMap(m => m.followupCandidates ?? []),
-        ]).slice(0, 12),
+        stablePatterns: mergeProfileList(existing?.stablePatterns, sorted.flatMap(m => m.stablePatterns ?? []), caps.stablePatterns),
+        agentPolicyHints: mergeProfileList(existing?.agentPolicyHints, sorted.flatMap(m => m.agentPolicyHints ?? []), caps.agentPolicyHints),
+        followupCandidates: mergeProfileList(existing?.followupCandidates, sorted.flatMap(m => m.followupCandidates ?? []), caps.followupCandidates),
         sourceChatIds: dedupeStrings([...(existing?.sourceChatIds ?? []), chatId]),
-        confidence: Math.max(existing?.confidence ?? 0, average(sorted.map(m => m.confidence ?? 0.7))),
+        // 合并记忆的 confidence 描述的是摘要质量，不覆盖主 reflection 对此人的显式估计
+        confidence: existing?.confidence ?? average(sorted.map(m => m.confidence ?? 0.7)),
         lastReflectedAt: new Date().toISOString(),
     });
 }
@@ -1989,6 +1993,76 @@ function average(values: number[]): number {
 
 function dedupeStrings(values: string[]): string[] {
     return [...new Set(values.map(v => v.trim()).filter(Boolean))];
+}
+
+/** 全局画像 list 字段容量；满容量后按 mergeProfileList 的规则从尾部淘汰 */
+const GLOBAL_PROFILE_LIST_CAPS = {
+    traits: 16,
+    interests: 24,
+    stablePatterns: 16,
+    agentPolicyHints: 16,
+    followupCandidates: 12,
+} as const;
+
+/** LLM 在 list 字段里以 ~ 开头输出一条既有条目，表示它已被本轮证据推翻 */
+const RETRACTION_PREFIX = /^[~～]\s*/;
+
+/** 撤回按包含关系匹配时的最短片段长度，避免极短文本误伤无关条目 */
+const RETRACTION_MIN_FRAGMENT = 4;
+
+const PROFILE_ENTRY_EDGE_CHARS = /^[\s"'“”‘’「」『』()（）\[\]【】]+|[\s"'“”‘’「」『』()（）\[\]【】。．.,，、；;：:!！?？~～]+$/g;
+
+/** 去掉首尾引号/括号/标点、折叠空白、小写，作为去重与撤回匹配的比较键 */
+function normalizeProfileEntry(value: string): string {
+    return value.replace(PROFILE_ENTRY_EDGE_CHARS, "").replace(/\s+/g, " ").toLowerCase();
+}
+
+function matchesRetraction(entryKey: string, retractionKey: string): boolean {
+    if (entryKey === retractionKey) return true;
+    if (retractionKey.length >= RETRACTION_MIN_FRAGMENT && entryKey.includes(retractionKey)) return true;
+    if (entryKey.length >= RETRACTION_MIN_FRAGMENT && retractionKey.includes(entryKey)) return true;
+    return false;
+}
+
+/**
+ * 合并画像 list 字段，返回新数组：
+ * - incoming 在前、existing 在后，按 normalizeProfileEntry 去重后截断到 cap。
+ *   本轮重新确认的条目因此前移刷新，长期无人重提的条目从尾部滑出；
+ * - incoming 中以 ~ 开头的条目视为撤回：匹配到的既有条目被移除，标记本身不入库。
+ */
+export function mergeProfileList(
+    existing: readonly string[] | undefined,
+    incoming: readonly string[] | undefined,
+    cap: number,
+): string[] {
+    const retractions: string[] = [];
+    const additions: string[] = [];
+    for (const raw of incoming ?? []) {
+        if (typeof raw !== "string") continue;
+        const value = raw.trim();
+        if (!value) continue;
+        if (RETRACTION_PREFIX.test(value)) {
+            const key = normalizeProfileEntry(value.replace(RETRACTION_PREFIX, ""));
+            if (key) retractions.push(key);
+        } else {
+            additions.push(value);
+        }
+    }
+
+    const result: string[] = [];
+    const seen = new Set<string>();
+    const consider = (value: string) => {
+        const key = normalizeProfileEntry(value);
+        if (!key || seen.has(key)) return;
+        if (retractions.some(r => matchesRetraction(key, r))) return;
+        seen.add(key);
+        result.push(value.trim());
+    };
+    for (const value of additions) consider(value);
+    for (const value of existing ?? []) {
+        if (typeof value === "string") consider(value);
+    }
+    return result.slice(0, cap);
 }
 
 function buildExistingMemoryContext(options: ExistingMemoryContextOptions): string {
