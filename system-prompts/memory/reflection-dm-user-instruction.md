@@ -17,6 +17,8 @@
 ## 输出原则（私聊特化）
 
 1. **globalPersonUpdates**：输出跨群共享的长期认知，例如稳定偏好、总体关系、长期互动策略；不要写只属于当前几句话的临时情绪。
+   - list 字段与既有画像按“新条目在前”合并并截断：只重申仍有证据支持的条目；已被本轮证据明确推翻的既有条目用 `~` 前缀原样输出以撤回（如 `"~喜欢旅行话题"`）
+   - `confidence` 只在有明确估计时给出，可以低于既有值
 2. **personUpdates**：深入分析一对一关系动态，只输出此私聊场景里确有变化的字段。
 3. **relationToAgent**：精确描述关系类型、情感色彩和对方对 agent 的期待。
 4. **interactionQuality**（必填）：评估整体互动质量：`friendly` / `dependent` / `instrumental` / `hostile`。
