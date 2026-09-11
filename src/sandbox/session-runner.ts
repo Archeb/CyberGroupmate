@@ -93,12 +93,24 @@ export class SentMessageCollector {
     private duplicateWarningBuffer: string[] = [];
     /** 整个 session 累计的重复拦截次数 */
     duplicateBlockedCount = 0;
+    /**
+     * 整个 session 累计的表态（reaction）次数。
+     * 表态不进 allSent（它不是一条消息），但它是一次"对外动作"——
+     * 用于把"只贴了个表情、没发消息"与"完全沉默跳过"区分开。
+     */
+    reactionCount = 0;
 
     constructor(private readonly stickerDescriptionLookup?: StickerDescriptionLookup) {}
 
     /** 由 sandbox notify 事件回调调用 */
     collect(event: Record<string, unknown>): void {
         const type = String(event.type ?? "");
+
+        // 表态事件：计入对外动作，但不算一条已发消息
+        if (type === "system.agent_reaction_sent") {
+            this.reactionCount++;
+            return;
+        }
 
         // 处理重复消息拦截事件
         if (type === "system.duplicate_message_blocked") {
@@ -1041,4 +1053,14 @@ function truncateOutput(output: string): string {
 
 function isCodeExecutionTimeoutError(message: string): boolean {
     return message.includes("Code execution timed out after");
+}
+
+/**
+ * 宽口径超时判定：用于把派发任务的"超时"从泛 ERROR 中拆出来标为 TIMEOUT。
+ * 覆盖代码块执行超时（"Code execution timed out after …"）与 LLM 调用超时
+ * （TimeoutError / "timed out" / "timeout"）。
+ */
+export function isTimeoutError(message: string | undefined | null): boolean {
+    if (!message) return false;
+    return /timed out|timeout/i.test(message);
 }

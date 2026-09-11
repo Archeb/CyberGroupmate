@@ -294,6 +294,15 @@ export function createDiscordClientProxy(
         sendReaction: async (channelId: string, messageId: string, emoji: string) => {
             await env.callHost("discord.sendReaction", [channelId, messageId, emoji]);
             env.emitOutput(`[Discord] sendReaction ok channel=${channelId} msg=${messageId} emoji=${emoji}`);
+            // 表态计入对外动作，供 SentMessageCollector 区分"沉默跳过"
+            env.notifyHost({
+                type: "system.agent_reaction_sent",
+                scene: "discord",
+                chatId: channelId,
+                messageId,
+                emoji,
+                timestamp: Date.now(),
+            });
         },
         sendTyping: async (channelId: string) => {
             await env.callHost("discord.sendTyping", [channelId]);
