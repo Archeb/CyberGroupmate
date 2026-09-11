@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { buildHarnessEnv, getHarnessHome, getHarnessInstructionPath, writeHarnessInstructions } from "../src/harness/home.js";
 import { HarnessManager } from "../src/harness/manager.js";
 import { serializeClaudeMcpConfig, serializeCodexMcpConfig, serializeCopilotMcpConfig } from "../src/harness/mcp-config.js";
-import { buildSystemPrompt, buildTaskPrompt } from "../src/harness/prompt.js";
+import { buildSystemPrompt, buildTaskPrompt, renderPendingFile } from "../src/harness/prompt.js";
 import type { HarnessMcpConfig } from "../src/harness/types.js";
 
 describe("HarnessManager MCP config loading", () => {
@@ -152,6 +152,20 @@ describe("Harness prompt and user home handling", () => {
         } finally {
             rmSync(root, { recursive: true, force: true });
         }
+    });
+
+    it("renders non-string notification content as JSON instead of [object Object]", () => {
+        const pending = [
+            // 模拟对象式调用漏过投递侧校验时的载荷形状
+            { source: "meta", content: { content: "任务正文", source: "meta" } },
+            { source: "scheduler", content: "普通文本通知" },
+        ] as unknown as Parameters<typeof renderPendingFile>[0];
+
+        const output = renderPendingFile(pending);
+
+        assert.match(output, /\[来自 meta\] \{"content":"任务正文","source":"meta"\}/);
+        assert.match(output, /\[来自 scheduler\] 普通文本通知/);
+        assert.doesNotMatch(output, /object Object/);
     });
 
     it("writes launcher instructions under the selected user HOME", () => {

@@ -36,7 +36,9 @@ declare const background: {
      * 向 Background Agent 派发一个任务。任务会进入队列，
      * 如果没有正在运行的实例则立即拉起，否则等当前实例结束后处理。
      *
-     * @param content 任务描述。写清楚需要做什么。
+     * @param content 任务描述。写清楚需要做什么。必须是字符串——
+     *   传对象（含 null/undefined）会抛 TypeError。不要写 background.enqueue({content, source})，
+     *   要结构化传参请展开位置参数：background.enqueue(payload.content, payload.source, payload.options)。
      * @param source 来源标识，默认 "meta"。
      * @param options 结构化上下文，会写入 harness pending 文件，供启动后的意识流读取。
      * @returns queued=true 表示已入队；queued=false 表示 Background Agent 未配置。
