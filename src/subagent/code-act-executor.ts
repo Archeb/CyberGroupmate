@@ -620,6 +620,7 @@ export class CodeActExecutor {
         try {
             // ═══ Fix 9: 实际的 Sandbox 执行逻辑 ═══
             if (this.hasDependencies()) {
+                await this.prepareSessionForExecution();
                 callback = await this.executeWithSandbox(task, startTime);
             } else {
                 // Fallback: 无依赖时使用骨架逻辑（测试用）
@@ -665,6 +666,18 @@ export class CodeActExecutor {
 
         await this.finalizeExecutionArtifacts();
         return callback;
+    }
+
+    /** Restored history must satisfy the current policy before its first executor request. */
+    private async prepareSessionForExecution(): Promise<void> {
+        if (!this.needsCompaction()) return;
+        // Reuse structured summaries, token-aware compaction, local fallback, and persistence.
+        await this.finalizeExecutionArtifacts();
+        if (this.needsCompaction()) {
+            // Protected context can exceed the budget even after forceTrim. Do not knowingly
+            // submit the same oversized history; execute() reports a normal ERROR callback.
+            throw new Error("CodeAct session remains over the configured history budget after compaction");
+        }
     }
 
     private async finalizeExecutionArtifacts(): Promise<void> {
