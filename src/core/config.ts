@@ -167,7 +167,8 @@ export interface TelegramWhitelistConfig {
 }
 
 export interface TelegramConfig {
-    mode: "bot" | "userbot";
+    /** bot = MTProto bot (legacy); bot_api = HTTP Bot API; userbot = MTProto user. */
+    mode: "bot" | "bot_api" | "userbot";
     botToken: string;
     apiId: string;
     apiHash: string;
@@ -744,7 +745,7 @@ export function loadConfig(configPath?: string, forceReload?: boolean): AppConfi
         },
         timezone: str(fileConfig.timezone),
         telegram: Object.keys(fileTG).length > 0 ? {
-            mode: (str(fileTG.mode) as "bot" | "userbot") ?? "bot",
+            mode: (str(fileTG.mode) as TelegramConfig["mode"]) ?? "bot",
             botToken: str(fileTG.bot_token) ?? "",
             apiId: str(fileTG.api_id) ?? "",
             apiHash: str(fileTG.api_hash) ?? "",
@@ -1971,8 +1972,8 @@ export function validateConfig(config: unknown): { valid: boolean; errors: strin
     // telegram (optional)
     const tg = c.telegram as Record<string, unknown> | undefined;
     if (tg) {
-        if (!tg.mode || (tg.mode !== "bot" && tg.mode !== "userbot")) {
-            errors.push("telegram.mode 必须是 \"bot\" 或 \"userbot\"");
+        if (!tg.mode || !["bot", "bot_api", "userbot"].includes(String(tg.mode))) {
+            errors.push("telegram.mode 必须是 \"bot\"、\"bot_api\" 或 \"userbot\"");
         }
         // whitelist enabled + empty lists = reject all — valid config, no error
     }
