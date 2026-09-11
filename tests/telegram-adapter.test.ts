@@ -13,6 +13,7 @@ import { gzipSync } from "node:zlib";
 import { NotificationCenter } from "../src/event/notification-center.js";
 import type { NotificationEvent } from "../src/event/notification-center.js";
 import { TelegramAdapter } from "../src/adapter/telegram-adapter.js";
+import { userGate } from "../src/adapter/user-gate.js";
 import type { TelegramConfig } from "../src/core/config.js";
 
 function makeNC(): NotificationCenter {
@@ -845,7 +846,7 @@ interface TelegramClient {
 
     it("/invisible should toggle user invisibility and send confirmation", async () => {
         // 清理跨测试/跨运行持久化状态
-        try { fs.rmSync("workspace/invisible-users.json", { force: true }); } catch {}
+        userGate.setInvisible([]); // 清理跨测试/跨运行持久化状态（单例内存态 + 文件）
         const nc = makeNC();
         const sentTexts: Array<[unknown, unknown]> = [];
         let newMessageHandler: ((msg: unknown) => void | Promise<void>) | null = null;
@@ -885,7 +886,9 @@ interface TelegramClient {
         assert.ok(sentTexts.length >= 1, "should send confirmation message");
         assert.ok(String(sentTexts[0][1]).includes("隐身"), "confirmation should mention 隐身");
         // userId is stored as a composite chat-id ("telegram:42") after normalization.
-        assert.ok(adapter.isUserInvisible("telegram:42"), "user should be invisible");
+        assert.ok(userGate.isInvisible("telegram:42"), "user should be invisible");
+        // 丢弃职责在 main.ts 的 userGate（593e973 起 adapter 不再自行丢弃），验证闸门会真的拦截
+        assert.ok(userGate.shouldDrop("telegram:42"), "gate should drop messages from invisible user");
 
         // Subsequent message from user 42 should be dropped
         sentTexts.length = 0;
@@ -905,7 +908,7 @@ interface TelegramClient {
             chat: { id: -100, title: "Test", type: "group" },
             sender: { id: 42, displayName: "Alice", isBot: false },
         });
-        assert.ok(!adapter.isUserInvisible("telegram:42"), "user should no longer be invisible");
+        assert.ok(!userGate.isInvisible("telegram:42"), "user should no longer be invisible");
         assert.ok(sentTexts.length >= 1, "should send un-invisible confirmation");
 
         await adapter.stop();
@@ -1208,7 +1211,7 @@ interface TelegramClient {
 
     it("should process /invisible@SelfUsername when username matches", async () => {
         // 清理跨测试持久化状态，避免被前序测试污染
-        try { fs.rmSync("workspace/invisible-users.json", { force: true }); } catch {}
+        userGate.setInvisible([]); // 清理跨测试/跨运行持久化状态（单例内存态 + 文件）
         const nc = makeNC();
         const sentTexts: Array<[unknown, unknown]> = [];
         let newMessageHandler: ((msg: unknown) => void | Promise<void>) | null = null;
@@ -1246,7 +1249,7 @@ interface TelegramClient {
 
         assert.ok(sentTexts.length >= 1, "should send confirmation for matching @username");
         assert.ok(String(sentTexts[0][1]).includes("隐身"), "confirmation should mention 隐身");
-        assert.ok(adapter.isUserInvisible("telegram:42"), "user should be invisible");
+        assert.ok(userGate.isInvisible("telegram:42"), "user should be invisible");
 
         await adapter.stop();
         nc.dispose();
@@ -1254,7 +1257,7 @@ interface TelegramClient {
 
     it("should ignore /invisible@OtherBot when username does not match self", async () => {
         // 清理跨测试持久化状态，避免被前序测试污染
-        try { fs.rmSync("workspace/invisible-users.json", { force: true }); } catch {}
+        userGate.setInvisible([]); // 清理跨测试/跨运行持久化状态（单例内存态 + 文件）
         const nc = makeNC();
         const events = captureEvents(nc);
         const sentTexts: Array<[unknown, unknown]> = [];
@@ -1294,7 +1297,7 @@ interface TelegramClient {
         // Should NOT send confirmation reply
         assert.equal(sentTexts.length, 0, "should not send confirmation for non-matching @username");
         // Should NOT toggle invisibility
-        assert.ok(!adapter.isUserInvisible("telegram:42"), "user should NOT be invisible");
+        assert.ok(!userGate.isInvisible("telegram:42"), "user should NOT be invisible");
         // Message should flow through to NC as a normal message
         assert.equal(events.length, 1, "message should be pushed to NC as normal message");
         assert.equal(events[0].type, "nc.message");
@@ -1306,7 +1309,7 @@ interface TelegramClient {
 
     it("should still process bare /invisible when self has no username", async () => {
         // 清理跨测试持久化状态，避免被前序测试污染
-        try { fs.rmSync("workspace/invisible-users.json", { force: true }); } catch {}
+        userGate.setInvisible([]); // 清理跨测试/跨运行持久化状态（单例内存态 + 文件）
         const nc = makeNC();
         const sentTexts: Array<[unknown, unknown]> = [];
         let newMessageHandler: ((msg: unknown) => void | Promise<void>) | null = null;
@@ -1344,7 +1347,7 @@ interface TelegramClient {
         });
 
         assert.ok(sentTexts.length >= 1, "should send confirmation for bare /invisible");
-        assert.ok(adapter.isUserInvisible("telegram:42"), "user should be invisible");
+        assert.ok(userGate.isInvisible("telegram:42"), "user should be invisible");
 
         await adapter.stop();
         nc.dispose();
@@ -1352,7 +1355,7 @@ interface TelegramClient {
 
     it("should still process /invisible@AnyUser when self has no username", async () => {
         // 清理跨测试持久化状态，避免被前序测试污染
-        try { fs.rmSync("workspace/invisible-users.json", { force: true }); } catch {}
+        userGate.setInvisible([]); // 清理跨测试/跨运行持久化状态（单例内存态 + 文件）
         const nc = makeNC();
         const sentTexts: Array<[unknown, unknown]> = [];
         let newMessageHandler: ((msg: unknown) => void | Promise<void>) | null = null;
@@ -1390,7 +1393,7 @@ interface TelegramClient {
         });
 
         assert.ok(sentTexts.length >= 1, "should still process when self has no username");
-        assert.ok(adapter.isUserInvisible("telegram:42"), "user should be invisible");
+        assert.ok(userGate.isInvisible("telegram:42"), "user should be invisible");
 
         await adapter.stop();
         nc.dispose();
