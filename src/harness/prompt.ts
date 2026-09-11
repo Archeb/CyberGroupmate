@@ -28,7 +28,9 @@ export function renderPendingFile(pending: HarnessNotify[]): string {
 }
 
 function formatPendingNotification(notify: HarnessNotify, index: number): string {
-    const lines = [`${index + 1}. ${notify.source ? `[来自 ${notify.source}] ` : ""}${notify.content}`];
+    // 投递路径若漏传非 string content，兜底成 JSON 而不是 "[object Object]"
+    const contentText = typeof notify.content === "string" ? notify.content : safeStringify(notify.content);
+    const lines = [`${index + 1}. ${notify.source ? `[来自 ${notify.source}] ` : ""}${contentText}`];
     const context = [
         notify.actorId ? `actorId=${notify.actorId}` : "",
         notify.runId ? `runId=${notify.runId}` : "",
