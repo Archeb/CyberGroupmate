@@ -973,7 +973,7 @@ export class CodeActExecutor {
                 sentCollector, // Fix 1: 传入 collector
                 async () => this.drainPendingMessages(), // 层 2: turn 间消息注入
                 async () => this.drainPendingMessagesForObservation(), // 层 2: direct attention 立即并入 observation
-                `让${this.personaName}想想，`,  // prefill: 引导 LLM 以角色开始思考
+                undefined,  // Persona guidance belongs in the system prompt, not a forced assistant prefix.
                 ["[Execution Output]"],  // stop sequences
                 this.chatId,  // 关联 chatId，用于 codeActEvents 进度广播
                 this.config.maxTurns,  // 最大交互轮次
