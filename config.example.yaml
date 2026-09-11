@@ -230,13 +230,14 @@ backfill:
 # ─── Telegram 设置 ───
 # 可选。telegram 和 discord 至少配置一个。
 telegram:
-  # 连接模式: "bot" | "userbot"
+  # 连接模式: "bot_api" (HTTP Bot API) | "bot" (MTProto bot，旧配置保持不变) | "userbot" (MTProto 用户账号)
+  # 只使用 BotFather Token 时选择 bot_api；不会根据凭据是否留空自动切换协议。
   mode: bot
   # Bot Token (bot 模式下使用)
   bot_token: ""
-  # API ID (bot / userbot 都需要)
+  # API ID (bot / userbot 需要；bot_api 不需要)
   api_id: ""
-  # API Hash (bot / userbot 都需要)
+  # API Hash (bot / userbot 需要；bot_api 不需要)
   api_hash: ""
   # 手机号 (userbot 模式下使用；首次登录时会在终端提示输入 OTP / 2FA)
   phone: ""

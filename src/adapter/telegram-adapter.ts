@@ -23,9 +23,14 @@ import { createHash, randomBytes } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { Long } from "@mtcute/node";
+import { TelegramBotApiClient } from "./telegram-bot-api-client.js";
 import { isAllowedTelegramMtcutePassthroughMethod, isBlockedTelegramMtcuteNativeMethod } from "../core/telegram-mtcute-passthrough.js";
 
 const log = createLogger("telegram-adapter");
+const BOT_API_METHODS = new Set([
+    "telegram.getMe", "telegram.getChat", "telegram.sendText", "telegram.sendMedia",
+    "telegram.sendFile", "telegram.sendSticker", "telegram.sendTyping", "telegram.downloadMedia",
+]);
 
 /** 白名单条目：去掉 `telegram:` 前缀并 trim，便于与 composite chatId 比对 */
 function normalizeWhitelistId(raw: string): string {
@@ -372,7 +377,7 @@ export class TelegramAdapter implements PlatformAdapter {
         const generation = ++this.clientGeneration;
         this.attachConnectionListeners(client, generation);
 
-        const self = this.config.mode === "bot"
+        const self = this.config.mode !== "userbot"
             ? await client.start({ botToken: this.config.botToken })
             : await client.start({
                 phone: () => this.config.phone,
@@ -613,6 +618,9 @@ export class TelegramAdapter implements PlatformAdapter {
         if (!this.client) {
             return { chats: 0, messages: 0, notes: ["telegram adapter 未连接"] };
         }
+        if (this.config.mode === "bot_api") {
+            return { chats: 0, messages: 0, notes: ["Bot API 无历史查询；仅接收 Telegram 保留的待处理更新（最长 24 小时）"] };
+        }
         if (this.config.mode === "bot") {
             return {
                 chats: 0,
@@ -792,7 +800,9 @@ export class TelegramAdapter implements PlatformAdapter {
             ? baseTypeDefs.replace(/^\s*\/\/ \[USERBOT_ONLY_BEGIN\]\s*$/gm, "").replace(/^\s*\/\/ \[USERBOT_ONLY_END\]\s*$/gm, "")
             : baseTypeDefs.replace(/^\s*\/\/ \[USERBOT_ONLY_BEGIN\]\s*$[\s\S]*?^\s*\/\/ \[USERBOT_ONLY_END\]\s*$/gm, "");
 
-        const modeNote = this.config.mode === "bot"
+        const modeNote = this.config.mode === "bot_api"
+            ? `// 当前 Telegram adapter 模式: bot_api (HTTP Bot API)\n// 仅支持: ${[...BOT_API_METHODS].join(", ")}。其他方法及 mtcute 透传不可用。\n`
+            : this.config.mode === "bot"
             ? "// 当前 Telegram adapter 模式: bot\n// 注意: bot mode 下不应使用历史读取、对话遍历、读回执、成员枚举等受限 API。\n"
             : "// 当前 Telegram adapter 模式: userbot\n// 可使用完整的 Telegram host proxy 能力面。\n";
 
@@ -802,6 +812,10 @@ export class TelegramAdapter implements PlatformAdapter {
     async handleCall(method: string, args: unknown[]): Promise<unknown> {
         if (!this.client) {
             throw new Error("TelegramAdapter is not started");
+        }
+
+        if (this.config.mode === "bot_api" && !BOT_API_METHODS.has(method)) {
+            throw new Error(`${method} is not supported in Telegram Bot API mode; MTProto methods require bot or userbot mode`);
         }
 
         // ─── /mute 写操作拦截 ───
@@ -1973,6 +1987,13 @@ export class TelegramAdapter implements PlatformAdapter {
     }
 
     private validateConfig(): void {
+        if (!["bot", "bot_api", "userbot"].includes(this.config.mode)) {
+            throw new Error("telegram.mode must be bot, bot_api, or userbot");
+        }
+        if (this.config.mode === "bot_api") {
+            if (!this.config.botToken?.trim()) throw new Error("telegram.bot_token is required in bot_api mode");
+            return;
+        }
         if (!this.config.apiId || !this.config.apiHash) {
             throw new Error("Telegram API credentials are missing in config.yaml (telegram.api_id / telegram.api_hash)");
         }
@@ -2536,6 +2557,7 @@ export class TelegramAdapter implements PlatformAdapter {
         options: { failOnUnresolved?: boolean; kind?: MeetPeerOptions["kind"]; dialogsLimit?: number; force?: boolean } = {},
     ): Promise<unknown> {
         const peer = this.normalizePeerArg(rawPeer, options.kind);
+        if (this.config.mode === "bot_api") return peer;
         this.rememberPeerObject(rawPeer);
 
         // 检查本地缓存
@@ -3242,6 +3264,9 @@ export class TelegramAdapter implements PlatformAdapter {
 }
 
 async function defaultTelegramClientFactory(config: TelegramConfig): Promise<TelegramClientLike> {
+    if (config.mode === "bot_api") {
+        return new TelegramBotApiClient(config.botToken);
+    }
     const { TelegramClient, SocksProxyTcpTransport } = await import("@mtcute/node");
     const proxyUrl = process.env.TG_PROXY || process.env.HTTPS_PROXY || "";
     const clientOpts: Record<string, unknown> = {
