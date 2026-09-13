@@ -14,6 +14,7 @@ import Database from "better-sqlite3";
 import { createHash, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { readMessageMentions } from "../core/message-provenance.js";
 import { createLogger } from "../core/logger.js";
 import { getGroupModelKey, safeGroupModelKey } from "../core/chat-id.js";
 import { buildVisibilityDeps, isPrivateChat, type VisibilityDeps } from "../core/visibility-policy.js";
@@ -489,6 +490,7 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
                 timestamp TEXT NOT NULL,
                 media_type TEXT,
                 media_info TEXT,
+                mentions TEXT,
                 access_control_blocked INTEGER NOT NULL DEFAULT 0,
                 access_control_released INTEGER NOT NULL DEFAULT 0,
                 PRIMARY KEY (chat_id, message_id)
@@ -589,6 +591,11 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
             );
         `);
         try { this.db.exec(`CREATE INDEX IF NOT EXISTS idx_sticker_file_aliases_content_hash ON sticker_file_aliases(content_hash)`); } catch { /* index */ }
+
+        // NULL preserves unknown mention provenance for legacy rows.
+        if (!(this.db.prepare("PRAGMA table_info(message_log)").all() as Array<{ name: string }>).some(column => column.name === "mentions")) {
+            this.db.exec("ALTER TABLE message_log ADD COLUMN mentions TEXT");
+        }
 
         // person_group_profiles 新增 affinity_score 列（兼容旧数据库）
         try { this.db.exec(`ALTER TABLE person_group_profiles ADD COLUMN affinity_score REAL DEFAULT 0`); } catch { /* 列已存在 */ }
@@ -991,9 +998,9 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
 
         const insert = this.db.prepare(`
             INSERT OR IGNORE INTO message_log
-                (message_id, chat_id, user_id, display_name, text, reply_to_message_id, timestamp, media_type, media_info,
+                (message_id, chat_id, user_id, display_name, text, reply_to_message_id, timestamp, media_type, media_info, mentions,
                  access_control_blocked, access_control_released)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
         `);
 
         const batch = this.db.transaction((msgs: MessageLogEntry[]) => {
@@ -1002,6 +1009,7 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
                     m.messageId, m.chatId, m.userId, m.displayName,
                     m.text, m.replyToMessageId ?? null, m.timestamp,
                     m.mediaType ?? null, m.mediaInfo ?? null,
+                    m.mentions === undefined ? null : JSON.stringify(m.mentions),
                     m.accessControlBlocked ? 1 : 0,
                 );
             }
@@ -2499,7 +2507,7 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
 
     getRecentMessages(chatId: string, limit: number = 5): RecentMessageEntry[] {
         const rows = this.db.prepare(
-            `SELECT message_id, chat_id, user_id, display_name, text, reply_to_message_id, timestamp, media_type, media_info,
+            `SELECT message_id, chat_id, user_id, display_name, text, reply_to_message_id, timestamp, media_type, media_info, mentions,
                     access_control_blocked
              FROM message_log
              WHERE chat_id = ?
@@ -2517,6 +2525,7 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
             timestamp: row.timestamp as string,
             mediaType: (row.media_type as string) ?? undefined,
             mediaInfo: (row.media_info as string) ?? undefined,
+            mentions: readMessageMentions(row.mentions),
             accessControlBlocked: Number(row.access_control_blocked) === 1,
         }));
     }
@@ -2524,7 +2533,7 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
     getPendingAccessControlMessages(chatId: string, limit: number = 50): RecentMessageEntry[] {
         const boundedLimit = Math.max(1, Math.floor(limit));
         const rows = this.db.prepare(
-            `SELECT message_id, chat_id, user_id, display_name, text, reply_to_message_id, timestamp, media_type, media_info,
+            `SELECT message_id, chat_id, user_id, display_name, text, reply_to_message_id, timestamp, media_type, media_info, mentions,
                     access_control_blocked
              FROM message_log
              WHERE chat_id = ? AND access_control_blocked = 1 AND access_control_released = 0
@@ -2542,6 +2551,7 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
             timestamp: row.timestamp as string,
             mediaType: (row.media_type as string) ?? undefined,
             mediaInfo: (row.media_info as string) ?? undefined,
+            mentions: readMessageMentions(row.mentions),
             accessControlBlocked: true,
         }));
     }
@@ -2773,7 +2783,7 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
 
         params.push(limit);
         const rows = this.db.prepare(`
-            SELECT message_id, chat_id, user_id, display_name, text, timestamp
+            SELECT message_id, chat_id, user_id, display_name, text, reply_to_message_id, timestamp, mentions
             FROM message_log
             WHERE ${conditions.join(" AND ")}
             ORDER BY timestamp DESC
@@ -2786,6 +2796,8 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
             userId: row.user_id as string,
             displayName: (row.display_name as string) ?? "",
             content: (row.text as string) ?? "",
+            mentions: readMessageMentions(row.mentions),
+            replyToMessageId: (row.reply_to_message_id as string) ?? undefined,
             timestamp: row.timestamp as string,
         }));
     }
@@ -2839,7 +2851,7 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
         params.push(limit);
         const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
         const rows = this.db.prepare(`
-            SELECT message_id, chat_id, user_id, display_name, text, timestamp, media_type, media_info
+            SELECT message_id, chat_id, user_id, display_name, text, reply_to_message_id, timestamp, media_type, media_info, mentions
             FROM message_log
             ${where}
             ORDER BY timestamp DESC
@@ -2852,6 +2864,8 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
             userId: row.user_id as string,
             displayName: (row.display_name as string) ?? "",
             content: (row.text as string) ?? "",
+            mentions: readMessageMentions(row.mentions),
+            replyToMessageId: (row.reply_to_message_id as string) ?? undefined,
             timestamp: row.timestamp as string,
             mediaType: (row.media_type as string) ?? undefined,
             mediaInfo: (row.media_info as string) ?? undefined,
@@ -2939,7 +2953,7 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
 
     getMessageById(chatId: string, messageId: string): RecentMessageEntry | null {
         const row = this.db.prepare(
-            `SELECT message_id, chat_id, user_id, display_name, text, reply_to_message_id, timestamp, media_type, media_info
+            `SELECT message_id, chat_id, user_id, display_name, text, reply_to_message_id, timestamp, media_type, media_info, mentions
              FROM message_log
              WHERE chat_id = ? AND message_id = ?
              LIMIT 1`
@@ -2957,6 +2971,7 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
             timestamp: row.timestamp as string,
             mediaType: (row.media_type as string) ?? undefined,
             mediaInfo: (row.media_info as string) ?? undefined,
+            mentions: readMessageMentions(row.mentions),
         };
     }
 
@@ -2980,7 +2995,7 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
                 try {
                     // 查询该发件人在 parent 消息之前的 N 条发言
                     const beforeCtx = this.db.prepare(`
-                        SELECT message_id, chat_id, user_id, display_name, text, reply_to_message_id, timestamp, media_type, media_info
+                        SELECT message_id, chat_id, user_id, display_name, text, reply_to_message_id, timestamp, media_type, media_info, mentions
                         FROM message_log 
                         WHERE chat_id = ? AND user_id = ? AND timestamp <= ?
                         ORDER BY timestamp DESC
@@ -2989,7 +3004,7 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
 
                     // 查询该发件人在 parent 消息之后的 N 条发言
                     const afterCtx = this.db.prepare(`
-                        SELECT message_id, chat_id, user_id, display_name, text, reply_to_message_id, timestamp, media_type, media_info
+                        SELECT message_id, chat_id, user_id, display_name, text, reply_to_message_id, timestamp, media_type, media_info, mentions
                         FROM message_log 
                         WHERE chat_id = ? AND user_id = ? AND timestamp > ?
                         ORDER BY timestamp ASC
@@ -3009,6 +3024,7 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
                                 timestamp: row.timestamp as string,
                                 mediaType: (row.media_type as string) ?? undefined,
                                 mediaInfo: (row.media_info as string) ?? undefined,
+                                mentions: readMessageMentions(row.mentions),
                             });
                         }
                     }
@@ -3037,7 +3053,7 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
             const chunk = messageIds.slice(i, i + CHUNK);
             const placeholders = chunk.map(() => "?").join(", ");
             const rows = this.db.prepare(
-                `SELECT message_id, chat_id, user_id, display_name, text, reply_to_message_id, timestamp, media_type, media_info
+                `SELECT message_id, chat_id, user_id, display_name, text, reply_to_message_id, timestamp, media_type, media_info, mentions
                  FROM message_log
                  WHERE chat_id = ? AND message_id IN (${placeholders})`
             ).all(chatId, ...chunk) as Record<string, unknown>[];
@@ -3053,6 +3069,7 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
                     timestamp: row.timestamp as string,
                     mediaType: (row.media_type as string) ?? undefined,
                     mediaInfo: (row.media_info as string) ?? undefined,
+                    mentions: readMessageMentions(row.mentions),
                 };
                 byId.set(entry.messageId, entry);
             }
@@ -3086,7 +3103,7 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
         const from = start.timestamp <= end.timestamp ? start.timestamp : end.timestamp;
         const to = start.timestamp <= end.timestamp ? end.timestamp : start.timestamp;
         const rows = this.db.prepare(
-            `SELECT message_id, chat_id, user_id, display_name, text, reply_to_message_id, timestamp, media_type, media_info
+            `SELECT message_id, chat_id, user_id, display_name, text, reply_to_message_id, timestamp, media_type, media_info, mentions
              FROM message_log
              WHERE chat_id = ?
                AND timestamp >= ?
@@ -3104,6 +3121,7 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
             timestamp: row.timestamp as string,
             mediaType: (row.media_type as string) ?? undefined,
             mediaInfo: (row.media_info as string) ?? undefined,
+            mentions: readMessageMentions(row.mentions),
         }));
 
         log.debug("getMessagesBetweenIds", {

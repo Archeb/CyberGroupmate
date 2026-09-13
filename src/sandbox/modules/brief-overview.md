@@ -91,8 +91,8 @@ onebot.d.ts — QQ / OneBot 平台 API 系统注入的 OneBot host proxy 接口�
 - `get_msg`: OneBot 原生 get_msg(params)。
 - `mention`: 构造 OneBot 标准 @ 消息段。只构造 segment，不会发送。兼容辅助函数，冻结为兜底用法。
 - `sendMessage`: 发送 OneBot 标准消息。message 可以是 CQ 字符串或消息段数组。兼容辅助函数，冻结为兜底用法。 用于文本、@、回复、图片、语音、视频、文件、表情等混合消息。
-- `sendAt`: 在群聊里 @ 指定 QQ 用户并追加文本。兼容辅助函数，冻结为兜底用法。 userId 支持裸 QQ 号、onebot:<qq>、onebot:private:<qq>、"all"、数组或逗号分隔字符串。
-- `sendText`: 发送文本消息。兼容 wrapper，冻结为兜底用法；新参数优先用 send_group_msg/send_private_msg/callApi。
+- `sendAt`: 在群聊里发送真实 @ 并追加文本。触发 bot 时优先使用，不能传昵称或群 chatId。 userId 支持裸 QQ 号、onebot:<qq>、onebot:private:<qq>、"all"、数组或逗号分隔字符串。
+- `sendText`: 发送文本消息。文字 @昵称 不是真实 @；提及或触发 bot 请使用 sendAt 或 opts.mentions。 新平台参数优先用 send_group_msg/send_private_msg/callApi。
 - `sendMedia`: 发送媒体消息。兼容 wrapper，冻结为兜底用法；新参数优先用 OneBot 原生 action。 支持本地文件路径或 URL。当 `type` 为 `audio` / `voice` 时，QQ/NapCat 不支持 `replyTo`，该参数会被忽略。
 - `sendFile`: 发送文件。兼容 wrapper，冻结为兜底用法；新参数优先用 OneBot 原生 action。
 - `sendSticker`: 发送贴纸或图片表情。兼容 wrapper，冻结为兜底用法；新参数优先用 OneBot 原生 action。

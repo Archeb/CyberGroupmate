@@ -7,6 +7,7 @@
  * 依赖 S1.1 的实时落盘：消息在 NC push 时已同步写入 message_log。
  */
 
+import { readMessageMentions, type MessageMention } from "../core/message-provenance.js";
 import type Database from "better-sqlite3";
 import { createLogger } from "../core/logger.js";
 
@@ -19,6 +20,7 @@ export interface SnapshotMessage {
     userId: string;
     displayName: string;
     text: string;
+    mentions?: MessageMention[];
     replyToMessageId: string | null;
     timestamp: string;
 }
@@ -77,7 +79,7 @@ export function buildMessageSnapshot(
 
     // 查询新消息
     const messages = db.prepare(`
-        SELECT message_id, chat_id, user_id, display_name, text, reply_to_message_id, timestamp
+        SELECT message_id, chat_id, user_id, display_name, text, reply_to_message_id, timestamp, mentions
         FROM message_log
         WHERE chat_id = ?
           AND timestamp > ?
@@ -90,6 +92,7 @@ export function buildMessageSnapshot(
         user_id: string;
         display_name: string;
         text: string;
+        mentions: string | null;
         reply_to_message_id: string | null;
         timestamp: string;
     }>;
@@ -108,6 +111,7 @@ export function buildMessageSnapshot(
         userId: row.user_id,
         displayName: row.display_name,
         text: row.text,
+        mentions: readMessageMentions(row.mentions),
         replyToMessageId: row.reply_to_message_id,
         timestamp: row.timestamp,
     }));
@@ -141,7 +145,7 @@ export function getRecentMessagesUntil(
     limit: number = 50,
 ): SnapshotMessage[] {
     const rows = db.prepare(`
-        SELECT message_id, chat_id, user_id, display_name, text, reply_to_message_id, timestamp
+        SELECT message_id, chat_id, user_id, display_name, text, reply_to_message_id, timestamp, mentions
         FROM message_log
         WHERE chat_id = ?
           AND timestamp <= ?
@@ -153,6 +157,7 @@ export function getRecentMessagesUntil(
         user_id: string;
         display_name: string;
         text: string;
+        mentions: string | null;
         reply_to_message_id: string | null;
         timestamp: string;
     }>;
@@ -164,6 +169,7 @@ export function getRecentMessagesUntil(
         userId: row.user_id,
         displayName: row.display_name,
         text: row.text,
+        mentions: readMessageMentions(row.mentions),
         replyToMessageId: row.reply_to_message_id,
         timestamp: row.timestamp,
     }));

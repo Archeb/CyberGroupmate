@@ -55,10 +55,10 @@ describe("recording pipeline message enrichment", () => {
 
         const context = await (pipeline as any).buildRecordingMessageContext(messages, "telegram:-100");
 
-        assert.match(context.formattedText, /\[msgId:4120\] 莫思奇多: \[📷 图片\]/);
+        assert.match(context.formattedText, /\[msgId:4120\] 莫思奇多 \[userId:telegram:u1\]: \[📷 图片\]/);
         assert.match(
             context.formattedText,
-            /\[msgId:4123\] Soha Jin \(↩ reply to 莫思奇多 #4120: "\[📷 图片\]"\): \[🎭 贴纸 🤨: 怀疑地皱眉打量，表示不太相信\]/,
+            /\[msgId:4123\] Soha Jin \[userId:telegram:u2\] \(↩ reply to 莫思奇多 \[userId:telegram:u1\] #4120: "\[📷 图片\]"\): \[🎭 贴纸 🤨: 怀疑地皱眉打量，表示不太相信\]/,
         );
         assert.equal(
             context.formattedMessagesById.get("4123")?.includes("sticker-known"),

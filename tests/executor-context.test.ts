@@ -6,12 +6,12 @@ import { getExecutorTaskProviders } from "../src/context-engine/providers/execut
 import { loadApiTypeDefs } from "../src/subagent/code-act-executor.js";
 
 describe("executor context providers", () => {
-    it("renders the same recent 30 Meta session digest window for subagents", () => {
+    it("renders the recent 30 session digests scoped to this chat", () => {
         const engine = new ContextEngine("executor-digest-test");
         engine.registerAll(getExecutorTaskProviders());
 
         const digests = Array.from({ length: 35 }, (_, index) => ({
-            createdAt: `2026-05-01T${String(index).padStart(2, "0")}:00:00.000Z`,
+            sourceChatId: "telegram:g1", createdAt: `2026-05-01T${String(index).padStart(2, "0")}:00:00.000Z`,
             content: `digest ${index + 1}`,
         }));
 
@@ -33,8 +33,8 @@ describe("executor context providers", () => {
         engine.registerAll(getExecutorTaskProviders());
 
         const base = [
-            { createdAt: "2026-05-01T10:00:00.000Z", content: "digest A" },
-            { createdAt: "2026-05-01T10:01:00.000Z", content: "digest B" },
+            { sourceChatId: "telegram:g1", createdAt: "2026-05-01T10:00:00.000Z", content: "digest A" },
+            { sourceChatId: "telegram:g1", createdAt: "2026-05-01T10:01:00.000Z", content: "digest B" },
         ];
         const common = {
             chatId: "telegram:g1",
@@ -55,7 +55,7 @@ describe("executor context providers", () => {
             taskId: "task-3",
             sessionDigests: [
                 ...base,
-                { createdAt: "2026-05-01T10:02:00.000Z", content: "digest C" },
+                { sourceChatId: "telegram:g1", createdAt: "2026-05-01T10:02:00.000Z", content: "digest C" },
             ],
         });
         assert.match(changed.historicalContent, /digest C/);

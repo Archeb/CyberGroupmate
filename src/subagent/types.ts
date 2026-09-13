@@ -16,6 +16,7 @@ import type {
     InteractionSearchResult,
 } from "../memory-v2/types.js";
 import type { SnapshotMessage } from "../memory-v2/message-snapshot.js";
+import type { MessageMention } from "../core/message-provenance.js";
 
 export interface ActiveUserProfile {
     userId: string;
@@ -81,6 +82,8 @@ export interface TopicDigest {
 }
 
 export interface AttentionRecentMessage {
+    mentions?: MessageMention[];
+    replyToUserId?: string;
     messageId: string;
     userId: string;
     displayName?: string;
@@ -273,6 +276,8 @@ export interface SubagentCallback {
 /** Post-task 发酵窗口内记录的群聊消息 */
 export interface PostTaskReactionMessage {
     messageId: string;
+    userId?: string;
+    mentions?: MessageMention[];
     sender: string;
     text: string;
     timestamp: string;

@@ -90,7 +90,8 @@
     {
       "userId": "string (用户ID)",
       "displayName": "string (当前显示名，如有变化)",
-      "aliases": ["string (昵称，请参考原有别名，在有证据的情况下谨慎更新，原来没有的话可以根据观察推断)"]
+      "sourceMessageIds": ["该账号本人明确自称的原消息 ID"],
+      "aliases": ["string (昵称，请参考原有别名，在有证据的情况下谨慎更新，必须有该 userId 本人原消息的明确自称证据，不能凭外号相似推断)"]
     }
   ],
   "groupUpdates": {
@@ -180,5 +181,6 @@
 
 **identityUpdates 说明**：
 - 参考「现有画像」中的已知显示名和别名，仅在发现变化时才输出
-- aliases 是该用户在群中被其他人叫的各种称呼（不含 userId 本身）
+- aliases 只接受该 userId 本人原消息中明确的“叫我/我叫/我的昵称是”等自称，或平台记录中的本人显示名；必须给出 sourceMessageIds。旁人叫法、转述、引用、角色扮演、名字中包含他人名字都不能确认别名。
+- displayName 由平台入站消息维护，Reflection 不修改；不要合并不同 userId 的画像。本人自称未必唯一，别名也不是跨账号关联键。
 - 如果没有身份变化，返回空数组 []

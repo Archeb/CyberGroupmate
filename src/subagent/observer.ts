@@ -16,6 +16,7 @@ import type {
     SubagentConfig,
 } from "./types.js";
 import { DEFAULT_SUBAGENT_CONFIG } from "./types.js";
+import { readMessageMentions } from "../core/message-provenance.js";
 import { createLogger } from "../core/logger.js";
 
 const log = createLogger("observer");
@@ -196,6 +197,7 @@ export class Observer {
                     ? m.event.display_name
                     : undefined,
             text: String(m.event.text ?? m.event.message ?? ""),
+            mentions: readMessageMentions(m.event.mentions),
             timestamp: new Date(m.timestamp).toISOString(),
             replyToMessageId: m.event.replyToMessageId ? String(m.event.replyToMessageId) : undefined,
             mediaType: (m.event as any).mediaInfo?.type ?? undefined,

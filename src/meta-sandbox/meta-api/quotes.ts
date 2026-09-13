@@ -1,3 +1,4 @@
+import { formatMessageSender, formatMessageMentions } from "../../core/message-provenance.js";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { extname, isAbsolute, relative, resolve } from "node:path";
 import { getGroupModelKey, isValidCompositeChatId } from "../../core/chat-id.js";
@@ -609,7 +610,7 @@ function formatMessages(messages: RecentMessageEntry[]): string {
         const reply = message.replyToMessageId ? ` replyTo=${message.replyToMessageId}` : "";
         const media = message.mediaType ? ` [${message.mediaType}${message.mediaInfo ? ` ${message.mediaInfo}` : ""}]` : "";
         const text = message.text || "[non-text message]";
-        return `[${formatTsForPrompt(message.timestamp)}] [msgId:${message.messageId}] ${message.displayName || message.userId}${reply}: ${text}${media}`;
+        return `[${formatTsForPrompt(message.timestamp)}] [msgId:${message.messageId}] ${formatMessageSender(message.displayName, message.userId)}${formatMessageMentions(message.mentions, message.text)}${reply}: ${text}${media}`;
     }).join("\n");
 }
 
@@ -678,7 +679,7 @@ function formatPersonDossier(index: number, dossier: Awaited<ReturnType<ReturnTy
     if (dossier.recentMessages.length > 0) {
         lines.push("recentMessages:");
         lines.push(...dossier.recentMessages.map((message) =>
-            `- [${formatTsForPrompt(message.timestamp)}] ${message.chatId} ${message.displayName}: ${message.content}`
+            `- [${formatTsForPrompt(message.timestamp)}] ${message.chatId} [msgId:${message.messageId}] ${formatMessageSender(message.displayName, message.userId)}${formatMessageMentions(message.mentions, message.content)}: ${message.content}`
         ));
     }
     return lines.join("\n");

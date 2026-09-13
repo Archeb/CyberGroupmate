@@ -17,6 +17,7 @@ import type {
     SubagentCallback,
     SubagentPostTaskFollowUpCallback,
 } from "./types.js";
+import { readMessageMentions } from "../core/message-provenance.js";
 import { createLogger } from "../core/logger.js";
 import { prefixedShortUuid } from "../core/ids.js";
 import { callLLMWithFallback, type ChatMessage, type ImagePart } from "../core/llm.js";
@@ -701,6 +702,8 @@ function toReactionMessage(
     return {
         messageId: String(event.messageId ?? event.id ?? event._id ?? `msg_${Date.now()}`),
         sender: String(event.displayName ?? event.senderName ?? event.userName ?? event.userId ?? event.senderId ?? "?"),
+        userId: String(event.userId ?? event.senderId ?? ""),
+        mentions: readMessageMentions(event.mentions),
         text: String(event.text ?? event.message ?? ""),
         timestamp: String(event.timestamp ?? event._ts ?? new Date().toISOString()),
         isDirectAttention: options?.isDirectAttention,
@@ -763,6 +766,8 @@ function formatReactionMessageLine(
     return formatMessageLine({
         id: message.messageId,
         sender: message.sender,
+        userId: message.userId,
+        mentions: message.mentions,
         text: message.text,
         timestamp: message.timestamp,
         replyTo: message.replyToMessageId ? `msg#${message.replyToMessageId}` : undefined,
@@ -899,6 +904,8 @@ async function enrichFollowUpJudgeMessages(
     const rawMessages = messages.map((message): RawMessage => ({
         id: message.messageId,
         sender: message.sender,
+        userId: message.userId,
+        mentions: message.mentions,
         text: message.text,
         timestamp: message.timestamp,
         replyTo: message.replyToMessageId ? `msg#${message.replyToMessageId}` : undefined,

@@ -13,6 +13,7 @@
  * @see memory.md §3.3 Reflection Skill
  */
 
+import { groundedIdentityUpdate } from "./identity-evidence.js";
 import { createLogger } from "../core/logger.js";
 import { getPlatform, ensureCompositeId, getRawId, getGroupModelKey } from "../core/chat-id.js";
 import { callLLMWithFallback, type LLMConfig, type ChatMessage } from "../core/llm.js";
@@ -97,6 +98,7 @@ interface ReflectionLLMOutput {
     }>;
     identityUpdates?: Array<{
         userId: string;
+        sourceMessageIds?: string[];
         displayName?: string;
         aliases?: string[];
     }>;
@@ -357,11 +359,12 @@ export async function runReflection(
     // 4a′. 更新 person_identities（displayName/aliases 变化）
     if (llmOutput.identityUpdates?.length) {
         for (const iu of llmOutput.identityUpdates) {
-            const idData: { displayName?: string; aliases?: string[] } = {};
-            if (iu.displayName) idData.displayName = iu.displayName;
-            if (iu.aliases?.length) idData.aliases = iu.aliases;
+            if (typeof iu.userId !== "string" || !Array.isArray(iu.sourceMessageIds)) continue;
+            const compositeUid = ensureCompositeId(getPlatform(chatId), iu.userId);
+            const sourceIds = iu.sourceMessageIds.filter((id): id is string => typeof id === "string").slice(0, 20);
+            const evidence = memory.getMessagesByIds(chatId, sourceIds);
+            const idData = groundedIdentityUpdate(compositeUid, iu, evidence, memory.getPersonIdentity(compositeUid)?.aliases);
             if (Object.keys(idData).length > 0) {
-                const compositeUid = ensureCompositeId(getPlatform(chatId), iu.userId);
                 memory.upsertPersonIdentity(compositeUid, idData);
                 log.debug("Reflection 4a′: 更新身份信息", { userId: compositeUid, ...idData });
             }
@@ -1080,7 +1083,9 @@ function buildReflectionPrompt(
                     // RecentMessageEntry → RawMessage
                     const rawMsgs: RawMessage[] = msgs.map(m => ({
                         id: m.messageId,
-                        sender: m.displayName ? `${m.displayName}(${m.userId})` : formatUserLabel(memory, m.userId),
+                        sender: m.displayName || m.userId,
+                        userId: m.userId,
+                        mentions: m.mentions,
                         text: m.text,
                         timestamp: m.timestamp,
                         replyToMsgId: m.replyToMessageId,
