@@ -30,9 +30,12 @@
         class="select select-xs select-bordered w-full"
         bind:value={config.telegram.mode}
       >
-        <option value="bot">bot</option><option value="userbot">userbot</option>
+        <option value="bot_api">机器人（Bot API）</option>
+        <option value="bot">机器人（MTProto）</option>
+        <option value="userbot">用户账号（MTProto）</option>
       </select></label
     >
+    {#if config.telegram.mode !== 'userbot'}
     <label class="cfg-field"
       ><span class="cfg-label"
         ><i class="fa-solid fa-rotate-right restart-icon"></i> Bot Token</span
@@ -45,6 +48,8 @@
         on:blur={pwBlur}
       /></label
     >
+    {/if}
+    {#if config.telegram.mode !== 'bot_api'}
     <label class="cfg-field"
       ><span class="cfg-label"
         ><i class="fa-solid fa-rotate-right restart-icon"></i> API ID</span
@@ -67,6 +72,8 @@
         on:blur={pwBlur}
       /></label
     >
+    {/if}
+    {#if config.telegram.mode === 'userbot'}
     <label class="cfg-field col-span-2"
       ><span class="cfg-label"
         ><i class="fa-solid fa-rotate-right restart-icon"></i> 手机号 (userbot)</span
@@ -78,7 +85,13 @@
         placeholder="+86..."
       /></label
     >
+    {/if}
   </div>
+  {#if config.telegram.mode === 'bot_api'}
+    <p class="text-xs opacity-60 mt-2">仅需 BotFather 签发的 Token。通过长轮询接收消息，需先手动移除已有 webhook。群消息受 Telegram 隐私模式限制；不支持历史查询、用户登录及 MTProto 原生方法。</p>
+  {:else}
+    <p class="text-xs opacity-60 mt-2">MTProto 连接需要 Telegram API ID 和 API Hash。机器人另需 Token；用户账号使用手机号、验证码及可选的两步验证密码登录。</p>
+  {/if}
   <div class="divider text-xs opacity-50 my-3">拟人化发送延迟</div>
   <label class="cfg-check mb-2">
     <input
