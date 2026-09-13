@@ -80,6 +80,12 @@ llm_profiles:
   #     output: 10.00
   #     cached_input: 1.25
 
+  # provider: openai 的 profile 可设置 chat_request_mode: stream | non_stream。
+  # 默认 non_stream；stream 使用 Chat Completions SSE，在后台聚合正文、推理和用量后返回。
+  # 例如 ClinePass 等需要流式兼容的网关，设置 chat_request_mode: stream。
+  # 流式默认发送 stream_options.include_usage: true；网关不支持时可通过
+  # extra_body: { stream_options: { include_usage: false } } 覆盖。
+
   # 示例：OpenAI Responses（普通 HTTP；同样支持 encrypted reasoning 回传）
   # openai-responses:
   #   provider: openai_responses

@@ -2,6 +2,7 @@
  * llm/openai.ts — OpenAI 兼容 API 调用
  */
 
+import { Stream } from "openai/streaming";
 import type { LLMConfig } from "../config.js";
 import { reasoningOriginKey } from "./reasoning-origin.js";
 import type { ChatMessage, LLMResponse } from "./types.js";
@@ -66,6 +67,9 @@ export async function callOpenAI(
         apiMessages.push({ role: "assistant", content: prefill });
     }
 
+    const streaming = config.chatRequestMode === "stream";
+    const controller = new AbortController();
+    const requestSignal = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
     const response = await fetch(url, {
         method: "POST",
         headers,
@@ -74,16 +78,16 @@ export async function callOpenAI(
             messages: apiMessages,
             ...(config.omit_temperature ? {} : { temperature }),
             max_tokens: maxTokens,
-            // Gemini thinking 参数（OpenAI 兼容格式：reasoning_effort）
-            ...(thinkingLevel && thinkingLevel !== "none" ? {
-                reasoning_effort: thinkingLevel,
-            } : {}),
-            // Stop sequences
+            ...(thinkingLevel && thinkingLevel !== "none" ? { reasoning_effort: thinkingLevel } : {}),
             ...(stop && stop.length > 0 ? { stop } : {}),
-            // Extra body（用户自定义额外字段）
             ...(config.extraBody ?? {}),
+            // 请求模式决定解析方式，不能被 extra_body.stream 覆盖。
+            stream: streaming,
+            ...(streaming ? {
+                stream_options: { include_usage: true, ...(config.extraBody?.stream_options as Record<string, unknown> ?? {}) },
+            } : {}),
         }),
-        signal,
+        signal: requestSignal,
     });
 
     if (!response.ok) {
@@ -93,26 +97,9 @@ export async function callOpenAI(
         );
     }
 
-    const data = (await response.json()) as {
-        choices: Array<{
-            message: {
-                content: string;
-                reasoning_content?: string;
-                reasoning?: string;
-            };
-        }>;
-        usage?: {
-            prompt_tokens?: number;
-            completion_tokens?: number;
-            total_tokens?: number;
-            prompt_tokens_details?: {
-                cached_tokens?: number;
-            };
-            completion_tokens_details?: {
-                reasoning_tokens?: number;
-            };
-        };
-    };
+    const data: ChatCompletionResult = streaming
+        ? await collectChatCompletionFromStream(response, controller, requestSignal, model)
+        : await response.json() as ChatCompletionResult;
 
     const responseMessage = data.choices?.[0]?.message;
     const content = responseMessage?.content ?? "";
@@ -140,5 +127,74 @@ export async function callOpenAI(
                 reasoningTokens: data.usage.completion_tokens_details?.reasoning_tokens,
             }
             : undefined,
+    };
+}
+
+type ChatCompletionResult = {
+    choices: Array<{
+        message: {
+            content: string;
+            reasoning_content?: string;
+            reasoning?: string;
+        };
+    }>;
+    usage?: {
+        prompt_tokens?: number;
+        completion_tokens?: number;
+        total_tokens?: number;
+        prompt_tokens_details?: {
+            cached_tokens?: number;
+        };
+        completion_tokens_details?: {
+            reasoning_tokens?: number;
+        };
+    };
+};
+
+type ChatCompletionChunk = {
+    choices?: Array<{
+        index: number;
+        delta?: { content?: string | null; reasoning_content?: string; reasoning?: string };
+        finish_reason?: string | null;
+    }>;
+    usage?: ChatCompletionResult["usage"];
+};
+
+/** SSE 解码由 SDK 处理，包括跨网络分块的 UTF-8、事件和上游 error 事件。 */
+async function collectChatCompletionFromStream(
+    response: Response,
+    controller: AbortController,
+    signal: AbortSignal,
+    model: string,
+): Promise<ChatCompletionResult> {
+    const content: string[] = [];
+    const reasoningContent: string[] = [];
+    const reasoning: string[] = [];
+    let usage: ChatCompletionResult["usage"];
+    let finished = false;
+    const stream = Stream.fromSSEResponse<ChatCompletionChunk>(response, controller);
+    for await (const chunk of stream) {
+        // include_usage 的最后一帧可以只有 usage，没有 choices。
+        if (chunk.usage) usage = chunk.usage;
+        const choice = chunk.choices?.find(choice => choice.index === 0);
+        if (!choice) continue;
+        if (choice.finish_reason === "error") {
+            throw new Error(`OpenAI stream failed from model ${model}`);
+        }
+        if (choice.delta?.content) content.push(choice.delta.content);
+        if (choice.delta?.reasoning_content) reasoningContent.push(choice.delta.reasoning_content);
+        if (choice.delta?.reasoning) reasoning.push(choice.delta.reasoning);
+        if (choice.finish_reason) finished = true;
+    }
+    // SDK 会吞掉 AbortError；不能把取消前累积的半截输出作为成功响应返回。
+    signal.throwIfAborted();
+    if (!finished) throw new Error(`OpenAI stream ended before completion from model ${model}`);
+    return {
+        choices: [{ message: {
+            content: content.join(""),
+            ...(reasoningContent.length ? { reasoning_content: reasoningContent.join("") } : {}),
+            ...(reasoning.length ? { reasoning: reasoning.join("") } : {}),
+        } }],
+        usage,
     };
 }
