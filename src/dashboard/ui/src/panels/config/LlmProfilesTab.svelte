@@ -119,6 +119,21 @@
               }}
             /><span>Prefill</span></label>
         </div>
+        {#if p.provider === "openai"}
+          <div class="cfg-grid-2 mt-2">
+            <label class="cfg-field"><span class="cfg-label">Chat Completions 请求模式</span>
+              <select class="select select-xs select-bordered w-full"
+                value={p.chatRequestMode ?? "non_stream"}
+                on:change={(e) => {
+                  p.chatRequestMode = e.target.value;
+                  config = config;
+                }}>
+                <option value="non_stream">非流式（默认）</option>
+                <option value="stream">流式缓存（收齐后返回完整输出）</option>
+              </select>
+            </label>
+          </div>
+        {/if}
         {#if p.provider === "openai_responses"}
           <div class="cfg-grid-2 mt-2">
             <label class="cfg-field"><span class="cfg-label">Responses 请求模式</span>

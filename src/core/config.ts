@@ -80,6 +80,8 @@ export interface LLMConfig {
      * 适用于某些 API 在出错时返回 200 但 content 包含错误信息的情况。
      */
     errorContentPatterns?: string[];
+    /** OpenAI Chat Completions 请求模式。仅 provider=openai 时生效；stream 在后台聚合完整输出，默认 non_stream。 */
+    chatRequestMode?: "stream" | "non_stream";
     /** OpenAI Responses API 请求模式。仅 provider=openai_responses 时生效，默认 non_stream。 */
     responsesRequestMode?: "stream" | "non_stream" | "websocket";
     /** 不发送 max_output_tokens。用于不接受该字段的 Responses 兼容网关。 */
@@ -1380,6 +1382,8 @@ function parseLLMProfile(raw: Record<string, unknown>): LLMConfig {
         errorContentPatterns: (Array.isArray(raw.error_content_patterns) && raw.error_content_patterns.length > 0)
             ? raw.error_content_patterns.map(String)
             : undefined,
+        chatRequestMode: raw.chat_request_mode === "stream" ? "stream"
+            : raw.chat_request_mode === "non_stream" ? "non_stream" : undefined,
         responsesRequestMode: (str(raw.responses_request_mode) as "stream" | "non_stream" | "websocket" | undefined),
         omit_max_output_tokens: Boolean(raw.omit_max_output_tokens),
         replyPrompt: str(raw.reply_prompt),
@@ -1490,6 +1494,7 @@ export function serializeConfigToObject(config: AppConfig): Record<string, unkno
         if (p.extraBody && Object.keys(p.extraBody).length > 0) entry.extra_body = p.extraBody;
         if (p.customHeaders && Object.keys(p.customHeaders).length > 0) entry.custom_headers = p.customHeaders;
         if (p.errorContentPatterns && p.errorContentPatterns.length > 0) entry.error_content_patterns = p.errorContentPatterns;
+        if (p.chatRequestMode) entry.chat_request_mode = p.chatRequestMode;
         if (p.responsesRequestMode) entry.responses_request_mode = p.responsesRequestMode;
         if (p.omit_max_output_tokens === true) entry.omit_max_output_tokens = true;
         if (p.replyPrompt) entry.reply_prompt = p.replyPrompt;
