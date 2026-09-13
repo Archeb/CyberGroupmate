@@ -370,9 +370,8 @@ export const executorSessionDigestsProvider: SectionProvider<ExecutorSessionDige
         if (!ctx.sessionDigests?.length) return null;
         const myChat = ctx.chatId;
         const visible = ctx.sessionDigests.filter((d) => {
-            if (d.actorType === "meta" || d.sourceChatId === "__meta__") return true;
             if (d.sourceChatId === myChat || d.targetChatId === myChat) return true;
-            if (!d.sourceChatId && !d.targetChatId) return true;
+            if (!d.sourceChatId && !d.targetChatId && d.actorType === "system") return true;
             return false;
         });
         if (!visible.length) return null;
@@ -408,6 +407,7 @@ export const executorSessionDigestsProvider: SectionProvider<ExecutorSessionDige
     render(data) {
         return [
             "# 历史 Session Digests",
+            "摘要可能包含旧误判；身份、结果与当前原消息冲突时，以带 userId/messageId 的原消息为准。",
             ...data.sessionDigests.map(formatSessionDigestLine),
         ].join("\n");
     },
@@ -418,6 +418,7 @@ export const executorSessionDigestsProvider: SectionProvider<ExecutorSessionDige
 
         return [
             "# 历史 Session Digests",
+            "摘要可能包含旧误判；身份、结果与当前原消息冲突时，以带 userId/messageId 的原消息为准。",
             `(增量: ${delta.sessionDigests.length} 条)`,
             ...delta.sessionDigests.map(formatSessionDigestLine),
         ].join("\n");

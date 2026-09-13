@@ -26,6 +26,8 @@
 
 注意：
 - 如果某个字段没有内容，使用空数组 [] 或空字符串 ""
-- personUpdates 中的 userId 如果不知道就用 displayName 代替
+- personUpdates 中的 userId 必须来自原消息；不知道就省略该人物更新，不要用 displayName 代替
 - newFacts 中 category 必须是以上枚举值之一
 - 保持简洁，只记录重要信息
+
+人物按平台 userId 关联，保留关键归因的 chatId/messageId/userId。昵称、引用对象和真实 @ 目标不是发送者。摘要不得把不同 QQ 号合并，也不得把群友转述写成 bot 回应。发送回执不等于业务成功；未见目标账号的对应结果时保留“待核实”。用户纠正优先于旧摘要，明确撤回错误归因，别把被否定的内容继续提炼为事实。

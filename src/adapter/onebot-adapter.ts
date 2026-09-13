@@ -13,6 +13,7 @@ import { isNewerThanWatermark, summarizeBackfillNotes } from "./backfill.js";
 import type { MediaDownloader } from "../core/media-downloader.js";
 import { ensureSupportedFormat } from "../core/vision-processor.js";
 import { composeChatId, ensureCompositeId, getRawId, parseChatId } from "../core/chat-id.js";
+import { assertNoAccidentalTextMention, outgoingOneBotMentions, validateOneBotMentionTarget } from "../core/onebot-mentions.js";
 import { createLogger } from "../core/logger.js";
 import {
     getOneBotNapCatGuideGroupForAction,
@@ -827,6 +828,13 @@ export class OneBotAdapter implements PlatformAdapter {
         const preparedParams = this.prepareNapCatGuideParams(normalizedAction, params);
         const group = getOneBotNapCatGuideGroupForAction(normalizedAction);
         log.debug("OneBot NapCat native call", { action: normalizedAction, guide: group });
+        const isMessageSend = ["send_msg", "send_group_msg", "send_private_msg"].includes(normalizedAction.replace(/_async$/, ""));
+        if (isMessageSend) {
+            const mentions = outgoingOneBotMentions(preparedParams.message, preparedParams.auto_escape === true);
+            if (targetChatId?.includes("group:")) assertNoAccidentalTextMention(preparedParams.message, mentions.length > 0);
+            const ack = await this.callAction(normalizedAction, preparedParams);
+            return { ...(ack as object), mentions, senderUserId: `onebot:${this.config.selfId}` };
+        }
         return this.callAction(normalizedAction, preparedParams);
     }
 
@@ -979,24 +987,27 @@ export class OneBotAdapter implements PlatformAdapter {
     private async sendMessage(chatId: string, message: OneBotOutgoingMessage, opts: Record<string, unknown>): Promise<unknown> {
         const parsed = parseChatId(chatId);
         const preparedMessage = await this.prepareOutgoingMessage(message, opts);
+        const mentions = outgoingOneBotMentions(preparedMessage);
+        if (parsed.groupId != null) assertNoAccidentalTextMention(message, mentions.length > 0);
+        const withProvenance = async (result: Promise<unknown>) => ({ ...(await result as object), mentions, senderUserId: `onebot:${this.config.selfId}` });
         if (parsed.groupId != null) {
-            return this.callAction("send_group_msg", {
+            return withProvenance(this.callAction("send_group_msg", {
                 group_id: Number(parsed.groupId),
                 message: preparedMessage,
-            });
+            }));
         }
         if (parsed.rawId.startsWith("private:")) {
             const userId = parsed.rawId.slice("private:".length);
-            return this.callAction("send_private_msg", {
+            return withProvenance(this.callAction("send_private_msg", {
                 user_id: Number(userId),
                 message: preparedMessage,
-            });
+            }));
         }
         throw new Error(`Unsupported onebot chatId: ${chatId}`);
     }
 
     private async sendAt(chatId: string, rawUserIds: unknown, text: string, opts: Record<string, unknown>): Promise<unknown> {
-        const userIds = this.normalizeMentionTargets(rawUserIds);
+        const userIds = this.outgoingMentionTargets(rawUserIds);
         if (userIds.length === 0) throw new Error("sendAt: userId 为空");
         const suffix = text
             ? (text.startsWith(" ") || text.startsWith("\n") || text.startsWith("\t") ? text : ` ${text}`)
@@ -1463,7 +1474,9 @@ export class OneBotAdapter implements PlatformAdapter {
             }
             segments.push(...mentionSegments);
             if (message) {
-                segments.push({ type: "text", data: { text: message } });
+                for (const segment of this.normalizeMessageSegments(message)) {
+                    segments.push(await this.prepareOutgoingSegment(segment));
+                }
             }
             return segments;
         }
@@ -1484,8 +1497,11 @@ export class OneBotAdapter implements PlatformAdapter {
         const data = { ...(segment.data ?? {}) };
 
         if (type === "at") {
-            const qq = this.normalizeMentionTarget(data.qq ?? data.user_id ?? data.id);
-            return { type, data: { ...data, qq: qq || "" } };
+            const rawTarget = data.qq ?? data.user_id ?? data.id;
+            if (String(rawTarget).startsWith("onebot:group:")) validateOneBotMentionTarget(String(rawTarget));
+            const qq = this.normalizeMentionTarget(rawTarget);
+            validateOneBotMentionTarget(qq);
+            return { type, data: { ...data, qq } };
         }
 
         if (type === "reply") {
@@ -1540,7 +1556,10 @@ export class OneBotAdapter implements PlatformAdapter {
     }
 
     private outgoingMentionTargets(value: unknown): string[] {
-        return this.normalizeMentionTargets(value);
+        if (JSON.stringify(value)?.includes("onebot:group:")) throw new Error("QQ @ 需要用户 QQ 号，不能传入群 chatId");
+        const targets = this.normalizeMentionTargets(value);
+        targets.forEach(validateOneBotMentionTarget);
+        return targets;
     }
 
     private sanitizeOutgoingMediaOptions(chatId: string, media: Record<string, unknown>, opts: Record<string, unknown>): Record<string, unknown> {

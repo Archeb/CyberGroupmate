@@ -12,6 +12,7 @@
 
 import type { NotificationEvent } from "./notification-center.js";
 import type { IMemoryStoreV2, MessageLogEntry } from "../memory-v2/types.js";
+import { readMessageMentions } from "../core/message-provenance.js";
 import { createLogger } from "../core/logger.js";
 
 const log = createLogger("message-log-writer");
@@ -140,7 +141,7 @@ export class MessageLogWriter {
 
         // Agent 发出的消息使用配置的 agentUserId/agentDisplayName
         const userId = isAgentSent
-            ? this.config.agentUserId
+            ? String(event.senderUserId ?? this.config.agentUserId)
             : String(event.userId ?? event.user_id ?? event.senderId ?? event.sender_id ?? "");
         const displayName = isAgentSent
             ? this.config.agentDisplayName
@@ -158,6 +159,7 @@ export class MessageLogWriter {
                     userId,
                     displayName,
                     text,
+                    mentions: readMessageMentions(event.mentions),
                     replyToMessageId: replyToMessageId ? String(replyToMessageId) : undefined,
                     timestamp,
                 };
@@ -171,6 +173,7 @@ export class MessageLogWriter {
             userId,
             displayName,
             text,
+            mentions: readMessageMentions(event.mentions),
             replyToMessageId: replyToMessageId ? String(replyToMessageId) : undefined,
             timestamp,
         };

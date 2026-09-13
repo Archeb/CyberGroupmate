@@ -7,10 +7,13 @@
  * 所有 Phase 6 模块从此文件导入类型，保持一致性。
  */
 
+import type { MessageMention } from "../core/message-provenance.js";
+
 // ─── 基础消息类型 ───
 
 /** 标准化消息结构（从 Telegram 事件转换而来） */
 export interface Message {
+    mentions?: MessageMention[];
     /** 消息 ID */
     id: string;
     /** 所属群/聊天 ID */

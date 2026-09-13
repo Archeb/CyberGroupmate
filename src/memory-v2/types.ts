@@ -11,6 +11,7 @@
  */
 
 import type { LLMConfig, ReflectionExternalConfig } from "../core/config.js";
+import type { MessageMention } from "../core/message-provenance.js";
 
 // ─── 事实分类 ───
 
@@ -451,6 +452,8 @@ export interface MessageSearchResult {
     userId: string;
     displayName: string;
     content: string;
+    mentions?: MessageMention[];
+    replyToMessageId?: string;
     timestamp: string;
     mediaType?: string;
     mediaInfo?: string;
@@ -637,6 +640,8 @@ export interface ReflectionResult {
 
 /** message_log 表的写入条目 */
 export interface MessageLogEntry {
+    /** Actual platform mentions; undefined for unavailable or legacy metadata. */
+    mentions?: MessageMention[];
     /** Telegram 消息 ID */
     messageId: string;
     /** 所属群组 */
@@ -660,6 +665,7 @@ export interface MessageLogEntry {
 }
 
 export interface RecentMessageEntry {
+    mentions?: MessageMention[];
     messageId: string;
     chatId: string;
     userId: string;

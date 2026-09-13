@@ -12,6 +12,7 @@ import { resolve as pathResolve } from "node:path";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { loadBuiltinGuideContent } from "../../builtin-guides.js";
+import { readMessageMentions } from "../../../core/message-provenance.js";
 import { DEFAULT_BANNED_WORDS, findBannedWords, buildBannedWordWarning } from "../../../core/banned-words.js";
 
 // ─── 工具函数 ───
@@ -31,6 +32,8 @@ export function formatOneBotAck(prefix: string, payload: unknown): string {
     const parts = [prefix];
     if (chatId !== undefined) parts.push(`chat=${String(chatId)}`);
     if (msgId !== undefined) parts.push(`msg=${String(msgId)}`);
+    const mentions = readMessageMentions(raw.mentions);
+    if (mentions !== undefined) parts.push(`mentions=${mentions.length ? mentions.map(mention => mention.userId).join(",") : "none"}`, "(仅发送回执，尚未确认对方回应)");
     return parts.join(" ");
 }
 
@@ -86,7 +89,7 @@ function normalizeMentionTarget(value: unknown): string {
     if (candidate.startsWith("@")) candidate = candidate.slice(1);
     if (candidate.startsWith("qq:")) candidate = candidate.slice("qq:".length);
     if (candidate.startsWith("onebot:private:")) candidate = candidate.slice("onebot:private:".length);
-    else if (candidate.startsWith("onebot:group:")) candidate = candidate.slice("onebot:group:".length);
+    else if (candidate.startsWith("onebot:group:")) throw new Error("QQ @ 需要用户 QQ 号，不能传入群 chatId");
     else if (candidate.startsWith("onebot:")) candidate = candidate.slice("onebot:".length);
     return candidate.trim();
 }
@@ -163,7 +166,7 @@ function normalizeOneBotNativeAction(action: unknown): string {
 }
 
 function isOneBotNativeSendAction(action: string): boolean {
-    return action === "send_msg" || action === "send_group_msg" || action === "send_private_msg";
+    return ["send_msg", "send_group_msg", "send_private_msg"].includes(action.replace(/_async$/, ""));
 }
 
 function oneBotNativeTarget(action: string, params: Record<string, unknown>): string {
@@ -295,6 +298,8 @@ export function createOneBotClientProxy(
                 messageId: typeof sent === "object" && sent && "message_id" in sent ? (sent as { message_id?: unknown }).message_id : undefined,
                 text: dedupText,
                 replyToMessageId: opts?.replyTo,
+                mentions: readMessageMentions((sent as { mentions?: unknown } | null)?.mentions),
+                senderUserId: (sent as { senderUserId?: string } | null)?.senderUserId,
                 messageSegments: Array.isArray(message) ? message : undefined,
                 timestamp: Date.now(),
             });
@@ -345,6 +350,8 @@ export function createOneBotClientProxy(
                 messageId: typeof sent === "object" && sent && "message_id" in sent ? (sent as { message_id?: unknown }).message_id : undefined,
                 text: dedupText,
                 replyToMessageId: opts?.replyTo,
+                mentions: readMessageMentions((sent as { mentions?: unknown } | null)?.mentions),
+                senderUserId: (sent as { senderUserId?: string } | null)?.senderUserId,
                 timestamp: Date.now(),
             });
             return sent;
@@ -391,6 +398,8 @@ export function createOneBotClientProxy(
                 messageId: typeof sent === "object" && sent && "message_id" in sent ? (sent as { message_id?: unknown }).message_id : undefined,
                 text: dedupText,
                 replyToMessageId: opts?.replyTo,
+                mentions: readMessageMentions((sent as { mentions?: unknown } | null)?.mentions),
+                senderUserId: (sent as { senderUserId?: string } | null)?.senderUserId,
                 timestamp: Date.now(),
             });
             return sent;
@@ -603,6 +612,8 @@ export function createOneBotClientProxy(
                 messageId: typeof result === "object" && result && "message_id" in result ? (result as { message_id?: unknown }).message_id : undefined,
                 text,
                 messageSegments: Array.isArray(normalizedParams.message) ? normalizedParams.message : undefined,
+                mentions: readMessageMentions((result as { mentions?: unknown } | null)?.mentions),
+                senderUserId: (result as { senderUserId?: string } | null)?.senderUserId,
                 timestamp: Date.now(),
             });
         }

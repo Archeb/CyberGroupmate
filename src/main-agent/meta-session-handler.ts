@@ -407,10 +407,11 @@ async function buildMetaResolveContext(
         ? null
         : deps.memory.getGroupModel(getGroupModelKey(entry.chatId));
     const topicDigests = enrichTopicDigests(entry.topicDigests, deps.memory);
-    const activeUserProfiles = isSyntheticMeta ? [] : buildActiveUserProfiles(entry, deps.memory);
+
     const isDirectMessage = groupModel?.isDirectMessage ?? inferDirectMessageFromChatId(entry.chatId) ?? entry.directAddressReason === "DM";
     const chatType = isSyntheticMeta ? "系统" : deriveChatType(isDirectMessage);
     const recentMessageContext = buildRecentMessageContext(deps.memory, entry, isSyntheticMeta);
+    const activeUserProfiles = isSyntheticMeta ? [] : buildActiveUserProfiles({ ...entry, recentMessages: recentMessageContext.messages }, deps.memory);
     const visionConfig = deps.getVisionConfig?.() ?? loadConfig().vision;
 
     return {
@@ -474,6 +475,7 @@ function buildRecentMessageContext(
                     messageId: message.messageId,
                     userId: message.userId,
                     displayName: message.displayName,
+                    mentions: message.mentions,
                     text: message.text,
                     timestamp: message.timestamp,
                     replyToMessageId: message.replyToMessageId,
@@ -508,12 +510,14 @@ function enrichAttentionRecentMessages(
         const inWindow = byId.get(replyToMsgId);
         let replyTo = message.replyTo ?? inWindow?.displayName ?? inWindow?.userId;
         let replyToText = message.replyToText;
+        let replyToUserId = message.replyToUserId ?? inWindow?.userId;
 
-        if ((!replyTo || !replyToText) && memory.getMessageById) {
+        if ((!replyTo || !replyToText || !replyToUserId) && memory.getMessageById) {
             try {
                 const original = memory.getMessageById(chatId, replyToMsgId);
                 if (original) {
                     replyTo = replyTo ?? original.displayName ?? original.userId;
+                    replyToUserId = original.userId;
                     if (!inWindow && !replyToText) {
                         replyToText = original.text || mediaPlaceholder(original.mediaType, original.mediaInfo);
                     }
@@ -529,6 +533,7 @@ function enrichAttentionRecentMessages(
             replyToMsgId,
             replyTo: replyTo ?? `msg#${replyToMsgId}`,
             replyToText,
+            replyToUserId,
         };
     });
 }
@@ -567,9 +572,15 @@ function buildActiveUserProfiles(
 ): ActiveUserProfile[] {
     const recentMessages = entry.recentMessages ?? [];
     const directUserIds = getDirectAddressUserIds(entry);
-    if (directUserIds.size === 0) {
-        return [];
+    // Include the people being replied to / mentioned, then recent speakers. Names never join accounts.
+    const relevantMessages = [...recentMessages].reverse();
+    for (const message of relevantMessages) {
+        if (message.replyToUserId) directUserIds.add(message.replyToUserId);
+        for (const mention of message.mentions ?? []) {
+            if (!mention.isAll) directUserIds.add(mention.userId);
+        }
     }
+    for (const message of relevantMessages) if (message.userId) directUserIds.add(message.userId);
     const messageCounts = new Map<string, number>();
     for (const message of recentMessages) {
         if (directUserIds.has(message.userId)) {
@@ -581,7 +592,7 @@ function buildActiveUserProfiles(
     const profilesByUserId = new Map(profiles.map((profile) => [profile.userId, profile]));
     const result: ActiveUserProfile[] = [];
 
-    for (const userId of directUserIds) {
+    for (const userId of [...directUserIds].slice(0, 12)) {
         const identity = memory.getPersonIdentity(userId);
         const profile = profilesByUserId.get(userId);
         const globalProfile = memory.getPersonProfile?.(userId) ?? null;
@@ -589,10 +600,10 @@ function buildActiveUserProfiles(
             globalProfile?.relationToAgent ? `全局: ${globalProfile.relationToAgent}` : "",
             profile?.relationToAgent ? `当前场景: ${profile.relationToAgent}` : "",
         ].filter(Boolean);
-        const fallbackName = recentMessages.find((message) => message.userId === userId)?.displayName;
+        const fallbackName = relevantMessages.find((message) => message.userId === userId)?.displayName;
         result.push({
             userId,
-            displayName: identity?.displayName ?? fallbackName ?? userId,
+            displayName: fallbackName || identity?.displayName || userId,
             userLabel: formatUserLabel(memory, userId, fallbackName),
             currentChatLabel: formatChatLabel(memory, entry.chatId),
             aliases: identity?.aliases ?? [],
@@ -649,7 +660,7 @@ function formatUserLabel(
     fallbackName?: string,
 ): string {
     const identity = memory.getPersonIdentity?.(userId);
-    const name = identity?.displayName?.trim() || fallbackName?.trim() || userId;
+    const name = fallbackName?.trim() || identity?.displayName?.trim() || userId;
     return `${name}(${userId})`;
 }
 

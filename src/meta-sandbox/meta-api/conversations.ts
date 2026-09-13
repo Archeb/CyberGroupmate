@@ -83,6 +83,8 @@ export interface ConversationsInboxOptions {
 }
 
 export interface ConversationInboxMessage {
+    mentions?: MessageSearchResult["mentions"];
+    replyToMessageId?: string;
     messageId: string;
     chatId: string;
     userId: string;
@@ -314,6 +316,8 @@ function recentMessageToInboxMessage(memory: ConversationsReader, message: Recen
         userId: message.userId,
         displayName: message.displayName,
         content: formatConversationMessageContent(memory, message),
+        mentions: message.mentions,
+        replyToMessageId: message.replyToMessageId,
         timestamp: message.timestamp,
     };
 }
@@ -539,6 +543,8 @@ function queryMessages(
                 userId: row.userId,
                 displayName: row.displayName,
                 content: row.text,
+                mentions: row.mentions,
+                replyToMessageId: row.replyToMessageId,
                 timestamp: row.timestamp,
                 mediaType: row.mediaType,
                 mediaInfo: row.mediaInfo,

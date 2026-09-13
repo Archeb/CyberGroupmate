@@ -315,6 +315,7 @@ export class RecordingPipeline extends EventEmitter {
                         userId: ensureCompositeId(getPlatform(chatId), String(m.senderId)),
                         displayName: m.senderName,
                         text: m.text,
+                        mentions: m.mentions,
                         replyToMessageId: m.replyToMessageId,
                         timestamp: new Date(m.timestamp).toISOString(),
                         mediaType: m.mediaType,
@@ -796,6 +797,9 @@ export class RecordingPipeline extends EventEmitter {
         return {
             id: message.id,
             sender: message.senderName?.trim() || message.senderId || "unknown",
+            userId: ensureCompositeId(getPlatform(message.chatId), message.senderId),
+            mentions: message.mentions,
+            replyToUserId: replyRaw?.userId,
             text: message.text,
             timestamp: new Date(message.timestamp).toISOString(),
             replyTo: replyToMsgId ? (replyRaw?.sender ?? `msg#${replyToMsgId}`) : undefined,
@@ -812,6 +816,8 @@ export class RecordingPipeline extends EventEmitter {
         return {
             id: entry.messageId,
             sender: entry.displayName?.trim() || entry.userId || "unknown",
+            userId: entry.userId,
+            mentions: entry.mentions,
             text: entry.text,
             timestamp: entry.timestamp,
             mediaType: entry.mediaType ?? normalized.mediaType,

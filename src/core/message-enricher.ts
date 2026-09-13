@@ -18,6 +18,7 @@ import type { MediaDownloader } from "./media-downloader.js";
 import type { ImageCatalog } from "./image-catalog.js";
 import { formatTsForPrompt } from "./timezone.js";
 import { createLogger } from "./logger.js";
+import { formatMessageSender, formatMessageMentions, type MessageMention } from "./message-provenance.js";
 import { extractUrls, fetchOpenGraphBatch, downloadOgImage, type OGResult } from "./opengraph.js";
 import { callLLMWithFallback, type ChatMessage } from "./llm.js";
 
@@ -29,9 +30,12 @@ const log = createLogger("message-enricher");
 export interface RawMessage {
     id?: string;
     sender?: string;
+    userId?: string;
+    mentions?: MessageMention[];
     text?: string;
     timestamp?: string;
     replyTo?: string;
+    replyToUserId?: string;
     /** 被回复消息的原始 message ID（用于在 reply tag 中标注 #msgId） */
     replyToMsgId?: string;
     /** 被回复消息的原文摘要（当被回复消息不在上下文中时填充） */
@@ -399,7 +403,7 @@ export function formatMessageLine(
 ): string {
     const replyTag = buildReplyTag(m);
     const textPart = formatMessageBody(m, options);
-    return `[${formatTsForPrompt(m.timestamp)}] [msgId:${m.id ?? "?"}] ${m.sender ?? "?"}${replyTag}: ${textPart}`;
+    return `[${formatTsForPrompt(m.timestamp)}] [msgId:${m.id ?? "?"}] ${formatMessageSender(m.sender, m.userId)}${formatMessageMentions(m.mentions, m.text)}${replyTag}: ${textPart}`;
 }
 
 export function formatMessageBody(
@@ -442,7 +446,7 @@ function buildReplyTag(m: RawMessage): string {
     const textSuffix = m.replyToText
         ? `: "${m.replyToText.length > 500 ? m.replyToText.slice(0, 500) + "…(已截断，请手动fetch完整消息)" : m.replyToText}"`
         : "";
-    return ` (↩ reply to ${m.replyTo}${msgIdSuffix}${textSuffix})`;
+    return ` (↩ reply to ${formatMessageSender(m.replyTo, m.replyToUserId)}${msgIdSuffix}${textSuffix})`;
 }
 
 /**
@@ -691,7 +695,7 @@ export function formatMessages(
         }
 
         const replyTag = buildReplyTag(m);
-        lines.push(`[${formatTsForPrompt(m.timestamp)}] [msgId:${m.id ?? "?"}] ${m.sender ?? "?"}${replyTag}: ${textPart}`);
+        lines.push(`[${formatTsForPrompt(m.timestamp)}] [msgId:${m.id ?? "?"}] ${formatMessageSender(m.sender, m.userId)}${formatMessageMentions(m.mentions, m.text)}${replyTag}: ${textPart}`);
     }
 
     // ─── 最后一条消息距今时间标记 ───

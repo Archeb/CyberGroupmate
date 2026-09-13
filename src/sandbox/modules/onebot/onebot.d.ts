@@ -6,6 +6,9 @@
  */
 
 interface OneBotMessageAck {
+    /** 实际发送载荷中的真实 @ 目标；空数组表示没有 @。仅发送回执，不证明 bot 已回复。 */
+    mentions?: Array<{ userId: string; isAll?: boolean }>;
+    senderUserId?: string;
     message_id?: unknown;
     id?: unknown;
     chatId?: string | number;
@@ -158,7 +161,7 @@ declare const onebot: {
     sendMessage(chatId: string | number, message: OneBotMessage, opts?: OneBotSendMessageOptions): Promise<OneBotMessageAck | null>;
 
     /**
-     * 在群聊里 @ 指定 QQ 用户并追加文本。兼容辅助函数，冻结为兜底用法。
+     * 在群聊里发送真实 @ 并追加文本。触发 bot 时优先使用，不能传昵称或群 chatId。
      * userId 支持裸 QQ 号、onebot:<qq>、onebot:private:<qq>、"all"、数组或逗号分隔字符串。
      * @example
      * await onebot.sendAt(chatId, "123456", "辛苦看下这个");
@@ -167,7 +170,8 @@ declare const onebot: {
     sendAt(chatId: string | number, userId: string | number | Array<string | number>, text?: string, opts?: { replyTo?: string | number }): Promise<OneBotMessageAck | null>;
 
     /**
-     * 发送文本消息。兼容 wrapper，冻结为兜底用法；新参数优先用 send_group_msg/send_private_msg/callApi。
+     * 发送文本消息。文字 @昵称 不是真实 @；提及或触发 bot 请使用 sendAt 或 opts.mentions。
+     * 新平台参数优先用 send_group_msg/send_private_msg/callApi。
      * @example
      * await onebot.sendText(chatId, "你好");
      */

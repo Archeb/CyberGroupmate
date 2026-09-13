@@ -258,6 +258,9 @@ function toRawMessage(message: AttentionRecentMessage, messagesById?: Map<string
     return {
         id: message.messageId,
         sender: message.displayName?.trim() || message.userId || "unknown",
+        userId: message.userId,
+        mentions: message.mentions,
+        replyToUserId: message.replyToUserId ?? replyTarget?.userId,
         text: message.text,
         timestamp: message.timestamp,
         replyTo: message.replyTo ?? (replyToMsgId
