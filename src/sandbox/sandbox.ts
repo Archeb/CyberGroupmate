@@ -333,6 +333,13 @@ export class Sandbox extends EventEmitter {
             this.emit("stderr", data.toString());
         });
 
+        // 子进程在超时/stop 后可能已关闭管道；向其 stdin 写结果会触发 EPIPE。
+        // 若不在此消费 error，Socket 上的 'error' 事件无监听者会使整个宿主进程崩溃。
+        // 生命周期失败已由下方 child 的 "exit"/"error" 统一上报，这里仅防止写错误冒泡。
+        this.child.stdin?.on("error", () => {
+            /* stdin 已关闭/管道已断：无接收方，忽略 */
+        });
+
         this.child.on("exit", (code, signal) => {
             const isExpected = signal === "SIGTERM" || signal === "SIGKILL" || code === 0;
             const logFn = isExpected ? log.debug.bind(log) : log.warn.bind(log);
@@ -585,6 +592,25 @@ export class Sandbox extends EventEmitter {
         }
     }
 
+    /**
+     * 向 worker stdin 写一行消息，对“子进程正在停止 / stdin 已关闭 / 管道已断”做防御。
+     *
+     * 超时会 SIGTERM/SIGKILL worker，但此前发出的 host_call 可能在 stop 之后才返回；
+     * 此时对端管道已关闭，直接 write 会抛 EPIPE，而 stdin 上没有 error 监听会使整个
+     * 宿主进程以 unhandled 'error' 崩溃。这里统一吞掉这类写失败（结果本就无人接收）。
+     */
+    private safeWrite(message: string): boolean {
+        const stdin = this.child?.stdin;
+        if (this.stopping || !this.child || !stdin || stdin.destroyed || stdin.writableEnded) {
+            return false;
+        }
+        try {
+            return stdin.write(message + "\n");
+        } catch {
+            return false;
+        }
+    }
+
     private async handleHostCall(id: string, method: string, args: unknown[]): Promise<void> {
         if (!this.child?.stdin) return;
 
@@ -601,7 +627,7 @@ export class Sandbox extends EventEmitter {
                 ok: true,
                 value,
             });
-            this.child.stdin.write(msg + "\n");
+            this.safeWrite(msg);
         } catch (err) {
             if (!this.child?.stdin) return;
             const msg = JSON.stringify({
@@ -612,7 +638,7 @@ export class Sandbox extends EventEmitter {
                 error: err instanceof Error ? err.message : String(err),
                 ...(err instanceof Error && err.stack ? { stack: err.stack } : {}),
             });
-            this.child.stdin.write(msg + "\n");
+            this.safeWrite(msg);
         }
     }
 
@@ -653,7 +679,7 @@ export class Sandbox extends EventEmitter {
                 code,
                 ...(options?.scopeId ? { scopeId: options.scopeId } : {}),
             });
-            this.child!.stdin!.write(msg + "\n");
+            this.safeWrite(msg);
         });
     }
 
@@ -675,7 +701,7 @@ export class Sandbox extends EventEmitter {
             this.pendingRequests.set(id, { resolve, reject, timer });
 
             const msg = JSON.stringify({ type: "reset_scope", id, scopeId });
-            this.child!.stdin!.write(msg + "\n");
+            this.safeWrite(msg);
         });
     }
 
@@ -983,7 +1009,7 @@ export class Sandbox extends EventEmitter {
         }
 
         const msg = JSON.stringify({ type: "input_response", id, value });
-        this.child.stdin.write(msg + "\n");
+        this.safeWrite(msg);
     }
 
     /**

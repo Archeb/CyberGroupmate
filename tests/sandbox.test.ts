@@ -508,6 +508,34 @@ describe("Sandbox", () => {
         assert.ok(!out.includes("__SANDBOX_DONE_"), `sentinel leaked into read(): ${JSON.stringify(out)}`);
     });
 
+    it("late host_call result after worker stdin closes never crashes the host", async () => {
+        const sb = await makeSandbox();
+        const internals = sb as unknown as {
+            child?: { stdin?: NodeJS.WritableStream & { write: (...a: unknown[]) => unknown; destroy?: () => void } };
+            stopping: boolean;
+            safeWrite: (message: string) => boolean;
+            handleHostCall: (id: string, method: string, args: unknown[]) => Promise<void>;
+        };
+        const stdin = internals.child?.stdin;
+        assert.ok(stdin, "worker stdin should exist");
+
+        // 关键守卫：stdin 上必须挂着 error 监听，否则 EPIPE 会成为 unhandled 'error' 直接终止进程。
+        assert.ok((stdin as unknown as NodeJS.EventEmitter).listenerCount("error") >= 1);
+
+        // 流仍健康，但 write 同步抛 EPIPE 时，safeWrite 必须吞掉而不是让进程崩溃。
+        const originalWrite = stdin.write.bind(stdin);
+        stdin.write = () => { throw Object.assign(new Error("write EPIPE"), { code: "EPIPE" }); };
+        assert.equal(internals.safeWrite("x"), false);
+        stdin.write = originalWrite as typeof stdin.write;
+
+        // 模拟超时停止窗口：stopping=true 且 stdin 已 destroy，但 child 引用尚未在 exit 回调里置空。
+        // 此时一个迟到的 host_call 结果到达：handleHostCall 必须正常 resolve，不得向死管道写。
+        internals.stopping = true;
+        stdin.destroy?.();
+        await internals.handleHostCall("late-1", "mcp.list", []);
+        assert.equal(internals.safeWrite("anything"), false);
+    });
+
     it("hasActiveBackgroundTasks tracks the background monitor lifecycle", async () => {
         const sb = await makeSandbox();
         assert.equal(sb.hasActiveBackgroundTasks(), false);
