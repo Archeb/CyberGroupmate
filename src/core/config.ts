@@ -658,7 +658,7 @@ export function loadConfig(configPath?: string, forceReload?: boolean): AppConfi
     if (existsSync(path)) {
         try {
             const raw = readFileSync(path, "utf-8");
-            fileConfig = parseYAML(raw) ?? {};
+            fileConfig = parseYAML(raw, { merge: true }) ?? {};
         } catch (err) {
             console.error(`[Config] config.yaml 解析错误: ${err instanceof Error ? err.message : err}`);
         }
