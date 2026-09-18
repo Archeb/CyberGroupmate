@@ -550,6 +550,17 @@ export function createTelegramClientProxy(
         sendReaction: async (chatId: number | string, messageId: number, emoji: string | null) => {
             await callTelegramHost("telegram.sendReaction", [chatId, messageId, emoji]);
             env.emitOutput(`[Telegram] sendReaction ok chat=${String(chatId)} msg=${messageId} emoji=${emoji ?? "(removed)"}`);
+            // 表态计入对外动作（emoji=null 是撤销表态，不计），供 SentMessageCollector 区分"沉默跳过"
+            if (emoji != null) {
+                env.notifyHost({
+                    type: "system.agent_reaction_sent",
+                    scene: "telegram",
+                    chatId: String(chatId),
+                    messageId,
+                    emoji,
+                    timestamp: Date.now(),
+                });
+            }
         },
         editMessage: async (chatId: number | string, messageId: number, text: string) => {
             const edited = hydrateTelegramMessage(await callTelegramHost("telegram.editMessage", [chatId, messageId, text]));
