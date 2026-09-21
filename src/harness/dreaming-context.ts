@@ -54,7 +54,11 @@ export interface DreamingContextDeps {
 
 const DEFAULT_MAX_TASKS = 100;
 const DEFAULT_MAX_PARTICIPANTS = 12;
-const SUMMARY_CLIP = 1200;
+// 摘要裁剪阈值：这份文件会被做梦 agent 整体读入并随每轮工具调用重复携带，
+// 过长的 turn-by-turn 思考流水账会以「长度 × 轮数」放大成本。只保留「做了什么」的密度。
+const SUMMARY_CLIP = 400;
+// 全局意识流 digest 单条截断：meta 播报常携带全量「在等/全轨」跟踪状态，相邻条目高度重复
+const DIGEST_CLIP = 320;
 
 /**
  * 构建 background-dreaming.md 的完整内容。无可用任务时返回 null。
@@ -123,7 +127,7 @@ function renderSessionDigests(digests: NonNullable<DreamingContextDeps["sessionD
             digest.runId ? `run=${digest.runId}` : "",
             digest.targetChatId ? `target=${digest.targetChatId}` : "",
         ].filter(Boolean).join(", ");
-        lines.push(`- [${formatTsForPrompt(digest.createdAt)}]${source ? ` [${source}]` : ""}${refs ? ` (${refs})` : ""} ${digest.content}`);
+        lines.push(`- [${formatTsForPrompt(digest.createdAt)}]${source ? ` [${source}]` : ""}${refs ? ` (${refs})` : ""} ${clip(digest.content, DIGEST_CLIP)}`);
     }
     return lines.join("\n");
 }

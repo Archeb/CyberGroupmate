@@ -551,5 +551,6 @@ metrics:
 #   max_budget_usd: 5           # 单次做梦的最大花费（美元，仅 Claude Code 支持）
 #   schedule: "0 3 * * *"       # 定时做梦的 cron 表达式（默认凌晨 3 点）
 #   min_interval_hours: 6       # 定时做梦的强制最小间隔（小时，默认 6，设 0 关闭）；防重启/cron 边界/重试叠加导致频繁做梦
+#   idle_min_interval_hours: 2  # 空闲巡视的最小间隔（小时，默认 2，设 0 关闭）；真实通知不受限
 #   extra_args:                 # 自定义启动参数（传给 harness CLI）
 #     - "--verbose"

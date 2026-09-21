@@ -13,10 +13,14 @@ export const PENDING_FILE = "workspace/background-pending.md";
 
 // 触发用的合成通知（不是真正「有人找你」的内容，不写进 pending 文件）
 const TRIGGER_MARKERS = new Set(["scheduled-dreaming", "manual-trigger-from-dashboard"]);
+// 合成触发的来源标识：按 source 过滤比按 content 前缀匹配可靠
+// （Meta 沙箱文档也鼓励把 "proactive-idle" 用作 source，见 meta-api background.enqueue）
+const TRIGGER_SOURCES = new Set(["scheduler", "proactive-idle"]);
 
-/** 过滤掉调度/手动触发的合成标记，只留下真正需要 agent 处理的通知 */
+/** 过滤掉调度/手动/空闲巡视等合成触发，只留下真正需要 agent 处理的通知 */
 export function selectPendingNotifications(pending: HarnessNotify[]): HarnessNotify[] {
-    return pending.filter((n) => !TRIGGER_MARKERS.has(n.content));
+    return pending.filter((n) =>
+        !TRIGGER_MARKERS.has(n.content) && !TRIGGER_SOURCES.has(n.source ?? ""));
 }
 
 /** 渲染 pending 通知文件内容（写入 PENDING_FILE） */

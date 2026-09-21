@@ -6,8 +6,10 @@ import { join } from "node:path";
 import { buildHarnessEnv, getHarnessHome, getHarnessInstructionPath, writeHarnessInstructions } from "../src/harness/home.js";
 import { HarnessManager } from "../src/harness/manager.js";
 import { serializeClaudeMcpConfig, serializeCodexMcpConfig, serializeCopilotMcpConfig } from "../src/harness/mcp-config.js";
-import { buildSystemPrompt, buildTaskPrompt, renderPendingFile } from "../src/harness/prompt.js";
-import type { HarnessMcpConfig } from "../src/harness/types.js";
+import { buildSystemPrompt, buildTaskPrompt, renderPendingFile, selectPendingNotifications } from "../src/harness/prompt.js";
+import type { HarnessLaunchOptions, HarnessMcpConfig } from "../src/harness/types.js";
+import type { ChildProcess } from "node:child_process";
+import { EventEmitter } from "node:events";
 
 describe("HarnessManager MCP config loading", () => {
     it("loads HTTP and stdio MCP configs and keeps cybergroupmate reserved", () => {
@@ -198,6 +200,201 @@ describe("Harness prompt and user home handling", () => {
             assert.equal(env.HOME, "real-home");
             assert.equal(env.USERPROFILE, "real-profile");
             assert.equal(env.CLAUDE_CODE_ENTRYPOINT, "background-agent");
+        } finally {
+            rmSync(root, { recursive: true, force: true });
+        }
+    });
+});
+
+describe("Harness pending notification filtering", () => {
+    it("drops synthetic triggers by content marker or source, keeps real notifications", () => {
+        const pending = [
+            { source: "scheduler", content: "scheduled-dreaming" },
+            { source: "dashboard", content: "manual-trigger-from-dashboard" },
+            { source: "proactive-idle", content: "consciousness_tick: 系统空闲，执行一次主动巡视" },
+            { source: "meta", content: "有人找你：帮忙查资料" },
+            { source: "dashboard", content: "检查 MCP 安装路径" },
+        ];
+        const kept = selectPendingNotifications(pending as never);
+        assert.deepEqual(kept.map((n) => n.content), [
+            "有人找你：帮忙查资料",
+            "检查 MCP 安装路径",
+        ]);
+    });
+});
+
+/** 构造可注入 history 的测试 manager，launcher 返回不自动退出的假子进程 */
+function createTestManager(root: string, overrides?: {
+    idleMinIntervalMs?: number;
+    startImpl?: (options: HarnessLaunchOptions) => Promise<ChildProcess>;
+}) {
+    const fakeChild = new EventEmitter() as EventEmitter & ChildProcess;
+    (fakeChild as { pid?: number }).pid = 424242;
+    fakeChild.kill = () => {
+        fakeChild.emit("exit", 0, null);
+        return true;
+    };
+    const manager = new HarnessManager({
+        launcher: {
+            name: "test",
+            start: overrides?.startImpl ?? (async () => fakeChild as unknown as ChildProcess),
+        },
+        workDir: root,
+        mcpUrl: "http://127.0.0.1:3100/mcp",
+        mcpToken: "token",
+        persona: { name: "D", description: "desc" },
+        ...(overrides?.idleMinIntervalMs != null ? { idleMinIntervalMs: overrides.idleMinIntervalMs } : {}),
+    });
+    return { manager, fakeChild };
+}
+
+/** 直接向 private history 注入一条运行记录 */
+function injectRun(manager: HarnessManager, startedAt: number, exitCode: number | null): void {
+    (manager as unknown as { history: Array<{ id: string; startedAt: number; exitCode?: number | null; events: unknown[] }> })
+        .history.push({ id: `harness-test-${startedAt}`, startedAt, exitCode, events: [] });
+}
+
+describe("Harness idle throttling and relaunch debounce", () => {
+    it("throttles idle triggers within the min interval but keeps real notifications instant", async () => {
+        const root = join(process.cwd(), "workspace", ".test-harness-idle");
+        rmSync(root, { recursive: true, force: true });
+        mkdirSync(join(root, "workspace"), { recursive: true });
+        try {
+            const { manager, fakeChild } = createTestManager(root);
+            injectRun(manager, Date.now() - 60_000, 0); // 一分钟前刚成功做过梦
+
+            manager.triggerIdle({ content: "consciousness_tick: 系统空闲", source: "proactive-idle" });
+            assert.equal(manager.queueLength, 0, "idle within interval should be dropped");
+            assert.equal(manager.isRunning, false, "throttled idle must not launch");
+
+            manager.enqueue({ content: "有人找你：速回", source: "meta" });
+            assert.equal(manager.isRunning, true, "real notification should launch immediately");
+
+            await manager.shutdown();
+            fakeChild.removeAllListeners();
+        } finally {
+            rmSync(root, { recursive: true, force: true });
+        }
+    });
+
+    it("passes idle triggers once the interval has elapsed", async () => {
+        const root = join(process.cwd(), "workspace", ".test-harness-idle-pass");
+        rmSync(root, { recursive: true, force: true });
+        mkdirSync(join(root, "workspace"), { recursive: true });
+        try {
+            const { manager, fakeChild } = createTestManager(root, { idleMinIntervalMs: 60_000 });
+            injectRun(manager, Date.now() - 120_000, 0); // 2 分钟前，超过 1 分钟间隔
+
+            manager.triggerIdle({ content: "consciousness_tick: 系统空闲", source: "proactive-idle" });
+            // launch 同步段 drain 队列并置 running，无需等待
+            assert.equal(manager.isRunning, true);
+            assert.equal(manager.queueLength, 0);
+
+            const status = manager.getStatus();
+            assert.ok(status.lastDreamStartedAt != null);
+            assert.equal(status.idleMinIntervalMs, 60_000);
+
+            await manager.shutdown();
+            fakeChild.removeAllListeners();
+        } finally {
+            rmSync(root, { recursive: true, force: true });
+        }
+    });
+
+    it("debounces relaunch after a run ends with pending notifications", async () => {
+        const root = join(process.cwd(), "workspace", ".test-harness-debounce");
+        rmSync(root, { recursive: true, force: true });
+        mkdirSync(join(root, "workspace"), { recursive: true });
+        try {
+            const { manager, fakeChild } = createTestManager(root);
+            manager.enqueue({ content: "第一条通知", source: "meta" });
+            // 等 launcher.start resolve、exit handler 挂上
+            await new Promise((resolve) => setTimeout(resolve, 10));
+            assert.equal(manager.isRunning, true);
+            // 运行中再入队一条：运行结束时应进入 debounce 而不是立即重启
+            manager.enqueue({ content: "第二条通知", source: "meta" });
+
+            fakeChild.emit("exit", 0, null);
+            await new Promise((resolve) => setTimeout(resolve, 20));
+
+            assert.equal(manager.isRunning, false);
+            assert.equal(manager.queueLength, 1, "one notification consumed by the finished run");
+            const timer = (manager as unknown as { relaunchTimer: unknown }).relaunchTimer;
+            assert.ok(timer != null, "relaunch should be debounced, not immediate");
+
+            manager.enqueue({ content: "第三条通知", source: "meta" });
+            assert.equal(manager.queueLength, 2, "notifications during debounce should batch up");
+            assert.equal(manager.isRunning, false, "no launch during debounce window");
+
+            await manager.shutdown();
+            fakeChild.removeAllListeners();
+        } finally {
+            rmSync(root, { recursive: true, force: true });
+        }
+    });
+});
+
+describe("Harness last-success baseline persistence", () => {
+    it("falls back to the persisted baseline when history has no successful run", () => {
+        const root = join(process.cwd(), "workspace", ".test-harness-baseline");
+        rmSync(root, { recursive: true, force: true });
+        mkdirSync(join(root, "workspace"), { recursive: true });
+        const baselineTs = Date.now() - 6 * 60 * 60_000;
+        writeFileSync(join(root, "workspace", "harness-last-success.json"), JSON.stringify({ lastSuccessfulStartedAt: baselineTs }), "utf-8");
+
+        try {
+            const { manager } = createTestManager(root);
+            injectRun(manager, Date.now() - 60_000, 1); // 最近一次运行失败了
+
+            let receivedSince: number | null | undefined;
+            (manager as unknown as { config: { buildDreamingDigest?: (sinceTs: number | null) => string | null } }).config.buildDreamingDigest =
+                (sinceTs) => { receivedSince = sinceTs; return null; };
+            (manager as unknown as { regenerateDreamingDigest(): void }).regenerateDreamingDigest();
+
+            assert.equal(receivedSince, baselineTs, "should use persisted baseline, not collapse to full window");
+        } finally {
+            rmSync(root, { recursive: true, force: true });
+        }
+    });
+
+    it("keeps null (full window) only when no success was ever recorded", () => {
+        const root = join(process.cwd(), "workspace", ".test-harness-baseline-null");
+        rmSync(root, { recursive: true, force: true });
+        mkdirSync(join(root, "workspace"), { recursive: true });
+
+        try {
+            const { manager } = createTestManager(root);
+            let receivedSince: number | null | undefined;
+            (manager as unknown as { config: { buildDreamingDigest?: (sinceTs: number | null) => string | null } }).config.buildDreamingDigest =
+                (sinceTs) => { receivedSince = sinceTs; return null; };
+            (manager as unknown as { regenerateDreamingDigest(): void }).regenerateDreamingDigest();
+
+            assert.equal(receivedSince, null, "fresh deployment keeps the full-window semantics");
+        } finally {
+            rmSync(root, { recursive: true, force: true });
+        }
+    });
+
+    it("persists the baseline after a successful run", async () => {
+        const root = join(process.cwd(), "workspace", ".test-harness-baseline-write");
+        rmSync(root, { recursive: true, force: true });
+        mkdirSync(join(root, "workspace"), { recursive: true });
+        try {
+            const { manager, fakeChild } = createTestManager(root);
+            manager.enqueue({ content: "做一次梦", source: "meta" });
+            await new Promise((resolve) => setTimeout(resolve, 10));
+            assert.equal(manager.isRunning, true);
+
+            fakeChild.emit("exit", 0, null);
+            await new Promise((resolve) => setTimeout(resolve, 20));
+
+            const file = join(root, "workspace", "harness-last-success.json");
+            assert.equal(existsSync(file), true);
+            const parsed = JSON.parse(readFileSync(file, "utf-8")) as { lastSuccessfulStartedAt: number };
+            assert.ok(parsed.lastSuccessfulStartedAt > 0);
+
+            await manager.shutdown();
+            fakeChild.removeAllListeners();
         } finally {
             rmSync(root, { recursive: true, force: true });
         }

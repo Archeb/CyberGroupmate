@@ -19,6 +19,10 @@ interface BackgroundStatus {
     harness?: string;
     consecutiveFailures?: number;
     lastError?: string | null;
+    /** 上次做梦的启动时间（ms epoch），从未做过则为 null */
+    lastDreamStartedAt?: number | null;
+    /** 空闲巡视的最小间隔（ms）。自发 enqueue 前可据此判断距上次做梦是否已足够久 */
+    idleMinIntervalMs?: number;
 }
 
 interface BackgroundEnqueueOptions {
