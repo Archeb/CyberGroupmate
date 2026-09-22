@@ -22,6 +22,18 @@ const JOURNAL_CLEANUP_INTERVAL_MS = 30 * 60_000;
 // 定时做梦的强制最小间隔：两次「定时触发」的做梦至少相隔这么久，避免重启/cron 边界/重试叠加导致频繁做梦。
 const DEFAULT_MIN_DREAM_INTERVAL_MS = 6 * 60 * 60_000;
 
+// 空闲巡视（consciousness_tick）的最小间隔：空闲巡视频率远高于定时做梦，不节流会一天触发十几次，
+// 每次都全量重建上下文。真实通知（有人找你/callback）不受此限制。
+const DEFAULT_IDLE_MIN_INTERVAL_MS = 2 * 60 * 60_000;
+
+// 运行结束后队列非空时的 relaunch 延迟：让这个窗口内的通知攒成一批，
+// 避免做梦一结束就为单条通知立即重启（每次启动都要重付 system prompt + dreaming 文件的固定开销）。
+const RELAUNCH_DEBOUNCE_MS = 120_000;
+
+// lastSuccessfulStartedAt 的持久化文件：history 只保留最近 50 条运行、重启后最多从 10 份
+// dream-journal 日志恢复，成功的运行可能被轮转掉。持久化基线避免 sinceTs 回退成 null（全量窗口）。
+const LAST_SUCCESS_FILE = "workspace/harness-last-success.json";
+
 export interface HarnessManagerConfig {
     launcher: HarnessLauncher;
     workDir: string;
@@ -42,6 +54,12 @@ export interface HarnessManagerConfig {
      * 缺省取 DEFAULT_MIN_DREAM_INTERVAL_MS；显式传 0 关闭。
      */
     minDreamIntervalMs?: number;
+    /**
+     * 空闲巡视的最小间隔（ms）。距上次做梦启动不足此间隔时，idle 触发被忽略。
+     * 仅作用于 triggerIdle（consciousness_tick 路径），真实通知不受限。
+     * 缺省取 DEFAULT_IDLE_MIN_INTERVAL_MS；显式传 0 关闭。
+     */
+    idleMinIntervalMs?: number;
 }
 
 export class HarnessManager {
@@ -59,11 +77,16 @@ export class HarnessManager {
     // 一次性的做梦收集起点覆盖：undefined=默认（上次做梦起始），null=全部，number=指定时刻(ms)
     private dreamingSinceOverride: number | null | undefined = undefined;
     private cleanupTimer: ReturnType<typeof setInterval> | null = null;
+    // 攒批用的 relaunch 延迟器：挂起时新入队通知不再立即 launch，等 debounce 窗口一起带走
+    private relaunchTimer: ReturnType<typeof setTimeout> | null = null;
+    // 持久化的「上次成功做梦起始时间」：history 被轮转/清空后仍能守住 sinceTs 基线
+    private persistedLastSuccessAt: number | null = null;
     onSpawnFailure?: (error: string, pendingCount: number) => void;
 
     constructor(config: HarnessManagerConfig) {
         this.config = config;
         this.hydrateHistory();
+        this.hydrateLastSuccess();
         this.cleanupTimer = setInterval(() => this.cleanupJournal(), JOURNAL_CLEANUP_INTERVAL_MS);
         if (this.cleanupTimer.unref) this.cleanupTimer.unref();
     }
@@ -80,7 +103,12 @@ export class HarnessManager {
         if (this.shuttingDown) return;
         this.pendingQueue.push(notify);
         if (!this.running) {
-            void this.launch();
+            // 已有攒批延迟器挂起时不再立即启动：新通知会留在队列里，由延迟器统一带走
+            if (this.relaunchTimer == null) {
+                void this.launch();
+            } else {
+                log.info("enqueue: relaunch debounced, queued", { queueLength: this.pendingQueue.length });
+            }
         } else {
             log.info("enqueue: instance running, queued", { queueLength: this.pendingQueue.length });
         }
@@ -120,6 +148,32 @@ export class HarnessManager {
         this.enqueue({ content: "scheduled-dreaming", source: "scheduler" });
     }
 
+    /**
+     * 空闲巡视（consciousness_tick）触发。与定时做梦共用 lastDreamStartedAt 基线，
+     * 但间隔独立（默认 2 小时）：刚做过梦（无论何种触发）就没有理由立刻再空闲巡视。
+     * 真实通知走 enqueue，不经此节流。
+     */
+    triggerIdle(notify: HarnessNotify): void {
+        if (this.shuttingDown) return;
+        const minInterval = this.config.idleMinIntervalMs ?? DEFAULT_IDLE_MIN_INTERVAL_MS;
+        if (minInterval > 0) {
+            const last = this.lastDreamStartedAt();
+            if (last != null) {
+                const elapsed = Date.now() - last;
+                if (elapsed < minInterval) {
+                    log.info("空闲巡视被最小间隔拦截，跳过本次", {
+                        minIntervalMin: Math.round(minInterval / 60_000),
+                        sinceLastMin: Math.round(elapsed / 60_000),
+                        remainMin: Math.ceil((minInterval - elapsed) / 60_000),
+                        running: this.running,
+                    });
+                    return;
+                }
+            }
+        }
+        this.enqueue(notify);
+    }
+
     /** 最近一次做梦的起始时间（ms）：当前运行优先，否则取历史中最新一次。无任何记录返回 null。 */
     private lastDreamStartedAt(): number | null {
         let last: number | null = this.currentRun?.startedAt ?? null;
@@ -138,6 +192,8 @@ export class HarnessManager {
         lastError: string | null;
         consecutiveFailures: number;
         harness: string;
+        lastDreamStartedAt: number | null;
+        idleMinIntervalMs: number;
     } {
         return {
             running: this.running,
@@ -148,6 +204,9 @@ export class HarnessManager {
             lastError: this.lastError,
             consecutiveFailures: this.consecutiveFailures,
             harness: this.config.launcher.name,
+            // 暴露给 Meta 的软提示：自发 enqueue 前可自行判断距上次做梦是否已足够久
+            lastDreamStartedAt: this.lastDreamStartedAt(),
+            idleMinIntervalMs: this.config.idleMinIntervalMs ?? DEFAULT_IDLE_MIN_INTERVAL_MS,
         };
     }
 
@@ -171,6 +230,10 @@ export class HarnessManager {
         if (this.cleanupTimer) {
             clearInterval(this.cleanupTimer);
             this.cleanupTimer = null;
+        }
+        if (this.relaunchTimer) {
+            clearTimeout(this.relaunchTimer);
+            this.relaunchTimer = null;
         }
         if (this.child) {
             log.info("shutdown: killing harness process");
@@ -292,9 +355,13 @@ export class HarnessManager {
                     this.onSpawnFailure?.(this.lastError, this.pendingQueue.length);
                 }
 
+                if (code === 0) this.persistLastSuccess(record.startedAt);
+
                 if (!this.shuttingDown && this.pendingQueue.length > 0) {
-                    log.info("launch: pending queue not empty, relaunching", { queueLength: this.pendingQueue.length });
-                    void this.launch();
+                    log.info("launch: pending queue not empty, debouncing relaunch", {
+                        queueLength: this.pendingQueue.length, debounceSec: RELAUNCH_DEBOUNCE_MS / 1000,
+                    });
+                    this.scheduleRelaunch();
                 }
             });
 
@@ -304,6 +371,17 @@ export class HarnessManager {
         } catch (err) {
             this.handleSpawnFailure(String(err), pending, record);
         }
+    }
+
+    private scheduleRelaunch(): void {
+        if (this.relaunchTimer) clearTimeout(this.relaunchTimer);
+        this.relaunchTimer = setTimeout(() => {
+            this.relaunchTimer = null;
+            if (!this.shuttingDown && !this.running && this.pendingQueue.length > 0) {
+                void this.launch();
+            }
+        }, RELAUNCH_DEBOUNCE_MS);
+        if (this.relaunchTimer.unref) this.relaunchTimer.unref();
     }
 
     private handleSpawnFailure(error: string, pending: HarnessNotify[], record: HarnessRunRecord): void {
@@ -398,13 +476,17 @@ export class HarnessManager {
         if (!this.config.buildDreamingDigest) return;
         const path = join(this.config.workDir, "workspace", "background-dreaming.md");
         try {
-            // 一次性覆盖优先；否则默认从「上次成功做梦」的起始时间收集。
+            // 一次性覆盖优先；否则从「上次成功做梦」的起始时间收集。
             // 必须用成功的运行做基线：失败的 spawn（如 E2BIG）会作为 retry 反复入队，
             // 若用「上一次运行」做基线，retry 会把窗口塌缩成 0，反而清掉刚写好的文件。
+            // history 里找不到成功运行时（被轮转/重启丢失）退回持久化基线，
+            // 两者皆无（首次部署，从未成功过）才允许 null=全量语义。
             const override = this.dreamingSinceOverride;
             this.dreamingSinceOverride = undefined;
             const lastSuccessful = [...this.history].reverse().find((run) => run.exitCode === 0);
-            const sinceTs = override !== undefined ? override : (lastSuccessful?.startedAt ?? null);
+            const sinceTs = override !== undefined
+                ? override
+                : (lastSuccessful?.startedAt ?? this.persistedLastSuccessAt ?? null);
             const digest = this.config.buildDreamingDigest(sinceTs);
             if (digest && digest.trim()) {
                 mkdirSync(join(this.config.workDir, "workspace"), { recursive: true });
@@ -547,6 +629,31 @@ export class HarnessManager {
         if (record.durationMs == null && record.endedAt != null) record.durationMs = record.endedAt - record.startedAt;
         if (record.exitCode === undefined) record.exitCode = null; // 已结束但退出码未知
         return record;
+    }
+
+    /** 启动时从持久化文件读回「上次成功做梦起始时间」，守住 sinceTs 基线不因 history 轮转而丢失。 */
+    private hydrateLastSuccess(): void {
+        try {
+            const raw = readFileSync(join(this.config.workDir, LAST_SUCCESS_FILE), "utf-8");
+            const parsed = JSON.parse(raw) as { lastSuccessfulStartedAt?: unknown };
+            const ts = Number(parsed.lastSuccessfulStartedAt);
+            if (Number.isFinite(ts) && ts > 0) this.persistedLastSuccessAt = ts;
+        } catch {
+            // 文件不存在或损坏：视为从未成功过（null=全量语义，首次部署合法）
+        }
+    }
+
+    /** 成功运行后持久化基线，取更晚者防乱序覆盖。失败只 debug，不影响主流程。 */
+    private persistLastSuccess(startedAt: number): void {
+        if (this.persistedLastSuccessAt != null && this.persistedLastSuccessAt >= startedAt) return;
+        this.persistedLastSuccessAt = startedAt;
+        const path = join(this.config.workDir, LAST_SUCCESS_FILE);
+        try {
+            mkdirSync(join(this.config.workDir, "workspace"), { recursive: true });
+            writeFileSync(path, JSON.stringify({ lastSuccessfulStartedAt: startedAt }), "utf-8");
+        } catch (err) {
+            log.debug("failed to persist last-success baseline", { error: String(err) });
+        }
     }
 
     /** 只保留最近 MAX_JOURNAL_FILES 份 dream-journal JSONL，删掉更早的，避免磁盘膨胀。 */

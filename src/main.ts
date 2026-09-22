@@ -1388,8 +1388,15 @@ async function main(): Promise<void> {
                 listTasks: () => globalState.listDispatchedSubagentTasks({ limit: 200 }).tasks,
                 memory,
                 sinceTs,
-                sessionDigests: memory.listSessionDigests({ limit: 30 }).slice().reverse(),
+                // digest 与任务共用同一个周期窗口：上次做梦时已消化的播报不再重复进入本次上下文
+                sessionDigests: memory.listSessionDigests({
+                    limit: 30,
+                    ...(sinceTs != null ? { after: new Date(sinceTs).toISOString() } : {}),
+                }).slice().reverse(),
             }),
+            idleMinIntervalMs: appConfig.backgroundAgent!.idleMinIntervalHours != null
+                ? appConfig.backgroundAgent!.idleMinIntervalHours * 60 * 60_000
+                : undefined,
         });
         harnessManager.onSpawnFailure = (error, pendingCount) => {
             globalState.addSessionDigest(`[Background Agent spawn failed] ${error} (${pendingCount} pending tasks)`, {
@@ -1402,7 +1409,7 @@ async function main(): Promise<void> {
             });
         };
         mainLoop.setProactiveIdleHandler((payload) => {
-            harnessManager!.enqueue({
+            harnessManager!.triggerIdle({
                 content: `consciousness_tick: ${payload.description}`,
                 source: "proactive-idle",
                 actorId: "main-loop",

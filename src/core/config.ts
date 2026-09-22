@@ -608,6 +608,8 @@ export interface AppConfig {
         schedule?: string;
         /** 定时做梦的强制最小间隔（小时）。距上次做梦不足此值时，定时触发被忽略。默认 6，设 0 关闭。 */
         minIntervalHours?: number;
+        /** 空闲巡视的最小间隔（小时）。距上次做梦不足此值时，空闲触发被忽略。默认 2，设 0 关闭。真实通知不受限。 */
+        idleMinIntervalHours?: number;
         maxBudgetUsd?: number;
         extraArgs?: string[];
         /** @deprecated use harnessModel */
@@ -1284,6 +1286,7 @@ function parseBackgroundAgentConfig(fileConfig: Record<string, unknown>): AppCon
         claudeModel: str(raw.claude_model) ?? undefined,
         schedule: str(raw.schedule) ?? undefined,
         minIntervalHours: raw.min_interval_hours != null ? num(raw.min_interval_hours, 6) : undefined,
+        idleMinIntervalHours: raw.idle_min_interval_hours != null ? num(raw.idle_min_interval_hours, 2) : undefined,
         maxBudgetUsd: raw.max_budget_usd != null ? num(raw.max_budget_usd, 5) : undefined,
         extraArgs: Array.isArray(raw.extra_args) ? (raw.extra_args as unknown[]).map(String) : undefined,
     };
@@ -1865,6 +1868,7 @@ export function serializeConfigToObject(config: AppConfig): Record<string, unkno
         if (config.backgroundAgent.claudeModel != null) ba.claude_model = config.backgroundAgent.claudeModel;
         if (config.backgroundAgent.schedule != null) ba.schedule = config.backgroundAgent.schedule;
         if (config.backgroundAgent.minIntervalHours != null) ba.min_interval_hours = config.backgroundAgent.minIntervalHours;
+        if (config.backgroundAgent.idleMinIntervalHours != null) ba.idle_min_interval_hours = config.backgroundAgent.idleMinIntervalHours;
         if (config.backgroundAgent.maxBudgetUsd != null) ba.max_budget_usd = config.backgroundAgent.maxBudgetUsd;
         if (config.backgroundAgent.extraArgs && config.backgroundAgent.extraArgs.length > 0) ba.extra_args = config.backgroundAgent.extraArgs;
         if (Object.keys(ba).length > 0) obj.background_agent = ba;
