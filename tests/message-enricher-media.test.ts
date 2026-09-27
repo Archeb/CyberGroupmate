@@ -127,6 +127,41 @@ describe("message-enricher media downloads", () => {
         }
     });
 
+    it("keeps Feishu sticker download identity separate from its sendable reference", async () => {
+        const lookups: string[] = [];
+        const downloadIdentities: string[] = [];
+        await enrichMessages([{
+            id: "om_sticker",
+            sender: "Alice",
+            text: "[Sticker: sticker_key]",
+            timestamp: "2026-05-27T03:51:00.000Z",
+            chatId: "feishu:oc_chat",
+            mediaType: "sticker",
+            mediaInfo: JSON.stringify({
+                type: "sticker",
+                fileId: "feishu-media:encoded",
+                uniqueFileId: "feishu:hashed-identity",
+                sendableFileId: "feishu-media:encoded",
+            }),
+        }], {
+            llmConfig,
+            visionConfig: { stickerMode: "vision_cache" },
+            visionLlmConfig: llmConfig,
+            stickerCache: {
+                getStickerDescription: uniqueFileId => { lookups.push(uniqueFileId); return null; },
+                setStickerDescription: () => {},
+            },
+            downloadFn: async (_fileId, _chatId, _messageId, uniqueFileId) => {
+                downloadIdentities.push(String(uniqueFileId));
+                throw new Error("stop after identity assertion");
+            },
+            enableOgPreview: false,
+        });
+
+        assert.equal(lookups[0], "feishu:hashed-identity");
+        assert.deepEqual(downloadIdentities, ["feishu:hashed-identity"]);
+    });
+
     it("uses cached sticker descriptions without leaking raw mediaInfo", async () => {
         const result = await enrichMessages([
             {

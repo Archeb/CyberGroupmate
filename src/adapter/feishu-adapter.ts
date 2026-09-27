@@ -1017,43 +1017,51 @@ export class FeishuAdapter implements PlatformAdapter {
     }
 
     async updateTemplateCard(chatId: string, messageId: string, templateId: string, variables: RecordValue = {}): Promise<RecordValue> {
+        this.assertWritable(chatId);
         await this.getMessage(chatId, messageId);
         if (!/^[A-Za-z0-9_-]{1,200}$/.test(templateId)) throw new Error("Feishu invalid card template ID");
         if (Buffer.byteLength(JSON.stringify(variables)) > MAX_CONTENT_BYTES) throw new Error("Feishu card variables too large");
         const update = this.requireClient().im.v1.message.updateByCard;
         if (!update) throw new Error("Feishu template card update API unavailable");
+        this.assertWritable(chatId);
         await this.api(() => update({ path: { message_id: rawId(messageId, "om_") }, data: { template_id: templateId, template_variable: variables } }));
         return { chatId: compositeId(chatId, "oc_"), messageId: rawId(messageId, "om_"), templateId, updated: true };
     }
 
     async updateCard(chatId: string, messageId: string, card: RecordValue, options: RecordValue = {}): Promise<RecordValue> {
+        this.assertWritable(chatId);
         const encoded = JSON.stringify(card);
         if (Buffer.byteLength(encoded) > MAX_CONTENT_BYTES) throw new Error("Feishu card too large");
         const cardId = await this.cardIdForMessage(chatId, messageId);
         const update = this.requireClient().cardkit?.v1?.card?.update;
         if (!update) throw new Error("Feishu CardKit update API unavailable");
+        this.assertWritable(chatId);
         const updateOptions = this.cardUpdateOptions(cardId, options);
         await this.api(() => update({ path: { card_id: cardId }, data: { card: { type: "card_json", data: encoded }, ...updateOptions } }));
         return { chatId: compositeId(chatId, "oc_"), messageId: rawId(messageId, "om_"), cardId, updated: true };
     }
 
     async patchCard(chatId: string, messageId: string, actions: unknown, options: RecordValue = {}): Promise<RecordValue> {
+        this.assertWritable(chatId);
         const encoded = JSON.stringify(actions);
         if (Buffer.byteLength(encoded) > MAX_CONTENT_BYTES) throw new Error("Feishu card patch too large");
         const cardId = await this.cardIdForMessage(chatId, messageId);
         const update = this.requireClient().cardkit?.v1?.card?.batchUpdate;
         if (!update) throw new Error("Feishu CardKit patch API unavailable");
+        this.assertWritable(chatId);
         const updateOptions = this.cardUpdateOptions(cardId, options);
         await this.api(() => update({ path: { card_id: cardId }, data: { actions: encoded, ...updateOptions } }));
         return { chatId: compositeId(chatId, "oc_"), messageId: rawId(messageId, "om_"), cardId, updated: true };
     }
 
     async streamCardText(chatId: string, messageId: string, elementId: string, contentValue: string, options: RecordValue = {}): Promise<RecordValue> {
+        this.assertWritable(chatId);
         if (!/^[A-Za-z0-9_-]{1,200}$/.test(elementId)) throw new Error("Feishu invalid card element ID");
         if (!contentValue || Buffer.byteLength(contentValue) > MAX_CONTENT_BYTES) throw new Error("Feishu invalid card stream content");
         const cardId = await this.cardIdForMessage(chatId, messageId);
         const update = this.requireClient().cardkit?.v1?.cardElement?.content;
         if (!update) throw new Error("Feishu CardKit stream API unavailable");
+        this.assertWritable(chatId);
         const updateOptions = this.cardUpdateOptions(cardId, options);
         await this.api(() => update({ path: { card_id: cardId, element_id: elementId }, data: { content: contentValue, ...updateOptions } }));
         return { chatId: compositeId(chatId, "oc_"), messageId: rawId(messageId, "om_"), cardId, elementId, updated: true };

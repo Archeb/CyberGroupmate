@@ -157,6 +157,11 @@ function stickerLookupCandidates(info?: Record<string, unknown>, text?: string):
     return candidates;
 }
 
+function stickerProcessingId(info: Record<string, unknown>, text: string | undefined, chatId: string | undefined): string {
+    if (chatId?.startsWith("feishu:")) return (info.uniqueFileId ?? info.fileId) as string;
+    return (stickerLookupCandidates(info, text)[0] ?? info.uniqueFileId ?? info.fileId) as string;
+}
+
 function mediaInfoToPlainObject(mediaInfo: unknown): Record<string, unknown> | undefined {
     if (!mediaInfo) return undefined;
     if (typeof mediaInfo === "string") {
@@ -505,7 +510,7 @@ export async function resolveReplyText(
                 type: ((info.type as string) ?? origMsg.mediaType) as MediaAttachment["type"],
                 fileId: info.fileId as string,
                 uniqueFileId: origMsg.mediaType === "sticker"
-                    ? (stickerLookupCandidates(info, origMsg.text)[0] ?? (info.uniqueFileId as string) ?? (info.fileId as string))
+                    ? stickerProcessingId(info, origMsg.text, deps.chatId)
                     : ((info.uniqueFileId as string) ?? (info.fileId as string)),
                 emoji: info.emoji as string | undefined,
                 mimeType: info.mimeType as string | undefined,
@@ -561,7 +566,7 @@ function parseMediaAttachments(messages: RawMessage[], fallbackChatId?: string):
                     type: item.type as MediaAttachment["type"],
                     fileId: item.fileId as string,
                     uniqueFileId: item.type === "sticker"
-                        ? (stickerLookupCandidates(item, m.text)[0] ?? item.uniqueFileId ?? item.fileId) as string
+                        ? stickerProcessingId(item, m.text, typeof item.chatId === "string" ? item.chatId : m.chatId ?? fallbackChatId)
                         : (item.uniqueFileId ?? item.fileId) as string,
                     url: item.url as string | undefined,
                     emoji: item.emoji as string | undefined,

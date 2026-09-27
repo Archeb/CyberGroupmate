@@ -645,6 +645,13 @@ describe("Feishu adapter host boundary edges", () => {
         try {
             f.adapter.muteChat("oc_chat", 1);
             await assert.rejects(f.adapter.sendText("feishu:oc_chat", "hello"), /muted/);
+            for (const mutate of [
+                () => f.adapter.updateTemplateCard("oc_chat", "om_parent", "template_1"),
+                () => f.adapter.updateCard("oc_chat", "om_parent", {}),
+                () => f.adapter.patchCard("oc_chat", "om_parent", []),
+                () => f.adapter.streamCardText("oc_chat", "om_parent", "answer", "text"),
+            ]) await assert.rejects(mutate(), /muted/);
+            assert.equal(f.calls.length, 0);
             assert.equal(f.adapter.getMutedChats().length, 1);
             f.adapter.unmuteChat("feishu:oc_chat");
             await assert.rejects(f.adapter.sendText("oc_chat", " "), /empty/);
