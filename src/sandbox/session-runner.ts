@@ -236,7 +236,7 @@ export interface SessionResult {
     messages: ChatMessage[];
     /** 结束原因 */
     endReason: "end_turn" | "max_turns" | "error" | "interrupted";
-    /** 如果因为 error 结束，错误信息 */
+    /** 错误或轮次耗尽时的失败原因 */
     error?: string;
 }
 
@@ -1018,6 +1018,7 @@ export async function runCodeActSession(
         turns,
         messages,
         endReason: "max_turns",
+        error: "CodeAct turn limit reached before explicit completion; consult actual execution results and send receipts",
     };
     } finally {
         if (sandbox.isAlive()) {

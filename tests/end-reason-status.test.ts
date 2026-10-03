@@ -23,8 +23,8 @@ describe("endReasonToTaskStatus", () => {
         assert.equal(endReasonToTaskStatus("end_turn"), "COMPLETED");
     });
 
-    it("max_turns → COMPLETED（跑满轮数也算完成，非失败）", () => {
-        assert.equal(endReasonToTaskStatus("max_turns"), "COMPLETED");
+    it("max_turns → ERROR（耗尽轮次不代表任务完成）", () => {
+        assert.equal(endReasonToTaskStatus("max_turns"), "ERROR");
     });
 
     it("undefined / 未知 endReason → COMPLETED（兜底不误判为失败）", () => {
