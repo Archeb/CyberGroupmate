@@ -448,9 +448,54 @@ describe("runMetaSession", () => {
         );
 
         assert.equal(result.endReason, "max_turns");
-        assert.equal(result.sessionDigest, "Need more context before acting.");
+        assert.equal(result.sessionDigest, undefined);
         assert.equal(result.turns.length, 2);
         assert.match(result.messages.at(-1)?.content ?? "", /Meta runner notice/);
+    });
+
+    it("stops consecutive invalid responses without replaying their text or reasoning", async () => {
+        resetMetaCodeActState();
+        const answers = [
+            "<longcat_tool_call>agents.listStatus</longcat_tool_call>",
+            '<tool_call>{"name":"agents.listStatus","arguments":{}}</tool_call>',
+            "[SESSION_DIGEST]FAKE-COMPLETION[/SESSION_DIGEST]",
+        ];
+        const requests: ChatMessage[][] = [];
+        const result = await runMetaSession([], new MetaSandbox({}), [TEST_LLM_CONFIG], {
+            maxTurns: 10,
+            llmCaller: async (messages) => {
+                requests.push(messages.map(m => ({ ...m })));
+                const content = answers.shift();
+                assert.notEqual(content, undefined);
+                return { content: content!, reasoning: "INVALID-REASONING" };
+            },
+        });
+        assert.equal(result.endReason, "no_code");
+        assert.equal(result.turns.length, 3);
+        assert.equal(result.sessionDigest, undefined);
+        assert.equal(getMetaCodeActState().isProcessing, false);
+        assert.equal(getMetaCodeActState().executionCount, 0);
+        assert.match(result.turns[0].assistantMessage, /longcat_tool_call/);
+        assert.doesNotMatch(JSON.stringify(requests.slice(1)), /longcat_tool_call|INVALID-REASONING/);
+        assert.doesNotMatch(JSON.stringify(result.messages), /FAKE-COMPLETION|INVALID-REASONING|longcat_tool_call/);
+    });
+
+    it("resets the invalid-response streak after code and preserves earlier real observations", async () => {
+        const bad = "<longcat_tool_call>INVALID-CALL</longcat_tool_call>";
+        const answers = [bad, bad, '```js\nconsole.log("REAL-OBSERVATION");\n```', bad, bad,
+            "[SESSION_DIGEST]Finished after real execution.[/SESSION_DIGEST]\n<end_turn>"];
+        const result = await runMetaSession([], new MetaSandbox({}), [TEST_LLM_CONFIG], {
+            llmCaller: async () => {
+                const content = answers.shift();
+                assert.notEqual(content, undefined);
+                return { content: content! };
+            },
+        });
+        assert.equal(result.endReason, "end_turn");
+        assert.equal(result.turns.length, 6);
+        assert.match(JSON.stringify(result.messages), /REAL-OBSERVATION/);
+        assert.doesNotMatch(JSON.stringify(result.messages), /INVALID-CALL/);
+        assert.equal(result.sessionDigest, "Finished after real execution.");
     });
 
     it("requires confirmation before accepting first-turn no-code end_turn", async () => {
