@@ -309,7 +309,9 @@ function normalizeThinkingText(thinking: string | undefined): string {
 function formatThinkingTranscript(result: SessionResult): string {
     const parts = result.turns
         .map((turn, index) => {
-            const thinking = normalizeThinkingText(turn.thinking);
+            const thinking = turn.formatError
+                ? `[格式错误，未执行] ${turn.formatError}`
+                : normalizeThinkingText(turn.thinking);
             if (!thinking) return null;
             return `[Turn ${index + 1}]\n${thinking}`;
         })
@@ -1038,7 +1040,7 @@ export class CodeActExecutor {
 
         // 记录 execution record（用于 compact）
         const thinkingSummary = sessionResult.turns
-            .map(t => normalizeThinkingText(t.thinking))
+            .map(t => t.formatError ? `[格式错误，未执行] ${t.formatError}` : normalizeThinkingText(t.thinking))
             .filter(Boolean)
             .join(" | ")
             .slice(0, 500);
