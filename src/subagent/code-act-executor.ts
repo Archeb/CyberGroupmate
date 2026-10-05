@@ -411,11 +411,12 @@ function formatExecutionRecordForCompact(rec: SessionExecutionRecord): string | 
  * session endReason → 派发任务终态映射：
  *   - error       → ERROR
  *   - interrupted → SKIPPED（被新消息/用户打断，是主动让路，非失败，不应误记 COMPLETED）
- *   - 其余（end_turn / max_turns）→ COMPLETED
+ *   - max_turns   → ERROR（轮次耗尽不能作为任务完成）
+ *   - end_turn    → COMPLETED
  * 注意：TIMEOUT 不在此产生——它只由 GlobalState 启动对账（进程中途退出残留 RUNNING）补写。
  */
 export function endReasonToTaskStatus(endReason: string | undefined): SubagentCallback["status"] {
-    return endReason === "error" ? "ERROR"
+    return endReason === "error" || endReason === "max_turns" ? "ERROR"
         : endReason === "interrupted" ? "SKIPPED"
             : "COMPLETED";
 }
@@ -1044,6 +1045,8 @@ export class CodeActExecutor {
             .slice(0, 500);
 
         const thinkingTranscript = formatThinkingTranscript(sessionResult);
+        const executedCodeBlocks = sessionResult.turns.reduce((count, turn) => count + turn.executionResults.length, 0);
+        const outcomeSummary = `执行事实：endReason=${sessionResult.endReason}, turns=${sessionResult.turns.length}, executedCodeBlocks=${executedCodeBlocks}, sentMessages=${sentCollector.allSent.length}。思考文本不是执行或发送回执。`;
 
         this.executionRecords.push({
             taskId: task.taskId,
@@ -1064,14 +1067,15 @@ export class CodeActExecutor {
             isDirectMessage: ctx.isDirectMessage,
             executionType: "CODEACT",
             status,
-            summary: thinkingTranscript,
+            endReason: sessionResult.endReason,
+            turns: sessionResult.turns.length,
+            executedCodeBlocks,
+            summary: `${outcomeSummary}\n${thinkingTranscript}`,
             replyContent: sessionResult.turns
                 .filter((t: any) => t.role === "assistant" && t.content)
                 .map((t: any) => t.content)
                 .join("\n") || undefined,
-            sentMessages: sentCollector.allSent.length > 0
-                ? sentCollector.allSent.map(m => ({ messageId: m.messageId, text: m.text, timestamp: m.timestamp }))
-                : undefined,
+            sentMessages: sentCollector.allSent.map(m => ({ messageId: m.messageId, text: m.text, timestamp: m.timestamp })),
             tokensUsed: (sessionResult as any).tokensUsed ?? undefined,
             error: sessionResult.error,
             durationMs,
@@ -1082,6 +1086,9 @@ export class CodeActExecutor {
         this.globalState?.updateDispatchedSubagentTask(task.taskId, {
             status: callback.status,
             sessionId: sessionResult.sessionId,
+            endReason: callback.endReason,
+            turns: callback.turns,
+            executedCodeBlocks: callback.executedCodeBlocks,
             summary: callback.summary,
             sentMessages: callback.sentMessages,
             error: callback.error,

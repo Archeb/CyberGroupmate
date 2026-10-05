@@ -498,11 +498,14 @@ export const metaCallbacksProvider: SectionProvider<MetaCallbacksData> = {
     render(data) {
         return [
             "# 新到达的 Subagent Callbacks",
+            "执行/发送事实以结构化结果和 sentMessages 回执为准；thinkingTranscript 中的调用文本不代表已执行，不能据此推断调用成功或消息已发送。",
             ...data.callbacks.map((cb) => [
                 `- ${cb.chatId}: status=${cb.status}, taskId=${cb.taskId}`,
+                cb.endReason ? `  endReason=${cb.endReason}, turns=${cb.turns ?? "unknown"}, executedCodeBlocks=${cb.executedCodeBlocks ?? "unknown"}` : "",
+                cb.sentMessages !== undefined ? `  sentMessageCount=${cb.sentMessages.length}` : "",
                 cb.contentDirection ? `  contentDirection=${cb.contentDirection}` : "",
                 cb.sentMessages?.length
-                    ? `  sentMessages=${cb.sentMessages.map((msg) => `"${msg.text}"`).join(" / ")}`
+                    ? `  sentMessages=${cb.sentMessages.map((msg) => `[messageId=${msg.messageId ?? "unknown"}] "${msg.text}"`).join(" / ")}`
                     : "",
                 cb.postTaskMessages?.length
                     ? [

@@ -234,6 +234,10 @@ export interface SubagentCallback {
     executionType: "CODEACT";
     /** 执行状态 — spec 中为 type: 'COMPLETED' | 'FAILED' | 'TIMEOUT' */
     status: "COMPLETED" | "ERROR" | "SKIPPED" | "TIMEOUT";
+    /** 执行器事实，不应从思考文本推断是否执行或发送成功。 */
+    endReason?: string;
+    turns?: number;
+    executedCodeBlocks?: number;
     /** 结果摘要 */
     summary: string;
     /** 回复内容（spec §2.2 result.replyContent） */
@@ -320,6 +324,9 @@ export interface DispatchedSubagentTaskRecord {
     updatedAt: string;
     completedAt?: string;
     sessionId?: string;
+    endReason?: string;
+    turns?: number;
+    executedCodeBlocks?: number;
     summary?: string;
     sentMessages?: Array<{
         messageId?: string;
