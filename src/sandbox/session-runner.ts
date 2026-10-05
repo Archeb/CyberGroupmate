@@ -222,6 +222,8 @@ export interface SessionTurn {
     codeBlocks: CodeBlock[];
     /** 各代码块执行结果 */
     executionResults: ExecutionResult[];
+    /** 无效工具调用格式；原始输出仅用于诊断，不作为后续任务的执行示例。 */
+    formatError?: string;
     /** LLM token 用量 */
     usage?: LLMResponse["usage"];
 }
@@ -312,6 +314,47 @@ export function parseResponse(response: string): {
     thinking = response.replace(codeBlockRegex, "").trim();
 
     return { thinking, codeBlocks };
+}
+
+/** 识别动作位置的伪调用/伪结果；围栏、行内代码、引用及摘要中的示例不算动作。 */
+function hasUnsupportedToolCall(response: string): boolean {
+    let fence = "";
+    const actionText = response
+        .split(/\r?\n/)
+        .filter(line => {
+            const marker = line.match(/^[ \t]{0,3}(`{3,}|~{3,})(.*)$/);
+            if (fence) {
+                if (marker && marker[1][0] === fence[0] && marker[1].length >= fence.length && !marker[2].trim()) {
+                    fence = "";
+                }
+                return false;
+            }
+            if (/^[ \t]*>/.test(line)) return false;
+            if (marker) {
+                fence = marker[1];
+                return false;
+            }
+            return true;
+        })
+        .join("\n")
+        .replace(/(?<!`)(`+)(?!`)[\s\S]*?(?<!`)\1(?!`)/g, "")
+        .replace(/\[SESSION_DIGEST\][\s\S]*?\[\/SESSION_DIGEST\]/g, "");
+    // 不依赖载荷格式：JSON、tool_name/function_name，以及单独伪造的结果都不受支持。
+    // 拦截独立动作块或成对的调用/结果；普通思考中仅提及标签名不算调用。
+    return /(?:^|\n)[ \t]*<tool_(?:call|result)(?=[\s/>])[^>]*>/i.test(actionText)
+        || /<(tool_(?:call|result))(?=[\s/>])[^>]*>[\s\S]*?<\/\1\s*>/i.test(actionText);
+}
+
+const MAX_TOOL_FORMAT_ERRORS = 3; // 首次错误后最多两次纠正机会。
+const TOOL_FORMAT_ERROR_HISTORY = "[CodeAct 格式错误：本轮生成了不支持的工具调用或结果文本，未执行任何动作；原始输出见 LLM 调用日志。]";
+
+function buildToolFormatObservation(attempt: number): string {
+    return [
+        `[CodeAct 格式错误 ${attempt}/${MAX_TOOL_FORMAT_ERRORS}] 本轮没有执行代码，也没有发送消息。`,
+        "此环境不解析 <tool_call>（包括 JSON、tool_name/function_name 载荷）或 <tool_result>。调用和结果文本都不会执行，也不是发送回执。请使用 ```typescript 或 ```javascript 代码围栏，按已有 API 签名编写实际代码，并等待运行器返回真实结果。不要把伪调用包在代码围栏里。",
+        '语法示例（只演示代码格式）：\n```typescript\nconsole.log("CodeAct ready");\n```',
+        "请重新处理当前任务，不能把生成的调用文本当成执行结果；无需动作时用 SESSION_DIGEST 和 <end_task> 正常结束。",
+    ].join("\n");
 }
 
 function hasSessionDigest(thinking?: string): boolean {
@@ -460,6 +503,7 @@ export async function runCodeActSession(
 ): Promise<SessionResult> {
     const sessionId = ulid();
     const turns: SessionTurn[] = [];
+    let toolFormatErrors = 0;
     let effectiveMaxTurns = maxTurns;
     let effectiveExecuteTimeout = executeTimeout;
 
@@ -674,6 +718,27 @@ export async function runCodeActSession(
             codeBlocks: codeBlocks.length > 0 ? codeBlocks : undefined,
             isProcessing: true,
         });
+
+        // 使用解析器已剥离可执行代码后的文本，代码里的字符串不是工具协议。
+        if (hasUnsupportedToolCall(thinking)) {
+            toolFormatErrors++;
+            turn.formatError = "Unsupported tool-call or tool-result text; no code executed in this turn";
+            turns.push(turn);
+            // 保留 turn/LLM 日志中的原始输出；工作上下文不积累错误 assistant 示例或推理。
+            messages[messages.length - 1] = { role: "assistant", content: TOOL_FORMAT_ERROR_HISTORY };
+            const observation = buildToolFormatObservation(toolFormatErrors);
+            messages.push({ role: "user", content: observation });
+            emitProgress({ turn: turnNum, phase: "observation", executionOutput: observation, isProcessing: true });
+            log.warn("Unsupported CodeAct tool-call format", { sessionId, turn: turnNum, attempt: toolFormatErrors });
+            if (toolFormatErrors >= MAX_TOOL_FORMAT_ERRORS) {
+                emitProgress({ turn: turnNum, phase: "end", isProcessing: false, endReason: "error" });
+                return {
+                    sessionId, turns, messages, endReason: "error",
+                    error: "CodeAct format recovery exhausted: unsupported tool-call or tool-result text after two correction attempts; consult actual execution results and send receipts",
+                };
+            }
+            continue;
+        }
 
         // ─── <end_task> 且无代码块 → 直接结束 session ───
         if (hasEndTurn && codeBlocks.length === 0) {
