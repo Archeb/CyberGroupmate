@@ -12,6 +12,8 @@ const log = createLogger("meta-session");
 
 const DEFAULT_MAX_TURNS = 10;
 const DEFAULT_CODE_TIMEOUT_MS = 30_000;
+const MAX_CONSECUTIVE_NO_CODE_RESPONSES = 3;
+const NO_CODE_HISTORY = "[Meta runner: this response contained neither runnable code nor <end_turn>; no action was executed in this turn. Original output is available in the LLM log.]";
 const END_TURN_MARKER = "<end_turn>";
 const META_SANDBOX_OBSERVATION_MARKER = "[MetaSandbox observation]";
 const CODE_FENCE_LANGS = "typescript|ts|javascript|js";
@@ -57,6 +59,8 @@ export interface MetaSessionTurn {
     thinking?: string;
     code?: string;
     observation?: string;
+    /** Invalid protocol output is retained for diagnostics, not replayed as an example. */
+    formatError?: string;
     usage?: LLMResponse["usage"];
 }
 
@@ -144,6 +148,7 @@ function extractExplicitSessionDigest(thinking?: string): string | undefined {
 }
 
 function extractLatestSessionDigest(turns: MetaSessionTurn[]): string | undefined {
+    turns = turns.filter((turn) => !turn.formatError);
     for (let index = turns.length - 1; index >= 0; index--) {
         const digest = extractExplicitSessionDigest(turns[index]?.thinking);
         if (digest) {
@@ -213,6 +218,7 @@ export async function runMetaSession(
     const codeTimeout = config.codeTimeout ?? DEFAULT_CODE_TIMEOUT_MS;
     const llmCaller = config.llmCaller ?? callLLMWithFallback;
     let firstNoCodeConfirmationPending = false;
+    let consecutiveNoCodeResponses = 0;
     metaCancelRequested = false;
     sandbox.beginSession(sessionId);
     syncMetaCodeActState(sessionId, messages, turns, true);
@@ -227,7 +233,7 @@ export async function runMetaSession(
             messages,
             endReason,
             error,
-            sessionDigest: extractLatestSessionDigest(turns),
+            sessionDigest: endReason === "no_code" ? undefined : extractLatestSessionDigest(turns),
         };
 
         syncMetaCodeActState(sessionId, messages, turns, false);
@@ -285,13 +291,20 @@ export async function runMetaSession(
                 usage: response.usage,
             };
 
+            const invalidResponse = !parsed.code && !hasEndTurn;
+            if (invalidResponse) {
+                turnRecord.formatError = "No runnable code or <end_turn>";
+            }
+
             turns.push(turnRecord);
-            const assistantHistoryContent = buildAssistantHistoryContent(assistantMessage);
+            const assistantHistoryContent = invalidResponse
+                ? NO_CODE_HISTORY
+                : buildAssistantHistoryContent(assistantMessage);
             if (assistantHistoryContent) {
                 messages.push({
                     role: "assistant",
                     content: assistantHistoryContent,
-                    ...(response.reasoning ? { reasoning: response.reasoning } : {}),
+                    ...(!invalidResponse && response.reasoning ? { reasoning: response.reasoning } : {}),
                 });
             }
             syncMetaCodeActState(sessionId, messages, turns, true);
@@ -304,6 +317,17 @@ export async function runMetaSession(
             });
 
             if (!parsed.code) {
+                if (hasEndTurn) {
+                    consecutiveNoCodeResponses = 0;
+                } else if (++consecutiveNoCodeResponses >= MAX_CONSECUTIVE_NO_CODE_RESPONSES) {
+                    const error = `Meta produced no runnable code or <end_turn> in ${MAX_CONSECUTIVE_NO_CODE_RESPONSES} consecutive responses`;
+                    const observation = `[Meta runner outcome] ${error}. Session stopped; earlier code and real observations remain in history. Unfinished work is not confirmed complete.`;
+                    turnRecord.observation = observation;
+                    messages.push({ role: "user", content: observation });
+                    log.warn(error, { sessionId, turn });
+                    return finalize("no_code", error);
+                }
+
                 if (turn === 1) {
                     const observation = buildFirstNoCodeConfirmationObservation();
                     firstNoCodeConfirmationPending = true;
@@ -358,6 +382,7 @@ export async function runMetaSession(
             }
 
             firstNoCodeConfirmationPending = false;
+            consecutiveNoCodeResponses = 0;
             emitMetaProgress(sessionId, {
                 turn,
                 phase: "executing",

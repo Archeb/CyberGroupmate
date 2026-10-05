@@ -163,6 +163,33 @@ function createMemoryStub() {
 }
 
 describe("createMetaSessionHandler", () => {
+    it("persists prior real actions when later invalid replies terminate the session", async () => {
+        const persisted: Array<{ role: string; content: string }> = [];
+        const answers = ['```js\nconsole.log("REAL-ACTION-RECEIPT");\n```', ...Array(3).fill("<longcat_tool_call>BAD-HISTORY</longcat_tool_call>")];
+        const handler = createMetaSessionHandler({
+            getPersona: () => ({ name: "Test", description: "Test" }),
+            globalState: {
+                getSessionDigests: () => [],
+                getMetaSessionHistory: () => [],
+                appendMetaSessionHistory: (messages) => { persisted.push(...messages); },
+            },
+            memory: createMemoryStub() as any,
+            sandbox: new MetaSandbox({}),
+            getLlmConfigs: () => [TEST_LLM_CONFIG],
+            llmCaller: async () => {
+                const content = answers.shift();
+                assert.notEqual(content, undefined);
+                return { content: content!, reasoning: "BAD-REASONING" };
+            },
+        });
+        const result = await handler([createEntry()], []);
+        assert.equal(result?.endReason, "no_code");
+        assert.equal(result?.sessionDigest, undefined);
+        assert.match(JSON.stringify(persisted), /REAL-ACTION-RECEIPT/);
+        assert.doesNotMatch(JSON.stringify(persisted), /BAD-HISTORY/);
+        assert.match(JSON.stringify(persisted), /Session stopped/);
+    });
+
     it("resolves the meta llm timeout for each handler run", async () => {
         const sandbox = new MetaSandbox({});
         const timeoutValues = [11_000, 22_000];
