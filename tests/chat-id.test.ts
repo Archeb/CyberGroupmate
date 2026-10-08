@@ -18,6 +18,15 @@ import {
 } from "../src/core/chat-id.js";
 
 describe("Composite ChatId 工具函数", () => {
+    it("preserves Feishu identifier underscores through file names", () => {
+        for (const id of ["oc_chat_with_underscores", "ou_user_with_underscores"]) {
+            const chatId = composeChatId("feishu", id);
+            assert.equal(fileNameToChatId(`${chatIdToFileName(chatId)}.json`), chatId);
+            assert.deepEqual(parseChatId(chatId), { platform: "feishu", rawId: id });
+            assert.equal(getPlatform(chatId), "feishu");
+            assert.equal(getGroupChatId(chatId), chatId);
+        }
+    });
 
     // ─── composeChatId ───
 

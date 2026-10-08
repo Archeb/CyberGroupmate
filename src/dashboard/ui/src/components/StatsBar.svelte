@@ -10,6 +10,7 @@
   const PLATFORM_LABELS = {
     telegram: 'Telegram',
     discord: 'Discord',
+    feishu: '飞书 / Lark',
     onebot: 'QQ',
   };
 

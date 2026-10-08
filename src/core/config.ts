@@ -192,6 +192,14 @@ export interface TelegramConfig {
     };
 }
 
+export interface FeishuConfig {
+    appId: string;
+    appSecret: string;
+    domain?: "feishu" | "lark";
+}
+
+export const FEISHU_APP_ID_PATTERN = /^cli_[0-9a-fA-F]{16}$/;
+
 export interface DiscordConfig {
     botToken: string;
     applicationId?: string;
@@ -567,6 +575,7 @@ export interface AppConfig {
     timezone?: string;
     telegram?: TelegramConfig;
     discord?: DiscordConfig;
+    feishu?: FeishuConfig;
     onebot?: OneBotConfig;
     notification: NotificationConfig;
     reflection: ReflectionExternalConfig;
@@ -748,6 +757,7 @@ export function loadConfig(configPath?: string, forceReload?: boolean): AppConfi
             description: str(filePersona.description) ?? "",
         },
         timezone: str(fileConfig.timezone),
+        feishu: parseFeishuConfig(fileConfig.feishu),
         telegram: Object.keys(fileTG).length > 0 ? {
             mode: (str(fileTG.mode) as TelegramConfig["mode"]) ?? "bot",
             botToken: str(fileTG.bot_token) ?? "",
@@ -954,6 +964,7 @@ function stringList(value: unknown): string[] | undefined {
 /** Convert adapter-local allowlists into one global whitelist on load. */
 function migrateLegacyWhitelists(fileConfig: Record<string, unknown>): ChatFilterConfig | undefined {
     const telegram = (fileConfig.telegram ?? {}) as Record<string, unknown>;
+    const feishu = (fileConfig.feishu ?? {}) as Record<string, unknown>;
     const discord = (fileConfig.discord ?? {}) as Record<string, unknown>;
     const onebot = (fileConfig.onebot ?? {}) as Record<string, unknown>;
     const telegramWhitelist = telegram.whitelist as Record<string, unknown> | undefined;
@@ -997,8 +1008,42 @@ function migrateLegacyWhitelists(fileConfig: Record<string, unknown>): ChatFilte
     }
 
     if (Object.keys(discord).length > 0) add("discord:*");
+    if (typeof feishu.app_id === "string" && feishu.app_id.trim()
+        && typeof feishu.app_secret === "string" && feishu.app_secret.trim()) add("feishu:*");
 
     return { enabled: true, mode: "whitelist", chatIds, userIds: [] };
+}
+
+function parseFeishuConfig(value: unknown, runtime = false): FeishuConfig | undefined {
+    if (value == null) return undefined;
+    if (typeof value !== "object" || Array.isArray(value)) {
+        throw new Error("feishu must be an object or null");
+    }
+    const raw = value as Record<string, unknown>;
+    const idKey = runtime ? "appId" : "app_id";
+    const secretKey = runtime ? "appSecret" : "app_secret";
+    for (const key of [idKey, secretKey]) {
+        if (raw[key] != null && typeof raw[key] !== "string") {
+            throw new Error(`feishu.${key} must be a string`);
+        }
+    }
+    if (raw.domain !== undefined && raw.domain !== "feishu" && raw.domain !== "lark") {
+        throw new Error('feishu.domain must be "feishu" or "lark"');
+    }
+    const appId = (raw[idKey] as string | undefined)?.trim() ?? "";
+    const appSecret = (raw[secretKey] as string | undefined)?.trim() ?? "";
+    if (!appId && !appSecret) return undefined;
+    if (!appId || !appSecret) {
+        throw new Error(`feishu.${idKey} and feishu.${secretKey} must both be non-empty`);
+    }
+    if (!FEISHU_APP_ID_PATTERN.test(appId)) {
+        throw new Error(`feishu.${idKey} must match cli_ followed by 16 hexadecimal characters`);
+    }
+    return {
+        appId,
+        appSecret,
+        ...(raw.domain !== undefined ? { domain: raw.domain as FeishuConfig["domain"] } : {}),
+    };
 }
 
 function parseBackfillConfig(fileConfig: Record<string, unknown>): BackfillConfig | undefined {
@@ -1582,6 +1627,15 @@ export function serializeConfigToObject(config: AppConfig): Record<string, unkno
         obj.telegram = tg;
     }
 
+    const feishu = parseFeishuConfig(config.feishu, true);
+    if (feishu) {
+        obj.feishu = {
+            app_id: feishu.appId,
+            app_secret: feishu.appSecret,
+            ...(feishu.domain !== undefined ? { domain: feishu.domain } : {}),
+        };
+    }
+
     // discord
     if (config.discord) {
         const dc: Record<string, unknown> = {
@@ -1895,6 +1949,32 @@ export function serializeConfigToObject(config: AppConfig): Record<string, unkno
         if (Object.keys(cf).length > 0) obj.chat_filter = cf;
     }
 
+    if (config.backfill) {
+        const b = config.backfill;
+        const backfill: Record<string, unknown> = {};
+        if (b.enabled != null) backfill.enabled = b.enabled;
+        if (b.maxMessagesPerChat != null) backfill.max_messages_per_chat = b.maxMessagesPerChat;
+        if (b.maxChats != null) backfill.max_chats = b.maxChats;
+        if (b.maxAgeMinutes != null) backfill.max_age_minutes = b.maxAgeMinutes;
+        if (b.delayMs != null) backfill.delay_ms = b.delayMs;
+        if (b.downloadMedia != null) backfill.download_media = b.downloadMedia;
+        obj.backfill = backfill;
+    }
+
+    if (config.mcpServers) {
+        obj.mcp_servers = config.mcpServers.map(server => {
+            const entry: Record<string, unknown> = { name: server.name };
+            if (server.transport != null) entry.transport = server.transport;
+            if (server.command != null) entry.command = server.command;
+            if (server.args != null) entry.args = server.args;
+            if (server.env != null) entry.env = server.env;
+            if (server.url != null) entry.url = server.url;
+            if (server.headers != null) entry.headers = server.headers;
+            if (server.autoConnect != null) entry.auto_connect = server.autoConnect;
+            return entry;
+        });
+    }
+
     // emergency_block
     if (config.emergencyBlock && config.emergencyBlock.message != null) {
         obj.emergency_block = { message: config.emergencyBlock.message };
@@ -1995,6 +2075,12 @@ export function validateConfig(config: unknown): { valid: boolean; errors: strin
         if ((host === "0.0.0.0" || host === "::") && !token.trim()) {
             errors.push("dashboard.host 为 0.0.0.0 或 :: 时 token 不能为空");
         }
+    }
+
+    try {
+        parseFeishuConfig(c.feishu, true);
+    } catch (err) {
+        errors.push((err as Error).message);
     }
 
     // discord (optional)

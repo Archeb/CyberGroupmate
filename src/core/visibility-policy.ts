@@ -24,7 +24,7 @@
 import { getRawId, isValidCompositeChatId, safeGroupModelKey } from "./chat-id.js";
 
 /** 历史/裸 rawId 兜底：GroupModel 以 composite key 存储，裸 id 反查不到平台时按此顺序试探。 */
-const KNOWN_PLATFORMS = ["telegram", "onebot", "discord"] as const;
+const KNOWN_PLATFORMS = ["telegram", "onebot", "discord", "feishu"] as const;
 
 export type ChatVisibility = "private" | "shared";
 

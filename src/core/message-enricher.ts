@@ -157,6 +157,11 @@ function stickerLookupCandidates(info?: Record<string, unknown>, text?: string):
     return candidates;
 }
 
+function stickerProcessingId(info: Record<string, unknown>, text: string | undefined, chatId: string | undefined): string {
+    if (chatId?.startsWith("feishu:")) return (info.uniqueFileId ?? info.fileId) as string;
+    return (stickerLookupCandidates(info, text)[0] ?? info.uniqueFileId ?? info.fileId) as string;
+}
+
 function mediaInfoToPlainObject(mediaInfo: unknown): Record<string, unknown> | undefined {
     if (!mediaInfo) return undefined;
     if (typeof mediaInfo === "string") {
@@ -505,7 +510,7 @@ export async function resolveReplyText(
                 type: ((info.type as string) ?? origMsg.mediaType) as MediaAttachment["type"],
                 fileId: info.fileId as string,
                 uniqueFileId: origMsg.mediaType === "sticker"
-                    ? (stickerLookupCandidates(info, origMsg.text)[0] ?? (info.uniqueFileId as string) ?? (info.fileId as string))
+                    ? stickerProcessingId(info, origMsg.text, deps.chatId)
                     : ((info.uniqueFileId as string) ?? (info.fileId as string)),
                 emoji: info.emoji as string | undefined,
                 mimeType: info.mimeType as string | undefined,
@@ -553,28 +558,30 @@ function parseMediaAttachments(messages: RawMessage[], fallbackChatId?: string):
 
         try {
             const info = JSON.parse(m.mediaInfo);
-            if (!info.fileId || !info.type) continue;
-
-            attachments.push({
-                type: info.type,
-                fileId: info.fileId,
-                uniqueFileId: info.type === "sticker"
-                    ? (stickerLookupCandidates(info, m.text)[0] ?? info.uniqueFileId ?? info.fileId)
-                    : (info.uniqueFileId ?? info.fileId),
-                url: info.url,
-                emoji: info.emoji,
-                mimeType: info.mimeType,
-                fileName: info.fileName,
-                filePath: info.filePath,
-                width: info.width,
-                height: info.height,
-                fileSize: info.fileSize,
-                downloadStatus: info.downloadStatus,
-                messageIndex: i,
-                // file reference refetch 所需的上下文
-                chatId: m.chatId ?? fallbackChatId,
-                messageId: m.id,
-            });
+            const mediaItems = Array.isArray(info.attachments) ? info.attachments : [info];
+            for (const raw of mediaItems) {
+                const item = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
+                if (!item.fileId || !item.type) continue;
+                attachments.push({
+                    type: item.type as MediaAttachment["type"],
+                    fileId: item.fileId as string,
+                    uniqueFileId: item.type === "sticker"
+                        ? stickerProcessingId(item, m.text, typeof item.chatId === "string" ? item.chatId : m.chatId ?? fallbackChatId)
+                        : (item.uniqueFileId ?? item.fileId) as string,
+                    url: item.url as string | undefined,
+                    emoji: item.emoji as string | undefined,
+                    mimeType: item.mimeType as string | undefined,
+                    fileName: item.fileName as string | undefined,
+                    filePath: item.filePath as string | undefined,
+                    width: item.width as number | undefined,
+                    height: item.height as number | undefined,
+                    fileSize: item.fileSize as number | undefined,
+                    downloadStatus: item.downloadStatus as MediaAttachment["downloadStatus"],
+                    messageIndex: i,
+                    chatId: typeof item.chatId === "string" ? item.chatId : m.chatId ?? fallbackChatId,
+                    messageId: typeof item.messageId === "string" ? item.messageId : m.id,
+                });
+            }
         } catch {
             /* mediaInfo JSON 解析失败，跳过 */
         }

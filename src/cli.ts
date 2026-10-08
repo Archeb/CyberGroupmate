@@ -398,6 +398,14 @@ async function cmdConfig(): Promise<void> {
     } else {
         console.log("\n\x1b[1mDiscord 配置：\x1b[0m (未配置)");
     }
+    if (config.feishu) {
+        console.log("\n\x1b[1m飞书 / Lark 配置：\x1b[0m");
+        console.log(`  App ID:      ${config.feishu.appId}`);
+        console.log(`  App Secret:  ${config.feishu.appSecret ? "(已设置)" : "(未设置)"}`);
+        console.log(`  Domain:      ${config.feishu.domain ?? "feishu"}`);
+    } else {
+        console.log("\n\x1b[1m飞书 / Lark 配置：\x1b[0m (未配置)");
+    }
     // 检查文件
     console.log("\n\x1b[1m文件检查：\x1b[0m");
     const files = [

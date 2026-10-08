@@ -42,6 +42,13 @@ import { getPendingMessageSignal, SendInterruptedError, type InterruptedSendPayl
 const log = createLogger("sandbox-host-calls");
 
 const humanizedLastSendTimes = new Map<string, number>();
+const FEISHU_WRITE_ACTIONS = new Set([
+    "message.delete", "message.patch", "message.update", "message.forward", "message.mergeForward",
+    "messageReaction.create", "messageReaction.delete", "pin.create", "pin.delete",
+    "chat.update", "chat.delete", "chatMembers.create", "chatMembers.delete", "chatMembers.meJoin",
+    "chatManagers.addManagers", "chatManagers.deleteManagers", "chatMenuTree.create", "chatMenuTree.delete",
+    "chatMenuTree.sort", "chatMenuItem.patch",
+]);
 
 export interface ManagedEnvPlan {
     hostVisible: Record<string, string>;
@@ -113,8 +120,54 @@ function buildPolicyContext(chatId: string, memory: MemoryStoreV2): PolicyContex
     });
 }
 
+function normalizeFeishuReadChatId(value: unknown): string {
+    if (typeof value !== "string" || !/^(?:feishu:)?oc_[A-Za-z0-9_-]{1,200}$/.test(value)) {
+        throw new Error("Feishu read requires a valid chatId (feishu:oc_...)");
+    }
+    return ensureCompositeId("feishu", value);
+}
+
+function decodeFeishuMediaReadTarget(fileId: unknown): string {
+    try {
+        if (typeof fileId !== "string" || fileId.length > 4096 || !/^feishu-media:[A-Za-z0-9_-]+$/.test(fileId)) throw new Error();
+        const ref = JSON.parse(Buffer.from(fileId.slice(13), "base64url").toString("utf8"));
+        const target = normalizeFeishuReadChatId(ref?.chatId);
+        if (typeof ref.messageId !== "string" || !/^(?:feishu:)?om_[A-Za-z0-9_-]{1,200}$/.test(ref.messageId)
+            || typeof ref.key !== "string" || !/^[A-Za-z0-9_-]{1,512}$/.test(ref.key)
+            || (ref.type !== "image" && ref.type !== "file")) throw new Error();
+        return target;
+    } catch {
+        throw new Error("Feishu invalid media reference");
+    }
+}
+
+function getFeishuReadTarget(method: string, args: unknown[]): string | undefined {
+    if (method === "feishu.getMessage" || method === "feishu.getHistory" || method === "feishu.getChat") {
+        return normalizeFeishuReadChatId(args[0]);
+    }
+    if (method === "feishu.sendSticker") return decodeFeishuMediaReadTarget(args[1]);
+    if (method === "feishu.callApi") {
+        const action = String(args[1] ?? "");
+        if (action === "chat.list" || action === "chat.search") {
+            throw new Error("Feishu global chat discovery is unavailable through the bound-chat API");
+        }
+        if ([
+            "message.readUsers", "messageReaction.list", "messageReaction.batchQuery", "pin.list",
+            "chat.link", "chatMembers.get", "chatMembers.isInChat",
+        ].includes(action)) return normalizeFeishuReadChatId(args[0]);
+        return undefined;
+    }
+    if (method !== "feishu.downloadMedia") return undefined;
+    const target = decodeFeishuMediaReadTarget(args[0]);
+    if (args[1] !== undefined && normalizeFeishuReadChatId(args[1]) !== target) {
+        throw new Error("Feishu media ownership mismatch: chatId must match the encoded media reference");
+    }
+    return target;
+}
+
 function getRestrictedWriteTarget(method: string, args: unknown[], adapter: PlatformAdapter): unknown {
     if (adapter.getWriteMethods().includes(method)) return args[0];
+    if (method === "feishu.callApi" && FEISHU_WRITE_ACTIONS.has(String(args[1] ?? ""))) return args[0];
     if (adapter.platform === "telegram" && method.startsWith("telegram.")) {
         const mtcuteMethod = method.slice("telegram.".length);
         if (TELEGRAM_MTCUTE_WRITE_METHODS.has(mtcuteMethod)) {
@@ -144,6 +197,9 @@ function enforceBackgroundWriteRestriction(method: string, args: unknown[], adap
         throw new Error(
             `[Background sandbox] ${method} 不允许：请使用 notify 工具发送消息。`,
         );
+    }
+    if (method === "feishu.callApi" && FEISHU_WRITE_ACTIONS.has(String(args[1] ?? ""))) {
+        throw new Error(`[Background sandbox] ${method} 不允许：请在绑定会话中执行飞书写操作。`);
     }
     if (method === "telegram.mtcute") {
         const mtcuteMethod = String(args[0] ?? "");
@@ -505,6 +561,20 @@ export function createSandboxHostCallHandler(chatId: string, deps: CreateSandbox
 
         const adapter = adapters.find((item) => item.canHandle(method));
         if (adapter) {
+            if (adapter.platform === "feishu") {
+                const target = getFeishuReadTarget(method, args);
+                if (target !== undefined) {
+                    if (isExplicitReadBlocked(target, policy())) {
+                        throw new Error(`[Sandbox privacy] ${method} blocked: target chat is private.`);
+                    }
+                    if (target !== chatId) {
+                        throw new Error(
+                            `[Sandbox privacy] ${method} only allows reads from the bound chat (${chatId}); ` +
+                            "use memory or dispatch for cross-chat access."
+                        );
+                    }
+                }
+            }
             // 提取一次写目标，R2 隔离与全局严格开关共用。
             const writeTarget = getRestrictedWriteTarget(method, args, adapter);
             const externalTarget = writeTarget != null && !isSelfTarget(writeTarget)
@@ -1063,6 +1133,9 @@ export function createSandboxHostCallHandler(chatId: string, deps: CreateSandbox
         if (method === "emergency.block") {
             const platform = getPlatform(chatId);
             const rawUserId = args[0] as string | undefined;
+            if (platform === "feishu" && (typeof rawUserId !== "string" || !/^feishu:ou_[A-Za-z0-9_-]{1,200}$/.test(rawUserId.trim()))) {
+                throw new Error("emergency.block requires an explicit Feishu userId (feishu:ou_...); use the sender's userId, not the chatId.");
+            }
             // 省略 userId 时默认拉黑当前会话对方（私聊场景 chatId 即对端 composite id）。
             let target = typeof rawUserId === "string" && rawUserId.trim().length > 0 ? rawUserId.trim() : chatId;
             if (!target.includes(":")) target = ensureCompositeId(platform, target);

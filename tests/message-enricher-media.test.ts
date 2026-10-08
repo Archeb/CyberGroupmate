@@ -84,6 +84,84 @@ describe("message-enricher media downloads", () => {
         }
     });
 
+    it("keeps multiple attachments from one message associated with their own files", async () => {
+        const directory = join(TEST_DIR, "multi-attachment");
+        try { fs.rmSync(directory, { recursive: true, force: true }); } catch { /* ignore */ }
+        const downloader = new MediaDownloader({ downloadDir: directory, retentionDays: 1, maxFileSize: 20 * 1024 * 1024 });
+        try {
+            const result = await enrichMessages([{
+                id: "multi",
+                sender: "Alice",
+                text: "",
+                timestamp: "2026-05-02T06:58:13.000Z",
+                chatId: "feishu:oc_test",
+                mediaType: "photo",
+                mediaInfo: JSON.stringify({
+                    type: "photo",
+                    fileId: "image-a",
+                    uniqueFileId: "unique-a",
+                    mimeType: "image/png",
+                    attachments: [
+                        { type: "photo", fileId: "image-a", uniqueFileId: "unique-a", mimeType: "image/png" },
+                        { type: "photo", fileId: "image-b", uniqueFileId: "unique-b", mimeType: "image/png" },
+                    ],
+                }),
+            }], {
+                llmConfig: { ...llmConfig, vision: true },
+                chatId: "feishu:oc_test",
+                mediaDownloader: downloader,
+                enableOgPreview: false,
+                downloadFn: async fileId => Buffer.from(fileId),
+            });
+
+            const first = downloader.getExistingPath("unique-a");
+            const second = downloader.getExistingPath("unique-b");
+            assert.ok(first);
+            assert.ok(second);
+            assert.notEqual(first, second);
+            assert.deepEqual(fs.readFileSync(first), Buffer.from("image-a"));
+            assert.deepEqual(fs.readFileSync(second), Buffer.from("image-b"));
+            assert.equal(result.imageParts.length, 2);
+        } finally {
+            downloader.dispose();
+        }
+    });
+
+    it("keeps Feishu sticker download identity separate from its sendable reference", async () => {
+        const lookups: string[] = [];
+        const downloadIdentities: string[] = [];
+        await enrichMessages([{
+            id: "om_sticker",
+            sender: "Alice",
+            text: "[Sticker: sticker_key]",
+            timestamp: "2026-05-27T03:51:00.000Z",
+            chatId: "feishu:oc_chat",
+            mediaType: "sticker",
+            mediaInfo: JSON.stringify({
+                type: "sticker",
+                fileId: "feishu-media:encoded",
+                uniqueFileId: "feishu:hashed-identity",
+                sendableFileId: "feishu-media:encoded",
+            }),
+        }], {
+            llmConfig,
+            visionConfig: { stickerMode: "vision_cache" },
+            visionLlmConfig: llmConfig,
+            stickerCache: {
+                getStickerDescription: uniqueFileId => { lookups.push(uniqueFileId); return null; },
+                setStickerDescription: () => {},
+            },
+            downloadFn: async (_fileId, _chatId, _messageId, uniqueFileId) => {
+                downloadIdentities.push(String(uniqueFileId));
+                throw new Error("stop after identity assertion");
+            },
+            enableOgPreview: false,
+        });
+
+        assert.equal(lookups[0], "feishu:hashed-identity");
+        assert.deepEqual(downloadIdentities, ["feishu:hashed-identity"]);
+    });
+
     it("uses cached sticker descriptions without leaking raw mediaInfo", async () => {
         const result = await enrichMessages([
             {

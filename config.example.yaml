@@ -234,7 +234,7 @@ backfill:
 #   allowed_chat_ids: []
 
 # ─── Telegram 设置 ───
-# 可选。telegram 和 discord 至少配置一个。
+# 可选。telegram / discord / feishu 至少配置一个。
 telegram:
   # 连接模式: "bot_api" (HTTP Bot API) | "bot" (MTProto bot，旧配置保持不变) | "userbot" (MTProto 用户账号)
   # 只使用 BotFather Token 时选择 bot_api；不会根据凭据是否留空自动切换协议。
@@ -254,8 +254,21 @@ telegram:
   #   min_delay: 500        # 最短延迟（ms），默认 500
   #   max_delay: 5000       # 最长延迟（ms），默认 5000
 
+# ─── 飞书 / Lark 设置 ───
+# 可选。企业自建应用，使用长连接接收消息；在飞书开放平台创建自建应用并获取 App ID / App Secret。
+# 需要启用机器人能力，至少订阅“接收消息”；交互卡片订阅 card.action.trigger，表情事件订阅
+# im.message.reaction.created_v1 / deleted_v1。按需开通消息读取/发送、会话历史、群信息、群成员、
+# 表情回复与 Pin 等权限；CardKit 动态更新需要 cardkit:card:write。
+# 若要把 open_id 显示为姓名，还需通讯录基本用户信息权限并配置可见范围。机器人只能复用已收到表情包的 file_key，
+# 不能上传任意新表情包。未授权能力会由飞书 API 明确报错。
+# 飞书开放平台目前不提供机器人 typing 状态，也不允许机器人把收到的消息标记为已读。
+# feishu:
+#   app_id: ""
+#   app_secret: ""
+#   domain: feishu  # feishu | lark（可选，默认 feishu）
+
 # ─── Discord 设置 ───
-# 可选。telegram 和 discord 至少配置一个。
+# 可选。telegram / discord / feishu 至少配置一个。
 # 在 https://discord.com/developers/applications 创建应用，
 # 获取 Bot Token 并开启 MESSAGE CONTENT Intent。
 # discord:

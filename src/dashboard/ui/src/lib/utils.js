@@ -71,6 +71,7 @@ export function platformLabel(platform) {
     case 'telegram': return 'TG';
     case 'discord': return 'DC';
     case 'onebot': return 'QQ';
+    case 'feishu': return '飞书';
     default: return platform.toUpperCase().slice(0, 2);
   }
 }

@@ -352,6 +352,7 @@ export async function processMediaBatch(
 ): Promise<ProcessedMedia[]> {
     const maxImages = config?.maxImagesPerContext ?? DEFAULT_MAX_IMAGES;
     const results: ProcessedMedia[] = [];
+    const resultSources = new Map<ProcessedMedia, MediaAttachment>();
 
     // 分类
     const photos: MediaAttachment[] = [];
@@ -411,8 +412,15 @@ export async function processMediaBatch(
             : { ...processed, index: s.messageIndex },
         );
     });
-    const stickerResults = (await Promise.all(stickerTasks)).flat();
-    results.push(...stickerResults);
+    const stickerResultsByGroup = await Promise.all(stickerTasks);
+    for (let groupIndex = 0; groupIndex < stickerResultsByGroup.length; groupIndex++) {
+        const group = [...stickerByUniqueId.values()][groupIndex];
+        const groupResults = stickerResultsByGroup[groupIndex];
+        for (let resultIndex = 0; resultIndex < groupResults.length; resultIndex++) {
+            resultSources.set(groupResults[resultIndex], group[resultIndex]);
+        }
+        results.push(...groupResults);
+    }
 
     // ─── 处理 Photo（并行） ───
     // 先分类：前 maxImages 张走路径 A（内联），其余走路径 B（描述）或 C（占位）
@@ -481,6 +489,9 @@ export async function processMediaBatch(
     });
 
     const photoResults = await Promise.all(photoTasks);
+    for (let i = 0; i < photoResults.length; i++) {
+        resultSources.set(photoResults[i], photos[i]);
+    }
     results.push(...photoResults);
 
     // ─── 保存 photo/sticker 到磁盘（如果有 mediaDownloader） ───
@@ -488,7 +499,7 @@ export async function processMediaBatch(
         for (const pm of results) {
             if (pm.filePath) continue; // 已保存
             // 找到对应的 attachment
-            const att = attachments.find(a => a.messageIndex === pm.index);
+            const att = resultSources.get(pm) ?? attachments.find(a => a.messageIndex === pm.index);
             if (!att) continue;
             // 已有文件则跳过
             const existing = mediaDownloader.getExistingPath(att.uniqueFileId);
@@ -528,7 +539,7 @@ export async function processMediaBatch(
     if (imageCatalog) {
         const hashPromises: Array<Promise<void>> = [];
         for (const pm of results) {
-            const att = attachments.find(a => a.messageIndex === pm.index);
+            const att = resultSources.get(pm) ?? attachments.find(a => a.messageIndex === pm.index);
             if (!att || att.type !== "photo") continue;
             let rawBuffer: Buffer | undefined;
             if (pm.base64Data) {

@@ -8,6 +8,7 @@
   import TimezoneTab from "./config/TimezoneTab.svelte";
   import TelegramTab from "./config/TelegramTab.svelte";
   import DiscordTab from "./config/DiscordTab.svelte";
+  import FeishuTab from "./config/FeishuTab.svelte";
   import OneBotTab from "./config/OneBotTab.svelte";
   import ReflectionTab from "./config/ReflectionTab.svelte";
   import ContextBudgetTab from "./config/ContextBudgetTab.svelte";
@@ -34,6 +35,8 @@
   let telegramEnabled = false;
   let discordEnabled = false;
   let onebotEnabled = false;
+  let feishuEnabled = false;
+  let originalFeishuEnabled = false;
 
   /** Password 输入框：focus 显示明文，blur 恢复隐藏 */
   function pwFocus(e) { e.target.type = 'text'; }
@@ -56,6 +59,7 @@
     { id: "timezone", label: "时区", icon: "fa-clock" },
     { id: "telegram", label: "Telegram", icon: "fa-paper-plane" },
     { id: "discord", label: "Discord", icon: "fa-gamepad" },
+    { id: "feishu", label: "飞书 / Lark", icon: "fa-comments" },
     { id: "onebot", label: "QQ / OneBot", icon: "fa-comments" },
     { id: "reflection", label: "反思引擎", icon: "fa-brain" },
     { id: "contextBudget", label: "上下文预算", icon: "fa-sliders" },
@@ -78,6 +82,7 @@
   const RESTART_FIELDS = {
     telegram: ["mode", "botToken", "apiId", "apiHash", "phone"],
     discord: ["botToken"],
+    feishu: ["appId", "appSecret", "domain"],
     onebot: ["wsUrl", "selfId", "sendFileAsDataUrl"],
     subagent: ["maxSandboxInstances"],
   };
@@ -144,6 +149,9 @@
         (config.telegram?.apiId && config.telegram?.apiHash && config.telegram?.phone)
       );
       discordEnabled = !!config.discord?.botToken;
+      feishuEnabled = !!(config.feishu?.appId && config.feishu?.appSecret);
+      originalFeishuEnabled = feishuEnabled;
+      if (!config.feishu) config.feishu = { appId: '', appSecret: '' };
       onebotEnabled = !!(config.onebot?.wsUrl && config.onebot?.selfId);
       // 始终确保 UI 有空对象可绑定
       if (!config.telegram) config.telegram = { mode: 'bot', botToken: '', apiId: '', apiHash: '', phone: '' };
@@ -178,6 +186,7 @@
 
   function hasRestartChanges() {
     if (!originalConfig || !config) return false;
+    if (feishuEnabled !== originalFeishuEnabled) return true;
     for (const sec of RESTART_SECTIONS) {
       if (JSON.stringify(config[sec]) !== JSON.stringify(originalConfig[sec]))
         return true;
@@ -192,6 +201,10 @@
   }
 
   async function saveAll() {
+    if (feishuEnabled && (!config.feishu.appId.trim() || !config.feishu.appSecret.trim())) {
+      showToast("启用飞书 / Lark 时 App ID 和 App Secret 均不能为空", "error");
+      return;
+    }
     saving = true;
     const needsRestart = hasRestartChanges();
     try {
@@ -200,9 +213,11 @@
       if (!telegramEnabled) delete payload.telegram;
       if (!discordEnabled) delete payload.discord;
       if (!onebotEnabled) delete payload.onebot;
+      if (!feishuEnabled) delete payload.feishu;
       const res = await api("/config", { method: "PUT", body: payload });
       if (res.ok) {
         originalConfig = JSON.parse(JSON.stringify(config));
+        originalFeishuEnabled = feishuEnabled;
         if (needsRestart) {
           showToast(
             "✅ 配置已保存。部分修改需要重启服务才能生效，请点击底部「重启服务」按钮。",
@@ -608,6 +623,8 @@
             <TelegramTab bind:config bind:telegramEnabled {pwFocus} {pwBlur} />
           {:else if currentSection === "discord"}
             <DiscordTab bind:config bind:discordEnabled {pwFocus} {pwBlur} />
+          {:else if currentSection === "feishu"}
+            <FeishuTab bind:config bind:feishuEnabled />
           {:else if currentSection === "onebot"}
             <OneBotTab bind:config bind:onebotEnabled />
           {:else if currentSection === "reflection"}

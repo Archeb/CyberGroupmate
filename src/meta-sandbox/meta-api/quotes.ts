@@ -82,7 +82,7 @@ export interface QuoteResolverDeps {
     boundChatId?: string;
 }
 
-const KNOWN_PLATFORMS = ["telegram", "discord", "onebot"] as const;
+const KNOWN_PLATFORMS = ["telegram", "discord", "onebot", "feishu"] as const;
 const DEFAULT_CHAT_LIMIT = 30;
 const MAX_CHAT_RANGE_MESSAGES = 100;
 const MAX_TEXT_FILE_CHARS = 12_000;

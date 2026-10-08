@@ -44,7 +44,9 @@ import { setGlobalTimezone, getGlobalTimezone } from "./core/timezone.js";
 import { TelegramAdapter } from "./adapter/telegram-adapter.js";
 import { DiscordAdapter } from "./adapter/discord-adapter.js";
 import { OneBotAdapter } from "./adapter/onebot-adapter.js";
+import { FeishuAdapter } from "./adapter/feishu-adapter.js";
 import type { PlatformAdapter } from "./adapter/platform-adapter.js";
+import { createTypingSender } from "./adapter/typing.js";
 import { BackfillCoordinator, resolveBackfillConfig, BACKFILL_FLAG, BACKFILL_STALE_FLAG, BACKFILL_DIRECT_REASON } from "./adapter/backfill.js";
 import { markChatAsRead } from "./adapter/read-receipts.js";
 
@@ -476,18 +478,14 @@ async function main(): Promise<void> {
         adapters.push(onebotAdapter);
     }
 
-    if (adapters.length === 0) {
-        throw new Error("至少需要配置一个平台 adapter（telegram / discord / onebot）");
+    if (appConfig.feishu) {
+        adapters.push(new FeishuAdapter(appConfig.feishu, nc, resolve(DATA_DIR), {
+            hasMessage: (chatId, messageId) => memory.getMessageById(chatId, messageId) !== null,
+        }));
     }
 
-    // 通用路由函数
-    function getAdapterForChat(chatId: string): PlatformAdapter | undefined {
-        try {
-            const platform = getPlatform(chatId);
-            return adapters.find(a => a.platform === platform);
-        } catch {
-            return undefined;
-        }
+    if (adapters.length === 0) {
+        throw new Error("至少需要配置一个平台 adapter（telegram / discord / onebot / feishu）");
     }
 
     function markDirectSubagentDeliveryAsRead(chatId: string, reason: string): void {
@@ -1071,15 +1069,6 @@ async function main(): Promise<void> {
 
 
 
-    const sendTyping = async (chatId: string) => {
-        const adapter = getAdapterForChat(chatId);
-        if (!adapter) {
-            return;
-        }
-        const typingMethod = `${adapter.platform}.sendTyping`;
-        await adapter.handleCall(typingMethod, [chatId]);
-    };
-
     const buildDownloadFn = (chatId: string) => {
         const adapter = adapters.find((item) => chatId.startsWith(item.platform + ":"));
         if (!adapter) {
@@ -1137,7 +1126,7 @@ async function main(): Promise<void> {
             memory,
             visionConfig,
             buildDownloadFn(chatId),
-            sendTyping,
+            createTypingSender(chatAdapter),
             visionLlmConfig,
             sharedMediaDownloader,
             formatMention,

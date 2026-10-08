@@ -106,6 +106,7 @@ const ID_ORDERING: Record<string, "numeric-id" | "timestamp"> = {
     telegram: "numeric-id",
     discord: "numeric-id",
     onebot: "timestamp",
+    feishu: "timestamp",
 };
 
 /**
