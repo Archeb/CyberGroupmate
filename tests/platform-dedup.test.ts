@@ -168,7 +168,40 @@ describe("platform proxy duplicate tracking", () => {
             args: ["channel-100", "msg-42", "😄"],
         }]);
         assert.ok(outputs.some((line) => line.includes("[Discord] sendReaction ok channel=channel-100 msg=msg-42 emoji=😄")));
+        // 表态不进 dedup history（它不是一条消息）……
         assert.deepEqual([...sentHistory.entries()], []);
-        assert.deepEqual(notifications, []);
+        // ……但会发一条 agent_reaction_sent 事件，供 SentMessageCollector 把"贴了表态"与"沉默跳过"区分开
+        assert.equal(notifications.length, 1);
+        assert.equal(notifications[0].type, "system.agent_reaction_sent");
+        assert.equal(notifications[0].scene, "discord");
+        assert.equal(notifications[0].chatId, "channel-100");
+        assert.equal(notifications[0].messageId, "msg-42");
+        assert.equal(notifications[0].emoji, "😄");
+    });
+
+    it("telegram reaction emits an action event, but removing one (emoji=null) does not", async () => {
+        const notifications: Array<Record<string, unknown>> = [];
+        const env: CapabilityRegistryEnv = {
+            ctx: {},
+            emitOutput: () => {},
+            notifyHost: (event) => notifications.push(event),
+            requestInput: async () => "",
+            printToHost: () => {},
+            spawnTask: () => {},
+            killTask: () => {},
+            listTasks: () => [],
+            callHost: async () => null,
+        };
+        const client = createTelegramClientProxy(env, new Map<string, Set<string>>()) as {
+            sendReaction(chatId: string, messageId: number, emoji: string | null): Promise<void>;
+        };
+
+        await client.sendReaction("100", 42, "👍");
+        assert.equal(notifications.length, 1);
+        assert.equal(notifications[0].type, "system.agent_reaction_sent");
+        assert.equal(notifications[0].emoji, "👍");
+
+        await client.sendReaction("100", 42, null); // 撤销表态，不算一次对外动作
+        assert.equal(notifications.length, 1);
     });
 });
