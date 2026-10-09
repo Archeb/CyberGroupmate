@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { enrichMessages } from "../src/core/message-enricher.js";
+import { enrichMessages, formatMessageBody, formatMessages } from "../src/core/message-enricher.js";
 import { MediaDownloader } from "../src/core/media-downloader.js";
 import type { LLMConfig } from "../src/core/config.js";
 
@@ -273,5 +273,90 @@ describe("message-enricher media downloads", () => {
         assert.match(result.formattedText, /贴纸 😮 😳: 惊讶、意外，带点紧张的小表情/);
         assert.doesNotMatch(result.formattedText, /AgADdg0AAvE2QVQ/);
         assert.doesNotMatch(result.formattedText, /AgAD4h0AArSSuVQ/);
+    });
+});
+
+describe("media placeholder summaries", () => {
+    const message = (attachments: unknown[], text = "看看 [📷 图片]") => ({
+        id: "multi-summary",
+        sender: "Alice",
+        text,
+        mediaType: "photo",
+        mediaInfo: JSON.stringify({ type: "photo", fileId: "first", attachments }),
+    });
+
+    it("counts the attachment list without counting the legacy first item twice", () => {
+        const result = formatMessageBody(message([
+            { type: "photo", fileId: "first" },
+            { type: "photo", fileId: "second" },
+        ]), { includeMediaTags: true });
+        assert.equal(result, "看看 [📷 图片×2]");
+    });
+
+    it("groups mixed media and replaces existing tags while ignoring invalid attachments", () => {
+        const result = formatMessageBody(message([
+            { type: "photo", fileId: "first" },
+            { type: "sticker", fileId: "sticker" },
+            { type: "video", fileId: "video-1" },
+            { type: "photo", fileId: "second" },
+            { type: "video", fileId: "video-2" },
+            { type: "audio", fileId: "audio" },
+            { type: "document", fileId: "document" },
+            { type: "animation", fileId: "gif" },
+            null,
+            { type: "photo" },
+            { fileId: "missing-type" },
+        ], "@Bob 看看 [📷 图片] [📹 视频]"), { includeMediaTags: true });
+        assert.equal(result, "@Bob 看看 [📷 图片×2] [🎭 贴纸×1] [📹 视频×2] [🎙 语音/音频×1] [📎 文件×1] [🎬 GIF×1]");
+    });
+
+    it("keeps repeated formatting and cache-only message formatting consistent", () => {
+        const original = message([
+            { type: "photo", fileId: "first" },
+            { type: "video", fileId: "video" },
+        ]);
+        const first = formatMessageBody(original, { includeMediaTags: true });
+        const second = formatMessageBody({ ...original, text: first }, { includeMediaTags: true });
+        assert.equal(first, "看看 [📷 图片×1] [📹 视频×1]");
+        assert.equal(second, first);
+        assert.ok(formatMessages([original], []).endsWith(`: ${first}`));
+    });
+
+    it("preserves legacy single media labels when the envelope has only one valid attachment", () => {
+        assert.equal(formatMessageBody(message([
+            { type: "photo", fileId: "first" },
+            { type: "photo" },
+        ]), { includeMediaTags: true }), "看看 [📷 图片]");
+        assert.equal(formatMessageBody({ text: "看看", mediaType: "video", mediaInfo: "invalid-json" }, { includeMediaTags: true }), "看看 [📹 视频]");
+    });
+
+    it("preserves the cached description of a single sticker", () => {
+        const result = formatMessageBody({
+            text: "[🎭 贴纸]",
+            mediaType: "sticker",
+            mediaInfo: JSON.stringify({ type: "sticker", fileId: "sticker", uniqueFileId: "known" }),
+        }, {
+            includeMediaTags: true,
+            stickerDescriptionLookup: {
+                getStickerDescription: id => id === "known" ? { description: "挥手", emojis: ["👋"] } : null,
+            },
+        });
+        assert.equal(result, "[🎭 贴纸 👋: 挥手]");
+    });
+
+    it("removes counted placeholders after media descriptions are available", () => {
+        const result = formatMessages([{
+            ...message([
+                { type: "photo", fileId: "first" },
+                { type: "photo", fileId: "second" },
+            ], "看看 [📷 图片×2]"),
+            processedMedia: [
+                { index: 0, description: "第一张", filePath: "/tmp/first.png" },
+                { index: 0, description: "第二张", filePath: "/tmp/second.png" },
+            ],
+        }], []);
+        assert.doesNotMatch(result, /×2/);
+        assert.match(result, /第一张/);
+        assert.match(result, /第二张/);
     });
 });
