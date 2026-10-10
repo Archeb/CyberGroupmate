@@ -329,6 +329,8 @@ export async function enrichMessages(
 
 // ─── 共享格式化函数 ───
 
+const MEDIA_PLACEHOLDER_PATTERN = /\[(?:📷 图片|🎭 贴纸[^\]]*|📹 视频|🎙 语音\/音频|🎬 (?:视频|GIF)|🎞 GIF|📎 (?:文件|媒体))(?:×\d+)?\]\s*/g;
+
 /**
  * 根据 mediaType/mediaInfo 生成媒体类型标签（无 vision 处理，纯文本标记）
  *
@@ -348,6 +350,18 @@ function mediaTagFromType(
             emoji = typeof info?.emoji === "string" ? info.emoji : "";
         }
     } catch { /* ignore */ }
+    if (Array.isArray(info?.attachments)) {
+        const counts = new Map<string, number>();
+        for (const item of info.attachments) {
+            if (!item || typeof item !== "object" || !item.fileId || typeof item.type !== "string") continue;
+            counts.set(item.type, (counts.get(item.type) ?? 0) + 1);
+        }
+        if ([...counts.values()].reduce((sum, count) => sum + count, 0) > 1) {
+            return [...counts].map(([type, count]) =>
+                mediaTagFromType(type).replace(/\]$/, `×${count}]`),
+            ).join(" ");
+        }
+    }
     switch (mediaType) {
         case "photo": return "[📷 图片]";
         case "sticker": {
@@ -383,11 +397,11 @@ function existingMediaTagPattern(mediaType?: string): RegExp | undefined {
     switch (mediaType) {
         case "photo": return /\[📷 图片[^\]]*\]\s*/;
         case "sticker": return /\[🎭 贴纸[^\]]*\]\s*/;
-        case "video": return /\[📹 视频\]\s*/;
-        case "animation": return /\[(?:🎬|🎞) (?:视频|GIF)\]\s*/;
-        case "audio": return /\[🎙 语音\/音频\]\s*/;
-        case "document": return /\[📎 文件\]\s*/;
-        case "other": return /\[📎 媒体\]\s*/;
+        case "video": return /\[📹 视频(?:×\d+)?\]\s*/;
+        case "animation": return /\[(?:🎬|🎞) (?:视频|GIF)(?:×\d+)?\]\s*/;
+        case "audio": return /\[🎙 语音\/音频(?:×\d+)?\]\s*/;
+        case "document": return /\[📎 文件(?:×\d+)?\]\s*/;
+        case "other": return /\[📎 媒体(?:×\d+)?\]\s*/;
         default: return undefined;
     }
 }
@@ -426,12 +440,8 @@ export function formatMessageBody(
             text: textPart,
         });
         if (tag && !textPart.includes(tag)) {
-            const existingPattern = existingMediaTagPattern(m.mediaType);
-            if (existingPattern?.test(textPart)) {
-                textPart = textPart.replace(existingPattern, `${tag} `).trim();
-            } else {
-                textPart = textPart ? `${textPart} ${tag}` : tag;
-            }
+            textPart = textPart.replace(MEDIA_PLACEHOLDER_PATTERN, "").trim();
+            textPart = textPart ? `${textPart} ${tag}` : tag;
         }
     }
 
@@ -628,7 +638,7 @@ export function formatMessages(
         if (m.processedMedia && m.processedMedia.length > 0) {
             // 移除 adapter 层写入的媒体占位标签（如 [📷 图片]、[🎭 贴纸: 💛]、[🎬 视频] 等），
             // 避免和 vision/download 产生的更丰富描述重复
-            textPart = textPart.replace(/\[(?:📷 图片|🎭 贴纸[^\]]*|📹 视频|🎙 语音\/音频|🎬 (?:视频|GIF)|🎞 GIF|📎 (?:文件|媒体))\]\s*/g, "").trim();
+            textPart = textPart.replace(MEDIA_PLACEHOLDER_PATTERN, "").trim();
 
             for (const pm of m.processedMedia) {
                 if (pm.base64Data && pm.mimeType) {
@@ -660,18 +670,10 @@ export function formatMessages(
         // 如果有 processedMedia 就不再追加 mediaTag（已处理），否则追加 mediaTag 作兜底
         const hasProcessedMedia = m.processedMedia && m.processedMedia.length > 0;
         if (!hasProcessedMedia && m.mediaType) {
-            const tag = mediaTagFromType(m.mediaType, m.mediaInfo, {
+            textPart = formatMessageBody(m, {
+                includeMediaTags: true,
                 stickerDescriptionLookup: options?.stickerDescriptionLookup,
-                text: textPart,
             });
-            if (tag && !textPart.includes(tag)) {
-                const existingPattern = existingMediaTagPattern(m.mediaType);
-                if (existingPattern?.test(textPart)) {
-                    textPart = textPart.replace(existingPattern, `${tag} `).trim();
-                } else {
-                    textPart = textPart ? `${textPart} ${tag}` : tag;
-                }
-            }
         }
 
         // ─── 注入 OpenGraph 链接预览 ───

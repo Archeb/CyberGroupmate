@@ -97,6 +97,7 @@ type OneBotMediaInfo = {
     width?: number;
     height?: number;
     emoji?: string;
+    attachments?: OneBotMediaInfo[];
 };
 
 type NormalizedOneBotIncomingMessage = {
@@ -1902,6 +1903,7 @@ export class OneBotAdapter implements PlatformAdapter {
     }
 
     private extractMediaInfo(message: OneBotMessageSegment[]): OneBotMediaInfo | undefined {
+        const attachments: OneBotMediaInfo[] = [];
         for (const seg of message) {
             const data = seg.data ?? {};
             if (seg.type === "image") {
@@ -1911,7 +1913,7 @@ export class OneBotAdapter implements PlatformAdapter {
                 const subType = typeof data.sub_type === "number" ? data.sub_type
                     : typeof data.sub_type === "string" ? Number(data.sub_type) : undefined;
                 const isSticker = subType === 1;
-                return {
+                attachments.push({
                     type: isSticker ? "sticker" : "photo",
                     url,
                     fileId: url || fileId,
@@ -1921,67 +1923,70 @@ export class OneBotAdapter implements PlatformAdapter {
                     height: typeof data.height === "number" ? data.height : (typeof data.height === "string" ? Number(data.height) || undefined : undefined),
                     mimeType: typeof data.mime_type === "string" ? data.mime_type : undefined,
                     fileSize: typeof data.file_size === "number" ? data.file_size : (typeof data.file_size === "string" ? Number(data.file_size) || undefined : undefined),
-                };
+                });
             }
             if (seg.type === "face") {
                 const faceId = String(data.id ?? "");
-                return {
+                attachments.push({
                     type: "sticker",
                     fileId: `face:${faceId}`,
                     uniqueFileId: `face:${faceId}`,
                     emoji: typeof data.result === "string" ? data.result : undefined,
-                };
+                });
             }
             if (seg.type === "mface") {
                 const url = typeof data.url === "string" ? data.url : undefined;
                 const emojiPackageId = String(data.emoji_package_id ?? "");
                 const emojiId = String(data.emoji_id ?? "");
-                return {
+                attachments.push({
                     type: "sticker",
                     url,
                     fileId: url ?? `mface:${emojiPackageId}_${emojiId}`,
                     uniqueFileId: `mface:${emojiPackageId}_${emojiId}`,
                     emoji: typeof data.summary === "string" ? data.summary : undefined,
-                };
+                });
             }
             if (seg.type === "video") {
                 const url = typeof data.url === "string" ? data.url : undefined;
                 const file = String(data.file ?? data.path ?? "");
                 const fileId = String(data.file_id ?? file);
-                return {
+                attachments.push({
                     type: "video",
                     url,
                     fileId: url || fileId,
                     uniqueFileId: String(data.file_unique ?? data.file_id ?? (file || url || fileId)),
                     fileName: typeof data.name === "string" ? data.name : (file ? path.basename(file) : undefined),
-                };
+                });
             }
             if (seg.type === "record") {
                 const url = typeof data.url === "string" ? data.url : undefined;
                 const file = String(data.file ?? data.path ?? "");
                 const fileId = String(data.file_id ?? file);
-                return {
+                attachments.push({
                     type: "audio",
                     url,
                     fileId: url || fileId,
                     uniqueFileId: String(data.file_unique ?? data.file_id ?? (file || url || fileId)),
                     fileName: typeof data.name === "string" ? data.name : (file ? path.basename(file) : undefined),
-                };
+                });
             }
             if (seg.type === "file") {
                 const url = typeof data.url === "string" ? data.url : undefined;
                 const file = String(data.file ?? data.path ?? "");
                 const fileId = String(data.file_id ?? file);
-                return {
+                attachments.push({
                     type: "document",
                     url,
                     fileId: url || fileId,
                     uniqueFileId: String(data.file_unique ?? data.file_id ?? (file || url || fileId)),
                     fileName: typeof data.name === "string" ? data.name : (file ? path.basename(file) : undefined),
-                };
+                });
             }
         }
-        return undefined;
+        const validAttachments = attachments.filter(item => item.fileId);
+        const first = validAttachments[0];
+        if (!first) return undefined;
+        return validAttachments.length > 1 ? { ...first, attachments: validAttachments } : first;
     }
 
     private mediaPlaceholder(type: OneBotMediaInfo["type"]): string {
