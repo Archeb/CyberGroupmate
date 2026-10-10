@@ -238,24 +238,29 @@ function resolveEffectiveBudget(
 /**
  * 判断是否需要触发 compaction
  *
- * 触发条件：总 token 超过有效上下文窗口的 85%
+ * 触发条件：总 token（含 overhead）超过有效上下文窗口的 85%
  * 当传入 llmConfig 且其 maxContextTokens 已设置时，使用该值替代 budget 中的默认值。
+ *
+ * overheadTokens 表示不在 messages 内、但会占用同一窗口的额外内容
+ * （如 system prompt + 本次任务 prompt），用于"按历史判断，按完整请求生效"的场景。
  */
 export function shouldCompact(
     messages: ChatMessage[],
     budget?: ContextBudget,
     llmConfig?: LLMConfig,
+    overheadTokens = 0,
 ): boolean {
     if (messages.length === 0) return false;
 
     const effectiveBudget = budget ?? getConfiguredBudget();
 
     const effectiveWindow = resolveEffectiveWindow(effectiveBudget, llmConfig);
-    const totalTokens = estimateMessagesTokens(messages);
+    const totalTokens = estimateMessagesTokens(messages) + overheadTokens;
     const threshold = effectiveWindow * COMPACT_TRIGGER_RATIO;
 
     log.debug("shouldCompact 检查", {
         totalTokens,
+        overheadTokens,
         threshold: Math.floor(threshold),
         effectiveWindow,
         messageCount: messages.length,
@@ -426,6 +431,8 @@ export interface ForceTrimOptions {
     targetLlmConfig?: LLMConfig;
     /** 裁剪原因，写入占位说明便于排查 */
     reason?: string;
+    /** 不在 messages 内、但会占用同一窗口的额外 token（如 system prompt + 本次任务 prompt） */
+    overheadTokens?: number;
 }
 
 export interface ForceTrimResult {
@@ -462,7 +469,11 @@ export function forceTrim(
     }
 
     const effectiveBudget = resolveEffectiveBudget(budget ?? getConfiguredBudget(), options?.targetLlmConfig);
-    const limit = Math.floor(effectiveBudget.effectiveContextWindow * COMPACT_TRIGGER_RATIO);
+    // overhead 占用同一窗口：管理目标变为 messages ≤ 0.85×window − overhead
+    const limit = Math.max(
+        0,
+        Math.floor(effectiveBudget.effectiveContextWindow * COMPACT_TRIGGER_RATIO) - (options?.overheadTokens ?? 0),
+    );
 
     const classified = classifyMessages(messages, effectiveBudget);
 
@@ -684,6 +695,8 @@ export async function compact(
         engagedIndices?: Set<number>;
         /** 用于判断目标 session 是否超窗；摘要生成仍使用 llmConfigs。 */
         targetLlmConfig?: LLMConfig;
+        /** 不在 messages 内、但会占用同一窗口的额外 token（如 system prompt + 本次任务 prompt） */
+        overheadTokens?: number;
     },
 ): Promise<ChatMessage[]> {
     const resolvedBudget = budget ?? getConfiguredBudget();
@@ -695,10 +708,11 @@ export async function compact(
         replyChain: options?.replyChain,
         engagedIndices: options?.engagedIndices,
         targetLlmConfig: targetConfig,
+        overheadTokens: options?.overheadTokens,
     };
 
     // 不需要压缩时原样返回
-    if (!shouldCompact(messages, effectiveBudget, targetConfig)) {
+    if (!shouldCompact(messages, effectiveBudget, targetConfig, options?.overheadTokens)) {
         log.debug("compact: 未超预算，跳过压缩");
         return messages;
     }
@@ -722,6 +736,7 @@ async function compactWithBriefing(
         replyChain?: Map<number, number>;
         engagedIndices?: Set<number>;
         targetLlmConfig?: LLMConfig;
+        overheadTokens?: number;
     } | undefined,
     trimOptions: ForceTrimOptions,
 ): Promise<ChatMessage[]> {
@@ -839,7 +854,7 @@ async function compactWithBriefing(
     });
 
     // 摘要生成成功但仍然超窗（受保护消息或尾部本身过大）→ 继续强制裁剪
-    if (shouldCompact(result, effectiveBudget, options?.targetLlmConfig)) {
+    if (shouldCompact(result, effectiveBudget, options?.targetLlmConfig, options?.overheadTokens)) {
         log.warn("compact: 摘要后仍超预算，追加强制裁剪", { afterTokens });
         return forceTrim(result, effectiveBudget, {
             ...trimOptions,

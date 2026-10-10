@@ -25,6 +25,7 @@ import {
 } from "../core/llm.js";
 import type { LLMConfig } from "../core/config.js";
 import { resolveComponentTimeout } from "../core/config.js";
+import { estimateMessagesTokens, forceTrim, shouldCompact } from "../memory-v2/context-manager.js";
 import type { ContextManifest } from "../context-engine/types.js";
 import { ulid } from "ulid";
 import { createLogger } from "../core/logger.js";
@@ -514,6 +515,15 @@ export async function runCodeActSession(
     // 清理可能残留的控制指令（避免上一个 session 泄漏）
     sandbox.consumeExecutionControl();
 
+    // ─── 层 3: session 内上下文守卫的基准 ───
+    // prefix（system + 历史 + 任务 prompt）由调用方在任务前预检/压缩，这里不动；
+    // session 运行中每轮检查完整 messages，超窗时只对 initialPrefixLength 之后
+    // 新增的 turn 消息做强制裁剪。限定裁剪范围是为了保住调用方的切分约定
+    // （executor 按前缀长度从 sessionResult.messages 切出新消息）。
+    const initialPrefixLength = messages.length;
+    const prefixOverheadTokens = estimateMessagesTokens(messages);
+    const primaryLlmConfig = Array.isArray(llmConfig) ? llmConfig[0] : llmConfig;
+
     /** 发射进度事件的辅助函数 */
     const emitProgress = (event: Omit<CodeActProgressEvent, "chatId" | "sessionId" | "timestamp">) => {
         if (!chatId) return;
@@ -580,6 +590,30 @@ export async function runCodeActSession(
                     phase: "new_messages",
                     userMessage: sanitizedContent,
                     isProcessing: true,
+                });
+            }
+        }
+
+        // ─── 层 3: session 内超窗守卫 ───
+        // compaction 只发生在任务前后，session 内每轮追加的 observation（最大 32KB 输出
+        // + 注入的 d.ts 文档 + 各种确认段落）会让上下文无界增长。这里在每次 LLM 调用前
+        // 按完整 messages 检查预算，超窗时对 session 内新增的 turn 消息做无 LLM 强制裁剪。
+        if (messages.length > initialPrefixLength && shouldCompact(messages, undefined, primaryLlmConfig)) {
+            const sessionTail = messages.slice(initialPrefixLength);
+            const trimmed = forceTrim(sessionTail, undefined, {
+                targetLlmConfig: primaryLlmConfig,
+                overheadTokens: prefixOverheadTokens,
+                reason: `CodeAct session 中途超窗（turn ${turnNum}，session 内消息 ${sessionTail.length} 条）`,
+            });
+            if (trimmed.dropped > 0 || trimmed.truncated) {
+                messages.length = initialPrefixLength;
+                messages.push(...trimmed.messages);
+                log.warn(`Turn ${turnNum}: session 内上下文超窗，已强制裁剪 turn 消息`, {
+                    sessionId,
+                    dropped: trimmed.dropped,
+                    truncated: trimmed.truncated,
+                    remainingSessionMessages: trimmed.messages.length,
+                    stillOverBudget: trimmed.stillOverBudget,
                 });
             }
         }
