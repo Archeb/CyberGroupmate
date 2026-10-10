@@ -49,7 +49,7 @@ import { EventEmitter } from "node:events";
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { shouldCompact, compact as contextManagerCompact, forceTrim as contextManagerForceTrim, estimateMessagesTokens } from "../memory-v2/context-manager.js";
+import { shouldCompact, compact as contextManagerCompact, forceTrim as contextManagerForceTrim, estimateMessagesTokens, estimateTokens } from "../memory-v2/context-manager.js";
 import { DEFAULT_BANNED_WORDS } from "../core/banned-words.js";
 import { registerPendingMessageSignal, type PendingMessageSignal } from "../sandbox/send-interrupt.js";
 
@@ -415,6 +415,31 @@ export interface SessionExecutionRecord {
 }
 
 const SESSION_MESSAGE_ID_RE = /\[msgId:([^\]\r\n]+)\]/g;
+
+// ─── Layer-1 compact 摘要的体积上限 ───
+// 实测事故：198 次任务累积的已见 msgId 跨度让 rebuildCompactedInteractionHistory
+// 从 memory 拉回 2295 条消息、23 万字符塞进一条 compact 消息——摘要比被压缩的
+// 历史还大，直接把请求顶到窗口之外。这两道上限保证 compact 产物有界。
+
+/** 重建交互历史最多取最近 N 条消息 */
+const COMPACT_REBUILD_MAX_MESSAGES = 200;
+/** 重建交互历史的 token 预算，超预算截断保留首尾 */
+const COMPACT_REBUILD_MAX_TOKENS = 6000;
+/** compact 摘要中最多保留最近 N 条 execution record 摘要 */
+const COMPACT_RECORD_SUMMARY_LIMIT = 30;
+
+/** 把文本截断到 token 预算内（保留首尾、中间省略）；供 compact 摘要等需要硬上限的文本使用 */
+export function truncateTextToTokenBudget(text: string, maxTokens: number): string {
+    const tokens = estimateTokens(text);
+    if (tokens <= maxTokens) return text;
+    const ratio = maxTokens / tokens;
+    const keepChars = Math.max(80, Math.floor(text.length * ratio) - 60);
+    if (keepChars >= text.length) return text;
+    const headChars = Math.floor(keepChars * 0.6);
+    const tailChars = keepChars - headChars;
+    const omitted = text.length - keepChars;
+    return `${text.slice(0, headChars)}\n…[已截断：省略 ${omitted} 字]…\n${text.slice(text.length - tailChars)}`;
+}
 
 function extractSeenMessageIds(messages: SessionMessage[]): string[] {
     const ids: string[] = [];
@@ -1756,7 +1781,18 @@ export class CodeActExecutor {
 
         if (messages.length === 0) return null;
 
-        const formatted = this.formatMemoryMessagesForHistory(messages);
+        // 已见 msgId 的首尾跨度可能覆盖上千条消息，无上限的重建会让
+        // compact 摘要本身超出窗口。只保留最近 COMPACT_REBUILD_MAX_MESSAGES 条，
+        // 再按 token 预算截断（保留首尾）。
+        if (messages.length > COMPACT_REBUILD_MAX_MESSAGES) {
+            messages = messages.slice(-COMPACT_REBUILD_MAX_MESSAGES);
+            source += `；截取最近 ${messages.length} 条`;
+        }
+
+        const formatted = truncateTextToTokenBudget(
+            this.formatMemoryMessagesForHistory(messages),
+            COMPACT_REBUILD_MAX_TOKENS,
+        );
         if (!formatted) return null;
 
         log.info("compactSession: 已从 memory 重建交互历史", {
@@ -1843,9 +1879,9 @@ export class CodeActExecutor {
         const recentMessages = this.session.slice(-keep);
 
         // ═══ Layer 1: 结构化快速 compact ═══
-        // 从 executionRecords 构建摘要
+        // 从 executionRecords 构建摘要（只带最近的，全量会让摘要失控）
         const recordSummaries: string[] = [];
-        for (const rec of this.executionRecords) {
+        for (const rec of this.executionRecords.slice(-COMPACT_RECORD_SUMMARY_LIMIT)) {
             const summary = formatExecutionRecordForCompact(rec);
             if (summary) recordSummaries.push(summary);
         }

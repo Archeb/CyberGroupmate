@@ -4,6 +4,7 @@ import { loadConfig, resolveComponentTimeout, type LLMConfig } from "../core/con
 import { loadPromptFile, registerCacheClear } from "../core/prompt-loader.js";
 import { join } from "node:path";
 import { encodingForModel } from "js-tiktoken";
+import { setMessagesTokenEstimator, tokenCalibrationFactor } from "./token-calibration.js";
 
 const log = createLogger("context-mgr");
 
@@ -163,10 +164,11 @@ export function estimateTokens(text: string): number {
 }
 
 /**
- * CJK 启发式 token 估算（fallback）
+ * CJK 启发式 token 估算（fallback 及超长文本路径）
  *
- * - 英文/拉丁字符：约 4 字符 = 1 token
- * - CJK 字符：约 1.5 字符 = 1 token
+ * - CJK 字符：约 1 字符 = 1 token（主流中文模型 tokenizer 的保守值；
+ *   此前按 1.5 字符/token 估会系统性低估约 1.5 倍，导致超窗请求被放行）
+ * - 非 CJK 字符：约 3.5 字符 = 1 token（英文散文实际更松、代码/JSON 更紧，取保守值）
  */
 export function estimateTokensFallback(text: string): number {
     if (!text) return 0;
@@ -175,8 +177,8 @@ export function estimateTokensFallback(text: string): number {
     const cjkCount = cjkMatches ? cjkMatches.length : 0;
     const nonCjkCount = text.length - cjkCount;
 
-    const cjkTokens = Math.ceil(cjkCount / 1.5);
-    const nonCjkTokens = Math.ceil(nonCjkCount / 4);
+    const cjkTokens = Math.ceil(cjkCount / 1.0);
+    const nonCjkTokens = Math.ceil(nonCjkCount / 3.5);
 
     return cjkTokens + nonCjkTokens;
 }
@@ -188,22 +190,29 @@ export function estimateMessagesTokens(messages: ChatMessage[]): number {
     return messages.reduce((sum, message) => sum + estimateMessageTokens(message), 0);
 }
 
+// 注入消息级估算器：llm.ts 在每次成功调用后用它比对真实 usage，校准每模型系数
+setMessagesTokenEstimator(estimateMessagesTokens);
+
+/** 每张图片附件按固定 token 计入预算（视觉模型下 1-2K tokens/图，取保守值） */
+const IMAGE_PART_TOKENS = 1600;
+
 function estimateMessageTokens(message: ChatMessage): number {
+    const imageTokens = (message.imageParts?.length ?? 0) * IMAGE_PART_TOKENS;
     const reasoning = message.reasoning;
-    if (!reasoning) return estimateTokens(message.content);
+    if (!reasoning) return estimateTokens(message.content) + imageTokens;
     if (reasoning.tokenCount != null) {
-        return estimateTokens(message.content) + reasoning.tokenCount;
+        return estimateTokens(message.content) + reasoning.tokenCount + imageTokens;
     }
     if (reasoning.provider === "openai_chat") {
-        return estimateTokens(message.content) + estimateTokens(reasoning.content);
+        return estimateTokens(message.content) + estimateTokens(reasoning.content) + imageTokens;
     }
     if (reasoning.provider === "anthropic") {
         const thinkingText = reasoning.blocks
             .map((block) => typeof block.thinking === "string" ? block.thinking : "")
             .join("");
-        return estimateTokens(message.content) + estimateTokens(thinkingText);
+        return estimateTokens(message.content) + estimateTokens(thinkingText) + imageTokens;
     }
-    return estimateTokens(message.content);
+    return estimateTokens(message.content) + imageTokens;
 }
 
 // ─── Compaction 判断 ───
@@ -255,12 +264,15 @@ export function shouldCompact(
     const effectiveBudget = budget ?? getConfiguredBudget();
 
     const effectiveWindow = resolveEffectiveWindow(effectiveBudget, llmConfig);
-    const totalTokens = estimateMessagesTokens(messages) + overheadTokens;
+    // 校准系数放大估算值，抵消 tokenizer 不一致 / 启发式低估
+    const calibrationFactor = tokenCalibrationFactor(llmConfig?.model);
+    const totalTokens = Math.ceil((estimateMessagesTokens(messages) + overheadTokens) * calibrationFactor);
     const threshold = effectiveWindow * COMPACT_TRIGGER_RATIO;
 
     log.debug("shouldCompact 检查", {
         totalTokens,
         overheadTokens,
+        calibrationFactor,
         threshold: Math.floor(threshold),
         effectiveWindow,
         messageCount: messages.length,
@@ -469,10 +481,12 @@ export function forceTrim(
     }
 
     const effectiveBudget = resolveEffectiveBudget(budget ?? getConfiguredBudget(), options?.targetLlmConfig);
-    // overhead 占用同一窗口：管理目标变为 messages ≤ 0.85×window − overhead
+    // overhead 占用同一窗口：管理目标变为 messages ≤ 0.85×window − overhead；
+    // 校准系数同步收紧限额（估算被低估多少，限额就除以多少）
+    const calibrationFactor = tokenCalibrationFactor(options?.targetLlmConfig?.model);
     const limit = Math.max(
         0,
-        Math.floor(effectiveBudget.effectiveContextWindow * COMPACT_TRIGGER_RATIO) - (options?.overheadTokens ?? 0),
+        Math.floor((effectiveBudget.effectiveContextWindow * COMPACT_TRIGGER_RATIO - (options?.overheadTokens ?? 0)) / calibrationFactor),
     );
 
     const classified = classifyMessages(messages, effectiveBudget);

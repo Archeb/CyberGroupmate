@@ -14,7 +14,7 @@ import { EventEmitter } from "node:events";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { CodeActExecutor, type SessionMessage } from "../src/subagent/code-act-executor.js";
+import { CodeActExecutor, type SessionMessage, truncateTextToTokenBudget } from "../src/subagent/code-act-executor.js";
 import { runCodeActSession } from "../src/sandbox/session-runner.js";
 import { NotificationCenter } from "../src/event/notification-center.js";
 import { clearConfigCache, loadConfig, resolveComponentProfiles } from "../src/core/config.js";
@@ -24,11 +24,17 @@ import type { CodeActReplyTask } from "../src/subagent/types.js";
 import { EXECUTOR_FOOTER_TEXT } from "../src/context-engine/providers/executor-providers.js";
 import {
     estimateMessagesTokens,
+    estimateTokens,
     forceTrim,
     shouldCompact,
     FORCE_TRIM_MARKER,
     type ContextBudget,
 } from "../src/memory-v2/context-manager.js";
+import {
+    recordTokenCalibration,
+    resetTokenCalibration,
+    tokenCalibrationFactor,
+} from "../src/memory-v2/token-calibration.js";
 
 // ─── 公共 harness ───
 
@@ -312,6 +318,72 @@ describe("executor task prompt collapse", () => {
             requests[0].messages.some(m => m.content.includes("digest-legacy")),
             "旧格式任务 prompt 的 historical 部分应保留",
         );
+    });
+});
+
+// ─── 5. token 估算校准 ───
+
+describe("token estimation calibration", () => {
+    it("超长 CJK 文本按 ~1 字符/token 保守估算（此前 1.5 字符/token 低估 1.5 倍）", () => {
+        const cjkText = "凯瑟琳在群里聊天。".repeat(2000); // 20000 chars，超 16000 走启发式
+        assert.ok(cjkText.length > 16000, "前置：应走启发式路径");
+        const tokens = estimateTokens(cjkText);
+        assert.ok(tokens >= cjkText.length * 0.9, `超长中文文本估算应不低于字符数的 0.9 倍，实际 ${tokens}/${cjkText.length}`);
+    });
+
+    it("图片附件按固定 token 计入预算", () => {
+        const withoutImage = estimateMessagesTokens([{ role: "user", content: "看看这张图" }]);
+        const withTwoImages = estimateMessagesTokens([{
+            role: "user",
+            content: "看看这张图",
+            imageParts: [{ url: "data:image/jpeg;base64,x" }, { url: "data:image/jpeg;base64,x" }],
+        }]);
+        assert.equal(withTwoImages - withoutImage, 3200);
+    });
+
+    it("真实 usage 采样后的校准系数收紧 shouldCompact / forceTrim 预算", t => {
+        t.after(() => resetTokenCalibration());
+        const calibratedModel = {
+            provider: "openai" as const,
+            baseUrl: "http://127.0.0.1:1/v1",
+            apiKey: "test",
+            model: "calibrated-model",
+            temperature: 0,
+            maxTokens: 100,
+            maxContextTokens: 1000,
+        };
+        // 消息本体约 670 tokens，阈值 850：未校准时放行，校准系数 2 后（~1340）拦截
+        const msgs: ChatMessage[] = Array.from({ length: 8 }, () => ({
+            role: "user" as const,
+            content: "hello world ".repeat(40),
+        }));
+        const est = estimateMessagesTokens(msgs);
+        assert.ok(est > 425 && est < 850, `前置：估算应落在阈值的一半以上，实际 ${est}`);
+
+        assert.equal(shouldCompact(msgs, undefined, calibratedModel), false, "无采样时系数为 1，不触发");
+
+        recordTokenCalibration("calibrated-model", 20000, 10000); // 采样比值 2.0
+        assert.ok(Math.abs(tokenCalibrationFactor("calibrated-model") - 2) < 0.01);
+        assert.equal(shouldCompact(msgs, undefined, calibratedModel), true, "校准后估算翻倍，应触发压缩");
+
+        // forceTrim 限额同步除以校准系数
+        const trimmed = forceTrim(msgs, undefined, { targetLlmConfig: calibratedModel });
+        assert.ok(trimmed.dropped > 0 || trimmed.truncated, "校准后应触发裁剪");
+    });
+
+    it("truncateTextToTokenBudget 截断超预算文本并保留首尾", () => {
+        // 文本超过 TOKEN_EXACT_MAX_LENGTH（16000 字符），走启发式估算路径，
+        // 避免 tiktoken BPE 在重复 CJK 上的超线性耗时
+        const text = "首部标记。".repeat(4000) + "中部内容。".repeat(2000) + "尾部标记。".repeat(1000);
+        assert.ok(text.length > 16000, "前置：应走启发式路径");
+        const budget = 1000;
+        const truncated = truncateTextToTokenBudget(text, budget);
+        assert.ok(truncated.length < text.length, "超预算文本必须被截断");
+        assert.ok(truncated.includes("已截断"), "应带截断说明");
+        assert.ok(truncated.startsWith("首部标记"), "保留头部");
+        assert.ok(truncated.endsWith("尾部标记。"), "保留尾部");
+        // 预算 1000 token ≈ 1000 CJK 字符，截断产物应回到该量级
+        assert.ok(truncated.length < 1600, `截断后长度应回到预算附近，实际 ${truncated.length}`);
     });
 });
 
