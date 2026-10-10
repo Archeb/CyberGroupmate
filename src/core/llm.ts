@@ -24,6 +24,7 @@ import { loadConfig } from "./config.js";
 import { createLogger } from "./logger.js";
 import { createHash } from "node:crypto";
 import { sanitizePromptText } from "./text-safety.js";
+import { recordTokenCalibrationFromUsage } from "../memory-v2/token-calibration.js";
 import { EventEmitter } from "node:events";
 
 // Provider 实现
@@ -590,6 +591,10 @@ async function _callLLMSingleKeyInner(
                 };
                 llmEvents.emit("llm:response", responseEvent);
             }
+
+            // ── token 校准采样：用真实 promptTokens 对比本地估算，更新该模型的校准系数 ──
+            // 只在成功响应后采样；小请求（模板/开销噪音占比高）由模块内部过滤。
+            recordTokenCalibrationFromUsage(model, result.usage?.promptTokens, messages);
 
             return result;
         } catch (err: unknown) {

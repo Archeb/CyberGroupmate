@@ -49,7 +49,7 @@ import { EventEmitter } from "node:events";
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { shouldCompact, compact as contextManagerCompact, forceTrim as contextManagerForceTrim } from "../memory-v2/context-manager.js";
+import { shouldCompact, compact as contextManagerCompact, forceTrim as contextManagerForceTrim, estimateMessagesTokens, estimateTokens } from "../memory-v2/context-manager.js";
 import { DEFAULT_BANNED_WORDS } from "../core/banned-words.js";
 import { registerPendingMessageSignal, type PendingMessageSignal } from "../sandbox/send-interrupt.js";
 
@@ -343,8 +343,21 @@ function formatThinkingPlaceholder(reason: string): string {
     return `本次思考过程：\n\`\`\`text\n${reason}\n\`\`\``;
 }
 
-function isExecutorTaskPrompt(content: string): boolean {
-    return content.startsWith("═══ ") && content.includes(EXECUTOR_FOOTER_TEXT);
+/** 任务 prompt 的 scope 标记：结构化标识任务 prompt 消息，替代内容嗅探 */
+const EXECUTOR_TASK_SCOPE = "executor-task";
+
+/**
+ * 判断一条 session 消息是否为 executor 任务 prompt。
+ *
+ * 优先用 scope 元数据（新数据在组装出站消息时打标）；
+ * 旧持久化数据没有 scope，退回内容识别——用 includes 匹配 header 行，
+ * 兼容 session digests 等早期 section 排在 "═══ taskId ═══" 之前的渲染顺序
+ * （startsWith 判断在 digests 存在时永远不命中，导致旧任务 prompt 从不折叠）。
+ */
+function isExecutorTaskPromptMessage(msg: Pick<SessionMessage, "role" | "content" | "scope">): boolean {
+    if (msg.role !== "user") return false;
+    if (msg.scope === EXECUTOR_TASK_SCOPE) return true;
+    return msg.content.includes("═══ ") && msg.content.includes(EXECUTOR_FOOTER_TEXT);
 }
 
 function collapseExecutorTaskPrompt(content: string): string {
@@ -356,7 +369,8 @@ function collapseExecutorTaskPrompt(content: string): string {
 
 function findLatestExecutorTaskPromptIndex(messages: SessionMessage[]): number {
     for (let index = messages.length - 1; index >= 0; index--) {
-        if (messages[index]?.role === "user" && isExecutorTaskPrompt(messages[index].content)) {
+        const msg = messages[index];
+        if (msg && isExecutorTaskPromptMessage(msg)) {
             return index;
         }
     }
@@ -383,6 +397,8 @@ export interface SessionMessage {
     role: "system" | "user" | "assistant";
     content: string;
     timestamp: string;
+    /** 与 ChatMessage.scope 同义；当前用于标记 executor 任务 prompt（executor-task） */
+    scope?: string;
     /** 与 assistant turn 一起持久化的 provider 原生推理状态。 */
     reasoning?: ChatMessage["reasoning"];
 }
@@ -399,6 +415,31 @@ export interface SessionExecutionRecord {
 }
 
 const SESSION_MESSAGE_ID_RE = /\[msgId:([^\]\r\n]+)\]/g;
+
+// ─── Layer-1 compact 摘要的体积上限 ───
+// 实测事故：198 次任务累积的已见 msgId 跨度让 rebuildCompactedInteractionHistory
+// 从 memory 拉回 2295 条消息、23 万字符塞进一条 compact 消息——摘要比被压缩的
+// 历史还大，直接把请求顶到窗口之外。这两道上限保证 compact 产物有界。
+
+/** 重建交互历史最多取最近 N 条消息 */
+const COMPACT_REBUILD_MAX_MESSAGES = 200;
+/** 重建交互历史的 token 预算，超预算截断保留首尾 */
+const COMPACT_REBUILD_MAX_TOKENS = 6000;
+/** compact 摘要中最多保留最近 N 条 execution record 摘要 */
+const COMPACT_RECORD_SUMMARY_LIMIT = 30;
+
+/** 把文本截断到 token 预算内（保留首尾、中间省略）；供 compact 摘要等需要硬上限的文本使用 */
+export function truncateTextToTokenBudget(text: string, maxTokens: number): string {
+    const tokens = estimateTokens(text);
+    if (tokens <= maxTokens) return text;
+    const ratio = maxTokens / tokens;
+    const keepChars = Math.max(80, Math.floor(text.length * ratio) - 60);
+    if (keepChars >= text.length) return text;
+    const headChars = Math.floor(keepChars * 0.6);
+    const tailChars = keepChars - headChars;
+    const omitted = text.length - keepChars;
+    return `${text.slice(0, headChars)}\n…[已截断：省略 ${omitted} 字]…\n${text.slice(text.length - tailChars)}`;
+}
 
 function extractSeenMessageIds(messages: SessionMessage[]): string[] {
     const ids: string[] = [];
@@ -598,10 +639,11 @@ export class CodeActExecutor {
         return this.session.map((msg, index) => ({
             role: msg.role,
             content: sanitizePromptTimestamps(
-                msg.role === "user" && isExecutorTaskPrompt(msg.content) && index !== latestTaskPromptIndex
+                isExecutorTaskPromptMessage(msg) && index !== latestTaskPromptIndex
                     ? collapseExecutorTaskPrompt(msg.content)
                     : msg.content,
             ),
+            ...(msg.scope ? { scope: msg.scope } : {}),
             ...(msg.reasoning ? { reasoning: msg.reasoning } : {}),
             ...(index === this.session.length - 1 ? { cacheBreakpoint: true } : {}),
         }));
@@ -745,16 +787,18 @@ export class CodeActExecutor {
      * 无 LLM 的强制裁剪兜底：只留本来就要保留的尾部，
      * 本来要被 compact 掉的部分直接丢弃。
      */
-    private forceTrimSession(reason: string): void {
+    private forceTrimSession(reason: string, overheadTokens = 0): void {
         const targetSessionConfig = resolveComponentProfiles("session")[0];
         const chatMessages: ChatMessage[] = this.session.map(m => ({
             role: m.role,
             content: m.content,
+            ...(m.scope ? { scope: m.scope } : {}),
             ...(m.reasoning ? { reasoning: m.reasoning } : {}),
         }));
         const trimmed = contextManagerForceTrim(chatMessages, undefined, {
             targetLlmConfig: targetSessionConfig,
             reason,
+            overheadTokens,
         });
 
         if (trimmed.dropped === 0 && !trimmed.truncated) {
@@ -771,6 +815,7 @@ export class CodeActExecutor {
         this.session = trimmed.messages.map(m => ({
             role: m.role as SessionMessage["role"],
             content: m.content,
+            ...(m.scope ? { scope: m.scope } : {}),
             timestamp,
         }));
         this.lastCompactedAt = timestamp;
@@ -943,12 +988,43 @@ export class CodeActExecutor {
             messages.push(...this.buildSessionHistoryMessages(isContinuation));
         }
 
-        // 当前任务 prompt 放在最后（路径 A 时附加图片）
+        // 当前任务 prompt 放在最后（路径 A 时附加图片）。
+        // scope 标记用于之后从 session 历史中识别任务 prompt（折叠 ephemeral 部分）。
         messages.push({
             role: "user",
             content: taskPrompt,
+            scope: EXECUTOR_TASK_SCOPE,
             ...(imageParts.length > 0 ? { imageParts } : {}),
         });
+
+        // ─── 出站消息预检（system + 历史 + 本次任务 prompt 的完整语料）───
+        // needsCompaction 只看 this.session；system prompt（含 apiTypeDefs）和
+        // context-engine 渲染的任务 prompt 不在内，预检通过不代表第一个请求在窗口内。
+        // 这里按完整出站消息检查，超窗时先压缩历史并重建历史段（system 与任务 prompt 不变）。
+        const sessionProfile = resolveComponentProfiles("session")[0];
+        const overheadTokens = estimateMessagesTokens([messages[0], messages[messages.length - 1]]);
+        if (shouldCompact(messages, undefined, sessionProfile)) {
+            log.warn("executeWithSandbox: 出站消息超过上下文预算，先压缩 session 历史", {
+                chatId: this.chatId,
+                taskId: task.taskId,
+                outboundMessages: messages.length,
+                overheadTokens,
+            });
+            try {
+                await this.compactSession(overheadTokens);
+            } catch (err) {
+                log.error("executeWithSandbox: compactSession 失败，改为强制裁剪", {
+                    chatId: this.chatId,
+                    error: String(err),
+                });
+                this.forceTrimSession("executeWithSandbox 出站消息预检 compactSession 异常", overheadTokens);
+            }
+            // this.session 已被压缩，重建出站消息中的历史段
+            messages.splice(1, messages.length - 2, ...this.buildSessionHistoryMessages(isContinuation));
+            // 压缩改变了持久化状态，必须在首个请求前落盘
+            // （与 prepareSessionForExecution 的"先持久化再请求"约定一致）
+            this.saveSession();
+        }
 
         // ═══ Fix 1: 注册 SentMessageCollector ═══
         // 清空 pending buffer（层 1 已经刷新了 recentMessages，此处 drain 掉残留）
@@ -1047,6 +1123,7 @@ export class CodeActExecutor {
             this.session.push({
                 role: msg.role as "system" | "user" | "assistant",
                 content: sanitizePromptTimestamps(msg.content),
+                ...(msg.scope ? { scope: msg.scope } : {}),
                 ...(msg.reasoning ? { reasoning: msg.reasoning } : {}),
                 timestamp: new Date().toISOString(),
             });
@@ -1704,7 +1781,18 @@ export class CodeActExecutor {
 
         if (messages.length === 0) return null;
 
-        const formatted = this.formatMemoryMessagesForHistory(messages);
+        // 已见 msgId 的首尾跨度可能覆盖上千条消息，无上限的重建会让
+        // compact 摘要本身超出窗口。只保留最近 COMPACT_REBUILD_MAX_MESSAGES 条，
+        // 再按 token 预算截断（保留首尾）。
+        if (messages.length > COMPACT_REBUILD_MAX_MESSAGES) {
+            messages = messages.slice(-COMPACT_REBUILD_MAX_MESSAGES);
+            source += `；截取最近 ${messages.length} 条`;
+        }
+
+        const formatted = truncateTextToTokenBudget(
+            this.formatMemoryMessagesForHistory(messages),
+            COMPACT_REBUILD_MAX_TOKENS,
+        );
         if (!formatted) return null;
 
         log.info("compactSession: 已从 memory 重建交互历史", {
@@ -1775,14 +1863,14 @@ export class CodeActExecutor {
      * 调用 context-manager.compact() 生成 LLM Context Briefing，
      * 支持话题保护和 reply chain 保护。
      */
-    private async compactSession(): Promise<void> {
+    private async compactSession(overheadTokens = 0): Promise<void> {
         const keep = Math.max(4, Math.floor(this.config.maxSessionMessages * 0.4));
         // 条数不够时跳过 Layer 1，但仍要走 Layer 2 的 token 预算检查
         // （少量超大消息同样会撑爆窗口）。
         if (this.session.length > keep) {
             this.compactSessionLayer1(keep);
         }
-        await this.compactSessionLayer2();
+        await this.compactSessionLayer2(overheadTokens);
     }
 
     /** Layer 1: 结构化快速 compact（无 LLM） */
@@ -1791,9 +1879,9 @@ export class CodeActExecutor {
         const recentMessages = this.session.slice(-keep);
 
         // ═══ Layer 1: 结构化快速 compact ═══
-        // 从 executionRecords 构建摘要
+        // 从 executionRecords 构建摘要（只带最近的，全量会让摘要失控）
         const recordSummaries: string[] = [];
-        for (const rec of this.executionRecords) {
+        for (const rec of this.executionRecords.slice(-COMPACT_RECORD_SUMMARY_LIMIT)) {
             const summary = formatExecutionRecordForCompact(rec);
             if (summary) recordSummaries.push(summary);
         }
@@ -1850,40 +1938,47 @@ export class CodeActExecutor {
      * compact 路由缺失或摘要模型不可用时不能就此放弃：否则 session 永久超窗，
      * 之后每次 LLM 调用都会因为 context 过长而失败。此时退化为强制裁剪。
      */
-    private async compactSessionLayer2(): Promise<void> {
+    private async compactSessionLayer2(overheadTokens = 0): Promise<void> {
         const sessionConfigs = resolveComponentProfiles("session");
         const compactConfigs = resolveComponentProfiles("compact");
         const targetSessionConfig = sessionConfigs[0];
         const chatMessages: ChatMessage[] = this.session.map(m => ({
             role: m.role,
             content: m.content,
+            ...(m.scope ? { scope: m.scope } : {}),
             ...(m.reasoning ? { reasoning: m.reasoning } : {}),
         }));
-        if (!shouldCompact(chatMessages, undefined, targetSessionConfig)) {
+        if (!shouldCompact(chatMessages, undefined, targetSessionConfig, overheadTokens)) {
             return;
         }
 
         log.info("compactSession Layer 2: token 仍超预算", {
             chatId: this.chatId,
             messageCount: chatMessages.length,
+            overheadTokens,
             hasCompactProfile: compactConfigs.length > 0,
         });
 
         if (compactConfigs.length === 0) {
-            this.forceTrimSession("未配置 compact 模型路由");
+            this.forceTrimSession("未配置 compact 模型路由", overheadTokens);
             return;
         }
 
         try {
             const compacted = await contextManagerCompact(chatMessages, compactConfigs, undefined, {
                 targetLlmConfig: targetSessionConfig,
+                overheadTokens,
             });
             this.session = compacted.map(m => ({
                 role: m.role as SessionMessage["role"],
                 content: m.content,
+                ...(m.scope ? { scope: m.scope } : {}),
                 ...(m.reasoning ? { reasoning: m.reasoning } : {}),
                 timestamp: new Date().toISOString(),
             }));
+            // LLM compact 丢弃了历史中的已提交 sections，delta 追踪随之失效，
+            // 必须重置（与 Layer 1 行为一致），否则下次 render 会漏发增量。
+            this.contextEngine.ledger.reset();
             log.info("compactSession Layer 2 完成", {
                 chatId: this.chatId,
                 afterMessages: this.session.length,
@@ -1893,7 +1988,7 @@ export class CodeActExecutor {
                 chatId: this.chatId,
                 error: String(err),
             });
-            this.forceTrimSession(`compact 模型调用失败：${String(err).slice(0, 160)}`);
+            this.forceTrimSession(`compact 模型调用失败：${String(err).slice(0, 160)}`, overheadTokens);
         }
     }
 }
