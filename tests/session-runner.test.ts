@@ -6,7 +6,36 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { parseResponse } from "../src/sandbox/session-runner.js";
+import { parseResponse, SentMessageCollector, isTimeoutError } from "../src/sandbox/session-runner.js";
+
+describe("isTimeoutError", () => {
+    it("matches code-execution and LLM timeouts, not generic errors", () => {
+        assert.equal(isTimeoutError("Code execution timed out after 60000ms"), true);
+        assert.equal(isTimeoutError("LLM call failed: TimeoutError: socket"), true);
+        assert.equal(isTimeoutError("Request timeout"), true);
+        assert.equal(isTimeoutError("Sandbox execution aborted: boom"), false);
+        assert.equal(isTimeoutError(undefined), false);
+        assert.equal(isTimeoutError(""), false);
+    });
+});
+
+describe("SentMessageCollector reaction tracking", () => {
+    it("counts agent_reaction_sent without adding to allSent", () => {
+        const c = new SentMessageCollector();
+        c.collect({ type: "system.agent_reaction_sent", chatId: "telegram:1", emoji: "👍" });
+        c.collect({ type: "system.agent_reaction_sent", chatId: "telegram:1", emoji: "🔥" });
+        assert.equal(c.reactionCount, 2);
+        assert.equal(c.allSent.length, 0);
+    });
+
+    it("keeps messages and reactions in separate counters", () => {
+        const c = new SentMessageCollector();
+        c.collect({ type: "system.agent_message_sent", chatId: "telegram:1", text: "hi" });
+        c.collect({ type: "system.agent_reaction_sent", chatId: "telegram:1", emoji: "👍" });
+        assert.equal(c.allSent.length, 1);
+        assert.equal(c.reactionCount, 1);
+    });
+});
 
 describe("parseResponse", () => {
     it("should parse thinking only (no code blocks)", () => {
