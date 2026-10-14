@@ -96,12 +96,26 @@ export class MetaSandbox {
             for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
                 const childPath = path ? `${path}.${key}` : key;
                 if (typeof child === "function") {
-                    wrapped[key] = async (...args: unknown[]) => {
-                        const result = normalizeProgrammaticTimestamps(
-                            await (child as (...params: unknown[]) => unknown).apply(value, args)
-                        );
-                        this.pushConsoleEntry("log", [`[meta-api] ${childPath} ->`, result]);
-                        return result;
+                    wrapped[key] = (...args: unknown[]) => {
+                        const invocation = (async () => {
+                            const result = normalizeProgrammaticTimestamps(
+                                await (child as (...params: unknown[]) => unknown).apply(value, args)
+                            );
+                            this.pushConsoleEntry("log", [`[meta-api] ${childPath} ->`, result]);
+                            return result;
+                        })();
+                        // 安全 catch：挂上反应即视为已处理，agent 未 await 的悬空拒绝不再升级为
+                        // unhandledRejection / 进程退出；正确 await 的调用方仍拿到原始拒绝，
+                        // execute() 的错误路径与 two-pass 文档注入行为不变。
+                        invocation.catch((error) => {
+                            log.warn("Meta API async rejection (agent 未 await?)", {
+                                method: childPath,
+                                sessionId: this.activeSessionId,
+                                error: error instanceof Error ? error.message : String(error),
+                            });
+                            this.pushConsoleEntry("error", [`[meta-api] ${childPath} rejected (await 其结果以处理错误):`, error]);
+                        });
+                        return invocation;
                     };
                 } else {
                     wrapped[key] = wrap(child, childPath);
