@@ -358,6 +358,10 @@ export function createTelegramClientProxy(
             });
             return sent;
         },
+        searchStickers: async (query?: { emoji?: string | string[]; keywords?: string | string[]; limit?: number }) => {
+            const results = await callTelegramHost("telegram.searchStickers", [query ?? {}]);
+            return Array.isArray(results) ? results : [];
+        },
         getChat: async (chatId: number | string) =>
             callTelegramHost("telegram.getChat", [chatId]),
         getUser: async (userId: number | string) =>

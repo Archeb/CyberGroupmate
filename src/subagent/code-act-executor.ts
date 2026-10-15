@@ -1214,6 +1214,10 @@ export class CodeActExecutor {
     private buildAvailableStickers(task: CodeActReplyTask): Array<{ emoji?: string; emojis?: string[]; description: string; uniqueFileId: string }> | undefined {
         if (!this.memory) return undefined;
 
+        // 与 adapter 层的发送拦截保持同一语义：disallow_all 不提供贴纸；allow_listed 仅已启用；allow_all 不过滤
+        const stickerSendingMode = this.visionConfig?.stickerSendingMode ?? "allow_all";
+        if (stickerSendingMode === "disallow_all") return undefined;
+
         const suggestedEmojis = task.decisions.flatMap(decision => decision.suggestedEmojis ?? []);
         if (suggestedEmojis.length === 0) return undefined;
 
@@ -1223,7 +1227,8 @@ export class CodeActExecutor {
         const sendableStickers: Array<{ emoji?: string; emojis?: string[]; description: string; uniqueFileId: string }> = [];
 
         for (const match of matches) {
-            if (!match.enabled || seen.has(match.uniqueFileId)) continue;
+            if (seen.has(match.uniqueFileId)) continue;
+            if (stickerSendingMode === "allow_listed" && !match.enabled) continue;
             const filePath = this.mediaDownloader?.getExistingPath(match.uniqueFileId);
             if (!filePath || filePath.toLowerCase().endsWith(".webm")) continue;
 

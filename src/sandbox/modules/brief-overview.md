@@ -114,7 +114,8 @@ onebot.d.ts — QQ / OneBot 平台 API 系统注入的 OneBot host proxy 接口�
 - `sendText`: 发送文本消息。文字 @昵称 不是真实 @；提及或触发 bot 请使用 sendAt 或 opts.mentions。 新平台参数优先用 send_group_msg/send_private_msg/callApi。
 - `sendMedia`: 发送媒体消息。兼容 wrapper，冻结为兜底用法；新参数优先用 OneBot 原生 action。 支持本地文件路径或 URL。当 `type` 为 `audio` / `voice` 时，QQ/NapCat 不支持 `replyTo`，该参数会被忽略。
 - `sendFile`: 发送文件。兼容 wrapper，冻结为兜底用法；新参数优先用 OneBot 原生 action。
-- `sendSticker`: 发送贴纸或图片表情。兼容 wrapper，冻结为兜底用法；新参数优先用 OneBot 原生 action。
+- `sendSticker`: 发送贴纸或图片表情。兼容 wrapper，冻结为兜底用法；新参数优先用 OneBot 原生 action。 受 vision.sticker_sending_mode 策略约束：allow_listed 模式下仅允许发送贴纸库允许列表（Dashboard 已启用）中的贴纸， 被拦截时应改用 searchStickers 查找可发送的贴纸。
+- `searchStickers`: 搜索贴纸库中当前策略允许发送的贴纸（allow_listed 模式仅返回已启用的贴纸；disallow_all 返回空）。 按贴纸关联 emoji 或描述关键词过滤（多个关键词为 AND 关系）；不传条件时返回最新的可发送贴纸。
 - `sendFace`: 发送 QQ 系统表情（CQ face）。兼容 wrapper，冻结为兜底用法；新参数优先用 OneBot 原生 action。
 - `sendTyping`: OneBot 无 typing 指示，此方法为 no-op。
 - `deleteMessages`: 撤回消息。
@@ -183,7 +184,8 @@ telegram.d.ts — Telegram 平台 API 这是系统注入的 Telegram host proxy 
 - `sendText`: mtcute 原生 sendText(chatId, text, params?)。text 支持 string 或 { text, entities }，params 保留 mtcute CommonSendParams 及新增字段。
 - `sendMedia`: 发送媒体消息。支持 URL 和本地文件路径（支持绝对路径或基于 cwd 工作区的相对路径）。
 - `sendFile`: 发送磁盘文件到聊天。支持绝对路径或基于 cwd 的相对路径。host 侧读取文件并上传。始终作为文件/文档发送。
-- `sendSticker`: 发送贴纸。通过 uniqueFileId 引用本地已缓存的贴纸文件。
+- `sendSticker`: 发送贴纸。通过 uniqueFileId 引用本地已缓存的贴纸文件。 受 vision.sticker_sending_mode 策略约束：allow_listed 模式下仅允许发送允许列表（Dashboard 已启用）中的贴纸， 被拦截时应改用 searchStickers 查找可发送的贴纸。
+- `searchStickers`: 搜索贴纸库中当前策略允许发送的贴纸（allow_listed 模式仅返回已启用的贴纸；disallow_all 返回空）。 按贴纸关联 emoji 或描述关键词过滤（多个关键词为 AND 关系）；不传条件时返回最新的可发送贴纸。 返回的 uniqueFileId 可直接用于 sendSticker。
 - `sendMediaGroup`: 发送媒体相册（多张图片/视频合并为一组）。 第一个媒体项的 caption 将作为整组的文案。
 - `forwardMessage`: 转发一条或多条已有消息到目标聊天，用于复读、搬运或保留原消息来源。 支持隐藏原作者/原 caption；目标聊天放第一个参数，便于遵守绑定聊天写限制。
 - `sendReaction`: 对消息发送表情表态。传 null 以撤销表态。

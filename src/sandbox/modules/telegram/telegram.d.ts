@@ -126,9 +126,19 @@ declare const telegram: {
     sendFile(chatId: number | string, filePath: string, opts?: { replyTo?: number; caption?: string; fileName?: string; mimeType?: string }): Promise<{ id: number; text: string; date: Date; chat: { id: number; title?: string; username?: string; type: "private" | "group" | "supergroup" | "channel"; }; sender: { id: number; displayName?: string; title?: string; username?: string; }; isMention: boolean; replyToMessage?: { id: number } | null; media?: unknown; mediaInfo?: { type: "photo" | "sticker" | "video" | "document" | "animation" | "audio" | "other"; rawType?: string; fileId?: string; uniqueFileId?: string; emoji?: string; mimeType?: string; fileName?: string; width?: number; height?: number; fileSize?: number; filePath?: string; downloadStatus?: "downloaded" | "cached" | "too_large" | "failed"; downloadError?: string; }; }>;
     /**
      * 发送贴纸。通过 uniqueFileId 引用本地已缓存的贴纸文件。
+     * 受 vision.sticker_sending_mode 策略约束：allow_listed 模式下仅允许发送允许列表（Dashboard 已启用）中的贴纸，
+     * 被拦截时应改用 searchStickers 查找可发送的贴纸。
      * @example sendSticker(chatId, 'AgADAgATxxxxxx')
      */
     sendSticker(chatId: number | string, uniqueFileId: string, opts?: { replyTo?: number }): Promise<{ id: number; text: string; date: Date; chat: { id: number; title?: string; username?: string; type: "private" | "group" | "supergroup" | "channel"; }; sender: { id: number; displayName?: string; title?: string; username?: string; }; isMention: boolean; replyToMessage?: { id: number } | null; media?: unknown; mediaInfo?: { type: "photo" | "sticker" | "video" | "document" | "animation" | "audio" | "other"; rawType?: string; fileId?: string; uniqueFileId?: string; emoji?: string; mimeType?: string; fileName?: string; width?: number; height?: number; fileSize?: number; filePath?: string; downloadStatus?: "downloaded" | "cached" | "too_large" | "failed"; downloadError?: string; }; }>;
+    /**
+     * 搜索贴纸库中当前策略允许发送的贴纸（allow_listed 模式仅返回已启用的贴纸；disallow_all 返回空）。
+     * 按贴纸关联 emoji 或描述关键词过滤（多个关键词为 AND 关系）；不传条件时返回最新的可发送贴纸。
+     * 返回的 uniqueFileId 可直接用于 sendSticker。
+     * @example searchStickers({ emoji: '😂', limit: 8 })
+     * @example searchStickers({ keywords: '猫 开心' })
+     */
+    searchStickers(query?: { emoji?: string | string[]; keywords?: string | string[]; limit?: number }): Promise<Array<{ uniqueFileId: string; description: string; emojis: string[]; enabled: boolean }>>;
     /**
      * 发送媒体相册（多张图片/视频合并为一组）。
      * 第一个媒体项的 caption 将作为整组的文案。

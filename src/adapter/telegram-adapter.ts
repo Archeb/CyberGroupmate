@@ -17,6 +17,7 @@ import { createLogger } from "../core/logger.js";
 import { shouldDropInbound } from "../core/inbound-filter.js";
 import { userGate } from "./user-gate.js";
 import type { MediaDownloader } from "../core/media-downloader.js";
+import type { StickerSendPolicy } from "../core/sticker-send-policy.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { createHash, randomBytes } from "node:crypto";
@@ -30,6 +31,7 @@ const log = createLogger("telegram-adapter");
 const BOT_API_METHODS = new Set([
     "telegram.getMe", "telegram.getChat", "telegram.sendText", "telegram.sendMedia",
     "telegram.sendFile", "telegram.sendSticker", "telegram.sendTyping", "telegram.downloadMedia",
+    "telegram.searchStickers",
 ]);
 
 /** 白名单条目：去掉 `telegram:` 前缀并 trim，便于与 composite chatId 比对 */
@@ -326,6 +328,7 @@ export class TelegramAdapter implements PlatformAdapter {
         private print: PrintHandler = console.log,
         private createClient: TelegramClientFactory = defaultTelegramClientFactory,
         private mediaDownloader?: MediaDownloader,
+        private stickerPolicy?: StickerSendPolicy,
     ) {
         this.legacyPrewarmGroupIds = new Set((config.whitelist?.groups ?? []).map(normalizeWhitelistId));
     }
@@ -846,7 +849,10 @@ export class TelegramAdapter implements PlatformAdapter {
             case "telegram.sendMedia": {
                 const peer = await this.ensurePeerCached(args[0]);
                 const opts = this.normalizeReplyOpts(args[2]);
-                const mediaArg = this.prepareOutgoingMediaForSend("telegram.sendMedia", args[1]);
+                const mediaArg = this.prepareOutgoingMediaForSend(
+                    "telegram.sendMedia",
+                    this.checkOutgoingStickerMedia("telegram.sendMedia", args[1]),
+                );
 
                 const captionLen = mediaArg
                     && typeof mediaArg === "object"
@@ -1062,6 +1068,10 @@ export class TelegramAdapter implements PlatformAdapter {
                 const stickerTarget = String(args[0] ?? "");
                 const uniqueFileId = String(args[1] ?? "");
                 if (!uniqueFileId) throw new Error("sendSticker: uniqueFileId 为空");
+                this.stickerPolicy?.assertSendAllowed(uniqueFileId, {
+                    method: "telegram.sendSticker",
+                    searchApi: "telegram.searchStickers",
+                });
                 const stickerPath = this.mediaDownloader.getExistingPath(uniqueFileId);
                 if (!stickerPath) throw new Error(`sendSticker: 未找到贴纸文件 uniqueFileId=${uniqueFileId}`);
                 if (!fs.existsSync(stickerPath)) throw new Error(`sendSticker: 文件不存在 ${stickerPath}`);
@@ -1072,7 +1082,7 @@ export class TelegramAdapter implements PlatformAdapter {
                         const dynamicStickerMedia = await this.buildTelegramDynamicStickerMedia(preparedSticker);
                         return this.handleCall("telegram.sendMedia", [
                             stickerTarget,
-                            dynamicStickerMedia,
+                            { ...dynamicStickerMedia, uniqueFileId },
                             stickerOpts,
                         ]);
                     } catch (err) {
@@ -1089,6 +1099,7 @@ export class TelegramAdapter implements PlatformAdapter {
                                 file: fallbackSticker.buffer,
                                 fileName: fallbackSticker.fileName,
                                 fileMime: fallbackSticker.mimeType,
+                                uniqueFileId,
                             },
                             stickerOpts,
                         ]);
@@ -1101,9 +1112,19 @@ export class TelegramAdapter implements PlatformAdapter {
                         file: preparedSticker.buffer,
                         fileName: preparedSticker.fileName,
                         fileMime: preparedSticker.mimeType,
+                        uniqueFileId,
                     },
                     stickerOpts,
                 ]);
+            }
+            case "telegram.searchStickers": {
+                if (!this.stickerPolicy) throw new Error("telegram.searchStickers: stickerPolicy not injected into TelegramAdapter");
+                const query = (args[0] ?? {}) as Record<string, unknown>;
+                return this.stickerPolicy.searchStickers({
+                    emoji: typeof query.emoji === "string" || Array.isArray(query.emoji) ? (query.emoji as string | string[]) : undefined,
+                    keywords: typeof query.keywords === "string" || Array.isArray(query.keywords) ? (query.keywords as string | string[]) : undefined,
+                    limit: typeof query.limit === "number" && Number.isFinite(query.limit) ? query.limit : undefined,
+                });
             }
             // ─── 扩展: 主动拉取 ───
             case "telegram.getFullUser": {
@@ -1613,6 +1634,25 @@ export class TelegramAdapter implements PlatformAdapter {
             }
         }
         return "";
+    }
+
+    /**
+     * sendMedia 的贴纸策略校验：type=sticker 时按 sticker_sending_mode 拦截，
+     * 校验通过后剥掉策略用的 uniqueFileId 标记，避免透传给 mtcute。
+     */
+    private checkOutgoingStickerMedia(method: string, media: unknown): unknown {
+        if (!this.stickerPolicy || !media || typeof media !== "object" || Array.isArray(media)) return media;
+        const record = media as Record<string, unknown>;
+        if (record.type !== "sticker") return media;
+        this.stickerPolicy.assertSendAllowed(
+            typeof record.uniqueFileId === "string" && record.uniqueFileId ? record.uniqueFileId : undefined,
+            { method, searchApi: "telegram.searchStickers" },
+        );
+        if ("uniqueFileId" in record) {
+            const { uniqueFileId: _policyMarker, ...rest } = record;
+            return rest;
+        }
+        return media;
     }
 
     private prepareOutgoingMediaForSend(method: string, media: unknown, mediaIndex?: number): unknown {

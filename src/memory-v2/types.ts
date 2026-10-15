@@ -831,8 +831,8 @@ export interface IMemoryStoreV2 {
     /** message_log 中出现过的会话（可按平台前缀过滤） */
     listKnownChatIds(platformPrefix?: string): string[];
 
-    /** 获取已缓存的 sticker 描述（只读，用于上下文富化） */
-    getStickerDescription(uniqueFileId: string, contentHash?: string): { description: string; emoji?: string; emojis?: string[] } | null;
+    /** 获取已缓存的 sticker 描述（只读，用于上下文富化；enabled 表示是否在发送允许列表中） */
+    getStickerDescription(uniqueFileId: string, contentHash?: string): { description: string; emoji?: string; emojis?: string[]; enabled: boolean } | null;
 
     /** 搜索核心事实 */
     searchFacts(query: string, options?: {

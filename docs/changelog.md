@@ -1,5 +1,38 @@
 # Changelog
 
+## 2026-10-15: 修复贴纸发送策略失效 + 新增 searchStickers 搜索 API
+
+meta-codeact 重构（移除 `dispatch-handler.ts`）时丢失了 `sticker_sending_mode` 的全部运行时校验，导致 `allow_listed` / `disallow_all` 模式下 Agent 仍可通过 `sendSticker`（任意 uniqueFileId）或 `sendMedia(type=sticker)` 发送允许列表外的贴纸。本次在 adapter 层重新接入强制校验，并为 Agent 提供合规的贴纸库搜索入口。
+
+### 🐛 修复
+
+- **发送层强制校验**：`telegram.sendSticker`、`telegram.sendMedia(type=sticker)`、`onebot.sendSticker` 在发送前按 `vision.sticker_sending_mode` 校验：
+  - `allow_listed`：仅允许 `sticker_descriptions.enabled=true` 的贴纸；`sendMedia` 以 `type=sticker` 发送时必须携带 `uniqueFileId` 引用库内贴纸（堵住自造贴纸文件的绕过）
+  - `disallow_all`：完全拒绝
+  - 被拦截时的报错信息会引导 Agent 改用 `searchStickers` 搜索允许发送的贴纸
+- **执行器建议列表恢复模式语义**：`buildAvailableStickers` 在 `disallow_all` 下不再提供贴纸、`allow_all` 下不再错误排除未启用贴纸
+- **模式热生效**：策略经 `loadConfig()` 读取模式，Dashboard 保存后立即生效，无需重启
+
+### 🆕 searchStickers API
+
+Telegram / OneBot 沙盒模块新增 `searchStickers({ emoji?, keywords?, limit? })`，返回**当前策略下允许发送**的贴纸（`allow_listed` 仅返回已启用；`disallow_all` 返回空），结果含 `uniqueFileId` 可直接用于 `sendSticker`。按贴纸关联 emoji 或描述关键词（多关键词 AND）过滤，不传条件返回最新可发送贴纸。
+
+### 改动文件清单
+
+| 文件 | 变更 |
+|---|---|
+| `src/core/sticker-send-policy.ts` | [NEW] 共享贴纸发送策略：模式校验 + 报错引导 + 合规搜索 |
+| `src/adapter/telegram-adapter.ts` | `sendSticker`/`sendMedia(type=sticker)` 接入校验；新增 `telegram.searchStickers` host call |
+| `src/adapter/onebot-adapter.ts` | `sendSticker` 接入校验；新增 `onebot.searchStickers` host call |
+| `src/memory-v2/memory-v2.ts` / `types.ts` | `getStickerDescription` 返回 `enabled` |
+| `src/subagent/code-act-executor.ts` | `buildAvailableStickers` 恢复 `stickerSendingMode` 语义 |
+| `src/context-engine/providers/executor-providers.ts` | 「可用贴纸」提示词强调仅可发送列表内/搜索到的贴纸 |
+| `src/sandbox/modules/telegram/`、`src/sandbox/modules/onebot/` | 新增 `searchStickers` 沙盒 API + d.ts 文档 |
+| `src/main.ts` | 构造 `StickerSendPolicy` 并注入两个适配器 |
+| `tests/sticker-send-policy.test.ts` | [NEW] 策略校验与搜索的单元测试 |
+
+---
+
 ## 2026-04-19: Sandbox \`shell\` 模块升级：支持 Multi-Tab 与长时任务后台运行
 
 将 Sandbox 的终端环境从单 PTY（伪终端）阻塞架构重构为支持 \`detach\` / \`attach\` 后台管理的 Multi-Tab 架构，显著提升了 Agent 运行耗时命令（如开发服务器、编译任务）且不阻塞主线程的能力。
