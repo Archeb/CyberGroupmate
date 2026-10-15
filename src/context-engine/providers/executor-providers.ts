@@ -734,7 +734,8 @@ export const executorStickersProvider: SectionProvider<string> = {
     render(data) {
         return [
             "## 可用贴纸",
-            "以下贴纸可通过 sendSticker 发送（适合用贴纸表达情绪或活跃气氛时使用，不要强行发送）：",
+            "以下贴纸可通过 sendSticker 发送（适合用贴纸表达情绪或活跃气氛时使用，不要强行发送）。",
+            "只能发送此处列出的贴纸；需要更多选择时，先用当前平台的 searchStickers（如 telegram.searchStickers）按 emoji/关键词搜索允许发送的贴纸，不要使用列表外的贴纸 ID 或自造贴纸文件。",
             data,
         ].join("\n");
     },

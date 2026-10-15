@@ -194,10 +194,20 @@ declare const onebot: {
 
     /**
      * 发送贴纸或图片表情。兼容 wrapper，冻结为兜底用法；新参数优先用 OneBot 原生 action。
+     * 受 vision.sticker_sending_mode 策略约束：allow_listed 模式下仅允许发送贴纸库允许列表（Dashboard 已启用）中的贴纸，
+     * 被拦截时应改用 searchStickers 查找可发送的贴纸。
      * @example
      * await onebot.sendSticker(chatId, "Downloads/sticker.png");
      */
     sendSticker(chatId: string | number, sticker: string | Record<string, unknown>, opts?: { replyTo?: string | number; caption?: string }): Promise<OneBotMessageAck | null>;
+
+    /**
+     * 搜索贴纸库中当前策略允许发送的贴纸（allow_listed 模式仅返回已启用的贴纸；disallow_all 返回空）。
+     * 按贴纸关联 emoji 或描述关键词过滤（多个关键词为 AND 关系）；不传条件时返回最新的可发送贴纸。
+     * @example
+     * await onebot.searchStickers({ emoji: "😂", limit: 8 });
+     */
+    searchStickers(query?: { emoji?: string | string[]; keywords?: string | string[]; limit?: number }): Promise<Array<{ uniqueFileId: string; description: string; emojis: string[]; enabled: boolean }>>;
 
     /**
      * 发送 QQ 系统表情（CQ face）。兼容 wrapper，冻结为兜底用法；新参数优先用 OneBot 原生 action。

@@ -3135,26 +3135,26 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
 
     // ── Sticker 描述缓存 ──
 
-    private getStickerDescriptionRow(uniqueFileId: string, contentHash?: string): { unique_file_id: string; description: string; emoji?: string | null; emojis?: string | null; content_hash?: string | null } | null {
+    private getStickerDescriptionRow(uniqueFileId: string, contentHash?: string): { unique_file_id: string; description: string; emoji?: string | null; emojis?: string | null; content_hash?: string | null; enabled?: number } | null {
         if (contentHash) {
             const byHash = this.db.prepare(
-                "SELECT unique_file_id, description, emoji, emojis, content_hash FROM sticker_descriptions WHERE content_hash = ? LIMIT 1"
-            ).get(contentHash) as { unique_file_id: string; description: string; emoji?: string | null; emojis?: string | null; content_hash?: string | null } | undefined;
+                "SELECT unique_file_id, description, emoji, emojis, content_hash, enabled FROM sticker_descriptions WHERE content_hash = ? LIMIT 1"
+            ).get(contentHash) as { unique_file_id: string; description: string; emoji?: string | null; emojis?: string | null; content_hash?: string | null; enabled?: number } | undefined;
             if (byHash) return byHash;
         }
 
         const direct = this.db.prepare(
-            "SELECT unique_file_id, description, emoji, emojis, content_hash FROM sticker_descriptions WHERE unique_file_id = ?"
-        ).get(uniqueFileId) as { unique_file_id: string; description: string; emoji?: string | null; emojis?: string | null; content_hash?: string | null } | undefined;
+            "SELECT unique_file_id, description, emoji, emojis, content_hash, enabled FROM sticker_descriptions WHERE unique_file_id = ?"
+        ).get(uniqueFileId) as { unique_file_id: string; description: string; emoji?: string | null; emojis?: string | null; content_hash?: string | null; enabled?: number } | undefined;
         if (direct) return direct;
 
         const alias = this.db.prepare(`
-            SELECT sd.unique_file_id, sd.description, sd.emoji, sd.emojis, sd.content_hash
+            SELECT sd.unique_file_id, sd.description, sd.emoji, sd.emojis, sd.content_hash, sd.enabled
             FROM sticker_file_aliases a
             JOIN sticker_descriptions sd ON sd.content_hash = a.content_hash
             WHERE a.unique_file_id = ?
             LIMIT 1
-        `).get(uniqueFileId) as { unique_file_id: string; description: string; emoji?: string | null; emojis?: string | null; content_hash?: string | null } | undefined;
+        `).get(uniqueFileId) as { unique_file_id: string; description: string; emoji?: string | null; emojis?: string | null; content_hash?: string | null; enabled?: number } | undefined;
         return alias ?? null;
     }
 
@@ -3184,7 +3184,7 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
         ).run(contentHash, uniqueFileId);
     }
 
-    getStickerDescription(uniqueFileId: string, contentHash?: string): { description: string; emoji?: string; emojis?: string[] } | null {
+    getStickerDescription(uniqueFileId: string, contentHash?: string): { description: string; emoji?: string; emojis?: string[]; enabled: boolean } | null {
         const row = this.getStickerDescriptionRow(uniqueFileId, contentHash);
         if (!row) return null;
         const emojis = normalizeStoredEmojis(row.emojis ?? undefined, row.emoji ?? undefined);
@@ -3192,6 +3192,7 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
             description: row.description,
             emoji: emojis[0] ?? row.emoji ?? undefined,
             emojis,
+            enabled: row.enabled !== 0,
         };
     }
 

@@ -11,6 +11,7 @@ import type { AdapterConnectionStatus, BackfillOptions, BackfillResult, Platform
 import { ConnectionTracker } from "./connection-tracker.js";
 import { isNewerThanWatermark, summarizeBackfillNotes } from "./backfill.js";
 import type { MediaDownloader } from "../core/media-downloader.js";
+import type { StickerSendPolicy } from "../core/sticker-send-policy.js";
 import { ensureSupportedFormat } from "../core/vision-processor.js";
 import { composeChatId, ensureCompositeId, getRawId, parseChatId } from "../core/chat-id.js";
 import { assertNoAccidentalTextMention, outgoingOneBotMentions, validateOneBotMentionTarget } from "../core/onebot-mentions.js";
@@ -203,6 +204,7 @@ export class OneBotAdapter implements PlatformAdapter {
         private config: OneBotConfig,
         private nc: NotificationCenter,
         private mediaDownloader?: MediaDownloader,
+        private stickerPolicy?: StickerSendPolicy,
     ) {}
 
     async start(): Promise<void> {
@@ -738,6 +740,16 @@ export class OneBotAdapter implements PlatformAdapter {
                 await this.applyHumanizedDelay(chatId, caption.length);
                 return this.sendSticker(chatId, sticker, opts);
             }
+            case "onebot.searchStickers":
+            case "qq.searchStickers": {
+                if (!this.stickerPolicy) throw new Error("onebot.searchStickers: stickerPolicy not injected into OneBotAdapter");
+                const query = (args[0] ?? {}) as Record<string, unknown>;
+                return this.stickerPolicy.searchStickers({
+                    emoji: typeof query.emoji === "string" || Array.isArray(query.emoji) ? (query.emoji as string | string[]) : undefined,
+                    keywords: typeof query.keywords === "string" || Array.isArray(query.keywords) ? (query.keywords as string | string[]) : undefined,
+                    limit: typeof query.limit === "number" && Number.isFinite(query.limit) ? query.limit : undefined,
+                });
+            }
             case "onebot.sendFace":
             case "qq.sendFace": {
                 const chatId = ensureCompositeId("onebot", String(args[0] ?? ""));
@@ -1060,6 +1072,22 @@ export class OneBotAdapter implements PlatformAdapter {
     }
 
     private async sendSticker(chatId: string, sticker: unknown, opts: Record<string, unknown>): Promise<unknown> {
+        // 贴纸发送策略：引用贴纸库（uniqueFileId 或媒体缓存命中）时按 allowlist 校验；
+        // 库外文件/URL 在 allow_listed / disallow_all 下同样拦截。
+        if (this.stickerPolicy) {
+            let libraryId: string | undefined;
+            if (sticker && typeof sticker === "object" && !Array.isArray(sticker)) {
+                const rec = sticker as Record<string, unknown>;
+                if (typeof rec.uniqueFileId === "string" && rec.uniqueFileId) libraryId = rec.uniqueFileId;
+            } else if (typeof sticker === "string" && this.mediaDownloader?.getExistingPath(sticker.trim())) {
+                libraryId = sticker.trim();
+            }
+            this.stickerPolicy.assertSendAllowed(libraryId, {
+                method: "onebot.sendSticker",
+                searchApi: "onebot.searchStickers",
+            });
+        }
+
         let file: unknown = sticker;
 
         if (typeof sticker === "string") {

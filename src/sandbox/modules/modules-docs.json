@@ -440,8 +440,13 @@
       },
       {
         "name": "sendSticker",
-        "brief": "发送贴纸或图片表情。兼容 wrapper，冻结为兜底用法；新参数优先用 OneBot 原生 action。",
-        "fullDoc": "```typescript\nsendSticker(chatId: string | number, sticker: string | Record<string, unknown>, opts?: { replyTo?: string | number; caption?: string }): Promise<OneBotMessageAck | null>\n```\n\n\n发送贴纸或图片表情。兼容 wrapper，冻结为兜底用法；新参数优先用 OneBot 原生 action。\n\n**示例：**\n```typescript\nawait onebot.sendSticker(chatId, \"Downloads/sticker.png\");\n```"
+        "brief": "发送贴纸或图片表情。兼容 wrapper，冻结为兜底用法；新参数优先用 OneBot 原生 action。 受 vision.sticker_sending_mode 策略约束：allow_listed 模式下仅允许发送贴纸库允许列表（Dashboard 已启用）中的贴纸， 被拦截时应改用 searchStickers 查找可发送的贴纸。",
+        "fullDoc": "```typescript\nsendSticker(chatId: string | number, sticker: string | Record<string, unknown>, opts?: { replyTo?: string | number; caption?: string }): Promise<OneBotMessageAck | null>\n```\n\n\n发送贴纸或图片表情。兼容 wrapper，冻结为兜底用法；新参数优先用 OneBot 原生 action。\n受 vision.sticker_sending_mode 策略约束：allow_listed 模式下仅允许发送贴纸库允许列表（Dashboard 已启用）中的贴纸，\n被拦截时应改用 searchStickers 查找可发送的贴纸。\n\n**示例：**\n```typescript\nawait onebot.sendSticker(chatId, \"Downloads/sticker.png\");\n```"
+      },
+      {
+        "name": "searchStickers",
+        "brief": "搜索贴纸库中当前策略允许发送的贴纸（allow_listed 模式仅返回已启用的贴纸；disallow_all 返回空）。 按贴纸关联 emoji 或描述关键词过滤（多个关键词为 AND 关系）；不传条件时返回最新的可发送贴纸。",
+        "fullDoc": "```typescript\nsearchStickers(query?: { emoji?: string | string[]; keywords?: string | string[]; limit?: number }): Promise<Array<{ uniqueFileId: string; description: string; emojis: string[]; enabled: boolean }>>\n```\n\n\n搜索贴纸库中当前策略允许发送的贴纸（allow_listed 模式仅返回已启用的贴纸；disallow_all 返回空）。\n按贴纸关联 emoji 或描述关键词过滤（多个关键词为 AND 关系）；不传条件时返回最新的可发送贴纸。\n\n**示例：**\n```typescript\nawait onebot.searchStickers({ emoji: \"😂\", limit: 8 });\n```"
       },
       {
         "name": "sendFace",
@@ -718,8 +723,13 @@
       },
       {
         "name": "sendSticker",
-        "brief": "发送贴纸。通过 uniqueFileId 引用本地已缓存的贴纸文件。",
-        "fullDoc": "```typescript\nsendSticker(chatId: number | string, uniqueFileId: string, opts?: { replyTo?: number }): Promise<{ id: number; text: string; date: Date; chat: { id: number; title?: string; username?: string; type: \"private\" | \"group\" | \"supergroup\" | \"channel\"; }; sender: { id: number; displayName?: string; title?: string; username?: string; }; isMention: boolean; replyToMessage?: { id: number } | null; media?: unknown; mediaInfo?: { type: \"photo\" | \"sticker\" | \"video\" | \"document\" | \"animation\" | \"audio\" | \"other\"; rawType?: string; fileId?: string; uniqueFileId?: string; emoji?: string; mimeType?: string; fileName?: string; width?: number; height?: number; fileSize?: number; filePath?: string; downloadStatus?: \"downloaded\" | \"cached\" | \"too_large\" | \"failed\"; downloadError?: string; }; }>\n```\n\n\n发送贴纸。通过 uniqueFileId 引用本地已缓存的贴纸文件。\n\n**示例：**\n```typescript\n// sendSticker(chatId, 'AgADAgATxxxxxx')\n```"
+        "brief": "发送贴纸。通过 uniqueFileId 引用本地已缓存的贴纸文件。 受 vision.sticker_sending_mode 策略约束：allow_listed 模式下仅允许发送允许列表（Dashboard 已启用）中的贴纸， 被拦截时应改用 searchStickers 查找可发送的贴纸。",
+        "fullDoc": "```typescript\nsendSticker(chatId: number | string, uniqueFileId: string, opts?: { replyTo?: number }): Promise<{ id: number; text: string; date: Date; chat: { id: number; title?: string; username?: string; type: \"private\" | \"group\" | \"supergroup\" | \"channel\"; }; sender: { id: number; displayName?: string; title?: string; username?: string; }; isMention: boolean; replyToMessage?: { id: number } | null; media?: unknown; mediaInfo?: { type: \"photo\" | \"sticker\" | \"video\" | \"document\" | \"animation\" | \"audio\" | \"other\"; rawType?: string; fileId?: string; uniqueFileId?: string; emoji?: string; mimeType?: string; fileName?: string; width?: number; height?: number; fileSize?: number; filePath?: string; downloadStatus?: \"downloaded\" | \"cached\" | \"too_large\" | \"failed\"; downloadError?: string; }; }>\n```\n\n\n发送贴纸。通过 uniqueFileId 引用本地已缓存的贴纸文件。\n受 vision.sticker_sending_mode 策略约束：allow_listed 模式下仅允许发送允许列表（Dashboard 已启用）中的贴纸，\n被拦截时应改用 searchStickers 查找可发送的贴纸。\n\n**示例：**\n```typescript\n// sendSticker(chatId, 'AgADAgATxxxxxx')\n```"
+      },
+      {
+        "name": "searchStickers",
+        "brief": "搜索贴纸库中当前策略允许发送的贴纸（allow_listed 模式仅返回已启用的贴纸；disallow_all 返回空）。 按贴纸关联 emoji 或描述关键词过滤（多个关键词为 AND 关系）；不传条件时返回最新的可发送贴纸。 返回的 uniqueFileId 可直接用于 sendSticker。",
+        "fullDoc": "```typescript\nsearchStickers(query?: { emoji?: string | string[]; keywords?: string | string[]; limit?: number }): Promise<Array<{ uniqueFileId: string; description: string; emojis: string[]; enabled: boolean }>>\n```\n\n\n搜索贴纸库中当前策略允许发送的贴纸（allow_listed 模式仅返回已启用的贴纸；disallow_all 返回空）。\n按贴纸关联 emoji 或描述关键词过滤（多个关键词为 AND 关系）；不传条件时返回最新的可发送贴纸。\n返回的 uniqueFileId 可直接用于 sendSticker。\n\n**示例：**\n```typescript\n// searchStickers({ emoji: '😂', limit: 8 })\n```\n\n```typescript\n// searchStickers({ keywords: '猫 开心' })\n```"
       },
       {
         "name": "sendMediaGroup",

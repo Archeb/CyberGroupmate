@@ -511,6 +511,10 @@ export function createOneBotClientProxy(
             });
             return sent;
         },
+        searchStickers: async (query?: { emoji?: string | string[]; keywords?: string | string[]; limit?: number }) => {
+            const results = await env.callHost("onebot.searchStickers", [query ?? {}]);
+            return Array.isArray(results) ? results : [];
+        },
         sendFace: async (chatId: string, faceId: string | number, opts?: { replyTo?: string | number; text?: string }) => {
             const text = `[face:${String(faceId)}]${opts?.text ? ` ${opts.text}` : ""}`;
             if (shouldBlockDuplicate(String(chatId), text)) {
