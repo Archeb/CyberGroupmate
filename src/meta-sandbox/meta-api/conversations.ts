@@ -1,5 +1,6 @@
 import { getGroupModelKey, getPlatform } from "../../core/chat-id.js";
 import { formatMessageBody } from "../../core/message-enricher.js";
+import { requireNonEmptyString } from "./params.js";
 import type {
     GroupModel,
     IMemoryStoreV2,
@@ -184,6 +185,11 @@ export function createConversationsApi(memory: ConversationsReader, subagentMana
             };
         },
         messages: async (chatId: string, options: ConversationsMessagesOptions = {}): Promise<ConversationsMessagesResult> => {
+            requireNonEmptyString(
+                chatId,
+                "chatId",
+                "形如 telegram:-1001234567890 / telegram:92604174，可先用 conversations.inbox() 查",
+            );
             const limit = clampLimit(options.limit, 50, 99);
             const before = timestampInputToIso(decodeMessageCursor(options.cursor) ?? options.before) ?? undefined;
             const after = timestampInputToIso(options.after) ?? undefined;

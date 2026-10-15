@@ -69,3 +69,54 @@ console.log(typeof agents.listStatus);
         assert.match(result.output, /task-42/);
     });
 });
+
+describe("MetaSandbox unawaited API rejections", () => {
+    // 2026-10-14 事故形态：agent 未 await 的 API 拒绝曾以 unhandledRejection 打穿主进程。
+    // 若安全 catch 缺失，下面的悬空拒绝会触发 Node 默认致命退出，测试进程直接失败。
+    it("fire-and-forget rejection followed by sync error surfaces only the sync error", async () => {
+        const sandbox = new MetaSandbox({
+            conversations: {
+                messages: async () => {
+                    throw new RangeError("Too few parameter values were provided");
+                },
+            },
+        });
+        sandbox.beginSession("s1");
+
+        const result = await sandbox.execute(`
+const m = conversations.messages(undefined);
+const out = shell("ls");
+`);
+        assert.equal(result.error, true);
+        assert.match(result.output, /shell is not defined/);
+    });
+
+    it("lone fire-and-forget rejection does not fail the execution", async () => {
+        const sandbox = new MetaSandbox({
+            dispatch: {
+                taskToGroup: async () => {
+                    throw new Error("boom");
+                },
+            },
+        });
+        sandbox.beginSession("s1");
+
+        const result = await sandbox.execute("dispatch.taskToGroup('g'); 'ok'");
+        assert.equal(result.error, false);
+    });
+
+    it("awaited API rejection still rejects execution for two-pass correction", async () => {
+        const sandbox = new MetaSandbox({
+            conversations: {
+                messages: async () => {
+                    throw new Error("chatId is required");
+                },
+            },
+        });
+        sandbox.beginSession("s1");
+
+        const result = await sandbox.execute("await conversations.messages('telegram:1')");
+        assert.equal(result.error, true);
+        assert.match(result.output, /chatId is required/);
+    });
+});

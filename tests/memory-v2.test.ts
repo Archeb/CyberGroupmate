@@ -810,3 +810,32 @@ describe("生命周期", () => {
         cleanupTestMemory(mem, "double-close");
     });
 });
+
+// ─── 空参防御 ───
+// 2026-10-14 事故：undefined chatId 直达 better-sqlite3 绑定层抛 RangeError，
+// 在 meta 沙箱未 await 的异步续体中变成 unhandledRejection 打穿主进程。
+
+describe("MemoryStoreV2 空参防御", () => {
+    it("读函数对空 chatId/userId/query 返回空值而不是抛错", () => {
+        const mem = createTestMemory("guards-read");
+        assert.equal(mem.getGroupModel(undefined as unknown as string), null);
+        assert.equal(mem.getPersonIdentity(undefined as unknown as string), null);
+        assert.equal(mem.getPersonProfile(undefined as unknown as string), null);
+        assert.deepEqual(mem.getRecentMessages(undefined as unknown as string), []);
+        assert.deepEqual(mem.getRecentTopics(undefined as unknown as string), []);
+        assert.deepEqual(mem.searchByAlias(undefined as unknown as string), []);
+        assert.deepEqual(mem.searchTopics(undefined as unknown as string), []);
+        assert.deepEqual(mem.queryMessages({ chatIds: [undefined as unknown as string] }), []);
+        cleanupTestMemory(mem, "guards-read");
+    });
+
+    it("upsertGroupModel 空 chatId 跳过写入", () => {
+        const mem = createTestMemory("guards-write");
+        mem.upsertGroupModel(undefined as unknown as string, { chatTitle: "不应入库" });
+        assert.equal(mem.getGroupModel(undefined as unknown as string), null);
+        const db = (mem as any).db;
+        const count = db.prepare("SELECT COUNT(*) AS c FROM group_models").get();
+        assert.equal(count.c, 0);
+        cleanupTestMemory(mem, "guards-write");
+    });
+});

@@ -204,4 +204,16 @@ describe("createConversationsApi", () => {
         assert.equal(secondPage.items[0].chatId, "g1");
         assert.equal(secondPage.nextCursor, undefined);
     });
+
+    it("rejects undefined/empty chatId in messages() with a descriptive error", async () => {
+        const api = createConversationsApi(memory);
+        await assert.rejects(
+            api.messages(undefined as unknown as string),
+            /chatId is required/,
+        );
+        await assert.rejects(
+            api.messages("   "),
+            /chatId is required/,
+        );
+    });
 });

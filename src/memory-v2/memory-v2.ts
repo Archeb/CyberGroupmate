@@ -1282,6 +1282,11 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
     }
 
     upsertGroupModel(chatId: string, data: Partial<GroupModel>): void {
+        // 空键写入只会产生查不回来的脏数据（曾有 agent 拼错参数传 undefined 打到这里）
+        if (!chatId || typeof chatId !== "string") {
+            log.warn("upsertGroupModel: 无效 chatId，跳过写入", { chatId });
+            return;
+        }
         const ts = now();
         const existing = this.db.prepare("SELECT chat_id FROM group_models WHERE chat_id = ?").get(chatId);
 
@@ -1347,6 +1352,10 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
     }
 
     getGroupModel(chatId: string): GroupModel | null {
+        // better-sqlite3 对 undefined 绑定参数抛 RangeError（曾以此打穿主进程），空键直接视为不存在
+        if (!chatId || typeof chatId !== "string") {
+            return null;
+        }
         const row = this.db.prepare("SELECT * FROM group_models WHERE chat_id = ?").get(chatId) as Record<string, unknown> | undefined;
         if (!row) {
             log.debug("getGroupModel: 未找到", { chatId });
@@ -1399,6 +1408,9 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
     }
 
     getPersonIdentity(userId: string): PersonIdentity | null {
+        if (!userId || typeof userId !== "string") {
+            return null;
+        }
         const row = this.db.prepare("SELECT * FROM person_identities WHERE user_id = ?").get(userId) as Record<string, unknown> | undefined;
         if (!row) {
             log.debug("getPersonIdentity: 未找到", { userId });
@@ -1418,6 +1430,9 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
     }
 
     getPersonProfile(userId: string): PersonProfile | null {
+        if (!userId || typeof userId !== "string") {
+            return null;
+        }
         const row = this.db.prepare("SELECT * FROM person_profiles WHERE user_id = ?").get(userId) as Record<string, unknown> | undefined;
         if (!row) return null;
         return {
@@ -1438,6 +1453,9 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
     }
 
     searchByAlias(query: string, limit: number = 10): PersonIdentity[] {
+        if (!query || typeof query !== "string") {
+            return [];
+        }
         const normalizedQuery = query.trim().toLocaleLowerCase();
         if (!normalizedQuery) return [];
         const candidateLimit = Math.min(Math.max(limit * 5, limit), 200);
@@ -2372,6 +2390,9 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
     }
 
     getRecentTopics(chatId: string, limit: number = 20): TopicNode[] {
+        if (!chatId || typeof chatId !== "string") {
+            return [];
+        }
         const rows = this.db.prepare(
             "SELECT * FROM topics WHERE chat_id = ? ORDER BY started_at DESC LIMIT ?"
         ).all(chatId, limit) as Record<string, unknown>[];
@@ -2506,6 +2527,9 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
     }
 
     getRecentMessages(chatId: string, limit: number = 5): RecentMessageEntry[] {
+        if (!chatId || typeof chatId !== "string") {
+            return [];
+        }
         const rows = this.db.prepare(
             `SELECT message_id, chat_id, user_id, display_name, text, reply_to_message_id, timestamp, media_type, media_info, mentions,
                     access_control_blocked
@@ -2669,6 +2693,9 @@ export class MemoryStoreV2 implements IMemoryStoreV2 {
         excludeTopicIds?: string[];
         limit?: number;
     } = {}): TopicSearchResult[] {
+        if (!query || typeof query !== "string") {
+            return [];
+        }
         const ftsQuery = buildFtsOrQuery(query);
         const limit = Math.min(Math.max(options.limit ?? 5, 1), 30);
 
