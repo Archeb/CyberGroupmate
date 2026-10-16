@@ -1648,11 +1648,16 @@ export class OneBotAdapter implements PlatformAdapter {
 
 
     /**
-     * 处理 OneBot notice 事件：群名变更、群成员昵称变更等。
-     * 这些事件用于实时更新缓存，确保 chatTitle 始终反映最新状态。
+     * 处理 OneBot notice 事件：群名变更、群成员昵称变更、戳一戳等。
+     * 群名/昵称事件用于实时更新缓存；戳一戳合成 nc.message 让 agent 感知。
      */
     private handleNoticeEvent(event: OneBotIncomingEvent): void {
         const noticeType = (event as Record<string, unknown>).notice_type;
+
+        if (noticeType === "notify" && event.sub_type === "poke") {
+            this.handlePokeNotice(event);
+            return;
+        }
 
         if (noticeType === "group_name_change") {
             // 群名变更事件（NapCat 扩展）
@@ -1676,6 +1681,95 @@ export class OneBotAdapter implements PlatformAdapter {
             }
             return;
         }
+    }
+
+    /**
+     * 处理戳一戳 notice（OneBot v11: notice_type=notify + sub_type=poke）。
+     *
+     * NapCat 群戳带 group_id/user_id（发起者）/target_id（被戳者），好友戳只有
+     * user_id/target_id。合成为 nc.message（模式同飞书 Reaction 事件）：
+     * - 戳 bot 本身或私聊戳 → mentionsAgent/_urgent，走直接唤醒路径；
+     * - 戳其他群友 → 仅作为环境上下文落盘/聚类，不唤醒。
+     * NapCat 会回显 bot 自己发起的 poke，这类不再作为入站事件上报，避免自我反馈。
+     */
+    private handlePokeNotice(event: OneBotIncomingEvent): void {
+        const rec = event as Record<string, unknown>;
+        const selfId = String(this.config.selfId);
+        if (rec.self_id != null && String(rec.self_id) !== selfId) return;
+
+        const pokerId = String(rec.user_id ?? "");
+        if (!pokerId || pokerId === selfId) return;
+        const targetId = rec.target_id != null ? String(rec.target_id) : "";
+        const groupId = rec.group_id != null ? String(rec.group_id) : "";
+
+        (async () => {
+            const isGroup = !!groupId;
+            const chatId = isGroup
+                ? composeChatId("onebot", `group:${groupId}`)
+                : composeChatId("onebot", `private:${pokerId}`);
+            const pokerName = await this.fetchMentionDisplayName(pokerId, isGroup ? groupId : undefined) ?? pokerId;
+            const pokedSelf = targetId === selfId;
+            const targetName = pokedSelf
+                ? "你"
+                : targetId
+                    ? await this.fetchMentionDisplayName(targetId, isGroup ? groupId : undefined) ?? targetId
+                    : "";
+            const text = targetName
+                ? `[👉 戳一戳] ${pokerName} 戳了${targetName === "你" ? "你" : ` ${targetName}`}`
+                : `[👉 戳一戳] ${pokerName} 发起戳一戳`;
+
+            const displayName = pokerName;
+            const chatTitle = isGroup
+                ? await this.fetchGroupName(groupId) ?? groupId
+                : await this.fetchUserNickname(pokerId) ?? displayName;
+            const timestamp = new Date((event.time ?? Math.floor(Date.now() / 1000)) * 1000).toISOString();
+            // 戳一戳没有 message_id；合成唯一 ID 避免 message_log (chat_id, message_id) 主键去重丢事件
+            const messageId = `poke_${event.time ?? Date.now()}_${pokerId}_${targetId || "0"}_${Math.random().toString(36).slice(2, 8)}`;
+            const isDirectMessage = !isGroup;
+            const mentionsAgent = pokedSelf;
+
+            const core = {
+                chatId,
+                userId: composeChatId("onebot", pokerId),
+                displayName,
+                text,
+                timestamp,
+                messageId,
+                chatTitle,
+                chatType: isGroup ? "group" : "private",
+                isDirectMessage,
+                mentionsAgent,
+                mentions: [],
+                messageSegments: [],
+            };
+            const source = {
+                scene: "onebot",
+                platform: "onebot",
+                chatId,
+                userId: core.userId,
+                chatType: core.chatType,
+                messageId,
+            };
+            const platformData = {
+                originalType: "notice.notify.poke",
+                pokerUserId: pokerId,
+                targetUserId: targetId || undefined,
+                groupId: groupId || undefined,
+                pokedSelf,
+            };
+
+            this.nc.push({
+                type: "nc.message",
+                scene: "onebot",
+                ...core,
+                source,
+                payload: { scene: "onebot", ...core, source, platformData },
+                _urgent: isDirectMessage || mentionsAgent,
+            } as never);
+            log.info("戳一戳事件已合成 nc.message", { chatId, pokerId, targetId: targetId || undefined, pokedSelf });
+        })().catch(err => {
+            log.warn("处理戳一戳事件失败", { error: String(err) });
+        });
     }
 
     /**

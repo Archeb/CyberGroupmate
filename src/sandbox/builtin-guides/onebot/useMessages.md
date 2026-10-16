@@ -23,7 +23,12 @@ const result = await onebot.callApi("get_msg", { message_id: 123456 });
 - `send_forward_msg` / `send_group_forward_msg` / `send_private_forward_msg`: 发送合并转发。
 - `set_msg_emoji_like`: 设置消息表情点赞。
 - `get_emoji_likes` / `fetch_emoji_like`: 查询消息表情点赞。
-- `group_poke`: 发送群戳一戳。
+- `group_poke`: 发送群戳一戳，参数 `{ group_id, user_id }`（user_id 是被戳的人）。
+- `friend_poke`: 发送好友/私聊戳一戳，参数 `{ user_id }`。
+
+## 戳一戳事件
+
+群里有人发起戳一戳时（无论戳的是 bot 还是其他群友），会以普通消息形式进入上下文，文本形如 `[👉 戳一戳] 张三 戳了你` / `[👉 戳一戳] 张三 戳了 李四`（私聊形如 `[👉 戳一戳] 张三 戳了你`）。戳中 bot 或私聊戳会直接唤醒；戳其他群友仅作为背景上下文。bot 自己发起的戳一戳不会重复上报。
 
 ## 媒体和跨机器注意
 
