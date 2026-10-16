@@ -195,6 +195,24 @@ describe("OneBot NapCat builtin guides", () => {
                 params: { group_id: 931351956, message: "native send" },
             });
 
+            // 戳一戳：群戳 + 好友戳都走 allowlist passthrough
+            await adapter.handleCall("onebot.callApi", [
+                "group_poke",
+                { group_id: 931351956, user_id: 777 },
+            ]);
+            assert.deepEqual(calls[2], {
+                action: "group_poke",
+                params: { group_id: 931351956, user_id: 777 },
+            });
+            await adapter.handleCall("onebot.callApi", [
+                "friend_poke",
+                { user_id: 777 },
+            ]);
+            assert.deepEqual(calls[3], {
+                action: "friend_poke",
+                params: { user_id: 777 },
+            });
+
             await assert.rejects(
                 () => adapter.handleCall("onebot.callApi", ["get_credentials", {}]),
                 /blocked by sandbox policy/,

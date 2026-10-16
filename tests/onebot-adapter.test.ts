@@ -393,4 +393,167 @@ describe("OneBotAdapter", () => {
 
         nc.dispose();
     });
+
+    it("should synthesize urgent nc.message when the bot is poked in a group", async () => {
+        const nc = makeNC();
+        const events = captureEvents(nc);
+        const adapter = new OneBotAdapter(makeConfig(), nc);
+
+        // @ts-expect-error - override private method for focused ingress test
+        adapter.callAction = async (action: string, params: Record<string, unknown>) => {
+            if (action === "get_group_member_info") {
+                return { user_id: params.user_id, card: "", nickname: `User${params.user_id}` };
+            }
+            if (action === "get_group_info") return { group_id: 42, group_name: "Test QQ Group" };
+            throw new Error(`unexpected action: ${action}`);
+        };
+
+        // @ts-expect-error - invoke private websocket handler for ingress normalization
+        adapter.handleWsMessage(JSON.stringify({
+            post_type: "notice",
+            notice_type: "notify",
+            sub_type: "poke",
+            self_id: "123456789",
+            group_id: 42,
+            user_id: 777,
+            target_id: 123456789,
+            time: 1770000000,
+        }));
+        await waitForAsyncHandlers();
+
+        assert.equal(events.length, 1);
+        assert.equal(events[0].type, "nc.message");
+        assert.equal(events[0].scene, "onebot");
+        assert.equal(events[0].chatId, "onebot:group:42");
+        assert.equal(events[0].userId, "onebot:777");
+        assert.equal(events[0].displayName, "User777");
+        assert.equal(events[0].text, "[👉 戳一戳] User777 戳了你");
+        assert.equal(events[0].chatTitle, "Test QQ Group");
+        assert.equal(events[0].chatType, "group");
+        assert.equal(events[0].isDirectMessage, false);
+        assert.equal(events[0].mentionsAgent, true);
+        assert.equal(events[0]._urgent, true);
+        assert.equal(
+            String(events[0].messageId).startsWith("poke_1770000000_777_123456789_"),
+            true,
+            `messageId should be synthetic poke id, got ${String(events[0].messageId)}`,
+        );
+        assert.equal(events[0].payload.platformData.originalType, "notice.notify.poke");
+        assert.equal(events[0].payload.platformData.pokedSelf, true);
+
+        nc.dispose();
+    });
+
+    it("should synthesize non-urgent context when a group member pokes another member", async () => {
+        const nc = makeNC();
+        const events = captureEvents(nc);
+        const adapter = new OneBotAdapter(makeConfig(), nc);
+
+        // @ts-expect-error - override private method for focused ingress test
+        adapter.callAction = async (action: string, params: Record<string, unknown>) => {
+            if (action === "get_group_member_info") {
+                return { user_id: params.user_id, card: "", nickname: `User${params.user_id}` };
+            }
+            if (action === "get_group_info") return { group_id: 42, group_name: "Test QQ Group" };
+            throw new Error(`unexpected action: ${action}`);
+        };
+
+        // @ts-expect-error - invoke private websocket handler for ingress normalization
+        adapter.handleWsMessage(JSON.stringify({
+            post_type: "notice",
+            notice_type: "notify",
+            sub_type: "poke",
+            self_id: "123456789",
+            group_id: 42,
+            user_id: 777,
+            target_id: 888,
+            time: 1770000100,
+        }));
+        await waitForAsyncHandlers();
+
+        assert.equal(events.length, 1);
+        assert.equal(events[0].chatId, "onebot:group:42");
+        assert.equal(events[0].text, "[👉 戳一戳] User777 戳了 User888");
+        assert.equal(events[0].mentionsAgent, false);
+        assert.equal(events[0]._urgent, false);
+        assert.equal(events[0].payload.platformData.pokedSelf, false);
+
+        nc.dispose();
+    });
+
+    it("should synthesize direct-message event for private poke", async () => {
+        const nc = makeNC();
+        const events = captureEvents(nc);
+        const adapter = new OneBotAdapter(makeConfig(), nc);
+
+        // @ts-expect-error - override private method for focused ingress test
+        adapter.callAction = async (action: string, params: Record<string, unknown>) => {
+            if (action === "get_stranger_info") {
+                return { user_id: params.user_id, nickname: "PrivateFriend" };
+            }
+            throw new Error(`unexpected action: ${action}`);
+        };
+
+        // 好友戳一戳没有 group_id；部分实现不带 target_id
+        // @ts-expect-error - invoke private websocket handler for ingress normalization
+        adapter.handleWsMessage(JSON.stringify({
+            post_type: "notice",
+            notice_type: "notify",
+            sub_type: "poke",
+            self_id: "123456789",
+            user_id: 777,
+            time: 1770000200,
+        }));
+        await waitForAsyncHandlers();
+
+        assert.equal(events.length, 1);
+        assert.equal(events[0].chatId, "onebot:private:777");
+        assert.equal(events[0].chatType, "private");
+        assert.equal(events[0].isDirectMessage, true);
+        assert.equal(events[0].text, "[👉 戳一戳] PrivateFriend 发起戳一戳");
+        assert.equal(events[0]._urgent, true);
+
+        nc.dispose();
+    });
+
+    it("should ignore pokes initiated by the bot or for another account", async () => {
+        const nc = makeNC();
+        const events = captureEvents(nc);
+        const adapter = new OneBotAdapter(makeConfig(), nc);
+
+        // @ts-expect-error - override private method; should not be called
+        adapter.callAction = async (action: string) => {
+            throw new Error(`unexpected action: ${action}`);
+        };
+
+        // bot 自己发起的戳一戳（NapCat 回显）
+        // @ts-expect-error - invoke private websocket handler for ingress normalization
+        adapter.handleWsMessage(JSON.stringify({
+            post_type: "notice",
+            notice_type: "notify",
+            sub_type: "poke",
+            self_id: "123456789",
+            group_id: 42,
+            user_id: 123456789,
+            target_id: 777,
+            time: 1770000300,
+        }));
+        // 另一个账号的戳一戳（多账号场景）
+        // @ts-expect-error - invoke private websocket handler for ingress normalization
+        adapter.handleWsMessage(JSON.stringify({
+            post_type: "notice",
+            notice_type: "notify",
+            sub_type: "poke",
+            self_id: "999999999",
+            group_id: 42,
+            user_id: 777,
+            target_id: 123456789,
+            time: 1770000301,
+        }));
+        await waitForAsyncHandlers();
+
+        assert.equal(events.length, 0);
+
+        nc.dispose();
+    });
 });

@@ -25,6 +25,7 @@ export const ONEBOT_NAPCAT_GUIDE_ACTIONS = {
         "get_emoji_likes",
         "fetch_emoji_like",
         "group_poke",
+        "friend_poke",
     ],
     groupAdministration: [
         "get_group_list",
@@ -128,6 +129,7 @@ export const ONEBOT_NAPCAT_WRITE_ACTIONS = new Set<string>([
     "send_private_forward_msg",
     "set_msg_emoji_like",
     "group_poke",
+    "friend_poke",
     "set_group_ban",
     "set_group_whole_ban",
     "set_group_kick",
