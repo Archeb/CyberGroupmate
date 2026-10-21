@@ -7,14 +7,22 @@ const log = createLogger("crash-report");
 export type CrashKind = "uncaughtException" | "unhandledRejection";
 
 /**
- * uncaughtException / unhandledRejection 的取证兜底：落一份结构化崩溃报告到
- * workspace/crash-reports/，随后由调用方按 Node 默认语义退出（交给 systemd 拉起，
- * 干净重启优于带病运行）。
+ * uncaughtException / unhandledRejection 的**兜底取证**，不是根治：
+ * 落一份结构化崩溃报告到 workspace/crash-reports/，并把完整 message+stack 打进
+ * journal（保持与 Node 默认致命退出等价的第一现场），随后由调用方按默认语义
+ * 退出进程、交给 systemd Restart=always 拉起。
  *
- * 注意：meta 沙箱内 agent 未 await 产生的 API 悬空拒绝已由 MetaSandbox 包装层
- * 拦截（meta-sandbox.ts decorateApiContext），不会走到这里；本模块只兜其它来源。
+ * 根治在别处：meta 沙箱内 agent 未 await 产生的 API 悬空拒绝由 MetaSandbox
+ * 包装层消化并转成 session-visible observation（meta-sandbox.ts
+ * decorateApiContext / drainPendingAsyncErrors），不应再走到这里。这里兜的是
+ * 其它未知来源——一旦触发，进程**仍然会退出**，不要把本 handler 当成
+ * "应用层不再出现 unhandled rejection" 的保证。
  */
 export function writeCrashReport(kind: CrashKind, error: unknown): void {
+    const message = error instanceof Error ? error.message : String(error);
+    const stack = error instanceof Error ? (error.stack ?? null) : null;
+    // journal 第一现场优先：即便文件落盘失败，stack 也不丢
+    log.error(`致命 ${kind}，进程即将退出（兜底取证，非根治）`, { message, stack });
     try {
         const dir = join(process.cwd(), "workspace", "crash-reports");
         mkdirSync(dir, { recursive: true });
@@ -22,8 +30,8 @@ export function writeCrashReport(kind: CrashKind, error: unknown): void {
             kind,
             timestamp: new Date().toISOString(),
             pid: process.pid,
-            message: error instanceof Error ? error.message : String(error),
-            stack: error instanceof Error ? (error.stack ?? null) : null,
+            message,
+            stack,
         };
         const file = join(dir, `crash-${Date.now()}.json`);
         writeFileSync(file, JSON.stringify(report, null, 2), "utf8");
