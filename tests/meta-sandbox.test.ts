@@ -91,7 +91,7 @@ const out = shell("ls");
         assert.match(result.output, /shell is not defined/);
     });
 
-    it("lone fire-and-forget rejection does not fail the execution", async () => {
+    it("lone fire-and-forget rejection does not fail the execution and lands in pendingAsyncErrors", async () => {
         const sandbox = new MetaSandbox({
             dispatch: {
                 taskToGroup: async () => {
@@ -103,6 +103,52 @@ const out = shell("ls");
 
         const result = await sandbox.execute("dispatch.taskToGroup('g'); 'ok'");
         assert.equal(result.error, false);
+
+        const pending = sandbox.drainPendingAsyncErrors();
+        assert.equal(pending.length, 1);
+        assert.match(pending[0], /taskToGroup/);
+        assert.match(pending[0], /boom/);
+        // drain 幂等：取过即清空
+        assert.deepEqual(sandbox.drainPendingAsyncErrors(), []);
+    });
+
+    it("late rejection after execute returned still becomes visible on the next drain", async () => {
+        const sandbox = new MetaSandbox({
+            dispatch: {
+                // 宿主侧真 setTimeout：拒绝发生在 execute 返回之后
+                taskToGroup: () => new Promise((_resolve, reject) => {
+                    setTimeout(() => reject(new Error("late boom")), 20);
+                }),
+            },
+        });
+        sandbox.beginSession("s1");
+
+        const result = await sandbox.execute("dispatch.taskToGroup('g'); 'ok'");
+        assert.equal(result.error, false);
+        assert.deepEqual(sandbox.drainPendingAsyncErrors(), []);
+
+        await new Promise((resolve) => setTimeout(resolve, 40));
+        const pending = sandbox.drainPendingAsyncErrors();
+        assert.equal(pending.length, 1);
+        assert.match(pending[0], /late boom/);
+    });
+
+    it("late rejection does not leak into the next session", async () => {
+        const sandbox = new MetaSandbox({
+            dispatch: {
+                taskToGroup: () => new Promise((_resolve, reject) => {
+                    setTimeout(() => reject(new Error("late boom")), 20);
+                }),
+            },
+        });
+        sandbox.beginSession("s1");
+        await sandbox.execute("dispatch.taskToGroup('g'); 'ok'");
+        sandbox.endSession("s1");
+
+        await new Promise((resolve) => setTimeout(resolve, 40));
+        sandbox.beginSession("s2");
+        assert.deepEqual(sandbox.drainPendingAsyncErrors(), []);
+        sandbox.endSession("s2");
     });
 
     it("awaited API rejection still rejects execution for two-pass correction", async () => {

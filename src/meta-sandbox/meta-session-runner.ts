@@ -430,6 +430,16 @@ export async function runMetaSession(
                 }
             }
 
+            // 悬空异步错误（agent 未 await 的 API 失败）注入 observation，保证对 agent 可见；
+            // 迟到的拒绝会留在队列里，注入下一轮
+            const pendingAsyncErrors = sandbox.drainPendingAsyncErrors();
+            if (pendingAsyncErrors.length > 0) {
+                const asyncErrorSection = `[未处理的异步错误]\n${pendingAsyncErrors.join("\n")}`;
+                observationOutput = observationOutput
+                    ? `${observationOutput}\n\n${asyncErrorSection}`
+                    : asyncErrorSection;
+            }
+
             turnRecord.observation = observationOutput;
             messages.push({ role: "user", content: formatObservation(observationOutput) });
             syncMetaCodeActState(sessionId, messages, turns, true);
