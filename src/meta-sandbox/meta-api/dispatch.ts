@@ -10,6 +10,7 @@ import type { GlobalState } from "../../main-agent/global-state.js";
 import type { SubagentManager } from "../../subagent/subagent-manager.js";
 import { getGroupModelKey } from "../../core/chat-id.js";
 import { toUnixTimestampMs } from "../../core/timezone.js";
+import { requireNonEmptyString } from "./params.js";
 import {
     collectQuoteRefs,
     resolveQuoteRefs,
@@ -107,6 +108,11 @@ export interface DispatchApiDeps {
 export function createDispatchApi(deps: DispatchApiDeps) {
     return {
         taskToGroup: async (chatId: string, taskSpec: DispatchTaskSpec, options?: DispatchTaskOptions): Promise<DispatchTaskResult> => {
+            requireNonEmptyString(
+                chatId,
+                "chatId",
+                "派发目标会话 ID，形如 telegram:-1001234567890",
+            );
             assertNoLegacyContext(taskSpec);
             const source = normalizeDispatchSource(options?.source);
             const subagent = deps.subagentManager.getOrCreate(chatId) as SubagentLike;

@@ -29,12 +29,21 @@ export interface MetaSandboxOptions {
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 
+/** pendingAsyncErrors 容量上限：防病态循环写爆内存，超限丢弃最旧的 */
+const MAX_PENDING_ASYNC_ERRORS = 20;
+
 export class MetaSandbox {
     private readonly context: Context;
     private readonly apiGlobalNames: Set<string>;
     private readonly scopeUnscopables: Record<string, true>;
     private activeSessionId: string | null = null;
     private outputLedger: MetaSandboxOutputRecord[] = [];
+    /**
+     * agent 未 await 的 API 悬空拒绝（含迟到拒绝）。execute 返回后由 runner
+     * drainPendingAsyncErrors() 取走并注入 observation，保证失败对 agent 可见，
+     * 而不是只留在 journal 里悄悄失败。
+     */
+    private pendingAsyncErrors: string[] = [];
 
     constructor(apiContext: Record<string, unknown>) {
         const metaApi = Object.freeze(this.decorateApiContext({ ...apiContext }));
@@ -96,12 +105,39 @@ export class MetaSandbox {
             for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
                 const childPath = path ? `${path}.${key}` : key;
                 if (typeof child === "function") {
-                    wrapped[key] = async (...args: unknown[]) => {
-                        const result = normalizeProgrammaticTimestamps(
-                            await (child as (...params: unknown[]) => unknown).apply(value, args)
-                        );
-                        this.pushConsoleEntry("log", [`[meta-api] ${childPath} ->`, result]);
-                        return result;
+                    wrapped[key] = (...args: unknown[]) => {
+                        // 会话归因取发起时刻：迟到拒绝（execute 已返回、甚至会话已切换）不得
+                        // 污染下一个会话的 observation，也不得在日志里错归因
+                        const callSessionId = this.activeSessionId;
+                        const invocation = (async () => {
+                            const result = normalizeProgrammaticTimestamps(
+                                await (child as (...params: unknown[]) => unknown).apply(value, args)
+                            );
+                            this.pushConsoleEntry("log", [`[meta-api] ${childPath} ->`, result]);
+                            return result;
+                        })();
+                        // 安全 catch：挂上反应即视为已处理，agent 未 await 的悬空拒绝不再升级为
+                        // unhandledRejection / 进程退出；正确 await 的调用方仍拿到原始拒绝，
+                        // execute() 的错误路径与 two-pass 文档注入行为不变。
+                        // 失败同时入队 pendingAsyncErrors，由 runner 注入 observation —— 悬空拒绝
+                        // 必须 session-visible，不能只在 journal 里悄悄失败。await 路径的失败会
+                        // 与当轮 Error 输出轻度重复（无法区分是否被 await），条目带方法名归属，
+                        // 视为信息增量。
+                        invocation.catch((error) => {
+                            const message = error instanceof Error ? error.message : String(error);
+                            log.warn("Meta API async rejection (agent 未 await?)", {
+                                method: childPath,
+                                sessionId: callSessionId,
+                                error: message,
+                            });
+                            if (this.activeSessionId === callSessionId) {
+                                this.pendingAsyncErrors.push(`[meta-api] ${childPath} 调用未被 await，已失败: ${message}`);
+                                if (this.pendingAsyncErrors.length > MAX_PENDING_ASYNC_ERRORS) {
+                                    this.pendingAsyncErrors.splice(0, this.pendingAsyncErrors.length - MAX_PENDING_ASYNC_ERRORS);
+                                }
+                            }
+                        });
+                        return invocation;
                     };
                 } else {
                     wrapped[key] = wrap(child, childPath);
@@ -116,6 +152,7 @@ export class MetaSandbox {
     beginSession(sessionId: string): void {
         this.activeSessionId = sessionId;
         this.outputLedger = [];
+        this.pendingAsyncErrors = [];
         (this.context as Record<string, unknown>).__metaScope = this.createSessionScope();
     }
 
@@ -126,10 +163,25 @@ export class MetaSandbox {
         this.activeSessionId = null;
         (this.context as Record<string, unknown>).__metaScope = this.createSessionScope();
         this.outputLedger = [];
+        this.pendingAsyncErrors = [];
     }
 
     getOutput(index: number): MetaSandboxOutputRecord | null {
         return this.outputLedger[index] ? { ...this.outputLedger[index] } : null;
+    }
+
+    /**
+     * 取走并清空本会话积压的悬空异步错误（agent 未 await 的 API 失败）。
+     * runner 在每次 execute 后调用，把结果注入本轮 observation；迟到的拒绝
+     * 会留在队列里，注入下一轮。队列随 beginSession/endSession 清空。
+     */
+    drainPendingAsyncErrors(): string[] {
+        if (this.pendingAsyncErrors.length === 0) {
+            return [];
+        }
+        const drained = this.pendingAsyncErrors;
+        this.pendingAsyncErrors = [];
+        return drained;
     }
 
     async execute(code: string, options?: MetaSandboxOptions): Promise<MetaSandboxExecutionResult> {

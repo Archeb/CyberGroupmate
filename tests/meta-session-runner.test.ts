@@ -134,6 +134,69 @@ describe("runMetaSession", () => {
         }
     });
 
+    it("injects unawaited API failures into the observation as async errors", async () => {
+        resetMetaCodeActState();
+        const sandbox = new MetaSandbox({
+            tools: {
+                flaky: async () => {
+                    throw new Error("quiet boom");
+                },
+            },
+        });
+        const progressEvents: any[] = [];
+        const onProgress = (event: unknown) => {
+            const data = event as { chatId?: string };
+            if (data.chatId === META_CODEACT_CHAT_ID) {
+                progressEvents.push(event);
+            }
+        };
+        codeActEvents.on("codeact:progress", onProgress);
+
+        try {
+            const responses: LLMResponse[] = [
+                {
+                    content: [
+                        "fire-and-forget 调用。",
+                        "",
+                        "```ts",
+                        "tools.flaky();",
+                        "'ok';",
+                        "```",
+                    ].join("\n"),
+                },
+                {
+                    content: "结束。\n[SESSION_DIGEST]done[/SESSION_DIGEST]\n<end_turn>",
+                },
+            ];
+
+            const result = await runMetaSession(
+                [
+                    { role: "system", content: "system" },
+                    { role: "user", content: "meta task" },
+                ],
+                sandbox,
+                [TEST_LLM_CONFIG],
+                {
+                    llmCaller: async () => {
+                        const next = responses.shift();
+                        assert.ok(next);
+                        return next;
+                    },
+                },
+            );
+
+            assert.equal(result.endReason, "end_turn");
+            const observationEvents = progressEvents.filter((event) => event.phase === "observation");
+            assert.equal(observationEvents.length, 1);
+            assert.match(observationEvents[0]?.executionOutput ?? "", /未处理的异步错误/);
+            assert.match(observationEvents[0]?.executionOutput ?? "", /flaky/);
+            assert.match(observationEvents[0]?.executionOutput ?? "", /quiet boom/);
+        } finally {
+            codeActEvents.off("codeact:progress", onProgress);
+            resetMetaCodeActState();
+        }
+    });
+
     it("executes code, feeds observation back, and ends on end_turn", async () => {
         const sandbox = new MetaSandbox({
             tools: {
