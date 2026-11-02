@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { AttentionAccumulator } from "../src/accumulator/attention-accumulator.js";
 import { calculatePressure } from "../src/accumulator/pressure.js";
 import { GlobalState } from "../src/main-agent/global-state.js";
+import type { TopicSignalPayload } from "../src/pipeline/topic-signal.js";
 
 const tempDirs: string[] = [];
 
@@ -29,6 +30,35 @@ function createAccumulator(config?: ConstructorParameters<typeof AttentionAccumu
     const globalState = new GlobalState({ filePath: join(dir, "state.json"), autoSaveInterval: 0 });
     const accumulator = new AttentionAccumulator(globalState, { windowMs: 1_000, topN: 2, ...config });
     return { accumulator, globalState };
+}
+
+function topicSignalPayload(
+    topicId: string,
+    summary: string,
+    messageCount: number,
+    pressureMessageCount = messageCount,
+): TopicSignalPayload {
+    return {
+        topicDigest: {
+            topicId,
+            label: `话题 ${topicId}`,
+            summary,
+            state: "ACTIVE",
+            participants: ["telegram:1"],
+            keywords: ["测试"],
+            messageCount,
+            lastActivityAt: "2026-11-02T00:00:00.000Z",
+            callbackPotential: messageCount,
+        },
+        pressureInput: {
+            participants: [{
+                messageCount: pressureMessageCount,
+                totalChars: pressureMessageCount * 10,
+                dunbarTier: 1,
+            }],
+            stickinessLevel: "CORE",
+        },
+    };
 }
 
 describe("AttentionAccumulator", () => {
@@ -226,6 +256,88 @@ describe("AttentionAccumulator", () => {
         acc2.restoreSignalPool();
         assert.equal(acc2.getSignalPoolSize(), 0);
         gs2.dispose();
+    });
+
+    it("merges duplicate topic signals for the same chat and topic", () => {
+        const { accumulator, globalState } = createAccumulator();
+        accumulator.ingest(2, {
+            chatId: "telegram:1",
+            source: "TOPIC_SIGNAL",
+            payload: topicSignalPayload("topic-1", "旧摘要", 5, 2),
+            enqueuedAt: 1_000,
+        });
+        accumulator.ingest(2, {
+            chatId: "telegram:1",
+            source: "TOPIC_SIGNAL",
+            payload: topicSignalPayload("topic-1", "新摘要", 20, 3),
+            enqueuedAt: 2_000,
+        });
+
+        const snapshot = accumulator.getSnapshot();
+        assert.equal(snapshot.active.length, 1);
+        assert.equal(snapshot.active[0]?.enqueuedAt, 1_000);
+        const digest = (snapshot.active[0]?.payload as TopicSignalPayload).topicDigest;
+        assert.equal(digest.summary, "新摘要");
+        assert.equal(digest.messageCount, 20);
+        assert.equal(digest.callbackPotential, 20);
+        globalState.dispose();
+    });
+
+    it("does not merge topic signals from different chats or topics", () => {
+        const { accumulator, globalState } = createAccumulator();
+        for (const [chatId, topicId] of [
+            ["telegram:1", "topic-1"],
+            ["telegram:1", "topic-2"],
+            ["telegram:2", "topic-1"],
+        ] as const) {
+            accumulator.ingest(2, {
+                chatId,
+                source: "TOPIC_SIGNAL",
+                payload: topicSignalPayload(topicId, topicId, 1, 1),
+                enqueuedAt: 1_000,
+            });
+        }
+
+        assert.equal(accumulator.getSnapshot().active.length, 3);
+        globalState.dispose();
+    });
+
+    it("dedupes duplicate topic signals when restoring the persisted pool", () => {
+        const dir = tempDir();
+        const globalState = new GlobalState({ filePath: join(dir, "state.json"), autoSaveInterval: 0 });
+        globalState.setSignalPool([
+            {
+                chatId: "telegram:1",
+                source: "TOPIC_SIGNAL",
+                payload: topicSignalPayload("topic-1", "old", 5, 2),
+                enqueuedAt: 1_000,
+                pressure: 10,
+                ignoredCount: 0,
+            },
+            {
+                chatId: "telegram:1",
+                source: "TOPIC_SIGNAL",
+                payload: topicSignalPayload("topic-1", "new", 20, 3),
+                enqueuedAt: 2_000,
+                pressure: 20,
+                ignoredCount: 0,
+            },
+            {
+                chatId: "telegram:1",
+                source: "TOPIC_SIGNAL",
+                payload: topicSignalPayload("topic-2", "other", 1, 1),
+                enqueuedAt: 1_500,
+                pressure: 5,
+                ignoredCount: 0,
+            },
+        ]);
+
+        const accumulator = new AttentionAccumulator(globalState, { windowMs: 1_000, topN: 2 });
+        accumulator.restoreSignalPool();
+
+        assert.equal(accumulator.getSignalPoolSize(), 2);
+        assert.equal(globalState.getSignalPool().length, 2);
+        globalState.dispose();
     });
 
     it("blocks chats, drops queued items, and ignores ingress until unblocked", () => {
