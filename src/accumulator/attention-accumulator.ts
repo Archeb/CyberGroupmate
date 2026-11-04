@@ -2,6 +2,7 @@ import { GlobalState } from "../main-agent/global-state.js";
 import { createLogger } from "../core/logger.js";
 import { calculatePressure } from "./pressure.js";
 import type { SignalPoolItem } from "../subagent/types.js";
+import type { TopicSignalPayload } from "../pipeline/topic-signal.js";
 import type {
     AttentionAccumulatorSnapshot,
     AttentionItem,
@@ -58,6 +59,65 @@ function resolvePressure(item: AttentionItem, now: number): number {
     });
 }
 
+function getTopicSignalPayload(item: AttentionItem): TopicSignalPayload | null {
+    if (item.layer !== 2 || item.source !== "TOPIC_SIGNAL") return null;
+    const payload = item.payload as Partial<TopicSignalPayload> | undefined;
+    const digest = payload?.topicDigest;
+    const pressureInput = payload?.pressureInput;
+    if (!digest || typeof digest.topicId !== "string") return null;
+    if (!pressureInput || !Array.isArray(pressureInput.participants)) return null;
+    return payload as TopicSignalPayload;
+}
+
+function topicSignalKey(item: AttentionItem): string | null {
+    const payload = getTopicSignalPayload(item);
+    return payload ? `${item.chatId}::${payload.topicDigest.topicId}` : null;
+}
+
+/**
+ * 合并同群同话题的重复信号。
+ *
+ * recording pipeline 的连续 flush 窗口是重叠的，因此不能把 messageCount / totalChars 相加，
+ * 否则会把同一批消息重复计入压力。这里只做三类合并：
+ * - 描述性字段取最新 digest；
+ * - 计数/潜力取较强值，参与者/关键词取并集；
+ * - 等待时间取最早的一次，压力用更强的那份 pressureInput 重新计算。
+ */
+function mergeTopicSignal(existing: AttentionItem, incoming: AttentionItem, now: number): boolean {
+    const oldPayload = getTopicSignalPayload(existing);
+    const newPayload = getTopicSignalPayload(incoming);
+    if (!oldPayload || !newPayload) return false;
+    if (existing.chatId !== incoming.chatId) return false;
+    if (oldPayload.topicDigest.topicId !== newPayload.topicDigest.topicId) return false;
+
+    const oldDigest = oldPayload.topicDigest;
+    const newDigest = newPayload.topicDigest;
+    const mergedDigest: TopicSignalPayload["topicDigest"] = {
+        ...newDigest,
+        messageCount: Math.max(oldDigest.messageCount ?? 0, newDigest.messageCount ?? 0),
+        callbackPotential: Math.max(oldDigest.callbackPotential ?? 0, newDigest.callbackPotential ?? 0),
+        participants: [...new Set([...(oldDigest.participants ?? []), ...(newDigest.participants ?? [])])],
+        keywords: [...new Set([...(oldDigest.keywords ?? []), ...(newDigest.keywords ?? [])])],
+    };
+
+    const oldPressure = resolvePressure(existing, now);
+    const newPressure = resolvePressure(incoming, now);
+    const strongerInput = newPressure >= oldPressure
+        ? newPayload.pressureInput
+        : oldPayload.pressureInput;
+
+    existing.enqueuedAt = Math.min(existing.enqueuedAt, incoming.enqueuedAt);
+    existing.ignoredCount = Math.max(existing.ignoredCount ?? 0, incoming.ignoredCount ?? 0);
+    existing.payload = { topicDigest: mergedDigest, pressureInput: strongerInput };
+    existing.pressure = calculatePressure({
+        participants: strongerInput.participants,
+        stickinessLevel: strongerInput.stickinessLevel,
+        ageMinutes: Math.max(0, (now - existing.enqueuedAt) / 60_000),
+        ignoredCount: existing.ignoredCount,
+    });
+    return true;
+}
+
 function compareAttentionItemsAt(now: number) {
     return (left: AttentionItem, right: AttentionItem): number => {
     if (left.layer !== right.layer) return left.layer - right.layer;
@@ -100,8 +160,33 @@ export class AttentionAccumulator {
     }
 
     restoreSignalPool(): void {
-        this.signalPool = this.globalState.getSignalPool().map(toAttentionItem);
-        log.info("restoreSignalPool", { count: this.signalPool.length });
+        const restored = this.globalState.getSignalPool().map(toAttentionItem);
+        const merged: AttentionItem[] = [];
+        const byKey = new Map<string, AttentionItem>();
+        const now = Date.now();
+
+        for (const item of restored) {
+            const key = topicSignalKey(item);
+            if (key) {
+                const existing = byKey.get(key);
+                if (existing) {
+                    mergeTopicSignal(existing, item, now);
+                    continue;
+                }
+                byKey.set(key, item);
+            }
+            merged.push(item);
+        }
+
+        this.signalPool = merged;
+        log.info("restoreSignalPool", {
+            count: this.signalPool.length,
+            restored: restored.length,
+            mergedDuplicates: restored.length - this.signalPool.length,
+        });
+        if (merged.length !== restored.length) {
+            this.persistSignalPool();
+        }
     }
 
     ingest(layer: AttentionLayer, item: Omit<AttentionItem, "layer">): void {
@@ -118,6 +203,19 @@ export class AttentionAccumulator {
 
         if (layer === 2) {
             entry.pressure = resolvePressure(entry, entry.enqueuedAt);
+            const key = topicSignalKey(entry);
+            const existing = key
+                ? this.signalPool.find((item) => topicSignalKey(item) === key)
+                : undefined;
+            if (existing && mergeTopicSignal(existing, entry, Date.now())) {
+                this.persistSignalPool();
+                log.debug("ingest: merged duplicate topic signal", {
+                    chatId: entry.chatId,
+                    topicId: getTopicSignalPayload(entry)?.topicDigest.topicId,
+                    pressure: existing.pressure,
+                });
+                return;
+            }
             this.signalPool.push(entry);
             this.persistSignalPool();
             return;
