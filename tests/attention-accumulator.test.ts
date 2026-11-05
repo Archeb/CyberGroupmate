@@ -340,8 +340,8 @@ describe("AttentionAccumulator", () => {
         globalState.dispose();
     });
 
-    it("blocks chats, drops queued items, and ignores ingress until unblocked", () => {
-        const { accumulator, globalState } = createAccumulator({ topN: 1 });
+    it("blocks chats by parking queued items and ingress until unblocked", () => {
+        const { accumulator, globalState } = createAccumulator();
         accumulator.ingest(2, {
             chatId: "telegram:1",
             source: "TOPIC_SIGNAL",
@@ -351,25 +351,47 @@ describe("AttentionAccumulator", () => {
         });
         accumulator.block("telegram:1");
 
+        // 已入队信号被暂存而不是删除
         assert.equal(accumulator.getSignalPoolSize(), 0);
+        assert.deepEqual(accumulator.getSnapshot().parkedCountByChatId, { "telegram:1": 1 });
+
+        // block 期间的新信号也暂存，且不会被 flush 释放
         accumulator.ingest(0, {
             chatId: "telegram:1",
             source: "DIRECT_ADDRESS",
             payload: { reason: "DM" },
             enqueuedAt: 10,
         });
+        assert.deepEqual(accumulator.getSnapshot().parkedCountByChatId, { "telegram:1": 2 });
         assert.equal(accumulator.flush(10), null);
 
+        // unblock 后暂存信号原样归还队列并照常投递
         accumulator.unblock("telegram:1");
+        assert.deepEqual(accumulator.getSnapshot().parkedCountByChatId, {});
+        const set = accumulator.flush(1_020);
+        assert.ok(set);
+        assert.deepEqual(
+            set?.items.map((item) => item.chatId),
+            ["telegram:1", "telegram:1"],
+        );
+        globalState.dispose();
+    });
+
+    it("removes parked items when explicitly removed", () => {
+        const { accumulator, globalState } = createAccumulator();
         accumulator.ingest(0, {
             chatId: "telegram:1",
             source: "DIRECT_ADDRESS",
             payload: { reason: "DM" },
-            enqueuedAt: 20,
+            enqueuedAt: 0,
         });
-        const set = accumulator.flush(1_020);
-        assert.ok(set);
-        assert.equal(set?.items[0]?.chatId, "telegram:1");
+        accumulator.block("telegram:1");
+        assert.deepEqual(accumulator.getSnapshot().parkedCountByChatId, { "telegram:1": 1 });
+
+        accumulator.remove("telegram:1");
+        assert.deepEqual(accumulator.getSnapshot().parkedCountByChatId, {});
+        accumulator.unblock("telegram:1");
+        assert.equal(accumulator.flush(2_000), null);
         globalState.dispose();
     });
 
