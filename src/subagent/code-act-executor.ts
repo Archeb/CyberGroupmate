@@ -452,12 +452,19 @@ function extractSeenMessageIds(messages: SessionMessage[]): string[] {
     return ids;
 }
 
+/** 模型漂移输出的 <｜DSML｜…> 伪 XML 不能进 compact——会被当 few-shot 持续复刻（2026-11-07 根因日记）。 */
+function stripPseudoToolXml(text: string): string {
+    const cut = text.indexOf("<｜DSML");
+    return (cut >= 0 ? text.slice(0, cut) : text).trim();
+}
+
 function formatExecutionRecordForCompact(rec: SessionExecutionRecord): string | null {
     const sentPart = rec.sentMessages.length > 0
         ? `\n  已发消息: ${rec.sentMessages.map(m => `"${m.text.length > 80 ? m.text.slice(0, 80) + '...' : m.text}"`).join(" / ")}`
         : "";
-    const thinkingPart = rec.thinkingSummary
-        ? `\n  思路: ${rec.thinkingSummary.slice(0, 200)}`
+    const cleanedThinking = rec.thinkingSummary ? stripPseudoToolXml(rec.thinkingSummary) : "";
+    const thinkingPart = cleanedThinking
+        ? `\n  思路: ${cleanedThinking.slice(0, 200)}`
         : "";
 
     if (!sentPart && !thinkingPart && rec.endReason === "end_turn") {
