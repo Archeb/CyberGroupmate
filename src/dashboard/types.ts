@@ -15,6 +15,7 @@ import type { ImageCatalog } from "../core/image-catalog.js";
 import type { PlatformAdapter } from "../adapter/platform-adapter.js";
 import type { AppConfig } from "../core/config.js";
 import type { AttentionAccumulator } from "../accumulator/attention-accumulator.js";
+import type { PostTaskWindowManager } from "../subagent/post-task-window.js";
 import type { MetaSandbox } from "../meta-sandbox/meta-sandbox.js";
 
 /** Dashboard 需要的所有组件引用 */
@@ -42,6 +43,8 @@ export interface DashboardDeps {
     onConfigSaved?: (config: AppConfig) => Promise<void> | void;
     /** Background Agent HarnessManager */
     harnessManager?: import("../harness/manager.js").HarnessManager;
+    /** Post-task window 管理器（手动注入注意力时立即结算进行中的窗口） */
+    postTaskWindows?: Pick<PostTaskWindowManager, "forceFlush" | "hasActiveWindow">;
 }
 
 /** Dashboard 配置 */

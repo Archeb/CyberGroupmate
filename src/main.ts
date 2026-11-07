@@ -1300,6 +1300,7 @@ async function main(): Promise<void> {
                 imageCatalog,
                 adapters,
                 get backfillCoordinator() { return backfillCoordinator ?? undefined; },
+                postTaskWindows: postTaskWindows ?? undefined,
                 metaSandbox,
                 onConfigSaved: async (config) => {
                     tokenStats.setProfiles(config.llmProfiles ?? {});

@@ -146,8 +146,12 @@ export class AttentionAccumulator {
     private signalPool: AttentionItem[] = [];
     private windowStartedAt: number | null = null;
     private blockedChatIds = new Set<string>();
+    /** chat 被 block 期间暂存的注意力条目，unblock 后原样归还队列。 */
+    private blockedBuffer = new Map<string, AttentionItem[]>();
     private dequeueHistory: ReleasedAttentionRecord[] = [];
     private readonly maxDequeueHistory = 50;
+    /** 单个 chat 暂存上限，防止长期 block 的 chat 无限积累。 */
+    private readonly maxBlockedBufferPerChat = 200;
     private readonly windowMs: number;
     private readonly maxWindowItems: number;
 
@@ -190,16 +194,17 @@ export class AttentionAccumulator {
     }
 
     ingest(layer: AttentionLayer, item: Omit<AttentionItem, "layer">): void {
-        if (this.blockedChatIds.has(item.chatId)) {
-            log.debug("ingest: ignored blocked chat", { chatId: item.chatId, layer, source: item.source });
-            return;
-        }
-
         const entry: AttentionItem = {
             ...item,
             layer,
             ignoredCount: item.ignoredCount ?? 0,
         };
+
+        if (this.blockedChatIds.has(item.chatId)) {
+            this.parkForBlockedChat(entry);
+            log.debug("ingest: chat blocked，暂存待 unblock 后投递", { chatId: item.chatId, layer, source: item.source });
+            return;
+        }
 
         if (layer === 2) {
             entry.pressure = resolvePressure(entry, entry.enqueuedAt);
@@ -242,27 +247,46 @@ export class AttentionAccumulator {
 
     block(chatId: string): void {
         this.blockedChatIds.add(chatId);
-        const pendingBefore = this.pending.length;
-        const signalBefore = this.signalPool.length;
+        const parkedPending = this.pending.filter((item) => item.chatId === chatId);
+        const parkedSignals = this.signalPool.filter((item) => item.chatId === chatId);
 
         this.pending = this.pending.filter((item) => item.chatId !== chatId);
         this.signalPool = this.signalPool.filter((item) => item.chatId !== chatId);
         if (this.pending.length === 0) {
             this.windowStartedAt = null;
         }
-        if (this.signalPool.length !== signalBefore) {
+
+        const parked = [...parkedPending, ...parkedSignals];
+        if (parked.length > 0) {
+            const buffer = this.blockedBuffer.get(chatId) ?? [];
+            buffer.push(...parked);
+            this.blockedBuffer.set(chatId, buffer.slice(-this.maxBlockedBufferPerChat));
+        }
+        if (parkedSignals.length > 0) {
             this.persistSignalPool();
         }
 
         log.debug("block", {
             chatId,
-            removedPending: pendingBefore - this.pending.length,
-            removedSignals: signalBefore - this.signalPool.length,
+            parkedPending: parkedPending.length,
+            parkedSignals: parkedSignals.length,
         });
     }
 
     unblock(chatId: string): void {
         this.blockedChatIds.delete(chatId);
+        const buffer = this.blockedBuffer.get(chatId);
+        this.blockedBuffer.delete(chatId);
+        if (!buffer || buffer.length === 0) {
+            return;
+        }
+
+        log.info("unblock: 归还暂存信号", { chatId, count: buffer.length });
+        // 走 ingest 归还，保留 layer-2 信号合并/持久化语义
+        for (const item of buffer) {
+            const { layer, ...rest } = item;
+            this.ingest(layer, rest);
+        }
     }
 
     isBlocked(chatId: string): boolean {
@@ -271,6 +295,7 @@ export class AttentionAccumulator {
 
     remove(chatId: string): void {
         this.blockedChatIds.delete(chatId);
+        this.blockedBuffer.delete(chatId);
         this.pending = this.pending.filter((item) => item.chatId !== chatId);
         const signalBefore = this.signalPool.length;
         this.signalPool = this.signalPool.filter((item) => item.chatId !== chatId);
@@ -382,11 +407,30 @@ export class AttentionAccumulator {
                 releasedAt: record.releasedAt,
             })),
             blockedChatIds: [...this.blockedChatIds].sort(),
+            parkedCountByChatId: Object.fromEntries(
+                [...this.blockedBuffer.entries()]
+                    .map(([chatId, items]): [string, number] => [chatId, items.length])
+                    .sort(([a], [b]) => a.localeCompare(b)),
+            ),
         };
     }
 
     dispose(): void {
         this.persistSignalPool();
+    }
+
+    private parkForBlockedChat(item: AttentionItem): void {
+        const buffer = this.blockedBuffer.get(item.chatId) ?? [];
+        if (buffer.length >= this.maxBlockedBufferPerChat) {
+            log.warn("blocked buffer 已满，丢弃最旧的暂存信号", {
+                chatId: item.chatId,
+                size: buffer.length,
+                max: this.maxBlockedBufferPerChat,
+            });
+            buffer.shift();
+        }
+        buffer.push(item);
+        this.blockedBuffer.set(item.chatId, buffer);
     }
 
     private pushDequeueHistory(item: AttentionItem, releasedAt: number): void {

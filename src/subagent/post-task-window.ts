@@ -281,6 +281,34 @@ export class PostTaskWindowManager {
         return this.windows.has(chatId);
     }
 
+    /**
+     * 立即结算当前窗口（例如 Dashboard 手动注入注意力时）：
+     * 把已收集的回调与消息打包成合并 callback 入队，解除 block，
+     * 让新的注意力信号可以马上进入 accumulator。
+     * 返回是否确实结算了一个窗口。
+     */
+    forceFlush(chatId: string, reason: string): boolean {
+        const window = this.windows.get(chatId);
+        if (!window) return false;
+
+        this.windows.delete(chatId);
+        if (window.timer) clearTimeout(window.timer);
+        if (window.followUpTimer) clearTimeout(window.followUpTimer);
+        const callback = this.buildCallback(window);
+        this.accumulator.unblock(chatId);
+        this.callbackQueue.enqueue(callback);
+
+        log.info("post-task window force flushed", {
+            chatId,
+            reason,
+            taskId: callback.taskId,
+            callbacks: window.callbacks.length,
+            messages: callback.postTaskMessages?.length ?? 0,
+            durationMs: Date.now() - window.startedAtMs,
+        });
+        return true;
+    }
+
     isReplyToWindowSentMessage(chatId: string, event: NotificationEvent): boolean {
         const window = this.windows.get(chatId);
         const replyToMessageId = event.replyToMessageId != null ? String(event.replyToMessageId) : "";

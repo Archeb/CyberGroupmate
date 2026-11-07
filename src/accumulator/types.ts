@@ -41,6 +41,8 @@ export interface AttentionAccumulatorSnapshot {
     active: AttentionSnapshotItem[];
     dequeued: ReleasedAttentionRecord[];
     blockedChatIds: string[];
+    /** chat 被 block 期间暂存、待 unblock 后投递的条目数 */
+    parkedCountByChatId: Record<string, number>;
 }
 
 export interface PressureParticipant {

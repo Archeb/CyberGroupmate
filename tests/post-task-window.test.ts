@@ -115,6 +115,38 @@ describe("PostTaskWindowManager", () => {
         manager.dispose();
     });
 
+    it("force flushes an active window immediately and unblocks the chat", () => {
+        const { manager, q5, unblocks } = makeManager({ windowMs: 60_000 });
+
+        manager.handleCallback(makeCallback());
+        assert.equal(q5.size, 0);
+        assert.equal(manager.hasActiveWindow("telegram:1"), true);
+
+        // 无窗口的 chat 返回 false，不产生副作用
+        assert.equal(manager.forceFlush("telegram:other", "test"), false);
+        assert.equal(q5.size, 0);
+
+        manager.recordMessage("telegram:1", {
+            _id: "evt-1",
+            _ts: "2026-05-03T12:00:00.000Z",
+            type: "nc.message",
+            chatId: "telegram:1",
+            messageId: "msg-1",
+            displayName: "Alice",
+            text: "等窗口结束再看",
+        });
+
+        assert.equal(manager.forceFlush("telegram:1", "test"), true);
+        assert.equal(manager.hasActiveWindow("telegram:1"), false);
+        assert.equal(q5.size, 1);
+        const [callback] = q5.drain();
+        assert.equal(callback.taskId, "task-1");
+        assert.equal(callback.postTaskMessages?.length, 1);
+        assert.equal(callback.postTaskMessages?.[0]?.text, "等窗口结束再看");
+        assert.deepEqual(unblocks, ["telegram:1"]);
+        manager.dispose();
+    });
+
     it("opens from agent sent events before callback arrives", async () => {
         const { manager, q5, enqueued, blocks, unblocks } = makeManager({ windowMs: 20 });
         const chatId = "discord:guild-1:channel-1";

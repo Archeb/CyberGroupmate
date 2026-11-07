@@ -943,6 +943,9 @@ export function createApiRouter(deps: DashboardDeps, bridge: EventBridge): Route
         if (!chatId) { res.status(400).json({ error: "chatId required" }); return; }
         const sub = deps.subagentManager.get(chatId);
         if (!sub) { res.status(404).json({ error: "chat not found" }); return; }
+        // 手动注入视为立即意图：结算进行中的 post-task window 并解除 block，
+        // 让信号直接进入 accumulator（窗口已收集的内容随合并 callback 照常投递）。
+        const windowFlushed = deps.postTaskWindows?.forceFlush(chatId, "dashboard-enqueue") ?? false;
         deps.accumulator.ingest(0, {
             chatId,
             source: "DIRECT_ADDRESS",
@@ -951,13 +954,19 @@ export function createApiRouter(deps: DashboardDeps, bridge: EventBridge): Route
             pressure: Number(priority) || 0,
         });
         bridge.broadcast({ type: "queue:update", timestamp: new Date().toISOString(), data: deps.accumulator.getSnapshot() });
-        log.info("手动注入 accumulator", { chatId, priority, note: typeof note === "string" ? note.slice(0, 200) : undefined });
-        res.json({ ok: true });
+        log.info("手动注入 accumulator", {
+            chatId,
+            priority,
+            windowFlushed,
+            note: typeof note === "string" ? note.slice(0, 200) : undefined,
+        });
+        res.json({ ok: true, windowFlushed, parked: deps.accumulator.isBlocked(chatId) });
     });
 
     router.post("/queue/boost", (req, res) => {
         const { chatId, amount } = req.body;
         if (!chatId) { res.status(400).json({ error: "chatId required" }); return; }
+        const windowFlushed = deps.postTaskWindows?.forceFlush(chatId, "dashboard-boost") ?? false;
         deps.accumulator.ingest(0, {
             chatId,
             source: "DIRECT_ADDRESS",
@@ -966,7 +975,7 @@ export function createApiRouter(deps: DashboardDeps, bridge: EventBridge): Route
             pressure: Number(amount) || 20,
         });
         bridge.broadcast({ type: "queue:update", timestamp: new Date().toISOString(), data: deps.accumulator.getSnapshot() });
-        res.json({ ok: true });
+        res.json({ ok: true, windowFlushed, parked: deps.accumulator.isBlocked(chatId) });
     });
 
     router.delete("/queue/:chatId", (req, res) => {
