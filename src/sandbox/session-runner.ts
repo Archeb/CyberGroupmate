@@ -342,8 +342,10 @@ function hasUnsupportedToolCall(response: string): boolean {
         .replace(/\[SESSION_DIGEST\][\s\S]*?\[\/SESSION_DIGEST\]/g, "");
     // 不依赖载荷格式：JSON、tool_name/function_name，以及单独伪造的结果都不受支持。
     // 拦截独立动作块或成对的调用/结果；普通思考中仅提及标签名不算调用。
+    // <｜DSML｜ calls/invoke> 是模型漂移产生的伪 tool call 形状（2026-11-07 根因日记），必须触发格式纠错。
     return /(?:^|\n)[ \t]*<tool_(?:call|result)(?=[\s/>])[^>]*>/i.test(actionText)
-        || /<(tool_(?:call|result))(?=[\s/>])[^>]*>[\s\S]*?<\/\1\s*>/i.test(actionText);
+        || /<(tool_(?:call|result))(?=[\s/>])[^>]*>[\s\S]*?<\/\1\s*>/i.test(actionText)
+        || /<[｜|]\s*DSML[｜|]\s*(?:calls|invoke)\b/i.test(actionText);
 }
 
 const MAX_TOOL_FORMAT_ERRORS = 3; // 首次错误后最多两次纠正机会。
