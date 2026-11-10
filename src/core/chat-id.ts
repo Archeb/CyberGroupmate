@@ -71,11 +71,11 @@ export function composeChatId(platform: PlatformName, ...parts: string[]): strin
  * parseChatId("discord:user789")
  *   → { platform: "discord", rawId: "user789" }  (DM, 无 groupId/channelId)
  *
- * parseChatId("onebot:group:679691983")
- *   → { platform: "onebot", rawId: "group:679691983", groupId: "679691983" }
+ * parseChatId("onebot:group:987654321")
+ *   → { platform: "onebot", rawId: "group:987654321", groupId: "987654321" }
  *
- * parseChatId("onebot:private:1694442676")
- *   → { platform: "onebot", rawId: "private:1694442676" }  (私聊, 无 groupId)
+ * parseChatId("onebot:private:111111111")
+ *   → { platform: "onebot", rawId: "private:111111111" }  (私聊, 无 groupId)
  */
 export function parseChatId(compositeId: string): ParsedChatId {
     if (!compositeId) {
@@ -252,7 +252,7 @@ export function fileNameToChatId(fileName: string): string {
     }
 
     // OneBot: 三段式（onebot:group:xxx / onebot:private:xxx），需将 _ 还原为 :
-    // onebot_group_679691983 → onebot:group:679691983
+    // onebot_group_987654321 → onebot:group:987654321
     if (platform === "onebot") {
         return `onebot:${rest.replaceAll("_", ":")}`;
     }
