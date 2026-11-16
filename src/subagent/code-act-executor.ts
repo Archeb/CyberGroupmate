@@ -249,6 +249,7 @@ export function getPlatformExecutionGuidance(platform: string): string {
         'await feishu.sendText(chatId, "正文", { replyToMessageId: "om_x", replyInThread: true, mentions: [{ userId: "feishu:ou_x", displayName: "名字" }] }); 可省略 options；replyInThread 必须有 replyToMessageId。文本含提及编码后最多 20 KiB。',
         'await feishu.sendMedia(chatId, { type: "photo", path: "media/image.png", caption: "说明" }, { replyToMessageId: "om_x" }); type 支持 photo/document/audio/video，可选 fileName 和音视频 duration；path 必须是 workspace 内本地文件，图片最多 10 MiB，其他文件最多 30 MiB。',
         'sendMessage 支持飞书原生 text/post/interactive/share_chat/share_user；getHistory 获取当前会话历史。合并转发消息会展开为 text 和 forwardedMessages；飞书不支持下载其中子消息的媒体资源，因此不会暴露这些附件的下载引用。',
+        "sendText 发送的是飞书 text 消息，markdown 不会渲染；需要 markdown 或富文本排版时，改用 sendMessage(chatId, \"post\", ...)（content 用 { tag: \"md\", text: ... } 节点）或 interactive 卡片，adapter 不会自动转换。",
         '收到 sticker 时可用 mediaInfo.sendableFileId（或 fileId）调用 sendSticker；飞书不允许机器人上传任意新表情包。sendTemplateCard/updateTemplateCard 使用卡片模板；sendCard/updateCard/patchCard/streamCardText 使用 CardKit，动态更新需对同一 messageId 使用递增 sequence。',
         'card.action.trigger 和消息表情增删会作为普通 nc.message 输入，原始 action/context 或 emoji 位于 payload.platformData；可按 replyToMessageId 找到被操作的消息。callApi(chatId, action, { path, params, data }) 开放消息编辑/撤回/转发/已读查询、表情、Pin、群资料、成员、管理员和群菜单，参数保持飞书 SDK 形状。',
         "caption 是单独的回复消息，不是媒体正文。主回执只确认媒体成功；只有 additionalMessages 中的成功 messageId 才确认说明文字已发出。captionError 表示媒体成功、说明失败，不要为重发说明而重发媒体。null 表示被拦截，不能说已发送。",

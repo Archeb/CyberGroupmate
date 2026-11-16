@@ -186,6 +186,111 @@ describe("Feishu adapter ingress edges", () => {
         } finally { await f.adapter.stop(); }
     });
 
+    it("resolves live message names from chat members when contact lookup is denied", async () => {
+        const f = fixture();
+        let contactCalls = 0;
+        let pages = 0;
+        f.client.contact!.v3!.user!.get = async () => { contactCalls++; throw new Error("no user authority error"); };
+        f.client.im.v1.chatMembers = {
+            get: async payload => {
+                pages++;
+                if (pages === 1) {
+                    assert.equal(payload?.params?.member_id_type, "open_id");
+                    assert.equal(payload?.params?.page_size, 100);
+                    return { code: 0, data: { items: [{ member_id: "ou_other", name: "Other" }], has_more: true, page_token: "next" } };
+                }
+                assert.equal(payload?.params?.page_token, "next");
+                return { code: 0, data: { items: [{ member_id: "ou_user", name: "Alice" }], has_more: false } };
+            },
+        };
+        await f.adapter.start();
+        try {
+            await f.connections[0].receive(incoming());
+            assert.equal(f.events[0].displayName, "Alice");
+            assert.equal(pages, 2);
+            assert.equal(contactCalls, 0);
+        } finally { await f.adapter.stop(); }
+    });
+
+    it("resolves live message names from message.get before chat members and contact", async () => {
+        const f = fixture();
+        let contactCalls = 0;
+        let memberCalls = 0;
+        f.client.contact!.v3!.user!.get = async () => { contactCalls++; throw new Error("no user authority error"); };
+        f.client.im.v1.chatMembers = {
+            get: async () => { memberCalls++; return { code: 0, data: { items: [], has_more: false } }; },
+        };
+        f.messages.set("om_one", {
+            message_id: "om_one", chat_id: "oc_chat", chat_type: "group", msg_type: "text",
+            body: { content: '{"text":"ordinary conversation"}' },
+            sender: { id: "ou_user", id_type: "open_id", sender_name: "Alice" }, create_time: time,
+        });
+        await f.adapter.start();
+        try {
+            await f.connections[0].receive(incoming());
+            assert.equal(f.events[0].displayName, "Alice");
+            assert.equal(contactCalls, 0);
+            assert.equal(memberCalls, 0);
+            const get = f.calls.find(call => call.method === "get");
+            assert.ok(get);
+            assert.equal(get.payload.path.message_id, "om_one");
+            assert.equal(get.payload.params.with_sender_name, true);
+        } finally { await f.adapter.stop(); }
+    });
+
+    it("coalesces concurrent name lookups for the same user", async () => {
+        const f = fixture();
+        const originalGet = f.client.im.v1.message.get;
+        let getCalls = 0;
+        let started!: () => void;
+        let release!: () => void;
+        const startedPromise = new Promise<void>(resolve => { started = resolve; });
+        const gate = new Promise<void>(resolve => { release = resolve; });
+        f.client.im.v1.message.get = async payload => {
+            getCalls++;
+            started();
+            await gate;
+            return originalGet(payload);
+        };
+        for (const messageId of ["om_a", "om_b"]) {
+            f.messages.set(messageId, {
+                message_id: messageId, chat_id: "oc_chat", chat_type: "group", msg_type: "text",
+                body: { content: '{"text":"hello"}' },
+                sender: { id: "ou_user", id_type: "open_id", sender_name: "Alice" }, create_time: time,
+            });
+        }
+        await f.adapter.start();
+        try {
+            const first = f.connections[0].receive(incoming({ message_id: "om_a" }));
+            await startedPromise;
+            const second = f.connections[0].receive(incoming({ message_id: "om_b" }));
+            await new Promise(resolve => setTimeout(resolve, 0));
+            assert.equal(getCalls, 1);
+            release();
+            await Promise.all([first, second]);
+            assert.equal(getCalls, 1);
+            assert.deepEqual(f.events.map(event => event.displayName), ["Alice", "Alice"]);
+        } finally { await f.adapter.stop(); }
+    });
+
+    it("does not use another sender's name from message.get", async () => {
+        const f = fixture();
+        f.client.contact!.v3!.user!.get = async () => { throw new Error("no user authority error"); };
+        f.client.im.v1.chatMembers = {
+            get: async () => ({ code: 0, data: { items: [], has_more: false } }),
+        };
+        f.messages.set("om_one", {
+            message_id: "om_one", chat_id: "oc_chat", chat_type: "group", msg_type: "text",
+            body: { content: '{"text":"ordinary conversation"}' },
+            sender: { id: "ou_other", id_type: "open_id", sender_name: "Other" }, create_time: time,
+        });
+        await f.adapter.start();
+        try {
+            await f.connections[0].receive(incoming());
+            assert.equal(f.events[0].displayName, "feishu:ou_user");
+        } finally { await f.adapter.stop(); }
+    });
+
     it("suppresses persisted IDs, ignores self, and bounds in-process dedup", async () => {
         const f = fixture({ dedupLimit: 2, hasMessage: (_, id) => id === "om_saved" });
         await f.adapter.start();
@@ -293,6 +398,87 @@ describe("Feishu adapter ingress edges", () => {
             assert.equal(f.events[1].text, "[Reaction added: THUMBSUP]");
             assert.equal(f.events[1].mentionsAgent, true);
             assert.equal((f.events[1].payload as any).platformData.originalType, "im.message.reaction.created_v1");
+        } finally { await f.adapter.stop(); }
+    });
+
+    it("resolves reaction operator names from chat members when contact lookup is denied", async () => {
+        const f = fixture();
+        let contactCalls = 0;
+        f.client.contact!.v3!.user!.get = async () => { contactCalls++; throw new Error("no user authority error"); };
+        f.client.im.v1.chatMembers = {
+            get: async () => ({ code: 0, data: { items: [{ member_id: "ou_reactor", name: "Reactor" }], has_more: false } }),
+        };
+        f.messages.set("om_bot", { message_id: "om_bot", chat_id: "oc_chat", chat_type: "group", msg_type: "text", body: { content: '{"text":"bot message"}' }, sender: { id: "ou_bot", id_type: "open_id" }, create_time: time });
+        await f.adapter.start();
+        try {
+            await f.connections[0].handlers["im.message.reaction.created_v1"]({
+                event_id: "evt_reaction",
+                event: { message_id: "om_bot", user_id: { open_id: "ou_reactor" }, reaction_type: { emoji_type: "THUMBSUP" }, action_time: time },
+            });
+            assert.equal(f.events[0].displayName, "Reactor");
+            assert.equal(contactCalls, 0);
+        } finally { await f.adapter.stop(); }
+    });
+
+    it("paginates chat member names beyond ten pages", async () => {
+        const f = fixture();
+        let pages = 0;
+        f.client.contact!.v3!.user!.get = async () => { throw new Error("no user authority error"); };
+        f.client.im.v1.chatMembers = {
+            get: async () => {
+                pages++;
+                const last = pages === 11;
+                return {
+                    code: 0,
+                    data: {
+                        items: [{ member_id: last ? "ou_reactor" : `ou_user_${pages}`, name: last ? "Reactor" : `User ${pages}` }],
+                        has_more: !last,
+                        ...(last ? {} : { page_token: `page_${pages + 1}` }),
+                    },
+                };
+            },
+        };
+        f.messages.set("om_bot", { message_id: "om_bot", chat_id: "oc_chat", chat_type: "group", msg_type: "text", body: { content: '{"text":"bot message"}' }, sender: { id: "ou_bot", id_type: "open_id" }, create_time: time });
+        await f.adapter.start();
+        try {
+            await f.connections[0].handlers["im.message.reaction.created_v1"]({
+                event_id: "evt_reaction",
+                event: { message_id: "om_bot", user_id: { open_id: "ou_reactor" }, reaction_type: { emoji_type: "THUMBSUP" }, action_time: time },
+            });
+            assert.equal(f.events[0].displayName, "Reactor");
+            assert.equal(pages, 11);
+        } finally { await f.adapter.stop(); }
+    });
+
+    it("refreshes cached member names after membership changes", async () => {
+        const f = fixture();
+        let memberCalls = 0;
+        let memberName = "Old";
+        f.client.contact!.v3!.user!.get = async () => { throw new Error("no user authority error"); };
+        f.client.im.v1.chatMembers = {
+            get: async () => {
+                memberCalls++;
+                return { code: 0, data: { items: [{ member_id: "ou_reactor", name: memberName }], has_more: false } };
+            },
+        };
+        f.messages.set("om_bot", { message_id: "om_bot", chat_id: "oc_chat", chat_type: "group", msg_type: "text", body: { content: '{"text":"bot message"}' }, sender: { id: "ou_bot", id_type: "open_id" }, create_time: time });
+        await f.adapter.start();
+        try {
+            const react = (eventId: string) => f.connections[0].handlers["im.message.reaction.created_v1"]({
+                event_id: eventId,
+                event: { message_id: "om_bot", user_id: { open_id: "ou_reactor" }, reaction_type: { emoji_type: "THUMBSUP" }, action_time: time },
+            });
+            await react("evt_old");
+            memberName = "New";
+            await f.connections[0].handlers["im.chat.member.user.added_v1"]({
+                event_id: "evt_member",
+                event: { chat_id: "oc_chat", users: [{ user_id: { open_id: "ou_reactor" } }] },
+            });
+            await react("evt_new");
+            const messages = f.events.filter(event => event.type === "nc.message");
+            assert.equal(messages[0].displayName, "Old");
+            assert.equal(messages[1].displayName, "New");
+            assert.equal(memberCalls, 2);
         } finally { await f.adapter.stop(); }
     });
 
@@ -804,7 +990,7 @@ describe("Feishu adapter host boundary edges", () => {
             await assert.rejects(f.adapter.downloadMedia(media.fileId, "oc_other"), /ownership/);
             await assert.rejects(f.adapter.downloadMedia(media.fileId, "oc_chat", "om_wrong"), /ownership/);
             await assert.rejects(f.adapter.downloadMedia(media.fileId, "oc_chat", "om_one", "wrong"), /ownership/);
-            assert.equal(f.calls.length, 0);
+            assert.equal(f.calls.filter(call => call.method === "resource").length, 0);
             assert.equal((await f.adapter.downloadMedia(null, media.fileId)).toString(), "media");
             const envelope = await f.adapter.handleCall("feishu.downloadMedia", [media.fileId, "oc_chat", "om_one", media.uniqueFileId]) as Record<string, unknown>;
             assert.deepEqual(envelope, { buffer: Buffer.from("media").toString("base64"), size: 5, fileName: "report.pdf" });

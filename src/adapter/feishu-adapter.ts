@@ -17,6 +17,13 @@ const MAX_CONTENT_BYTES = 256 * 1024;
 const MAX_TEXT_BYTES = 20 * 1024;
 const TIMEOUT_MS = 30_000;
 const DEDUP_LIMIT = 10_000;
+const CHAT_MEMBER_PAGE_SIZE = 100;
+const MAX_CHAT_MEMBER_PAGES = 50;
+const CHAT_MEMBER_CACHE_MS = 10 * 60_000;
+const CHAT_MEMBER_PARTIAL_CACHE_MS = 60_000;
+const CHAT_MEMBER_LOOKUP_TIMEOUT_MS = 5_000;
+const USER_NAME_CACHE_MS = 10 * 60_000;
+const USER_NAME_NEGATIVE_CACHE_MS = 60_000;
 const silentLogger = { error() {}, warn() {}, info() {}, debug() {}, trace() {} };
 type RecordValue = Record<string, unknown>;
 type MessageApi = Client["im"]["v1"]["message"];
@@ -313,6 +320,10 @@ export class FeishuAdapter implements PlatformAdapter {
     private readonly chatNames = new Map<string, string>();
     private readonly chatTypes = new Map<string, "p2p" | "group">();
     private readonly userNames = new Map<string, { name?: string; expiresAt: number }>();
+    private readonly userNamesPending = new Map<string, Promise<string | undefined>>();
+    private readonly chatMemberNames = new Map<string, { names: Map<string, string>; expiresAt: number }>();
+    private readonly chatMemberNamesPending = new Map<string, Promise<Map<string, string>>>();
+    private readonly chatMemberNamesGeneration = new Map<string, number>();
     private readonly cardSequences = new Map<string, number>();
     private readonly requestTimeoutMs: number;
     private readonly readinessTimeoutMs: number;
@@ -395,6 +406,7 @@ export class FeishuAdapter implements PlatformAdapter {
                 "im.chat.updated_v1",
                 "im.chat.member.user.added_v1",
                 "im.chat.member.user.deleted_v1",
+                "im.chat.member.user.withdrawn_v1",
                 "im.chat.member.bot.added_v1",
                 "im.chat.member.bot.deleted_v1",
                 "im.chat.disbanded_v1",
@@ -485,41 +497,188 @@ export class FeishuAdapter implements PlatformAdapter {
         const outer = record(value);
         const event = outer.event ? record(outer.event) : outer;
         const messageId = string(event.message_id);
-        const chatId = string(event.chat_id);
+        const chatRaw = string(event.chat_id);
+        const chatId = ID_PATTERNS.oc_.test(chatRaw) ? compositeId(chatRaw, "oc_") : undefined;
+        if (chatId) {
+            const memberChanged = eventType === "im.chat.member.user.added_v1"
+                || eventType === "im.chat.member.user.deleted_v1"
+                || eventType === "im.chat.member.user.withdrawn_v1";
+            if (memberChanged) {
+                for (const item of Array.isArray(event.users) ? event.users : []) {
+                    const user = record(item);
+                    const openId = string(record(user.user_id).open_id) || string(user.open_id);
+                    const name = string(user.name);
+                    if (!ID_PATTERNS.ou_.test(openId)) continue;
+                    if (name) {
+                        this.userNames.set(openId, { name, expiresAt: Date.now() + USER_NAME_CACHE_MS });
+                        trimMap(this.userNames, 5000);
+                    } else {
+                        this.userNames.delete(openId);
+                    }
+                }
+                this.invalidateChatMemberNames(chatId);
+            } else if (eventType === "im.chat.disbanded_v1") {
+                this.invalidateChatMemberNames(chatId);
+                this.chatNames.delete(chatId);
+                this.chatTypes.delete(chatId);
+            }
+        }
         this.nc.push({
             type: `feishu.${eventType.replace(/^im\./, "").replaceAll(".", "_")}`,
             scene: "feishu",
-            ...(ID_PATTERNS.oc_.test(chatId) ? { chatId: `feishu:${chatId}` } : {}),
+            ...(chatId ? { chatId } : {}),
             ...(ID_PATTERNS.om_.test(messageId) ? { messageId } : {}),
             payload: event,
         });
     }
 
-    private async resolveUserName(openId: string): Promise<string | undefined> {
-        const cached = this.userNames.get(openId);
-        if (cached && cached.expiresAt > Date.now()) return cached.name;
-        let name: string | undefined;
+    private invalidateChatMemberNames(chatId: string): void {
+        this.chatMemberNames.delete(chatId);
+        this.chatMemberNamesPending.delete(chatId);
+        this.chatMemberNamesGeneration.set(chatId, (this.chatMemberNamesGeneration.get(chatId) ?? 0) + 1);
+    }
+
+    private async ensureChatMemberNames(chatId: string): Promise<Map<string, string>> {
+        const cached = this.chatMemberNames.get(chatId);
+        if (cached && cached.expiresAt > Date.now()) return cached.names;
+        const pending = this.chatMemberNamesPending.get(chatId);
+        if (pending) return pending;
+        const generation = this.chatMemberNamesGeneration.get(chatId) ?? 0;
+        const operation = (async () => {
+            const names = new Map<string, string>();
+            let complete = false;
+            try {
+                const get = this.requireClient().im.v1.chatMembers?.get;
+                if (get) {
+                    let pageToken: string | undefined;
+                    for (let page = 0; page < MAX_CHAT_MEMBER_PAGES; page++) {
+                        const response = await this.api(() => get({
+                            path: { chat_id: rawId(chatId, "oc_") },
+                            params: {
+                                member_id_type: "open_id",
+                                page_size: CHAT_MEMBER_PAGE_SIZE,
+                                ...(pageToken ? { page_token: pageToken } : {}),
+                            },
+                        }));
+                        const data = record(response.data);
+                        for (const item of Array.isArray(data.items) ? data.items : []) {
+                            const member = record(item);
+                            const id = string(member.member_id);
+                            const name = string(member.name);
+                            if (ID_PATTERNS.ou_.test(id) && name) names.set(id, name);
+                        }
+                        if (data.has_more !== true) {
+                            complete = true;
+                            break;
+                        }
+                        pageToken = string(data.page_token) || undefined;
+                        if (!pageToken) {
+                            complete = true;
+                            break;
+                        }
+                    }
+                }
+            } catch {
+                // Name resolution is best-effort; fall back to message/contact data.
+            }
+            if ((this.chatMemberNamesGeneration.get(chatId) ?? 0) === generation) {
+                const ttl = complete && names.size > 0 ? CHAT_MEMBER_CACHE_MS : CHAT_MEMBER_PARTIAL_CACHE_MS;
+                this.chatMemberNames.set(chatId, {
+                    names,
+                    expiresAt: Date.now() + ttl,
+                });
+                trimMap(this.chatMemberNames, 1000);
+            }
+            return names;
+        })();
+        this.chatMemberNamesPending.set(chatId, operation);
+        try {
+            return await operation;
+        } finally {
+            if (this.chatMemberNamesPending.get(chatId) === operation) this.chatMemberNamesPending.delete(chatId);
+        }
+    }
+
+    private async resolveNameFromMessage(openId: string, messageId: string, chatId?: string): Promise<string | undefined> {
+        try {
+            const id = rawId(messageId, "om_");
+            const response = await this.api(() => this.requireClient().im.v1.message.get({
+                path: { message_id: id },
+                params: { user_id_type: "open_id", with_sender_name: true },
+            }));
+            const data = record(response.data);
+            const original = (Array.isArray(data.items) ? data.items : []).map(record).find(item => item.message_id === id);
+            if (!original || original.deleted) return undefined;
+            if (chatId && string(original.chat_id) && rawId(original.chat_id, "oc_") !== rawId(chatId, "oc_")) return undefined;
+            const sender = record(original.sender);
+            const senderIds = [
+                string(sender.id),
+                string(sender.open_bot_id),
+                string(record(sender.sender_id).open_id),
+            ];
+            if (!senderIds.includes(openId)) return undefined;
+            const i18n = record(sender.sender_i18n_names);
+            return string(sender.sender_name) || string(sender.name)
+                || string(i18n.zh_cn) || string(i18n.en_us) || string(i18n.ja_jp) || undefined;
+        } catch {
+            return undefined;
+        }
+    }
+
+    private async resolveNameFromChatMembers(openId: string, chatId: string): Promise<string | undefined> {
+        const members = await bounded(this.ensureChatMemberNames(chatId), Math.min(this.requestTimeoutMs, CHAT_MEMBER_LOOKUP_TIMEOUT_MS))
+            .catch(() => new Map<string, string>());
+        return members.get(openId);
+    }
+
+    private async resolveNameFromContact(openId: string): Promise<string | undefined> {
         try {
             const get = this.requireClient().contact?.v3?.user?.get;
-            if (get) {
-                const response = await this.api(() => get({ path: { user_id: openId }, params: { user_id_type: "open_id" } }));
-                const data = record(response.data);
-                const user = record(data.user ?? data);
-                name = string(user.name) || string(user.en_name) || undefined;
-            }
+            if (!get) return undefined;
+            const response = await this.api(() => get({ path: { user_id: openId }, params: { user_id_type: "open_id" } }));
+            const data = record(response.data);
+            const user = record(data.user ?? data);
+            return string(user.name) || string(user.en_name) || undefined;
         } catch {
-            name = undefined;
+            return undefined;
         }
-        this.userNames.set(openId, { name, expiresAt: Date.now() + (name ? 60 * 60_000 : 5 * 60_000) });
+    }
+
+    private async resolveUserNameUncached(openId: string, chatId?: string, messageId?: string): Promise<string | undefined> {
+        let name: string | undefined;
+        if (messageId) name = await this.resolveNameFromMessage(openId, messageId, chatId);
+        if (!name && chatId) name = await this.resolveNameFromChatMembers(openId, chatId);
+        if (!name) name = await this.resolveNameFromContact(openId);
+        const ttl = name ? USER_NAME_CACHE_MS : USER_NAME_NEGATIVE_CACHE_MS;
+        this.userNames.set(openId, {
+            name,
+            expiresAt: Date.now() + ttl,
+        });
         trimMap(this.userNames, 5000);
         return name;
     }
 
-    private async senderWithName(sender: RecordValue): Promise<RecordValue> {
+    private async resolveUserName(openId: string, chatId?: string, messageId?: string): Promise<string | undefined> {
+        const cached = this.userNames.get(openId);
+        if (cached && cached.expiresAt > Date.now()) return cached.name;
+        const pending = this.userNamesPending.get(openId);
+        if (pending) return pending;
+        const operation = this.resolveUserNameUncached(openId, chatId, messageId);
+        this.userNamesPending.set(openId, operation);
+        try {
+            return await operation;
+        } finally {
+            if (this.userNamesPending.get(openId) === operation) this.userNamesPending.delete(openId);
+        }
+    }
+
+    private async senderWithName(sender: RecordValue, chatId?: string, messageId?: string): Promise<RecordValue> {
         if (string(sender.sender_name) || string(sender.name)) return sender;
-        const id = string(record(sender.sender_id).open_id) || (sender.id_type === "open_id" ? string(sender.id) : "");
+        const id = string(record(sender.sender_id).open_id)
+            || (sender.id_type === "open_id" ? string(sender.id) : "")
+            || string(sender.open_bot_id);
         if (!ID_PATTERNS.ou_.test(id)) return sender;
-        const name = await this.resolveUserName(id);
+        const name = await this.resolveUserName(id, chatId, messageId);
         return name ? { ...sender, sender_name: name } : sender;
     }
 
@@ -597,7 +756,7 @@ export class FeishuAdapter implements PlatformAdapter {
         const eventId = `feishu-card:${string(outer.event_id ?? event.event_id ?? outer.uuid ?? event.uuid ?? event.token)
             || createHash("sha256").update(JSON.stringify([messageId, userRaw, action])).digest("hex")}`;
         const text = `[Card action${string(action.name) ? `: ${string(action.name)}` : ""}] ${JSON.stringify(detail)}`.slice(0, MAX_TEXT_BYTES);
-        const displayName = string(operator.name) || await this.resolveUserName(userRaw) || userId;
+        const displayName = string(operator.name) || await this.resolveUserName(userRaw, chatId) || userId;
         if (session.signal.aborted || this.session !== session) return {};
         await this.ensureChatMetadata(chatId);
         if (session.signal.aborted || this.session !== session) return {};
@@ -629,7 +788,7 @@ export class FeishuAdapter implements PlatformAdapter {
         const chatId = compositeId(chatRaw, "oc_");
         const userId = compositeId(userRaw, "ou_");
         const eventId = `feishu-reaction:${string(outer.event_id ?? event.event_id ?? outer.uuid ?? event.uuid) || `${messageId}:${userRaw}:${emoji}:${action}:${string(event.action_time)}`}`;
-        const displayName = await this.resolveUserName(userRaw) ?? userId;
+        const displayName = await this.resolveUserName(userRaw, chatId) ?? userId;
         if (session.signal.aborted || this.session !== session) return;
         await this.ensureChatMetadata(chatId);
         if (session.signal.aborted || this.session !== session) return;
@@ -792,12 +951,16 @@ export class FeishuAdapter implements PlatformAdapter {
     }
 
     private async normalizeMessage(message: RecordValue, sender: RecordValue, chatType?: string): Promise<RecordValue> {
-        const namedSender = await this.senderWithName(sender);
-        if (string(message.message_type ?? message.msg_type) !== "merge_forward") return this.normalize(message, namedSender, chatType);
-        const response = await this.api(() => this.requireClient().im.v1.message.get({ path: { message_id: rawId(message.message_id, "om_") }, params: { user_id_type: "open_id", with_sender_name: true } }));
-        const items = (Array.isArray(record(response.data).items) ? record(response.data).items as unknown[] : []).map(record);
-        const parent = items.find(item => item.message_id === message.message_id) ?? { ...message, sender: namedSender };
-        return this.expandMergedForward({ ...parent, sender: await this.senderWithName(record(parent.sender)) }, items, chatType);
+        const chatId = ID_PATTERNS.oc_.test(string(message.chat_id)) ? compositeId(message.chat_id, "oc_") : undefined;
+        const messageId = string(message.message_id);
+        if (string(message.message_type ?? message.msg_type) === "merge_forward") {
+            const response = await this.api(() => this.requireClient().im.v1.message.get({ path: { message_id: rawId(messageId, "om_") }, params: { user_id_type: "open_id", with_sender_name: true } }));
+            const data = record(response.data);
+            const items = (Array.isArray(data.items) ? data.items : []).map(record);
+            const parent = items.find(item => item.message_id === messageId) ?? { ...message, sender };
+            return this.expandMergedForward({ ...parent, sender: await this.senderWithName(record(parent.sender), chatId) }, items, chatType);
+        }
+        return this.normalize(message, await this.senderWithName(sender, chatId, messageId), chatType);
     }
 
     private cardText(value: unknown): string {
@@ -1157,7 +1320,7 @@ export class FeishuAdapter implements PlatformAdapter {
         const message = records.find(item => item.message_id === id);
         if (!message || message.deleted || rawId(message.chat_id, "oc_") !== chat) throw new Error("Feishu message chat mismatch or message unavailable");
         if (string(message.msg_type ?? message.message_type) === "merge_forward") return this.expandMergedForward(message, records, string(message.chat_type));
-        return this.normalize(message, await this.senderWithName(record(message.sender)), string(message.chat_type));
+        return this.normalize(message, await this.senderWithName(record(message.sender), compositeId(chat, "oc_")), string(message.chat_type));
     }
 
     async getHistory(chatId: string, options: RecordValue = {}): Promise<RecordValue> {
