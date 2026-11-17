@@ -779,6 +779,212 @@ describe("Feishu adapter host boundary edges", () => {
         } finally { await f.adapter.stop(); }
     });
 
+    it("normalizes composite IDs before native SDK calls and accepts app_id member removal", async () => {
+        const f = fixture();
+        const calls: Array<{ action: string; payload: any }> = [];
+        const native = (action: string) => async (payload: any) => {
+            calls.push({ action, payload });
+            return { code: 0, data: {} };
+        };
+        f.client.im.v1.message.forward = native("forward");
+        f.client.im.v1.chatMembers = { delete: native("membersDelete") };
+        await f.adapter.start();
+        try {
+            await f.adapter.callApi("feishu:oc_chat", "message.forward", {
+                path: { message_id: "feishu:om_parent" },
+                params: { receive_id_type: "chat_id" },
+                data: { receive_id: "feishu:oc_chat" },
+            });
+            await f.adapter.callApi("feishu:oc_chat", "chatMembers.delete", {
+                path: { chat_id: "feishu:oc_chat" },
+                params: { member_id_type: "app_id" },
+                data: { id_list: [`feishu:${config.appId}`] },
+            });
+            assert.deepEqual(calls, [
+                {
+                    action: "forward",
+                    payload: {
+                        path: { message_id: "om_parent" },
+                        params: { receive_id_type: "chat_id" },
+                        data: { receive_id: "oc_chat" },
+                    },
+                },
+                {
+                    action: "membersDelete",
+                    payload: {
+                        path: { chat_id: "oc_chat" },
+                        params: { member_id_type: "app_id" },
+                        data: { id_list: [config.appId] },
+                    },
+                },
+            ]);
+        } finally { await f.adapter.stop(); }
+    });
+
+    it("rejects invalid member ID types and empty membership payloads", async () => {
+        const f = fixture();
+        const nativeCalls: unknown[] = [];
+        const native = async (payload: unknown) => { nativeCalls.push(payload); return { code: 0, data: {} }; };
+        f.client.im.v1.chatMembers = { create: native, delete: native, get: native };
+        f.client.im.v1.chatManagers = { addManagers: native, deleteManagers: native };
+        await f.adapter.start();
+        try {
+            for (const action of ["chatMembers.create", "chatMembers.delete"]) {
+                await assert.rejects(f.adapter.callApi("oc_chat", action, {
+                    path: { chat_id: "oc_chat" },
+                    params: { member_id_type: "app" },
+                    data: { id_list: [config.appId] },
+                }), /member_id_type/);
+                await assert.rejects(f.adapter.callApi("oc_chat", action, {
+                    path: { chat_id: "oc_chat" },
+                    params: { member_id_type: "app_id" },
+                    data: { id_list: [] },
+                }), /data\.id_list/);
+                await assert.rejects(f.adapter.callApi("oc_chat", action, {
+                    path: { chat_id: "oc_chat" },
+                    params: { member_id_type: "app_id" },
+                    data: {},
+                }), /data\.id_list/);
+            }
+            await assert.rejects(f.adapter.callApi("oc_chat", "chatMembers.get", {
+                path: { chat_id: "oc_chat" },
+                params: { member_id_type: "app_id" },
+            }), /member_id_type/);
+            for (const action of ["chatManagers.addManagers", "chatManagers.deleteManagers"]) {
+                await assert.rejects(f.adapter.callApi("oc_chat", action, {
+                    path: { chat_id: "oc_chat" },
+                    params: { member_id_type: "open_id" },
+                    data: { manager_ids: [] },
+                }), /data\.manager_ids/);
+                await assert.rejects(f.adapter.callApi("oc_chat", action, {
+                    path: { chat_id: "oc_chat" },
+                    params: { member_id_type: "app" },
+                    data: { manager_ids: ["ou_user"] },
+                }), /member_id_type/);
+            }
+            assert.equal(nativeCalls.length, 0);
+        } finally { await f.adapter.stop(); }
+    });
+
+    it("accepts documented native action shapes and normalizes member IDs", async () => {
+        const f = fixture();
+        const calls: Array<{ action: string; payload: any }> = [];
+        const native = (action: string) => async (payload: any) => {
+            calls.push({ action, payload });
+            return { code: 0, data: {} };
+        };
+        f.client.im.v1.messageReaction = {
+            create: native("reactionCreate"),
+            delete: native("reactionDelete"),
+            list: native("reactionList"),
+            batchQuery: native("reactionBatch"),
+        };
+        f.client.im.v1.chatManagers = { addManagers: native("addManagers"), deleteManagers: native("deleteManagers") };
+        f.client.im.v1.chatMenuTree = { create: native("menuCreate"), delete: native("menuDelete"), sort: native("menuSort") };
+        f.client.im.v1.chatMenuItem = { patch: native("menuPatch") };
+        f.client.im.v1.chatMembers = { delete: native("membersDelete") };
+        await f.adapter.start();
+        try {
+            await f.adapter.callApi("oc_chat", "messageReaction.create", {
+                path: { message_id: "om_parent" },
+                data: { reaction_type: { emoji_type: "SMILE" } },
+            });
+            await f.adapter.callApi("oc_chat", "messageReaction.delete", {
+                path: { message_id: "om_parent", reaction_id: "reaction_1" },
+            });
+            await f.adapter.callApi("oc_chat", "messageReaction.list", {
+                path: { message_id: "om_parent" },
+                params: { user_id_type: "open_id" },
+            });
+            await f.adapter.callApi("oc_chat", "messageReaction.batchQuery", {
+                data: { queries: [{ message_id: "om_parent" }], page_size_per_message: 20 },
+            });
+            await f.adapter.callApi("oc_chat", "chatManagers.addManagers", {
+                path: { chat_id: "oc_chat" },
+                params: { member_id_type: "open_id" },
+                data: { manager_ids: ["feishu:ou_user"] },
+            });
+            await f.adapter.callApi("oc_chat", "chatManagers.deleteManagers", {
+                path: { chat_id: "oc_chat" },
+                params: { member_id_type: "app_id" },
+                data: { manager_ids: [`feishu:${config.appId}`] },
+            });
+            await f.adapter.callApi("oc_chat", "chatMenuTree.create", {
+                path: { chat_id: "oc_chat" },
+                data: { menu_tree: { chat_menu_top_levels: [{ chat_menu_item: { action_type: "NONE", name: "Menu" } }] } },
+            });
+            await f.adapter.callApi("oc_chat", "chatMenuTree.delete", {
+                path: { chat_id: "oc_chat" },
+                data: { chat_menu_top_level_ids: ["menu_1"] },
+            });
+            await f.adapter.callApi("oc_chat", "chatMenuTree.sort", {
+                path: { chat_id: "oc_chat" },
+                data: { chat_menu_top_level_ids: ["menu_1"] },
+            });
+            await f.adapter.callApi("oc_chat", "chatMenuItem.patch", {
+                path: { chat_id: "oc_chat", menu_item_id: "menu_1" },
+                data: { update_fields: ["NAME"], chat_menu_item: { name: "Menu" } },
+            });
+            await f.adapter.callApi("oc_chat", "chatMembers.delete", {
+                path: { chat_id: "oc_chat" },
+                params: { member_id_type: "app_id" },
+                data: { id_list: [`feishu:${config.appId}`] },
+            });
+            assert.deepEqual(calls.map(call => call.action), [
+                "reactionCreate", "reactionDelete", "reactionList", "reactionBatch",
+                "addManagers", "deleteManagers", "menuCreate", "menuDelete", "menuSort", "menuPatch", "membersDelete",
+            ]);
+            assert.deepEqual(calls.find(call => call.action === "addManagers")!.payload.data.manager_ids, ["ou_user"]);
+            assert.deepEqual(calls.find(call => call.action === "deleteManagers")!.payload.data.manager_ids, [config.appId]);
+            assert.deepEqual(calls.find(call => call.action === "membersDelete")!.payload.data.id_list, [config.appId]);
+        } finally { await f.adapter.stop(); }
+    });
+
+    it("rejects missing documented fields for native actions", async () => {
+        const f = fixture();
+        await f.adapter.start();
+        try {
+            const cases: Array<[string, Record<string, unknown>, RegExp]> = [
+                ["message.patch", { path: { message_id: "om_parent" }, data: {} }, /data\.content/],
+                ["message.update", { path: { message_id: "om_parent" }, data: { content: "{}" } }, /data\.msg_type/],
+                ["message.update", { path: { message_id: "om_parent" }, data: { msg_type: "text" } }, /data\.content/],
+                ["message.update", { path: { message_id: "om_parent" }, data: { msg_type: "image", content: "{}" } }, /data\.msg_type/],
+                ["message.forward", { params: { receive_id_type: "chat_id" }, data: { receive_id: "oc_chat" } }, /path\.message_id/],
+                ["message.mergeForward", { params: { receive_id_type: "chat_id" }, data: { receive_id: "oc_chat" } }, /data\.message_id_list/],
+                ["message.readUsers", { path: { message_id: "om_parent" } }, /params\.user_id_type/],
+                ["message.readUsers", { path: { message_id: "om_parent" }, params: { user_id_type: "app_id" } }, /user_id_type/],
+                ["messageReaction.create", { path: { message_id: "om_parent" }, data: {} }, /data\.reaction_type/],
+                ["messageReaction.create", { path: { message_id: "om_parent" }, data: { reaction_type: {} } }, /emoji_type/],
+                ["messageReaction.delete", { path: { message_id: "om_parent" } }, /path\.reaction_id/],
+                ["messageReaction.list", { path: { message_id: "om_parent" }, params: { user_id_type: "app_id" } }, /user_id_type/],
+                ["messageReaction.batchQuery", {}, /data\.queries/],
+                ["messageReaction.batchQuery", { data: { queries: [] } }, /data\.queries/],
+                ["messageReaction.batchQuery", { data: { queries: [{}] } }, /message_id/],
+                ["pin.create", { data: {} }, /data\.message_id/],
+                ["pin.delete", {}, /path\.message_id/],
+                ["pin.list", {}, /params\.chat_id/],
+                ["chatMembers.create", { path: { chat_id: "oc_chat" }, params: { member_id_type: "open_id", succeed_type: 3 }, data: { id_list: ["ou_user"] } }, /succeed_type/],
+                ["chatManagers.addManagers", { path: { chat_id: "oc_chat" }, data: {} }, /data\.manager_ids/],
+                ["chatMenuTree.create", { path: { chat_id: "oc_chat" }, data: {} }, /data\.menu_tree/],
+                ["chatMenuTree.create", { path: { chat_id: "oc_chat" }, data: { menu_tree: { chat_menu_top_levels: [] } } }, /chat_menu_top_levels/],
+                ["chatMenuTree.create", { path: { chat_id: "oc_chat" }, data: { menu_tree: { chat_menu_top_levels: [{ chat_menu_item: { name: "Menu" } }] } } }, /action_type/],
+                ["chatMenuTree.delete", { path: { chat_id: "oc_chat" }, data: {} }, /chat_menu_top_level_ids/],
+                ["chatMenuTree.sort", { path: { chat_id: "oc_chat" }, data: { chat_menu_top_level_ids: [] } }, /chat_menu_top_level_ids/],
+                ["chatMenuItem.patch", { path: { chat_id: "oc_chat" }, data: { update_fields: ["NAME"], chat_menu_item: { name: "Menu" } } }, /path\.menu_item_id/],
+                ["chatMenuItem.patch", { path: { chat_id: "oc_chat", menu_item_id: "menu_1" }, data: { chat_menu_item: { name: "Menu" } } }, /data\.update_fields/],
+                ["chatMenuItem.patch", { path: { chat_id: "oc_chat", menu_item_id: "menu_1" }, data: { update_fields: [], chat_menu_item: { name: "Menu" } } }, /data\.update_fields/],
+                ["chatMenuItem.patch", { path: { chat_id: "oc_chat", menu_item_id: "menu_1" }, data: { update_fields: ["UNKNOWN"], chat_menu_item: { name: "Menu" } } }, /data\.update_fields/],
+                ["chatMenuItem.patch", { path: { chat_id: "oc_chat", menu_item_id: "menu_1" }, data: { update_fields: ["NAME"] } }, /data\.chat_menu_item/],
+                ["chat.link", { path: { chat_id: "oc_chat" }, data: { validity_period: "month" } }, /validity_period/],
+                ["chat.update", { path: { chat_id: "oc_chat" }, params: { user_id_type: "app_id" } }, /user_id_type/],
+                ["chatMembers.get", { path: { chat_id: "oc_chat" }, params: { member_id_type: "app_id" } }, /member_id_type/],
+            ];
+            for (const [action, payload, expected] of cases) {
+                await assert.rejects(f.adapter.callApi("oc_chat", action, payload), expected);
+            }
+        } finally { await f.adapter.stop(); }
+    });
+
     it("uses chat_mode for chat metadata and cached history classification", async () => {
         const f = fixture();
         f.client.im.v1.chat.get = async () => ({ code: 0, data: { name: "Direct", chat_mode: "p2p", chat_type: "private" } });
@@ -915,6 +1121,38 @@ describe("Feishu adapter host boundary edges", () => {
                 assert.equal((error as Error).message, "Feishu API business failure (99991663)");
                 return true;
             });
+            f.client.im.v1.message.create = async () => ({ code: 99991663, msg: "permission denied" });
+            await assert.rejects(f.adapter.sendText("oc_chat", "hello"), error => {
+                assert.equal((error as Error).message, "Feishu API business failure (99991663): permission denied");
+                return true;
+            });
+            f.client.im.v1.message.create = async () => ({ code: 99991663, msg: "permission denied", log_id: "log_test" });
+            await assert.rejects(f.adapter.sendText("oc_chat", "hello"), error => {
+                assert.equal((error as Error).message, "Feishu API business failure (99991663, log_id log_test): permission denied");
+                return true;
+            });
+            f.client.im.v1.message.create = async () => ({ code: 99991663, msg: "permission denied", error: { log_id: "log_body" } });
+            await assert.rejects(f.adapter.sendText("oc_chat", "hello"), error => {
+                assert.equal((error as Error).message, "Feishu API business failure (99991663, log_id log_body): permission denied");
+                return true;
+            });
+            f.client.im.v1.message.create = async () => {
+                throw { response: { status: 400, headers: { "X-Tt-Logid": "log_test" }, data: { code: 232001, msg: "invalid parameter" } } };
+            };
+            await assert.rejects(f.adapter.sendText("oc_chat", "hello"), error => {
+                assert.equal((error as Error).message, "Feishu API request failed (HTTP 400, code 232001, log_id log_test): invalid parameter");
+                return true;
+            });
+            f.client.im.v1.message.create = async () => {
+                throw { response: { status: 400, headers: { "X-Tt-Logid": "log_secret" }, data: { code: 232001, msg: config.appSecret } } };
+            };
+            await assert.rejects(f.adapter.sendText("oc_chat", "hello"), error => {
+                assert.ok(String(error).includes("log_id log_secret"));
+                assert.ok(!String(error).includes(config.appSecret));
+                return true;
+            });
+            f.client.im.v1.message.create = () => new Promise(() => {});
+            await assert.rejects(f.adapter.sendText("oc_chat", "hello"), /Feishu API request timed out/);
             f.client.im.v1.message.create = async () => { throw new Error(config.appSecret); };
             await assert.rejects(f.adapter.sendText("oc_chat", "hello"), error => !String(error).includes(config.appSecret));
         } finally { await f.adapter.stop(); }
