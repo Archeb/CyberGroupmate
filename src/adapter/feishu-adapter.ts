@@ -134,6 +134,8 @@ const FEISHU_NATIVE_READ_ACTIONS = new Set([
     "chat.link", "chatMembers.get", "chatMembers.isInChat",
 ]);
 const MESSAGE_TYPES = new Set(["text", "post", "interactive", "share_chat", "share_user"]);
+const CARD_MSG_CONTENT_TYPE = "user_card_content";
+const DEGRADED_CARD_PATTERN = /请升级至最新版本客户端|Please upgrade to the latest version of the client/i;
 const MEDIA_TYPES = new Set(["photo", "document", "audio", "video"]);
 const FEISHU_WRITE_METHODS = [
     "feishu.sendText", "feishu.sendMessage", "feishu.sendMedia", "feishu.sendSticker",
@@ -148,9 +150,31 @@ const ID_PATTERNS: Record<IdPrefix, RegExp> = {
     ou_: /^ou_[A-Za-z0-9_-]{1,200}$/,
     om_: /^om_[A-Za-z0-9_-]{1,200}$/,
 };
+const MEMBER_ID_TYPES = new Set(["user_id", "union_id", "open_id", "app_id"]);
+const USER_ID_TYPES = new Set(["user_id", "union_id", "open_id"]);
+const MESSAGE_UPDATE_TYPES = new Set(["text", "post"]);
+const MENU_ACTION_TYPES = new Set(["NONE", "REDIRECT_LINK"]);
+const MENU_UPDATE_FIELDS = new Set(["ICON", "NAME", "I18N_NAME", "REDIRECT_LINK"]);
+const LINK_VALIDITY_PERIODS = new Set(["week", "year", "permanently"]);
 
 function record(value: unknown): RecordValue {
     return value !== null && typeof value === "object" && !Array.isArray(value) ? value as RecordValue : {};
+}
+
+function headerValue(headers: unknown, name: string): string {
+    const get = (headers as { get?: (key: string) => unknown } | null | undefined)?.get;
+    if (typeof get === "function") {
+        try {
+            const value = get.call(headers, name);
+            if (value !== undefined && value !== null) return string(value);
+        } catch {
+            // Fall through to enumerable header properties.
+        }
+    }
+    for (const [key, value] of Object.entries(record(headers))) {
+        if (key.toLowerCase() === name) return string(value);
+    }
+    return "";
 }
 
 function string(value: unknown): string {
@@ -165,6 +189,43 @@ function rawId(value: unknown, prefix: IdPrefix): string {
 
 function compositeId(value: unknown, prefix: IdPrefix): string {
     return `feishu:${rawId(value, prefix)}`;
+}
+
+function stripFeishuPrefix(value: string): string {
+    return value.replace(/^feishu:/, "");
+}
+
+function requiredText(value: unknown, field: string): string {
+    if (typeof value !== "string" || !value.trim()) throw new Error(`Feishu native action requires ${field}`);
+    return value;
+}
+
+function requiredObject(value: unknown, field: string): RecordValue {
+    if (value === null || typeof value !== "object" || Array.isArray(value)) throw new Error(`Feishu native action requires ${field}`);
+    return value as RecordValue;
+}
+
+function requiredStringArray(value: unknown, field: string): string[] {
+    return requiredArray(value, field).map(item => requiredText(item, `${field} items`));
+}
+
+function requiredArray(value: unknown, field: string): unknown[] {
+    if (!Array.isArray(value) || value.length === 0) throw new Error(`Feishu native action requires non-empty ${field}`);
+    return value;
+}
+
+function requiredId(value: unknown, prefix: IdPrefix, field: string): string {
+    const id = stripFeishuPrefix(requiredText(value, field));
+    if (!ID_PATTERNS[prefix].test(id)) throw new Error(`Feishu native action ${field} has invalid identifier`);
+    return id;
+}
+
+function checkEnum(value: string, allowed: Set<string>, field: string): void {
+    if (!allowed.has(value)) throw new Error(`Feishu native action ${field} must be one of ${[...allowed].join(", ")}`);
+}
+
+function checkOptionalEnum(value: unknown, allowed: Set<string>, field: string): void {
+    if (value !== undefined) checkEnum(requiredText(value, field), allowed, field);
 }
 
 function trimMap<K, V>(map: Map<K, V>, limit: number): void {
@@ -235,7 +296,12 @@ function checkBusiness(value: unknown): RecordValue {
     const result = record(value);
     if (result.code !== undefined && result.code !== 0) {
         const code = typeof result.code === "number" && Number.isSafeInteger(result.code) ? ` (${result.code})` : "";
-        throw new Error(`Feishu API business failure${code}`);
+        const error = new Error(`Feishu API business failure${code}`);
+        Object.defineProperty(error, "feishu", {
+            value: { code: result.code, msg: result.msg, log_id: result.log_id ?? record(result.error).log_id },
+            enumerable: false,
+        });
+        throw error;
     }
     return result;
 }
@@ -478,14 +544,58 @@ export class FeishuAdapter implements PlatformAdapter {
     }
 
     private async api<T>(call: () => Promise<T>): Promise<T & RecordValue> {
-        let result: T;
         try {
-            result = await bounded(Promise.resolve().then(call), this.requestTimeoutMs);
-        } catch {
-            throw new Error("Feishu API request failed or timed out");
+            const result = await bounded(Promise.resolve().then(call), this.requestTimeoutMs);
+            checkBusiness(result);
+            return result as T & RecordValue;
+        } catch (error) {
+            throw new Error(this.describeApiError(error));
         }
-        checkBusiness(result);
-        return result as T & RecordValue;
+    }
+
+    private safeFeishuMessage(value: unknown): string {
+        const message = string(value).replace(/\s+/g, " ").trim().slice(0, 300);
+        return message && (!this.config.appSecret || !message.includes(this.config.appSecret)) ? message : "";
+    }
+
+    private safeFeishuLogId(value: unknown): string {
+        const logId = string(value).trim();
+        return /^[A-Za-z0-9._:-]{1,200}$/.test(logId) ? logId : "";
+    }
+
+    private describeApiError(error: unknown): string {
+        const outer = record(error);
+        const response = record(outer.response);
+        const responseData = record(response.data);
+        const business = record(outer.feishu);
+        const code = business.code ?? responseData.code;
+        const message = this.safeFeishuMessage(business.msg ?? responseData.msg);
+        const logId = this.safeFeishuLogId(
+            business.log_id
+            || responseData.log_id
+            || record(responseData.error).log_id
+            || headerValue(response.headers, "x-tt-logid"),
+        );
+        const details = (parts: string[]): string => parts.filter(Boolean).join(", ");
+        const logText = logId ? `log_id ${logId}` : "";
+        const status = typeof response.status === "number" && Number.isSafeInteger(response.status) ? `HTTP ${response.status}` : "";
+        if (business.code !== undefined && business.code !== 0) {
+            const codeText = typeof business.code === "number" && Number.isSafeInteger(business.code) ? String(business.code) : "";
+            const suffix = details([codeText, logText]);
+            return `Feishu API business failure${suffix ? ` (${suffix})` : ""}${message ? `: ${message}` : ""}`;
+        }
+        if (code !== undefined && code !== 0) {
+            const suffix = details([status, `code ${String(code)}`, logText]);
+            return `Feishu API request failed${suffix ? ` (${suffix})` : ""}${message ? `: ${message}` : ""}`;
+        }
+        const raw = error instanceof Error ? error.message : "";
+        if (raw === "Feishu operation timed out" || outer.code === "ETIMEDOUT" || outer.code === "ECONNABORTED") {
+            return `Feishu API request timed out${logId ? ` (log_id ${logId})` : ""}`;
+        }
+        if (raw === "Feishu operation cancelled") return "Feishu API request cancelled";
+        const suffix = details([status, logText]);
+        if (suffix) return `Feishu API request failed (${suffix})`;
+        return "Feishu API request failed";
     }
 
     private requireClient(): FeishuApi {
@@ -950,17 +1060,52 @@ export class FeishuAdapter implements PlatformAdapter {
         return expand(parent, chatType, new Set());
     }
 
-    private async normalizeMessage(message: RecordValue, sender: RecordValue, chatType?: string): Promise<RecordValue> {
+    private async normalizeMessage(message: RecordValue, sender: RecordValue, chatType?: string, refetchDegradedCard = true): Promise<RecordValue> {
         const chatId = ID_PATTERNS.oc_.test(string(message.chat_id)) ? compositeId(message.chat_id, "oc_") : undefined;
         const messageId = string(message.message_id);
-        if (string(message.message_type ?? message.msg_type) === "merge_forward") {
-            const response = await this.api(() => this.requireClient().im.v1.message.get({ path: { message_id: rawId(messageId, "om_") }, params: { user_id_type: "open_id", with_sender_name: true } }));
+        const type = string(message.message_type ?? message.msg_type);
+        if (type === "merge_forward") {
+            const response = await this.api(() => this.requireClient().im.v1.message.get({
+                path: { message_id: rawId(messageId, "om_") },
+                params: { user_id_type: "open_id", with_sender_name: true, card_msg_content_type: CARD_MSG_CONTENT_TYPE },
+            }));
             const data = record(response.data);
             const items = (Array.isArray(data.items) ? data.items : []).map(record);
             const parent = items.find(item => item.message_id === messageId) ?? { ...message, sender };
             return this.expandMergedForward({ ...parent, sender: await this.senderWithName(record(parent.sender), chatId) }, items, chatType);
         }
-        return this.normalize(message, await this.senderWithName(sender, chatId, messageId), chatType);
+        let resolved = message;
+        if (refetchDegradedCard && (type === "interactive" || type === "card") && this.hasDegradedCard(message)) {
+            resolved = await this.fetchFullCardMessage(messageId, chatId) ?? message;
+        }
+        const resolvedSender = resolved === message ? sender : record(resolved.sender);
+        return this.normalize(resolved, await this.senderWithName(resolvedSender, chatId, messageId), chatType);
+    }
+
+    private hasDegradedCard(message: RecordValue): boolean {
+        try {
+            const card = content(message.content ?? record(message.body).content);
+            return DEGRADED_CARD_PATTERN.test(JSON.stringify(card));
+        } catch {
+            return false;
+        }
+    }
+
+    private async fetchFullCardMessage(messageId: string, expectedChatId?: string): Promise<RecordValue | undefined> {
+        try {
+            const id = rawId(messageId, "om_");
+            const response = await this.api(() => this.requireClient().im.v1.message.get({
+                path: { message_id: id },
+                params: { user_id_type: "open_id", with_sender_name: true, card_msg_content_type: CARD_MSG_CONTENT_TYPE },
+            }));
+            const items = record(response.data).items;
+            const found = (Array.isArray(items) ? items : []).map(record).find(item => item.message_id === id && !item.deleted);
+            if (!found || (expectedChatId && rawId(found.chat_id, "oc_") !== rawId(expectedChatId, "oc_"))) return undefined;
+            if (this.hasDegradedCard(found)) return undefined;
+            return found;
+        } catch {
+            return undefined;
+        }
     }
 
     private cardText(value: unknown): string {
@@ -976,6 +1121,8 @@ export class FeishuAdapter implements PlatformAdapter {
                 if (child && typeof child === "object") visit(child);
             }
         };
+        const card = record(value);
+        if (card.header) visit(card.header);
         visit(value);
         return [...new Set(parts)].join("\n").slice(0, MAX_TEXT_BYTES);
     }
@@ -1314,7 +1461,10 @@ export class FeishuAdapter implements PlatformAdapter {
         const chat = rawId(chatId, "oc_");
         const id = rawId(messageId, "om_");
         const client = this.requireClient();
-        const response = await this.api(() => client.im.v1.message.get({ path: { message_id: id }, params: { user_id_type: "open_id", with_sender_name: true } }));
+        const response = await this.api(() => client.im.v1.message.get({
+            path: { message_id: id },
+            params: { user_id_type: "open_id", with_sender_name: true, card_msg_content_type: CARD_MSG_CONTENT_TYPE },
+        }));
         const items = record(response.data).items;
         const records = (Array.isArray(items) ? items : []).map(record);
         const message = records.find(item => item.message_id === id);
@@ -1341,10 +1491,14 @@ export class FeishuAdapter implements PlatformAdapter {
             ...(options.startTime !== undefined ? { start_time: String(options.startTime) } : {}),
             ...(options.endTime !== undefined ? { end_time: String(options.endTime) } : {}),
             with_sender_name: true,
+            card_msg_content_type: CARD_MSG_CONTENT_TYPE,
         } }));
         const data = record(response.data);
         const rawItems = (Array.isArray(data.items) ? data.items : []).map(record).filter(item => !item.deleted && item.chat_id === id);
-        const items = await Promise.all(rawItems.map(item => this.normalizeMessage(item, record(item.sender), string(item.chat_type) || chatType)));
+        const items = await Promise.all(rawItems.map(item =>
+            // message.list 已请求 user_card_content，无需逐条回查
+            this.normalizeMessage(item, record(item.sender), string(item.chat_type) || chatType, false)
+        ));
         return { items, hasMore: data.has_more === true, pageToken: string(data.page_token) || undefined };
     }
 
@@ -1356,33 +1510,143 @@ export class FeishuAdapter implements PlatformAdapter {
         const path = record(payload.path);
         const params = record(payload.params);
         const data = record(payload.data);
-        for (const candidate of [path.chat_id, params.chat_id, params.container_id]) {
-            if (candidate !== undefined && rawId(candidate, "oc_") !== expectedChatId) throw new Error("Feishu native action chat mismatch");
+        const normalizedPath = { ...path };
+        const normalizedParams = { ...params };
+        const normalizedData = { ...data };
+        for (const [target, key, prefix, field] of [
+            [normalizedPath, "chat_id", "oc_", "path.chat_id"],
+            [normalizedPath, "message_id", "om_", "path.message_id"],
+            [normalizedParams, "chat_id", "oc_", "params.chat_id"],
+            [normalizedParams, "container_id", "oc_", "params.container_id"],
+            [normalizedData, "receive_id", "oc_", "data.receive_id"],
+            [normalizedData, "message_id", "om_", "data.message_id"],
+        ] as const) {
+            if (target[key] !== undefined) target[key] = requiredId(target[key], prefix, field);
+        }
+        for (const key of ["id_list", "manager_ids", "user_id_list", "bot_id_list", "moderator_added_list", "moderator_removed_list"]) {
+            if (normalizedData[key] !== undefined) {
+                normalizedData[key] = requiredStringArray(normalizedData[key], `data.${key}`).map(stripFeishuPrefix);
+            }
+        }
+        if (normalizedData.owner_id !== undefined) normalizedData.owner_id = stripFeishuPrefix(requiredText(normalizedData.owner_id, "data.owner_id"));
+        if (normalizedData.message_id_list !== undefined) {
+            normalizedData.message_id_list = requiredStringArray(normalizedData.message_id_list, "data.message_id_list")
+                .map(id => requiredId(id, "om_", "data.message_id_list items"));
+        }
+        if (normalizedData.queries !== undefined) {
+            normalizedData.queries = requiredArray(normalizedData.queries, "data.queries").map((value, index) => {
+                const query = requiredObject(value, `data.queries[${index}]`);
+                return { ...query, message_id: requiredId(query.message_id, "om_", `data.queries[${index}].message_id`) };
+            });
+        }
+        const normalizedPayload: RecordValue = { ...payload };
+        if (payload.path !== undefined) normalizedPayload.path = normalizedPath;
+        if (payload.params !== undefined) normalizedPayload.params = normalizedParams;
+        if (payload.data !== undefined) normalizedPayload.data = normalizedData;
+        for (const candidate of [normalizedPath.chat_id, normalizedParams.chat_id, normalizedParams.container_id]) {
+            if (candidate !== undefined && candidate !== expectedChatId) throw new Error("Feishu native action chat mismatch");
         }
         if (action === "message.forward" || action === "message.mergeForward") {
-            if (params.receive_id_type !== "chat_id") throw new Error("Feishu native forwarding requires receive_id_type chat_id");
-            if (rawId(data.receive_id, "oc_") !== expectedChatId) throw new Error("Feishu native action chat mismatch");
+            if (normalizedParams.receive_id_type !== "chat_id") throw new Error("Feishu native forwarding requires receive_id_type chat_id");
+            if (requiredId(normalizedData.receive_id, "oc_", "data.receive_id") !== expectedChatId) throw new Error("Feishu native action chat mismatch");
+        }
+        switch (action) {
+            case "message.patch":
+                requiredText(normalizedData.content, "data.content");
+                break;
+            case "message.update": {
+                checkEnum(requiredText(normalizedData.msg_type, "data.msg_type"), MESSAGE_UPDATE_TYPES, "data.msg_type");
+                requiredText(normalizedData.content, "data.content");
+                break;
+            }
+            case "message.mergeForward":
+                requiredStringArray(normalizedData.message_id_list, "data.message_id_list");
+                break;
+            case "message.readUsers":
+                checkEnum(requiredText(normalizedParams.user_id_type, "params.user_id_type"), USER_ID_TYPES, "params.user_id_type");
+                break;
+            case "messageReaction.create": {
+                const reactionType = requiredObject(normalizedData.reaction_type, "data.reaction_type");
+                requiredText(reactionType.emoji_type, "data.reaction_type.emoji_type");
+                break;
+            }
+            case "messageReaction.delete":
+                requiredText(normalizedPath.reaction_id, "path.reaction_id");
+                break;
+            case "messageReaction.list":
+                checkOptionalEnum(normalizedParams.user_id_type, USER_ID_TYPES, "params.user_id_type");
+                break;
+            case "messageReaction.batchQuery":
+                requiredArray(normalizedData.queries, "data.queries");
+                checkOptionalEnum(normalizedParams.user_id_type, USER_ID_TYPES, "params.user_id_type");
+                break;
+            case "chatMembers.create":
+            case "chatMembers.delete":
+                requiredStringArray(normalizedData.id_list, "data.id_list");
+                checkOptionalEnum(normalizedParams.member_id_type, MEMBER_ID_TYPES, "params.member_id_type");
+                if (action === "chatMembers.create" && normalizedParams.succeed_type !== undefined && ![0, 1, 2].includes(normalizedParams.succeed_type as number)) {
+                    throw new Error("Feishu native action params.succeed_type must be 0, 1, or 2");
+                }
+                break;
+            case "chatMembers.get":
+                checkOptionalEnum(normalizedParams.member_id_type, USER_ID_TYPES, "params.member_id_type");
+                break;
+            case "chatManagers.addManagers":
+            case "chatManagers.deleteManagers":
+                requiredStringArray(normalizedData.manager_ids, "data.manager_ids");
+                checkOptionalEnum(normalizedParams.member_id_type, MEMBER_ID_TYPES, "params.member_id_type");
+                break;
+            case "chatMenuTree.create": {
+                const menuTree = requiredObject(normalizedData.menu_tree, "data.menu_tree");
+                const topLevels = requiredArray(menuTree.chat_menu_top_levels, "data.menu_tree.chat_menu_top_levels");
+                if (topLevels.length > 3) throw new Error("Feishu native action supports at most 3 top-level menus");
+                for (const [index, value] of topLevels.entries()) {
+                    const base = `data.menu_tree.chat_menu_top_levels[${index}]`;
+                    const level = requiredObject(value, base);
+                    const item = requiredObject(level.chat_menu_item, `${base}.chat_menu_item`);
+                    const actionField = `${base}.chat_menu_item.action_type`;
+                    checkEnum(requiredText(item.action_type, actionField), MENU_ACTION_TYPES, actionField);
+                    requiredText(item.name, `${base}.chat_menu_item.name`);
+                }
+                break;
+            }
+            case "chatMenuTree.delete":
+            case "chatMenuTree.sort":
+                requiredStringArray(normalizedData.chat_menu_top_level_ids, "data.chat_menu_top_level_ids");
+                break;
+            case "chatMenuItem.patch": {
+                requiredText(normalizedPath.menu_item_id, "path.menu_item_id");
+                const updateFields = requiredStringArray(normalizedData.update_fields, "data.update_fields");
+                for (const field of updateFields) checkEnum(field, MENU_UPDATE_FIELDS, "data.update_fields items");
+                requiredObject(normalizedData.chat_menu_item, "data.chat_menu_item");
+                break;
+            }
+            case "chat.link":
+                checkOptionalEnum(normalizedData.validity_period, LINK_VALIDITY_PERIODS, "data.validity_period");
+                break;
+            case "chat.update":
+                checkOptionalEnum(normalizedParams.user_id_type, USER_ID_TYPES, "params.user_id_type");
+                break;
         }
         // Check the actual scope fields used by each SDK action, including body IDs.
-        let messageIds: unknown[] = [];
+        let messageIds: string[] = [];
         if (action === "message.mergeForward") {
-            if (!Array.isArray(data.message_id_list) || data.message_id_list.length === 0) throw new Error("Feishu native action requires message_id_list");
-            messageIds = data.message_id_list;
+            messageIds = normalizedData.message_id_list as string[];
         } else if (action === "messageReaction.batchQuery") {
-            if (!Array.isArray(data.queries) || data.queries.length === 0) throw new Error("Feishu native action requires queries");
-            messageIds = data.queries.map(query => record(query).message_id);
+            messageIds = (normalizedData.queries as RecordValue[]).map(query => string(query.message_id));
         } else if (action === "pin.create") {
-            messageIds = [data.message_id];
+            messageIds = [requiredId(normalizedData.message_id, "om_", "data.message_id")];
         } else if (resourceName === "message" || resourceName === "messageReaction" || action === "pin.delete") {
-            messageIds = [path.message_id];
+            messageIds = [requiredId(normalizedPath.message_id, "om_", "path.message_id")];
         } else {
-            const scopedChatId = action === "pin.list" ? params.chat_id : path.chat_id;
-            if (rawId(scopedChatId, "oc_") !== expectedChatId) throw new Error("Feishu native action chat mismatch");
+            const scopedChatId = action === "pin.list" ? normalizedParams.chat_id : normalizedPath.chat_id;
+            const field = action === "pin.list" ? "params.chat_id" : "path.chat_id";
+            if (requiredId(scopedChatId, "oc_", field) !== expectedChatId) throw new Error("Feishu native action chat mismatch");
         }
-        for (const messageId of new Set(messageIds)) await this.getMessage(chatId, rawId(messageId, "om_"));
+        for (const messageId of new Set(messageIds)) await this.getMessage(chatId, messageId);
         const api = record(record(this.requireClient().im.v1)[resourceName])[methodName];
         if (typeof api !== "function") throw new Error("Feishu native action unavailable in SDK");
-        return this.api(() => (api as ApiCall)(payload));
+        return this.api(() => (api as ApiCall)(normalizedPayload));
     }
 
     async getChat(chatId: string): Promise<RecordValue> {
