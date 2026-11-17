@@ -361,6 +361,74 @@ describe("Feishu adapter ingress edges", () => {
         } finally { await f.adapter.stop(); }
     });
 
+    it("refetches degraded live card events with the full card content", async () => {
+        const f = fixture();
+        const degradedCard = { title: "示例卡片标题", elements: [[{ tag: "text", text: "请升级至最新版本客户端，以查看内容" }]] };
+        const fullCard = {
+            schema: "2.0",
+            header: { template: "green", title: { tag: "plain_text", content: "示例卡片标题" } },
+            body: { elements: [{ tag: "markdown", content: "这是一段示例卡片正文，用于验证卡片内容解析。" }] },
+        };
+        f.messages.set("om_live_card", {
+            message_id: "om_live_card", chat_id: "oc_chat", chat_type: "group", msg_type: "interactive",
+            body: { content: JSON.stringify(fullCard) }, sender: { id: "ou_user", id_type: "open_id" }, create_time: time,
+        });
+        await f.adapter.start();
+        try {
+            await f.connections[0].receive(incoming({ message_id: "om_live_card", message_type: "interactive", content: JSON.stringify(degradedCard) }));
+            await waitFor(() => f.events.length > 0);
+            const text = String(f.events[0].text);
+            assert.match(text, /示例卡片标题/);
+            assert.match(text, /这是一段示例卡片正文/);
+            assert.doesNotMatch(text, /请升级至最新版本客户端/);
+            assert.ok(f.calls.some(call => call.method === "get" && call.payload.params.card_msg_content_type === "user_card_content"));
+        } finally { await f.adapter.stop(); }
+    });
+
+    it("detects English degraded card placeholders", async () => {
+        const f = fixture();
+        const degradedCard = { title: "Sample Card", elements: [[{ tag: "text", text: "Please upgrade to the latest version of the client to view the content." }]] };
+        const fullCard = {
+            schema: "2.0",
+            header: { title: { tag: "plain_text", content: "Sample Card" } },
+            body: { elements: [{ tag: "markdown", content: "Sample card body content" }] },
+        };
+        f.messages.set("om_live_card_en", {
+            message_id: "om_live_card_en", chat_id: "oc_chat", chat_type: "group", msg_type: "interactive",
+            body: { content: JSON.stringify(fullCard) }, sender: { id: "ou_user", id_type: "open_id" }, create_time: time,
+        });
+        await f.adapter.start();
+        try {
+            await f.connections[0].receive(incoming({ message_id: "om_live_card_en", message_type: "interactive", content: JSON.stringify(degradedCard) }));
+            await waitFor(() => f.events.length > 0);
+            const text = String(f.events[0].text);
+            assert.match(text, /Sample card body content/);
+            assert.doesNotMatch(text, /Please upgrade/);
+        } finally { await f.adapter.stop(); }
+    });
+
+    it("rejects cross-chat card content when refetching degraded events", async () => {
+        const f = fixture();
+        const degradedCard = { title: "Sample Card", elements: [[{ tag: "text", text: "请升级至最新版本客户端，以查看内容" }]] };
+        const foreignCard = {
+            schema: "2.0",
+            header: { title: { tag: "plain_text", content: "Sample Card" } },
+            body: { elements: [{ tag: "markdown", content: "secret cross-chat content" }] },
+        };
+        f.messages.set("om_foreign_card", {
+            message_id: "om_foreign_card", chat_id: "oc_other", chat_type: "group", msg_type: "interactive",
+            body: { content: JSON.stringify(foreignCard) }, sender: { id: "ou_user", id_type: "open_id" }, create_time: time,
+        });
+        await f.adapter.start();
+        try {
+            await f.connections[0].receive(incoming({ message_id: "om_foreign_card", message_type: "interactive", content: JSON.stringify(degradedCard) }));
+            await waitFor(() => f.events.length > 0);
+            const text = String(f.events[0].text);
+            assert.match(text, /请升级至最新版本客户端/);
+            assert.doesNotMatch(text, /secret cross-chat content/);
+        } finally { await f.adapter.stop(); }
+    });
+
     it("normalizes audio/video resources and preserves every attachment", async () => {
         const f = fixture();
         await f.adapter.start();
@@ -721,6 +789,33 @@ describe("Feishu adapter host boundary edges", () => {
             const item = (history.items as any[])[0];
             assert.equal(item.chatType, "private");
             assert.equal(item.isDirectMessage, true);
+        } finally { await f.adapter.stop(); }
+    });
+
+    it("requests full card content for message reads and history", async () => {
+        const f = fixture();
+        const fullCard = {
+            schema: "2.0",
+            header: { template: "green", title: { tag: "plain_text", content: "示例卡片标题" } },
+            body: { elements: [{ tag: "markdown", content: "这是一段示例卡片正文，用于验证卡片内容解析。" }] },
+        };
+        f.messages.set("om_card_full", {
+            message_id: "om_card_full", chat_id: "oc_chat", chat_type: "group", msg_type: "interactive",
+            body: { content: JSON.stringify(fullCard) }, sender: { id: "ou_user", id_type: "open_id" }, create_time: time,
+        });
+        await f.adapter.start();
+        try {
+            const message = await f.adapter.getMessage("oc_chat", "om_card_full");
+            const text = String(message.text);
+            assert.match(text, /示例卡片标题/);
+            assert.match(text, /这是一段示例卡片正文/);
+            assert.ok(f.calls.some(call => call.method === "get" && call.payload.params.card_msg_content_type === "user_card_content"));
+
+            const history = await f.adapter.getHistory("oc_chat");
+            assert.ok(f.calls.some(call => call.method === "list" && call.payload.params.card_msg_content_type === "user_card_content"));
+            const item = (history.items as any[]).find(entry => entry.messageId === "om_card_full");
+            assert.ok(item);
+            assert.match(String(item.text), /这是一段示例卡片正文/);
         } finally { await f.adapter.stop(); }
     });
 

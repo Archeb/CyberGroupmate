@@ -134,6 +134,8 @@ const FEISHU_NATIVE_READ_ACTIONS = new Set([
     "chat.link", "chatMembers.get", "chatMembers.isInChat",
 ]);
 const MESSAGE_TYPES = new Set(["text", "post", "interactive", "share_chat", "share_user"]);
+const CARD_MSG_CONTENT_TYPE = "user_card_content";
+const DEGRADED_CARD_PATTERN = /请升级至最新版本客户端|Please upgrade to the latest version of the client/i;
 const MEDIA_TYPES = new Set(["photo", "document", "audio", "video"]);
 const FEISHU_WRITE_METHODS = [
     "feishu.sendText", "feishu.sendMessage", "feishu.sendMedia", "feishu.sendSticker",
@@ -950,17 +952,52 @@ export class FeishuAdapter implements PlatformAdapter {
         return expand(parent, chatType, new Set());
     }
 
-    private async normalizeMessage(message: RecordValue, sender: RecordValue, chatType?: string): Promise<RecordValue> {
+    private async normalizeMessage(message: RecordValue, sender: RecordValue, chatType?: string, refetchDegradedCard = true): Promise<RecordValue> {
         const chatId = ID_PATTERNS.oc_.test(string(message.chat_id)) ? compositeId(message.chat_id, "oc_") : undefined;
         const messageId = string(message.message_id);
-        if (string(message.message_type ?? message.msg_type) === "merge_forward") {
-            const response = await this.api(() => this.requireClient().im.v1.message.get({ path: { message_id: rawId(messageId, "om_") }, params: { user_id_type: "open_id", with_sender_name: true } }));
+        const type = string(message.message_type ?? message.msg_type);
+        if (type === "merge_forward") {
+            const response = await this.api(() => this.requireClient().im.v1.message.get({
+                path: { message_id: rawId(messageId, "om_") },
+                params: { user_id_type: "open_id", with_sender_name: true, card_msg_content_type: CARD_MSG_CONTENT_TYPE },
+            }));
             const data = record(response.data);
             const items = (Array.isArray(data.items) ? data.items : []).map(record);
             const parent = items.find(item => item.message_id === messageId) ?? { ...message, sender };
             return this.expandMergedForward({ ...parent, sender: await this.senderWithName(record(parent.sender), chatId) }, items, chatType);
         }
-        return this.normalize(message, await this.senderWithName(sender, chatId, messageId), chatType);
+        let resolved = message;
+        if (refetchDegradedCard && (type === "interactive" || type === "card") && this.hasDegradedCard(message)) {
+            resolved = await this.fetchFullCardMessage(messageId, chatId) ?? message;
+        }
+        const resolvedSender = resolved === message ? sender : record(resolved.sender);
+        return this.normalize(resolved, await this.senderWithName(resolvedSender, chatId, messageId), chatType);
+    }
+
+    private hasDegradedCard(message: RecordValue): boolean {
+        try {
+            const card = content(message.content ?? record(message.body).content);
+            return DEGRADED_CARD_PATTERN.test(JSON.stringify(card));
+        } catch {
+            return false;
+        }
+    }
+
+    private async fetchFullCardMessage(messageId: string, expectedChatId?: string): Promise<RecordValue | undefined> {
+        try {
+            const id = rawId(messageId, "om_");
+            const response = await this.api(() => this.requireClient().im.v1.message.get({
+                path: { message_id: id },
+                params: { user_id_type: "open_id", with_sender_name: true, card_msg_content_type: CARD_MSG_CONTENT_TYPE },
+            }));
+            const items = record(response.data).items;
+            const found = (Array.isArray(items) ? items : []).map(record).find(item => item.message_id === id && !item.deleted);
+            if (!found || (expectedChatId && rawId(found.chat_id, "oc_") !== rawId(expectedChatId, "oc_"))) return undefined;
+            if (this.hasDegradedCard(found)) return undefined;
+            return found;
+        } catch {
+            return undefined;
+        }
     }
 
     private cardText(value: unknown): string {
@@ -976,6 +1013,8 @@ export class FeishuAdapter implements PlatformAdapter {
                 if (child && typeof child === "object") visit(child);
             }
         };
+        const card = record(value);
+        if (card.header) visit(card.header);
         visit(value);
         return [...new Set(parts)].join("\n").slice(0, MAX_TEXT_BYTES);
     }
@@ -1314,7 +1353,10 @@ export class FeishuAdapter implements PlatformAdapter {
         const chat = rawId(chatId, "oc_");
         const id = rawId(messageId, "om_");
         const client = this.requireClient();
-        const response = await this.api(() => client.im.v1.message.get({ path: { message_id: id }, params: { user_id_type: "open_id", with_sender_name: true } }));
+        const response = await this.api(() => client.im.v1.message.get({
+            path: { message_id: id },
+            params: { user_id_type: "open_id", with_sender_name: true, card_msg_content_type: CARD_MSG_CONTENT_TYPE },
+        }));
         const items = record(response.data).items;
         const records = (Array.isArray(items) ? items : []).map(record);
         const message = records.find(item => item.message_id === id);
@@ -1341,10 +1383,14 @@ export class FeishuAdapter implements PlatformAdapter {
             ...(options.startTime !== undefined ? { start_time: String(options.startTime) } : {}),
             ...(options.endTime !== undefined ? { end_time: String(options.endTime) } : {}),
             with_sender_name: true,
+            card_msg_content_type: CARD_MSG_CONTENT_TYPE,
         } }));
         const data = record(response.data);
         const rawItems = (Array.isArray(data.items) ? data.items : []).map(record).filter(item => !item.deleted && item.chat_id === id);
-        const items = await Promise.all(rawItems.map(item => this.normalizeMessage(item, record(item.sender), string(item.chat_type) || chatType)));
+        const items = await Promise.all(rawItems.map(item =>
+            // message.list 已请求 user_card_content，无需逐条回查
+            this.normalizeMessage(item, record(item.sender), string(item.chat_type) || chatType, false)
+        ));
         return { items, hasMore: data.has_more === true, pageToken: string(data.page_token) || undefined };
     }
 
