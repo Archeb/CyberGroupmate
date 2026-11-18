@@ -56,6 +56,7 @@ function reads(chatId: string): Array<[string, unknown[]]> {
         ["feishu.getHistory", [chatId, { pageSize: 10 }]],
         ["feishu.getChat", [chatId]],
         ["feishu.callApi", [chatId, "pin.list", { params: { chat_id: String(chatId).replace(/^feishu:/, "") } }]],
+        ["feishu.callApi", [chatId, "chatAnnouncementBlock.list", { path: { chat_id: String(chatId).replace(/^feishu:/, "") } }]],
         ["feishu.downloadMedia", [reference(chatId), chatId]],
         ["feishu.downloadMedia", [reference(chatId)]],
     ];
@@ -128,6 +129,39 @@ describe("Feishu host read policy boundaries", () => {
                 await assert.rejects(handler(method, [target, "om_message"]), /valid chatId/);
                 assert.deepEqual(calls, []);
             }
+        }
+    });
+
+    it("confines message search to the bound chat", async () => {
+        // 未指定 chat_ids 时补上绑定会话，避免按应用可见范围全局搜索。
+        {
+            const { handler, calls } = makeHandler();
+            await handler("feishu.searchMessages", ["关键词", undefined]);
+            assert.deepEqual(calls, [{ method: "feishu.searchMessages", args: ["关键词", { filter: { chat_ids: [BOUND] } }] }]);
+        }
+        // 空数组或字符串形式都不能让飞书跳过会话过滤。
+        for (const chatIds of [[], BOUND, [BOUND]]) {
+            const { handler, calls } = makeHandler();
+            await handler("feishu.searchMessages", ["关键词", { filter: { chat_ids: chatIds } }]);
+            assert.deepEqual(calls[0].args[1], { filter: { chat_ids: [BOUND] } });
+        }
+        // 指向其它会话一律拒绝，私密或共享都一样。
+        for (const enforce of ["block", "warn", "off"] as const) {
+            for (const chatIds of [[OTHER], OTHER, [BOUND, OTHER], [OTHER, BOUND]]) {
+                const { handler, calls, config } = makeHandler();
+                config.privacy.enforce = enforce;
+                await assert.rejects(
+                    handler("feishu.searchMessages", ["关键词", { filter: { chat_ids: chatIds } }]),
+                    /only allows reads from the bound chat/,
+                );
+                assert.deepEqual(calls, []);
+            }
+        }
+        // 绑定到非 Feishu 会话时不能发起 Feishu 搜索。
+        for (const bound of ["__background__", "telegram:oc_bound"]) {
+            const { handler, calls } = makeHandler(bound);
+            await assert.rejects(handler("feishu.searchMessages", ["关键词", {}]), /valid chatId/);
+            assert.deepEqual(calls, []);
         }
     });
 

@@ -251,10 +251,11 @@ export function getPlatformExecutionGuidance(platform: string): string {
         'sendMessage 支持飞书原生 text/post/interactive/share_chat/share_user；getHistory 获取当前会话历史。合并转发消息会展开为 text 和 forwardedMessages；飞书不支持下载其中子消息的媒体资源，因此不会暴露这些附件的下载引用。',
         "sendText 发送的是飞书 text 消息，markdown 不会渲染；需要 markdown 或富文本排版时，改用 sendMessage(chatId, \"post\", ...)（content 用 { tag: \"md\", text: ... } 节点）或 interactive 卡片，adapter 不会自动转换。",
         '收到 sticker 时可用 mediaInfo.sendableFileId（或 fileId）调用 sendSticker；飞书不允许机器人上传任意新表情包。sendTemplateCard/updateTemplateCard 使用卡片模板；sendCard/updateCard/patchCard/streamCardText 使用 CardKit，动态更新需对同一 messageId 使用递增 sequence。',
-        'card.action.trigger 和消息表情增删会作为普通 nc.message 输入，原始 action/context 或 emoji 位于 payload.platformData；可按 replyToMessageId 找到被操作的消息。callApi(chatId, action, { path, params, data }) 开放消息编辑/撤回/转发/已读查询、表情、Pin、群资料、成员、管理员和群菜单，参数保持飞书 SDK 形状。',
+        'card.action.trigger 和消息表情增删会作为普通 nc.message 输入，原始 action/context 或 emoji 位于 payload.platformData；可按 replyToMessageId 找到被操作的消息。callApi(chatId, action, { path, params, data }) 开放消息编辑/撤回/转发/已读查询、表情、Pin、群资料、成员、管理员、群菜单、群发言权限（chatModeration.get/update）、群公告和群置顶（chatTopNotice.putTopNotice/deleteTopNotice），参数保持飞书 SDK 形状。群公告分两代：旧版 doc 用 chatAnnouncement.get/patch（patch 只支持旧版格式）；新版 docx 用 chatAnnouncementBlock.list 读块、chatAnnouncementBlock.batchUpdate 改块、chatAnnouncementBlockChildren.create/batchDelete 增删块。',
         "caption 是单独的回复消息，不是媒体正文。主回执只确认媒体成功；只有 additionalMessages 中的成功 messageId 才确认说明文字已发出。captionError 表示媒体成功、说明失败，不要为重发说明而重发媒体。null 表示被拦截，不能说已发送。",
         "回执 senderUserId、mentions、replyToMessageId、rootId、threadId 是实际发送上下文；自己的发言不等于他人或 bot 回应。完成任务前区分已发送、部分失败、对方是否回应，不虚构成功或已读。",
-        "feishu.getMessage(chatId, messageId) / getChat(chatId) 查询消息和会话；downloadMedia(fileId, chatId?, messageId?, uniqueFileId?) 返回 Downloads 内路径，可交给 vision.see(path)。",
+        "feishu.getMessage(chatId, messageId) / getChat(chatId) / getChatMembers(chatId) 查询消息、会话和群成员（不含机器人成员，member_total 为 -1 时 memberTotalIsExact=false）；getChatMenu(chatId) 读群菜单（仅 chat_mode=group）；getChatAnnouncement(chatId) 读群公告，自动兼容旧版 doc（返回 content）和新版 docx（返回 text + blocks）；getBotInfo() 返回机器人自己的 open_id、app_id 和名称；searchMessages(query, { filter }) 走飞书原生搜索，需要应用开通 search:message 权限，未开通会返回 99991672 和申请链接；downloadMedia(fileId, chatId?, messageId?, uniqueFileId?) 返回 Downloads 内路径，可交给 vision.see(path)。",
+        "feishu.leaveChat(chatId) 让机器人主动退群（飞书允许机器人随时移出自己，群被 mute 也能退）。退群后会话缓存会清空，后续不要再向该 chatId 发送消息。",
         "Feishu 不提供机器人 typing，也不允许机器人把收到的消息标为已读；但 message.readUsers 可以查询机器人自己 7 天内发送消息的已读用户。不要虚构输入状态或已读。发送未提供 uuid 时系统每次操作生成一个，不自动重试。",
     ].join("\n");
 }

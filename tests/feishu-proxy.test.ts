@@ -407,8 +407,10 @@ describe("Feishu sandbox API boundary", () => {
         const module = registry.find(entry => entry.name === "feishu");
         assert.ok(module);
         assert.deepEqual(module.methods.map(method => method.name).sort(), [
-            "callApi", "downloadMedia", "getChat", "getHistory", "getMessage", "patchCard", "sendCard",
-            "sendMedia", "sendMessage", "sendSticker", "sendTemplateCard", "sendText", "streamCardText", "updateCard", "updateTemplateCard",
+            "callApi", "downloadMedia", "getBotInfo", "getChat", "getChatAnnouncement", "getChatMembers",
+            "getChatMenu", "getHistory", "getMessage", "leaveChat", "patchCard", "searchMessages", "sendCard",
+            "sendMedia", "sendMessage", "sendSticker", "sendTemplateCard", "sendText", "streamCardText",
+            "updateCard", "updateTemplateCard",
         ]);
         assert.match(generateBriefOverview(registry), /sendText\(chatId, text, options\?\)/);
         assert.match(lookupFullDocs(registry, ["feishu.sendMedia"]), /FeishuMedia/);

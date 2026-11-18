@@ -44,9 +44,15 @@ modules/emergency.d.ts — 紧急拉黑模块类型定义 遇到你无法处理�
 - `streamCardText`: streamCardText(chatId, messageId, elementId, content, options?)
 - `getMessage`: getMessage(chatId, messageId)
 - `getHistory`: 获取当前会话历史消息，支持飞书 page token 分页。
+- `searchMessages`: 搜索消息。需要应用开通 `search:message` 权限，否则飞书返回 99991672 并附申请链接。 未指定 filter.chat_ids 时按应用可见范围搜索。
 - `getChat`: getChat(chatId)
+- `getChatMembers`: 群成员列表。飞书该接口不返回机器人成员。
+- `getChatMenu`: 读取群菜单。飞书仅支持 chat_mode=group 的群。
+- `getChatAnnouncement`: 读取群公告，自动兼容两种形态： - 旧版 doc：返回 content（旧版云文档格式） - 新版 docx：im.v1 会报 232097，自动回退到 docx 接口并返回 text + blocks
+- `getBotInfo`: 机器人自身信息（open_id、app_id、名称、头像、可用状态）。
+- `leaveChat`: 机器人主动退群（飞书允许机器人随时将自己移出群组）。
 - `downloadMedia`: downloadMedia(fileId, chatId?, messageId?, uniqueFileId?)
-- `callApi`: 调用受控的飞书 IM 原生 API。chatId 是安全归属上下文；payload 保持 SDK 的 { path, params, data } 形状。 消息、表情、Pin、群资料、成员、管理员和群菜单能力均通过此入口开放。 转发仅支持 receive_id_type: "chat_id"，收件人与所有源消息必须属于 chatId；不开放全局群聊发现。
+- `callApi`: 调用受控的飞书 IM 原生 API。chatId 是安全归属上下文；payload 保持 SDK 的 { path, params, data } 形状。 消息、表情、Pin、群资料、成员、管理员、群菜单、群发言权限、群公告和群置顶能力均通过此入口开放。 转发仅支持 receive_id_type: "chat_id"，收件人与所有源消息必须属于 chatId；不开放全局群聊发现。
 
 ## fs
 filesystem.d.ts — 文件系统操作模块类型定义 所有路径操作限定在 workspace/ 目录下。 支持相对路径（相对于 workspace/）和绝对路径。
