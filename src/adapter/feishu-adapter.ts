@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import type { Readable } from "node:stream";
 import type { Client, HttpInstance, HttpRequestOptions, WSClient, defaultHttpInstance } from "@larksuiteoapi/node-sdk";
 import { FEISHU_APP_ID_PATTERN, type FeishuConfig } from "../core/config.js";
+import { formatFeishuEmoji, formatFeishuReaction } from "../core/feishu-emoji.js";
 import type { NotificationCenter, NotificationInput } from "../event/notification-center.js";
 import type { AdapterConnectionStatus, BackfillOptions, BackfillResult, PlatformAdapter } from "./platform-adapter.js";
 import { isNewerThanWatermark, summarizeBackfillNotes } from "./backfill.js";
@@ -903,7 +904,7 @@ export class FeishuAdapter implements PlatformAdapter {
         await this.ensureChatMetadata(chatId);
         if (session.signal.aborted || this.session !== session) return;
         const chatType = string(original.chat_type) || this.chatTypes.get(chatId);
-        const text = `[Reaction ${action}: ${emoji}]`;
+        const text = formatFeishuReaction(action, emoji);
         const originalSender = record(original.sender);
         const reactedToBot = (originalSender.id_type === "open_id" && originalSender.id === this.botOpenId) || originalSender.open_bot_id === this.botOpenId;
         const normalizedType = chatType === "p2p" ? "private" : "group";
@@ -968,7 +969,7 @@ export class FeishuAdapter implements PlatformAdapter {
                 break;
             case "sticker":
                 addMedia(body.file_key, "file", undefined, undefined, "sticker");
-                text = `[Sticker: ${string(body.file_key) || string(body.sticker_id) || "sticker"}]`;
+                text = "[🎭 贴纸]";
                 break;
             case "share_chat":
                 text = `[Shared chat: ${string(body.chat_id)}]`;
@@ -999,7 +1000,7 @@ export class FeishuAdapter implements PlatformAdapter {
                         return labels.get(id) ?? `@${string(node.user_name) || id}`;
                     }
                     if (node.tag === "img") { addMedia(node.image_key, "image"); return "[Image]"; }
-                    if (node.tag === "emotion") return `[${string(node.emoji_type)}]`;
+                    if (node.tag === "emotion") return formatFeishuEmoji(string(node.emoji_type));
                     return "";
                 }).join(""))].filter(Boolean).join("\n");
                 break;

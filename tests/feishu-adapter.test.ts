@@ -463,7 +463,7 @@ describe("Feishu adapter ingress edges", () => {
             assert.equal(f.events[0].replyToMessageId, "om_bot");
             assert.equal(f.events[0]._urgent, true);
             assert.equal(f.events[1].displayName, "Reactor");
-            assert.equal(f.events[1].text, "[Reaction added: THUMBSUP]");
+            assert.equal(f.events[1].text, "[👍 表态] 给消息点了「赞」");
             assert.equal(f.events[1].mentionsAgent, true);
             assert.equal((f.events[1].payload as any).platformData.originalType, "im.message.reaction.created_v1");
         } finally { await f.adapter.stop(); }
@@ -560,7 +560,7 @@ describe("Feishu adapter ingress edges", () => {
             await f.connections[0].receive(incoming({ message_id: "om_merge", message_type: "merge_forward", content: "Merged and Forwarded Message" }));
             const event = f.events[0];
             assert.match(String(event.text), /Alice: child text/);
-            assert.match(String(event.text), /Bob: \[Sticker: sticker_key\]/);
+            assert.match(String(event.text), /Bob: \[🎭 贴纸\]/);
             assert.equal((event.forwardedMessages as unknown[]).length, 2);
             assert.equal(event.mediaInfo, undefined);
             assert.ok((event.forwardedMessages as any[]).every(child => child.mediaInfo === undefined && child.mediaInfos === undefined));
