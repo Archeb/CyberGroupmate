@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import type { Readable } from "node:stream";
 import type { Client, HttpInstance, HttpRequestOptions, WSClient, defaultHttpInstance } from "@larksuiteoapi/node-sdk";
 import { FEISHU_APP_ID_PATTERN, type FeishuConfig } from "../core/config.js";
+import { formatFeishuEmoji, formatFeishuReaction } from "../core/feishu-emoji.js";
 import type { NotificationCenter, NotificationInput } from "../event/notification-center.js";
 import type { AdapterConnectionStatus, BackfillOptions, BackfillResult, PlatformAdapter } from "./platform-adapter.js";
 import { isNewerThanWatermark, summarizeBackfillNotes } from "./backfill.js";
@@ -33,12 +34,16 @@ export interface FeishuApi {
     request: Client["request"];
     im: {
         v1: {
-            message: Pick<MessageApi, "create" | "reply" | "get"> & Partial<Pick<MessageApi, "delete" | "patch" | "list" | "mergeForward" | "forward" | "update" | "readUsers" | "createByCard" | "replyByCard" | "updateByCard">>;
+            message: Pick<MessageApi, "create" | "reply" | "get"> & Partial<Pick<MessageApi, "delete" | "patch" | "list" | "search" | "mergeForward" | "forward" | "update" | "readUsers" | "createByCard" | "replyByCard" | "updateByCard">>;
             chat: Pick<Client["im"]["v1"]["chat"], "get"> & Partial<Pick<Client["im"]["v1"]["chat"], "create" | "update" | "delete" | "list" | "search" | "link">>;
             chatMembers?: Partial<Pick<Client["im"]["v1"]["chatMembers"], "create" | "delete" | "meJoin" | "get" | "isInChat">>;
             chatManagers?: Record<string, ApiCall>;
             chatMenuTree?: Record<string, ApiCall>;
             chatMenuItem?: Record<string, ApiCall>;
+            chatModeration?: Record<string, ApiCall>;
+            chatAnnouncement?: Record<string, ApiCall>;
+            chatTopNotice?: Record<string, ApiCall>;
+            chatAnnouncementBlock?: Record<string, ApiCall>;
             messageReaction?: Partial<Pick<Client["im"]["v1"]["messageReaction"], "create" | "delete" | "list" | "batchQuery">>;
             pin?: Partial<Pick<Client["im"]["v1"]["pin"], "create" | "delete" | "list">>;
             image: Pick<Client["im"]["v1"]["image"], "create">;
@@ -49,6 +54,12 @@ export interface FeishuApi {
     contact?: {
         v3?: {
             user?: Partial<Pick<Client["contact"]["v3"]["user"], "get">>;
+        };
+    };
+    docx?: {
+        v1?: {
+            chatAnnouncement?: Record<string, ApiCall>;
+            chatAnnouncementBlock?: Record<string, ApiCall>;
         };
     };
     cardkit?: {
@@ -126,12 +137,18 @@ const FEISHU_NATIVE_ACTIONS = new Set([
     "chat.update", "chat.delete", "chat.link",
     "chatMembers.create", "chatMembers.delete", "chatMembers.meJoin", "chatMembers.get", "chatMembers.isInChat",
     "chatManagers.addManagers", "chatManagers.deleteManagers",
-    "chatMenuTree.create", "chatMenuTree.delete", "chatMenuTree.sort",
+    "chatMenuTree.get", "chatMenuTree.create", "chatMenuTree.delete", "chatMenuTree.sort",
     "chatMenuItem.patch",
+    "chatModeration.get", "chatModeration.update",
+    "chatAnnouncement.get", "chatAnnouncement.patch",
+    "chatAnnouncementBlock.list", "chatAnnouncementBlock.batchUpdate",
+    "chatAnnouncementBlockChildren.create", "chatAnnouncementBlockChildren.batchDelete",
+    "chatTopNotice.putTopNotice", "chatTopNotice.deleteTopNotice",
 ]);
 const FEISHU_NATIVE_READ_ACTIONS = new Set([
     "message.readUsers", "messageReaction.list", "messageReaction.batchQuery", "pin.list",
     "chat.link", "chatMembers.get", "chatMembers.isInChat",
+    "chatModeration.get", "chatAnnouncement.get", "chatAnnouncementBlock.list", "chatMenuTree.get",
 ]);
 const MESSAGE_TYPES = new Set(["text", "post", "interactive", "share_chat", "share_user"]);
 const CARD_MSG_CONTENT_TYPE = "user_card_content";
@@ -140,10 +157,12 @@ const MEDIA_TYPES = new Set(["photo", "document", "audio", "video"]);
 const FEISHU_WRITE_METHODS = [
     "feishu.sendText", "feishu.sendMessage", "feishu.sendMedia", "feishu.sendSticker",
     "feishu.sendTemplateCard", "feishu.sendCard", "feishu.updateTemplateCard", "feishu.updateCard", "feishu.patchCard", "feishu.streamCardText",
+    "feishu.leaveChat",
 ] as const;
 const FEISHU_METHODS = [
     ...FEISHU_WRITE_METHODS,
-    "feishu.getMessage", "feishu.getHistory", "feishu.getChat", "feishu.downloadMedia", "feishu.callApi",
+    "feishu.getMessage", "feishu.getHistory", "feishu.searchMessages", "feishu.getChat", "feishu.getChatMembers",
+    "feishu.getChatMenu", "feishu.getChatAnnouncement", "feishu.getBotInfo", "feishu.downloadMedia", "feishu.callApi",
 ] as const;
 const ID_PATTERNS: Record<IdPrefix, RegExp> = {
     oc_: /^oc_[A-Za-z0-9_-]{1,200}$/,
@@ -156,6 +175,7 @@ const MESSAGE_UPDATE_TYPES = new Set(["text", "post"]);
 const MENU_ACTION_TYPES = new Set(["NONE", "REDIRECT_LINK"]);
 const MENU_UPDATE_FIELDS = new Set(["ICON", "NAME", "I18N_NAME", "REDIRECT_LINK"]);
 const LINK_VALIDITY_PERIODS = new Set(["week", "year", "permanently"]);
+const TOP_NOTICE_ACTIONS = new Set(["1", "2"]);
 
 function record(value: unknown): RecordValue {
     return value !== null && typeof value === "object" && !Array.isArray(value) ? value as RecordValue : {};
@@ -220,6 +240,13 @@ function requiredId(value: unknown, prefix: IdPrefix, field: string): string {
     return id;
 }
 
+/** 文档块 ID 是 doxcn 前缀的字符串，不属于消息/会话/用户 ID 体系。 */
+function requiredBlockId(value: unknown, field: string): string {
+    const id = requiredText(value, field);
+    if (!/^[A-Za-z0-9_-]{1,200}$/.test(id)) throw new Error(`Feishu native action ${field} has invalid identifier`);
+    return id;
+}
+
 function checkEnum(value: string, allowed: Set<string>, field: string): void {
     if (!allowed.has(value)) throw new Error(`Feishu native action ${field} must be one of ${[...allowed].join(", ")}`);
 }
@@ -255,6 +282,74 @@ function timestamp(value: unknown): string {
     const text = string(value);
     const ms = /^\d{1,16}$/.test(text) ? Number(text) : NaN;
     return new Date(Number.isSafeInteger(ms) && ms >= 0 && ms <= 8.64e15 ? ms : Date.now()).toISOString();
+}
+
+/**
+ * 群公告的时间字段是秒级时间戳，与消息的毫秒级 create_time 不同。
+ * 文档标注为 int，实际 SDK 既可能返回 number 也可能返回字符串，两种都要接受。
+ */
+function timestampSeconds(value: unknown): string | undefined {
+    const text = typeof value === "number" ? String(value) : string(value);
+    const seconds = /^\d{1,12}$/.test(text) ? Number(text) : NaN;
+    return Number.isSafeInteger(seconds) && seconds >= 0 ? new Date(seconds * 1000).toISOString() : undefined;
+}
+
+/**
+ * `im.v1.message.search` 的 create_time 文档标注为 ISO8601（如 2026-03-21T16:15:30+08:00），
+ * 与其它消息接口的毫秒时间戳不同；这里同时兼容 ISO 字符串与秒/毫秒时间戳。
+ */
+function searchTimestamp(value: unknown): string | undefined {
+    const text = string(value);
+    if (!text) return undefined;
+    if (/^\d+$/.test(text)) {
+        const numeric = Number(text);
+        if (!Number.isSafeInteger(numeric)) return undefined;
+        return new Date(text.length <= 12 ? numeric * 1000 : numeric).toISOString();
+    }
+    const ms = Date.parse(text);
+    return Number.isFinite(ms) ? new Date(ms).toISOString() : undefined;
+}
+
+/** 群公告所有者的 ID 类型可能是 app_id（机器人创建），此时不能套用 ou_ 前缀。 */
+function announcementOwnerId(value: unknown, idType: unknown): string | undefined {
+    const id = string(value);
+    if (!id) return undefined;
+    if (string(idType) === "app_id") return id;
+    return ID_PATTERNS.ou_.test(id) ? compositeId(id, "ou_") : id;
+}
+
+/** 业务错误码可能挂在 error.feishu 上，也可能只出现在 adapter 包装后的 message 里。 */
+function hasFeishuErrorCode(error: unknown, code: number): boolean {
+    return record(record(error).feishu).code === code
+        || new RegExp(`\\b${code}\\b`).test(String((error as Error)?.message ?? ""));
+}
+
+/** 一级、二级菜单项的公共字段；两者的 ID 字段名不同，由调用方补充。 */
+function chatMenuItemFields(item: RecordValue): RecordValue {
+    return {
+        name: string(item.name) || undefined,
+        actionType: string(item.action_type) || undefined,
+        redirectLink: item.redirect_link !== undefined ? record(item.redirect_link) : undefined,
+        imageKey: string(item.image_key) || undefined,
+        i18nNames: item.i18n_names !== undefined ? record(item.i18n_names) : undefined,
+    };
+}
+
+/**
+ * 群公告元信息在 doc 与 docx 两条路径下字段相同，统一映射避免重复。
+ * revision 由调用方给出：doc 用 `revision`，docx 用 `revision_id`。
+ */
+function announcementMeta(data: RecordValue, revision: unknown): RecordValue {
+    return {
+        revision: revision !== undefined ? String(revision) : undefined,
+        ownerId: announcementOwnerId(data.owner_id, data.owner_id_type),
+        ownerIdType: string(data.owner_id_type) || undefined,
+        modifierId: announcementOwnerId(data.modifier_id, data.modifier_id_type),
+        modifierIdType: string(data.modifier_id_type) || undefined,
+        // 实测两个公告接口的 create_time/update_time 都是秒级时间戳。
+        createTime: data.create_time !== undefined ? timestampSeconds(data.create_time) : undefined,
+        updateTime: data.update_time !== undefined ? timestampSeconds(data.update_time) : undefined,
+    };
 }
 
 function content(value: unknown): RecordValue {
@@ -903,7 +998,7 @@ export class FeishuAdapter implements PlatformAdapter {
         await this.ensureChatMetadata(chatId);
         if (session.signal.aborted || this.session !== session) return;
         const chatType = string(original.chat_type) || this.chatTypes.get(chatId);
-        const text = `[Reaction ${action}: ${emoji}]`;
+        const text = formatFeishuReaction(action, emoji);
         const originalSender = record(original.sender);
         const reactedToBot = (originalSender.id_type === "open_id" && originalSender.id === this.botOpenId) || originalSender.open_bot_id === this.botOpenId;
         const normalizedType = chatType === "p2p" ? "private" : "group";
@@ -968,7 +1063,7 @@ export class FeishuAdapter implements PlatformAdapter {
                 break;
             case "sticker":
                 addMedia(body.file_key, "file", undefined, undefined, "sticker");
-                text = `[Sticker: ${string(body.file_key) || string(body.sticker_id) || "sticker"}]`;
+                text = "[🎭 贴纸]";
                 break;
             case "share_chat":
                 text = `[Shared chat: ${string(body.chat_id)}]`;
@@ -999,7 +1094,7 @@ export class FeishuAdapter implements PlatformAdapter {
                         return labels.get(id) ?? `@${string(node.user_name) || id}`;
                     }
                     if (node.tag === "img") { addMedia(node.image_key, "image"); return "[Image]"; }
-                    if (node.tag === "emotion") return `[${string(node.emoji_type)}]`;
+                    if (node.tag === "emotion") return formatFeishuEmoji(string(node.emoji_type));
                     return "";
                 }).join(""))].filter(Boolean).join("\n");
                 break;
@@ -1184,7 +1279,13 @@ export class FeishuAdapter implements PlatformAdapter {
             case "feishu.streamCardText": return this.streamCardText(string(args[0]), string(args[1]), string(args[2]), string(args[3]), record(args[4]));
             case "feishu.getMessage": return this.getMessage(string(args[0]), string(args[1]));
             case "feishu.getHistory": return this.getHistory(string(args[0]), record(args[1]));
+            case "feishu.searchMessages": return this.searchMessages(string(args[0]), record(args[1]));
             case "feishu.getChat": return this.getChat(string(args[0]));
+            case "feishu.getChatMembers": return this.getChatMembers(string(args[0]), record(args[1]));
+            case "feishu.getChatMenu": return this.getChatMenu(string(args[0]));
+            case "feishu.getChatAnnouncement": return this.getChatAnnouncement(string(args[0]));
+            case "feishu.getBotInfo": return this.getBotInfo();
+            case "feishu.leaveChat": return this.leaveChat(string(args[0]));
             case "feishu.callApi": return this.callApi(string(args[0]), string(args[1]), record(args[2]));
             case "feishu.downloadMedia": {
                 const meta = await this.downloadMediaWithMeta(string(args[0]), args[1] === undefined ? undefined : string(args[1]), args[2] === undefined ? undefined : string(args[2]), args[3] === undefined ? undefined : string(args[3]));
@@ -1502,9 +1603,83 @@ export class FeishuAdapter implements PlatformAdapter {
         return { items, hasMore: data.has_more === true, pageToken: string(data.page_token) || undefined };
     }
 
+    /**
+     * 搜索消息。
+     *
+     * 飞书 `im.v1.message.search` 需要 `search:message` 应用权限；未开通时飞书返回
+     * 99991672 并带上申请链接，这里把原始错误透传给调用方，不做降级猜测。
+     */
+    async searchMessages(query: string, options: RecordValue = {}): Promise<RecordValue> {
+        const keyword = typeof query === "string" ? query.trim() : "";
+        const filters = record(options.filter);
+        const chatIds = Array.isArray(filters.chat_ids)
+            ? filters.chat_ids.map(value => rawId(value, "oc_"))
+            : undefined;
+        const fromIds = Array.isArray(filters.from_ids)
+            ? filters.from_ids.map(value => stripFeishuPrefix(requiredText(value, "filter.from_ids items")))
+            : undefined;
+        const atChatterIds = Array.isArray(filters.at_chatter_ids)
+            ? filters.at_chatter_ids.map(value => stripFeishuPrefix(requiredText(value, "filter.at_chatter_ids items")))
+            : undefined;
+        if (!keyword && !chatIds && !fromIds && !atChatterIds && !filters.time_range && !filters.chat_type
+            && !filters.is_at_me && !filters.include_attachment_types && !filters.from_types
+            && !filters.exclude_from_types) {
+            throw new Error("Feishu searchMessages requires query or at least one filter");
+        }
+        // 官方文档：page_size 默认 15，最大 30（与 message.list 的 50 不同）。
+        const pageSize = Math.max(1, Math.min(30, Number(options.pageSize) || 15));
+        const client = this.requireClient();
+        const search = client.im.v1.message.search;
+        if (!search) throw new Error("Feishu message search API unavailable in SDK");
+        const data: RecordValue = {};
+        if (keyword) data.query = keyword;
+        const filter: RecordValue = {};
+        if (chatIds) filter.chat_ids = chatIds;
+        if (fromIds) filter.from_ids = fromIds;
+        if (atChatterIds) filter.at_chatter_ids = atChatterIds;
+        if (filters.time_range !== undefined) filter.time_range = requiredObject(filters.time_range, "filter.time_range");
+        if (filters.chat_type !== undefined) filter.chat_type = requiredText(filters.chat_type, "filter.chat_type");
+        if (filters.is_at_me !== undefined) filter.is_at_me = filters.is_at_me === true;
+        if (filters.include_attachment_types !== undefined) {
+            filter.include_attachment_types = requiredStringArray(filters.include_attachment_types, "filter.include_attachment_types");
+        }
+        if (filters.from_types !== undefined) filter.from_types = requiredStringArray(filters.from_types, "filter.from_types");
+        if (filters.exclude_from_types !== undefined) {
+            filter.exclude_from_types = requiredStringArray(filters.exclude_from_types, "filter.exclude_from_types");
+        }
+        if (Object.keys(filter).length > 0) data.filter = filter;
+        const params: RecordValue = { page_size: pageSize, user_id_type: "open_id" };
+        if (typeof options.pageToken === "string" && options.pageToken) params.page_token = options.pageToken;
+        const response = await this.api(() => search({ data, params }));
+        const result = record(response.data);
+        const items = (Array.isArray(result.items) ? result.items : []).map(record).map(item => {
+            const meta = record(item.meta_data);
+            const chatId = string(meta.chat_id);
+            return {
+                messageId: string(meta.message_id),
+                chatId: ID_PATTERNS.oc_.test(chatId) ? compositeId(chatId, "oc_") : undefined,
+                userId: string(meta.from_id) ? compositeId(meta.from_id, "ou_") : undefined,
+                text: string(item.display_info),
+                messageType: string(meta.type),
+                timestamp: searchTimestamp(meta.create_time),
+                threadId: string(meta.thread_id) || undefined,
+                isP2pChat: meta.is_p2p_chat === true,
+            };
+        });
+        return {
+            items,
+            hasMore: result.has_more === true,
+            pageToken: string(result.page_token) || undefined,
+            total: result.total !== undefined ? Number(result.total) : undefined,
+            notice: string(result.notice) || undefined,
+        };
+    }
+
     async callApi(chatId: string, action: string, payload: RecordValue = {}): Promise<unknown> {
         const expectedChatId = rawId(chatId, "oc_");
         if (!FEISHU_NATIVE_ACTIONS.has(action)) throw new Error("Unsupported Feishu native action");
+        // 群公告在 docx 类型下无法用 im.v1 读取，走专用封装以兼容两种形态。
+        if (action === "chatAnnouncement.get") return this.getChatAnnouncement(chatId);
         if (!FEISHU_NATIVE_READ_ACTIONS.has(action)) this.assertWritable(chatId);
         const [resourceName, methodName] = action.split(".");
         const path = record(payload.path);
@@ -1627,6 +1802,60 @@ export class FeishuAdapter implements PlatformAdapter {
             case "chat.update":
                 checkOptionalEnum(normalizedParams.user_id_type, USER_ID_TYPES, "params.user_id_type");
                 break;
+            case "chatModeration.get":
+                checkOptionalEnum(normalizedParams.user_id_type, USER_ID_TYPES, "params.user_id_type");
+                break;
+            case "chatModeration.update": {
+                checkOptionalEnum(normalizedParams.user_id_type, USER_ID_TYPES, "params.user_id_type");
+                const setting = normalizedData.moderation_setting;
+                if (setting === undefined && normalizedData.moderator_added_list === undefined
+                    && normalizedData.moderator_removed_list === undefined) {
+                    throw new Error("Feishu native action requires data.moderation_setting, data.moderator_added_list or data.moderator_removed_list");
+                }
+                if (setting !== undefined) requiredText(setting, "data.moderation_setting");
+                break;
+            }
+            case "chatAnnouncement.get":
+                checkOptionalEnum(normalizedParams.user_id_type, USER_ID_TYPES, "params.user_id_type");
+                break;
+            case "chatAnnouncement.patch":
+                requiredText(normalizedData.revision, "data.revision");
+                // 实测：requests 为空数组时飞书返回 232001，必须至少一条。
+                requiredStringArray(normalizedData.requests, "data.requests");
+                break;
+            case "chatAnnouncementBlock.list":
+                checkOptionalEnum(normalizedParams.user_id_type, USER_ID_TYPES, "params.user_id_type");
+                break;
+            case "chatAnnouncementBlock.batchUpdate":
+                // 文档：requests 最多 200 条，且同一块不能重复出现。
+                requiredArray(normalizedData.requests, "data.requests");
+                break;
+            case "chatAnnouncementBlockChildren.create":
+                requiredBlockId(normalizedPath.block_id, "path.block_id");
+                requiredArray(normalizedData.children, "data.children");
+                break;
+            case "chatAnnouncementBlockChildren.batchDelete": {
+                requiredBlockId(normalizedPath.block_id, "path.block_id");
+                const start = normalizedData.start_index;
+                const end = normalizedData.end_index;
+                if (!Number.isInteger(start) || Number(start) < 0) throw new Error("Feishu native action requires non-negative integer data.start_index");
+                if (!Number.isInteger(end) || Number(end) <= Number(start)) throw new Error("Feishu native action requires data.end_index greater than data.start_index");
+                break;
+            }
+            case "chatTopNotice.putTopNotice": {
+                const notices = requiredArray(normalizedData.chat_top_notice, "data.chat_top_notice");
+                if (notices.length > 1) throw new Error("Feishu native action supports at most one top notice per chat");
+                const notice = requiredObject(notices[0], "data.chat_top_notice[0]");
+                checkOptionalEnum(notice.action_type, TOP_NOTICE_ACTIONS, "data.chat_top_notice[0].action_type");
+                if (notice.message_id !== undefined) {
+                    notice.message_id = requiredId(notice.message_id, "om_", "data.chat_top_notice[0].message_id");
+                }
+                // 文档：action_type=1 为消息置顶，必须填 message_id；2 为群公告置顶，不填。
+                if (notice.action_type === "1" && notice.message_id === undefined) {
+                    throw new Error("Feishu native action requires data.chat_top_notice[0].message_id when action_type is 1");
+                }
+                break;
+            }
         }
         // Check the actual scope fields used by each SDK action, including body IDs.
         let messageIds: string[] = [];
@@ -1636,6 +1865,11 @@ export class FeishuAdapter implements PlatformAdapter {
             messageIds = (normalizedData.queries as RecordValue[]).map(query => string(query.message_id));
         } else if (action === "pin.create") {
             messageIds = [requiredId(normalizedData.message_id, "om_", "data.message_id")];
+        } else if (action === "chatTopNotice.putTopNotice") {
+            // 置顶消息同样要验证消息属于当前会话，避免跨会话引用；群公告置顶没有 message_id。
+            messageIds = requiredArray(normalizedData.chat_top_notice, "data.chat_top_notice")
+                .map(value => string(record(value).message_id))
+                .filter(Boolean);
         } else if (resourceName === "message" || resourceName === "messageReaction" || action === "pin.delete") {
             messageIds = [requiredId(normalizedPath.message_id, "om_", "path.message_id")];
         } else {
@@ -1644,7 +1878,11 @@ export class FeishuAdapter implements PlatformAdapter {
             if (requiredId(scopedChatId, "oc_", field) !== expectedChatId) throw new Error("Feishu native action chat mismatch");
         }
         for (const messageId of new Set(messageIds)) await this.getMessage(chatId, messageId);
-        const api = record(record(this.requireClient().im.v1)[resourceName])[methodName];
+        const client = this.requireClient();
+        // 新版 docx 群公告的块操作挂在 docx.v1 下，不在 im.v1。
+        const api = resourceName.startsWith("chatAnnouncementBlock")
+            ? record(record(record(client.docx?.v1)[resourceName]))[methodName]
+            : record(record(client.im.v1)[resourceName])[methodName];
         if (typeof api !== "function") throw new Error("Feishu native action unavailable in SDK");
         return this.api(() => (api as ApiCall)(normalizedPayload));
     }
@@ -1660,7 +1898,265 @@ export class FeishuAdapter implements PlatformAdapter {
         this.chatTypes.set(composite, data.chat_mode === "p2p" ? "p2p" : "group");
         trimMap(this.chatNames, 1000);
         trimMap(this.chatTypes, 1000);
-        return { chatId: composite, title: name, name, chatType: data.chat_mode === "p2p" ? "private" : "group", description: string(data.description) };
+        return {
+            chatId: composite,
+            title: name,
+            name,
+            chatType: data.chat_mode === "p2p" ? "private" : "group",
+            chatMode: string(data.chat_mode) || undefined,
+            description: string(data.description),
+            avatar: string(data.avatar) || undefined,
+            ownerId: string(data.owner_id) ? compositeId(data.owner_id, "ou_") : undefined,
+            ownerIdType: string(data.owner_id_type) || undefined,
+            userCount: data.user_count !== undefined ? Number(data.user_count) : undefined,
+            external: data.external === true,
+            chatTag: string(data.chat_tag) || undefined,
+            chatStatus: string(data.chat_status) || undefined,
+        };
+    }
+
+    /** 机器人自身信息（启动时已通过 /open-apis/bot/v3/info 取过 open_id）。 */
+    async getBotInfo(): Promise<RecordValue> {
+        const client = this.requireClient();
+        if (!this.botOpenId) throw new Error("Feishu bot identity is not ready");
+        const response = await this.api(() => client.request({ url: "/open-apis/bot/v3/info", method: "GET" }));
+        const bot = record(response.bot);
+        return {
+            userId: compositeId(this.botOpenId, "ou_"),
+            openId: this.botOpenId,
+            appId: this.config.appId,
+            name: string(bot.app_name) || undefined,
+            avatar: string(bot.avatar_url) || undefined,
+            ipWhiteList: Array.isArray(bot.ip_white_list) ? bot.ip_white_list : undefined,
+            activateStatus: bot.activate_status !== undefined ? Number(bot.activate_status) : undefined,
+        };
+    }
+
+    /** 群成员列表（飞书该接口不返回机器人成员）。 */
+    async getChatMembers(chatId: string, options: RecordValue = {}): Promise<RecordValue> {
+        const id = rawId(chatId, "oc_");
+        const composite = compositeId(id, "oc_");
+        const client = this.requireClient();
+        const get = client.im.v1.chatMembers?.get;
+        if (!get) throw new Error("Feishu chat member API unavailable in SDK");
+        const pageSize = Math.max(1, Math.min(100, Number(options.pageSize) || 50));
+        const maxPages = Math.max(1, Math.min(MAX_CHAT_MEMBER_PAGES, Number(options.maxPages) || 20));
+        const requestedIdType = options.memberIdType === undefined
+            ? "open_id"
+            : requiredText(options.memberIdType, "memberIdType");
+        checkEnum(requestedIdType, USER_ID_TYPES, "memberIdType");
+        const memberIdType = requestedIdType as "user_id" | "union_id" | "open_id";
+        const members: RecordValue[] = [];
+        let pageToken: string | undefined = typeof options.pageToken === "string" ? options.pageToken : undefined;
+        let pages = 0;
+        let hasMore = false;
+        let memberTotal: number | undefined;
+        let securityConfLimit: number | undefined;
+        let triggerSecurityConfLimit = false;
+        while (pages < maxPages) {
+            const currentToken = pageToken;
+            const response = await this.api(() => get({
+                path: { chat_id: id },
+                params: {
+                    member_id_type: memberIdType,
+                    page_size: pageSize,
+                    ...(currentToken ? { page_token: currentToken } : {}),
+                },
+            }));
+            pages++;
+            const data = record(response.data);
+            for (const item of Array.isArray(data.items) ? data.items : []) {
+                const member = record(item);
+                const memberId = string(member.member_id);
+                if (!memberId) continue;
+                members.push({
+                    userId: memberIdType === "open_id" && ID_PATTERNS.ou_.test(memberId) ? compositeId(memberId, "ou_") : memberId,
+                    rawUserId: memberId,
+                    memberIdType: string(member.member_id_type) || memberIdType,
+                    displayName: string(member.name) || undefined,
+                    tenantKey: string(member.tenant_key) || undefined,
+                });
+            }
+            // 飞书在无法给出准确人数时返回 -1，此时保持 undefined 让调用方知道是未知值。
+            const reportedTotal = data.member_total !== undefined ? Number(data.member_total) : undefined;
+            if (reportedTotal !== undefined && Number.isFinite(reportedTotal) && reportedTotal >= 0) memberTotal = reportedTotal;
+            if (data.security_conf_limit !== undefined) securityConfLimit = Number(data.security_conf_limit);
+            if (data.trigger_security_conf_limit === true) triggerSecurityConfLimit = true;
+            hasMore = data.has_more === true;
+            pageToken = string(data.page_token) || undefined;
+            if (!hasMore || !pageToken) break;
+        }
+        return {
+            chatId: composite,
+            items: members,
+            hasMore: hasMore && !!pageToken,
+            pageToken: hasMore && pageToken ? pageToken : undefined,
+            // 飞书常返回 -1（未知）；此时用已拉到的条数兜底，但明确标注非精确值。
+            memberTotal: memberTotal ?? members.length,
+            memberTotalIsExact: memberTotal !== undefined,
+            securityConfLimit,
+            triggerSecurityConfLimit,
+            scannedPages: pages,
+        };
+    }
+
+    /**
+     * 机器人主动退群。
+     *
+     * 飞书 `chatMembers.delete` 文档明确：机器人可在任何条件下将自己移出群组。
+     * 走语义化方法而不是 `callApi` 的原因：
+     * - `callApi` 会经过 `assertWritable`，群被 mute 时会被拦下；
+     * - 退群必须显式指定自己（app_id 或 bot open_id），不能省略 `id_list`。
+     */
+    async leaveChat(chatId: string): Promise<RecordValue> {
+        const id = rawId(chatId, "oc_");
+        const client = this.requireClient();
+        const remove = client.im.v1.chatMembers?.delete;
+        if (!remove) throw new Error("Feishu chat member removal API unavailable in SDK");
+        const selfIds = [this.config.appId, this.botOpenId].filter((value): value is string => !!value);
+        if (selfIds.length === 0) throw new Error("Feishu bot identity is not ready");
+        let removed = false;
+        let lastError: unknown;
+        let alreadyOut = false;
+        for (const selfId of selfIds) {
+            const memberIdType = selfId === this.config.appId ? "app_id" : "open_id";
+            try {
+                await this.api(() => remove({
+                    path: { chat_id: id },
+                    params: { member_id_type: memberIdType },
+                    data: { id_list: [selfId] },
+                }));
+                removed = true;
+                break;
+            } catch (error) {
+                lastError = error;
+                // 232011: 机器人已不在该群，退群视为已达成（幂等）。
+                if (hasFeishuErrorCode(error, 232011)) {
+                    alreadyOut = true;
+                    break;
+                }
+            }
+        }
+        if (alreadyOut) removed = true;
+        if (!removed) throw lastError instanceof Error ? lastError : new Error("Feishu leaveChat failed");
+        const composite = compositeId(id, "oc_");
+        this.chatNames.delete(composite);
+        this.chatTypes.delete(composite);
+        this.invalidateChatMemberNames(composite);
+        return { chatId: composite, left: true, alreadyOut };
+    }
+
+    /**
+     * 读取群公告。
+     *
+     * 飞书群公告有两种形态：
+     * - 旧版 doc：`im.v1.chatAnnouncement.get` 直接返回 `content`（旧版云文档格式）。
+     * - 新版 docx：`im.v1.chatAnnouncement.get` 会报 232097，必须改用
+     *   `docx.v1.chatAnnouncement.get` 取元信息，再按 revision 拉 block 列表。
+     * 这里统一封装：先试 im.v1，命中 docx 时自动回退到 docx 接口。
+     */
+    async getChatAnnouncement(chatId: string): Promise<RecordValue> {
+        const id = rawId(chatId, "oc_");
+        const client = this.requireClient();
+        const imGet = client.im.v1.chatAnnouncement?.get;
+        if (typeof imGet !== "function") throw new Error("Feishu chat announcement API unavailable in SDK");
+        try {
+            const response = await this.api(() => imGet({ path: { chat_id: id }, params: { user_id_type: "open_id" } }));
+            const data = record(response.data);
+            return {
+                chatId: compositeId(id, "oc_"),
+                announcementType: "doc",
+                content: string(data.content),
+                ...announcementMeta(data, data.revision),
+            };
+        } catch (error) {
+            if (!hasFeishuErrorCode(error, 232097)) throw error;
+        }
+        return this.getDocxAnnouncement(id);
+    }
+
+    private async getDocxAnnouncement(rawChatId: string): Promise<RecordValue> {
+        const client = this.requireClient();
+        const get = client.docx?.v1?.chatAnnouncement?.get;
+        if (typeof get !== "function") throw new Error("Feishu docx chat announcement API unavailable in SDK");
+        const response = await this.api(() => get({ path: { chat_id: rawChatId }, params: { user_id_type: "open_id" } }));
+        const data = record(response.data);
+        const revisionId = data.revision_id !== undefined ? String(data.revision_id) : undefined;
+        let blocks: RecordValue[] = [];
+        let hasMore = false;
+        let pageToken: string | undefined;
+        // 运行时 SDK 同时提供 list 与 listWithIterator；类型声明只暴露了后者。
+        const listBlocks = (client.docx?.v1?.chatAnnouncementBlock as Record<string, ApiCall> | undefined)?.list;
+        if (typeof listBlocks === "function" && revisionId !== undefined) {
+            let pages = 0;
+            do {
+                const currentToken = pageToken;
+                const page = await this.api(() => listBlocks({
+                    path: { chat_id: rawChatId },
+                    params: {
+                        revision_id: Number(revisionId),
+                        // 文档：page_size 最大 500，默认 500。
+                        page_size: 500,
+                        user_id_type: "open_id",
+                        ...(currentToken ? { page_token: currentToken } : {}),
+                    },
+                }));
+                const pageData = record(page.data);
+                for (const item of Array.isArray(pageData.items) ? pageData.items : []) blocks.push(record(item));
+                hasMore = pageData.has_more === true;
+                pageToken = string(pageData.page_token) || undefined;
+                pages++;
+            } while (hasMore && pageToken && pages < 20);
+        }
+        return {
+            chatId: compositeId(rawChatId, "oc_"),
+            announcementType: "docx",
+            blocks,
+            text: blocks.map(block => this.docxBlockText(block)).filter(Boolean).join("\n"),
+            hasMore,
+            pageToken: hasMore ? pageToken : undefined,
+            ...announcementMeta(data, revisionId),
+        };
+    }
+
+    private docxBlockText(block: RecordValue): string {
+        const parts: string[] = [];
+        const visit = (node: unknown): void => {
+            if (Array.isArray(node)) { for (const child of node) visit(child); return; }
+            if (node === null || typeof node !== "object") return;
+            const item = record(node);
+            if (typeof item.content === "string" && item.content) parts.push(item.content);
+            for (const value of Object.values(item)) {
+                if (value !== null && typeof value === "object") visit(value);
+            }
+        };
+        visit(block);
+        return parts.join("");
+    }
+
+    /** 读取群菜单（仅 chat_mode=group 的群支持，飞书侧限制）。 */
+    async getChatMenu(chatId: string): Promise<RecordValue> {
+        const id = rawId(chatId, "oc_");
+        const client = this.requireClient();
+        const get = client.im.v1.chatMenuTree?.get;
+        if (typeof get !== "function") throw new Error("Feishu chat menu API unavailable in SDK");
+        const response = await this.api(() => get({ path: { chat_id: id } }));
+        const tree = record(record(response.data).menu_tree);
+        const topLevels = (Array.isArray(tree.chat_menu_top_levels) ? tree.chat_menu_top_levels : []).map(record);
+        return {
+            chatId: compositeId(id, "oc_"),
+            items: topLevels.map(level => {
+                const item = record(level.chat_menu_item);
+                return {
+                    topLevelId: string(level.chat_menu_top_level_id) || undefined,
+                    ...chatMenuItemFields(item),
+                    children: (Array.isArray(level.children) ? level.children : []).map(record).map(child => ({
+                        menuItemId: string(child.chat_menu_second_level_id) || undefined,
+                        ...chatMenuItemFields(record(child.chat_menu_item)),
+                    })),
+                };
+            }),
+        };
     }
 
     async fetchMissedMessages(options: BackfillOptions): Promise<BackfillResult> {

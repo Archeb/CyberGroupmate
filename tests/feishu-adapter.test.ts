@@ -11,6 +11,13 @@ import { createFeishuHttpInstance, FeishuAdapter, type FeishuAdapterDependencies
 const config = { appId: "cli_0123456789abcdef", appSecret: "secret-never-in-errors" };
 const time = "1767225600123";
 
+/** 模拟飞书 SDK 抛出的业务错误：code 挂在不可枚举的 error.feishu 上。 */
+function feishuError(code: number, msg: string): Error {
+    const error = new Error(`Feishu API business failure (${code})`);
+    Object.defineProperty(error, "feishu", { value: { code, msg }, enumerable: false });
+    return error;
+}
+
 function incoming(overrides: Record<string, unknown> = {}, senderId = "ou_user") {
     return {
         sender: { sender_id: { open_id: senderId }, sender_type: "user" },
@@ -463,7 +470,7 @@ describe("Feishu adapter ingress edges", () => {
             assert.equal(f.events[0].replyToMessageId, "om_bot");
             assert.equal(f.events[0]._urgent, true);
             assert.equal(f.events[1].displayName, "Reactor");
-            assert.equal(f.events[1].text, "[Reaction added: THUMBSUP]");
+            assert.equal(f.events[1].text, "[👍 表态] 给消息点了「赞」");
             assert.equal(f.events[1].mentionsAgent, true);
             assert.equal((f.events[1].payload as any).platformData.originalType, "im.message.reaction.created_v1");
         } finally { await f.adapter.stop(); }
@@ -560,7 +567,7 @@ describe("Feishu adapter ingress edges", () => {
             await f.connections[0].receive(incoming({ message_id: "om_merge", message_type: "merge_forward", content: "Merged and Forwarded Message" }));
             const event = f.events[0];
             assert.match(String(event.text), /Alice: child text/);
-            assert.match(String(event.text), /Bob: \[Sticker: sticker_key\]/);
+            assert.match(String(event.text), /Bob: \[🎭 贴纸\]/);
             assert.equal((event.forwardedMessages as unknown[]).length, 2);
             assert.equal(event.mediaInfo, undefined);
             assert.ok((event.forwardedMessages as any[]).every(child => child.mediaInfo === undefined && child.mediaInfos === undefined));
@@ -1178,11 +1185,12 @@ describe("Feishu adapter host boundary edges", () => {
             await assert.rejects(f.adapter.sendText("discord:oc_chat", "hello"), /identifier/);
             await assert.rejects(f.adapter.sendText("oc_chat", "hello", { replyInThread: true }), /parent/);
             assert.equal(f.adapter.canHandle("feishu.callApi"), true);
-            assert.equal(f.adapter.canHandle("feishu.searchMessages"), false);
+            assert.equal(f.adapter.canHandle("feishu.searchMessages"), true);
             assert.equal(f.adapter.canHandle("feishu.addReaction"), false);
             assert.deepEqual(f.adapter.getWriteMethods(), [
                 "feishu.sendText", "feishu.sendMessage", "feishu.sendMedia", "feishu.sendSticker",
                 "feishu.sendTemplateCard", "feishu.sendCard", "feishu.updateTemplateCard", "feishu.updateCard", "feishu.patchCard", "feishu.streamCardText",
+                "feishu.leaveChat",
             ]);
             await assert.rejects(f.adapter.handleCall("feishu.callApi", ["oc_chat", "unknown", {}]), /Unsupported/);
             assert.equal(f.calls.length, 0);
@@ -1407,6 +1415,466 @@ describe("Feishu adapter host boundary edges", () => {
             const fetched = await f.adapter.getMessage("feishu:oc_a_b", "om_under");
             assert.equal(fetched.chatId, "feishu:oc_a_b");
             assert.equal(f.adapter.formatMention("feishu:ou_x_y", "X"), '<at user_id="ou_x_y">X</at>');
+        } finally { await f.adapter.stop(); }
+    });
+
+    it("leaves a chat as the bot itself and clears cached chat metadata", async () => {
+        const f = fixture();
+        const removals: any[] = [];
+        f.client.im.v1.chatMembers = {
+            delete: async (payload: any) => {
+                removals.push(payload);
+                return { code: 0, data: {} };
+            },
+        };
+        await f.adapter.start();
+        try {
+            await f.adapter.getChat("oc_chat");
+            const result = await f.adapter.leaveChat("feishu:oc_chat");
+            assert.deepEqual(result, { chatId: "feishu:oc_chat", left: true, alreadyOut: false });
+            assert.equal(removals.length, 1);
+            assert.equal(removals[0].path.chat_id, "oc_chat");
+            assert.deepEqual(removals[0].data.id_list, [config.appId]);
+            assert.equal(removals[0].params.member_id_type, "app_id");
+        } finally { await f.adapter.stop(); }
+    });
+
+    it("leaves a chat even when the chat is muted", async () => {
+        const f = fixture();
+        f.client.im.v1.chatMembers = { delete: async () => ({ code: 0, data: {} }) };
+        await f.adapter.start();
+        try {
+            f.adapter.muteChat("feishu:oc_chat", 60_000);
+            assert.equal(f.adapter.isChatMuted("feishu:oc_chat"), true);
+            const result = await f.adapter.leaveChat("oc_chat");
+            assert.equal(result.left, true);
+        } finally { await f.adapter.stop(); }
+    });
+
+    it("falls back to the bot open_id when app_id removal is rejected", async () => {
+        const f = fixture();
+        const attempts: Array<{ member_id_type: string; id_list: string[] }> = [];
+        f.client.im.v1.chatMembers = {
+            delete: async (payload: any) => {
+                attempts.push({ member_id_type: payload.params.member_id_type, id_list: payload.data.id_list });
+                if (payload.params.member_id_type === "app_id") throw new Error("app_id not accepted");
+                return { code: 0, data: {} };
+            },
+        };
+        await f.adapter.start();
+        try {
+            const result = await f.adapter.leaveChat("oc_chat");
+            assert.equal(result.left, true);
+            assert.deepEqual(attempts.map(a => a.member_id_type), ["app_id", "open_id"]);
+            assert.deepEqual(attempts[1].id_list, ["ou_bot"]);
+        } finally { await f.adapter.stop(); }
+    });
+
+    it("treats 232011 as an idempotent leave for chats the bot already left", async () => {
+        const f = fixture();
+        f.client.im.v1.chatMembers = {
+            delete: async () => {
+                throw feishuError(232011, "Operator can NOT be out of the chat.");
+            },
+        };
+        await f.adapter.start();
+        try {
+            const result = await f.adapter.leaveChat("oc_chat");
+            assert.equal(result.left, true);
+            assert.equal(result.alreadyOut, true);
+        } finally { await f.adapter.stop(); }
+    });
+
+    it("searches messages with the native search API and surfaces missing scope errors", async () => {
+        const f = fixture();
+        const searches: any[] = [];
+        (f.client.im.v1.message as any).search = async (payload: any) => {
+            searches.push(payload);
+            return {
+                code: 0,
+                data: {
+                    items: [{
+                        id: "1",
+                        display_info: "hello world",
+                        meta_data: {
+                            message_id: "om_hit",
+                            chat_id: "oc_chat",
+                            from_id: "ou_user",
+                            type: "text",
+                            create_time: time,
+                        },
+                    }],
+                    has_more: false,
+                    total: 1,
+                },
+            };
+        };
+        await f.adapter.start();
+        try {
+            const result = await f.adapter.searchMessages("hello", { filter: { chat_ids: ["feishu:oc_chat"], from_ids: ["feishu:ou_user"] } });
+            assert.equal(searches[0].data.query, "hello");
+            assert.deepEqual(searches[0].data.filter.chat_ids, ["oc_chat"]);
+            assert.deepEqual(searches[0].data.filter.from_ids, ["ou_user"]);
+            // 官方文档：page_size 默认 15、最大 30。
+            assert.equal(searches[0].params.page_size, 15);
+            assert.equal(result.total, 1);
+            const hit = (result.items as any[])[0];
+            assert.equal(hit.messageId, "om_hit");
+            assert.equal(hit.chatId, "feishu:oc_chat");
+            assert.equal(hit.userId, "feishu:ou_user");
+            await assert.rejects(f.adapter.searchMessages("", {}), /requires query/);
+            (f.client.im.v1.message as any).search = async () => {
+                throw feishuError(99991672, "Access denied. [search:message]");
+            };
+            await assert.rejects(f.adapter.searchMessages("hello"), /99991672/);
+        } finally { await f.adapter.stop(); }
+    });
+
+    it("parses ISO8601 search timestamps and forwards exclude_from_types", async () => {
+        const f = fixture();
+        const searches: any[] = [];
+        (f.client.im.v1.message as any).search = async (payload: any) => {
+            searches.push(payload);
+            return {
+                code: 0,
+                data: {
+                    items: [{
+                        id: "1",
+                        display_info: "命中片段",
+                        meta_data: {
+                            message_id: "om_hit",
+                            chat_id: "oc_chat",
+                            type: "text",
+                            // 官方文档示例：create_time 是 ISO8601，不是毫秒时间戳。
+                            create_time: "2026-03-21T16:15:30+08:00",
+                        },
+                    }],
+                    has_more: false,
+                },
+            };
+        };
+        await f.adapter.start();
+        try {
+            const result = await f.adapter.searchMessages("", {
+                filter: { exclude_from_types: ["bot"], is_at_me: true },
+            });
+            assert.deepEqual(searches[0].data.filter.exclude_from_types, ["bot"]);
+            assert.equal(searches[0].data.filter.is_at_me, true);
+            const hit = (result.items as any[])[0];
+            assert.equal(hit.timestamp, new Date("2026-03-21T16:15:30+08:00").toISOString());
+        } finally { await f.adapter.stop(); }
+    });
+
+    it("lists chat members across pages and reports totals", async () => {
+        const f = fixture();
+        let page = 0;
+        f.client.im.v1.chatMembers = {
+            get: async () => {
+                page++;
+                return {
+                    code: 0,
+                    data: {
+                        items: [{ member_id: `ou_member_${page}`, member_id_type: "open_id", name: `Member ${page}` }],
+                        has_more: page < 2,
+                        page_token: page < 2 ? `page_${page + 1}` : undefined,
+                        member_total: 2,
+                    },
+                };
+            },
+        };
+        await f.adapter.start();
+        try {
+            const result = await f.adapter.getChatMembers("feishu:oc_chat", { pageSize: 1 });
+            assert.equal(page, 2);
+            assert.equal(result.memberTotal, 2);
+            assert.equal(result.hasMore, false);
+            const items = result.items as any[];
+            assert.deepEqual(items.map(item => item.userId), ["feishu:ou_member_1", "feishu:ou_member_2"]);
+            assert.deepEqual(items.map(item => item.displayName), ["Member 1", "Member 2"]);
+            await assert.rejects(f.adapter.getChatMembers("oc_chat", { memberIdType: "app_id" as any }), /memberIdType/);
+        } finally { await f.adapter.stop(); }
+    });
+
+    it("exposes bot identity from the bot info endpoint", async () => {
+        const f = fixture();
+        f.client.request = (async () => ({ code: 0, bot: { open_id: "ou_bot", app_name: "CyberGroupmate", avatar_url: "https://example/avatar.png", activate_status: 2 } })) as any;
+        await f.adapter.start();
+        try {
+            const info = await f.adapter.getBotInfo();
+            assert.equal(info.userId, "feishu:ou_bot");
+            assert.equal(info.openId, "ou_bot");
+            assert.equal(info.appId, config.appId);
+            assert.equal(info.name, "CyberGroupmate");
+            assert.equal(info.activateStatus, 2);
+        } finally { await f.adapter.stop(); }
+    });
+
+    it("exposes chat moderation, announcement and top notice native actions", async () => {
+        const f = fixture();
+        const calls: Array<{ action: string; payload: any }> = [];
+        const native = (action: string) => async (payload: any) => {
+            calls.push({ action, payload });
+            return { code: 0, data: {} };
+        };
+        f.client.im.v1.chatModeration = { get: native("moderationGet"), update: native("moderationUpdate") };
+        f.client.im.v1.chatAnnouncement = { get: native("announcementGet"), patch: native("announcementPatch") };
+        f.client.im.v1.chatTopNotice = { putTopNotice: native("topNoticePut"), deleteTopNotice: native("topNoticeDelete") };
+        f.client.im.v1.chatMenuTree = { get: native("menuGet") };
+        await f.adapter.start();
+        try {
+            await f.adapter.callApi("oc_chat", "chatModeration.get", { path: { chat_id: "oc_chat" }, params: { user_id_type: "open_id" } });
+            await f.adapter.callApi("oc_chat", "chatModeration.update", {
+                path: { chat_id: "oc_chat" },
+                data: { moderation_setting: "only_owner", moderator_added_list: ["feishu:ou_user"] },
+            });
+            await f.adapter.callApi("oc_chat", "chatAnnouncement.get", { path: { chat_id: "oc_chat" } });
+            await f.adapter.callApi("oc_chat", "chatAnnouncement.patch", {
+                path: { chat_id: "oc_chat" },
+                data: { revision: "1", requests: ["{}"] },
+            });
+            await f.adapter.callApi("oc_chat", "chatTopNotice.putTopNotice", {
+                path: { chat_id: "oc_chat" },
+                data: { chat_top_notice: [{ action_type: "1", message_id: "feishu:om_parent" }] },
+            });
+            await f.adapter.callApi("oc_chat", "chatTopNotice.deleteTopNotice", { path: { chat_id: "oc_chat" } });
+            await f.adapter.callApi("oc_chat", "chatMenuTree.get", { path: { chat_id: "oc_chat" } });
+            assert.deepEqual(calls.map(call => call.action), [
+                "moderationGet", "moderationUpdate", "announcementGet", "announcementPatch",
+                "topNoticePut", "topNoticeDelete", "menuGet",
+            ]);
+            assert.deepEqual(calls[1].payload.data.moderator_added_list, ["ou_user"]);
+            assert.deepEqual(calls[4].payload.data.chat_top_notice[0].message_id, "om_parent");
+
+            await assert.rejects(f.adapter.callApi("oc_chat", "chatModeration.update", { path: { chat_id: "oc_chat" }, data: {} }), /moderation_setting/);
+            await assert.rejects(f.adapter.callApi("oc_chat", "chatAnnouncement.patch", { path: { chat_id: "oc_chat" }, data: {} }), /data\.revision/);
+            await assert.rejects(f.adapter.callApi("oc_chat", "chatTopNotice.putTopNotice", {
+                path: { chat_id: "oc_chat" },
+                data: { chat_top_notice: [{ action_type: "1", message_id: "om_a" }, { action_type: "1", message_id: "om_b" }] },
+            }), /at most one top notice/);
+            // 文档：action_type=1（消息置顶）必须带 message_id。
+            await assert.rejects(f.adapter.callApi("oc_chat", "chatTopNotice.putTopNotice", {
+                path: { chat_id: "oc_chat" },
+                data: { chat_top_notice: [{ action_type: "1" }] },
+            }), /requires data\.chat_top_notice\[0\]\.message_id/);
+        } finally { await f.adapter.stop(); }
+    });
+
+    it("falls back to the docx announcement API when the chat uses docx announcements", async () => {
+        const f = fixture();
+        f.client.im.v1.chatAnnouncement = {
+            get: async () => {
+                throw feishuError(232097, "Unable to operate docx type chat announcement.");
+            },
+        };
+        f.client.docx = {
+            v1: {
+                chatAnnouncement: {
+                    get: async () => ({
+                        code: 0,
+                        data: { announcement_type: "docx", revision_id: 3, owner_id: "ou_user", create_time: 1790587144 },
+                    }),
+                },
+                chatAnnouncementBlock: {
+                    list: async () => ({
+                        code: 0,
+                        data: {
+                            items: [{ block_id: "b1", block_type: 2, text: { elements: [{ text_run: { content: "群公告正文" } }] } }],
+                            has_more: false,
+                        },
+                    }),
+                },
+            },
+        };
+        await f.adapter.start();
+        try {
+            const result = await f.adapter.getChatAnnouncement("oc_chat");
+            assert.equal(result.announcementType, "docx");
+            assert.equal(result.revision, "3");
+            assert.equal(result.text, "群公告正文");
+            assert.equal((result.blocks as unknown[]).length, 1);
+            assert.equal(result.ownerId, "feishu:ou_user");
+            // 文档：create_time 是秒级时间戳。
+            assert.equal(result.createTime, new Date(1790587144 * 1000).toISOString());
+        } finally { await f.adapter.stop(); }
+    });
+
+    it("reads legacy doc announcements without falling back", async () => {
+        const f = fixture();
+        f.client.im.v1.chatAnnouncement = {
+            get: async () => ({ code: 0, data: { content: "旧版公告", revision: "0", owner_id: "ou_user" } }),
+        };
+        await f.adapter.start();
+        try {
+            const result = await f.adapter.getChatAnnouncement("oc_chat");
+            assert.equal(result.announcementType, "doc");
+            assert.equal(result.content, "旧版公告");
+            assert.equal(result.revision, "0");
+        } finally { await f.adapter.stop(); }
+    });
+
+    it("follows docx announcement page tokens instead of refetching the first page", async () => {
+        const f = fixture();
+        const pages: Array<Record<string, unknown>> = [];
+        f.client.im.v1.chatAnnouncement = {
+            get: async () => {
+                throw feishuError(232097, "Unable to operate docx type chat announcement.");
+            },
+        };
+        f.client.docx = {
+            v1: {
+                chatAnnouncement: {
+                    get: async () => ({ code: 0, data: { announcement_type: "docx", revision_id: 3 } }),
+                },
+                chatAnnouncementBlock: {
+                    list: async (payload: any) => {
+                        pages.push(payload.params);
+                        const second = payload.params.page_token === "page_2";
+                        return {
+                            code: 0,
+                            data: {
+                                items: [{ block_id: second ? "b2" : "b1", block_type: 2, text: { elements: [{ text_run: { content: second ? "第二页" : "第一页" } }] } }],
+                                has_more: !second,
+                                ...(second ? {} : { page_token: "page_2" }),
+                            },
+                        };
+                    },
+                },
+            },
+        };
+        await f.adapter.start();
+        try {
+            const result = await f.adapter.getChatAnnouncement("oc_chat");
+            assert.equal(pages.length, 2);
+            assert.equal(pages[0].page_token, undefined);
+            assert.equal(pages[1].page_token, "page_2");
+            assert.equal(result.text, "第一页\n第二页");
+            assert.equal((result.blocks as unknown[]).length, 2);
+            assert.equal(result.hasMore, false);
+        } finally { await f.adapter.stop(); }
+    });
+
+    it("keeps app_id announcement owners unprefixed", async () => {
+        const f = fixture();
+        f.client.im.v1.chatAnnouncement = {
+            get: async () => ({
+                code: 0,
+                data: {
+                    content: "机器人创建的公告",
+                    revision: "1",
+                    owner_id: "cli_a2beeb8d2b79900b",
+                    owner_id_type: "app_id",
+                    modifier_id: "cli_a2beeb8d2b79900b",
+                    modifier_id_type: "app_id",
+                },
+            }),
+        };
+        await f.adapter.start();
+        try {
+            const result = await f.adapter.getChatAnnouncement("oc_chat");
+            assert.equal(result.ownerId, "cli_a2beeb8d2b79900b");
+            assert.equal(result.ownerIdType, "app_id");
+            assert.equal(result.modifierId, "cli_a2beeb8d2b79900b");
+        } finally { await f.adapter.stop(); }
+    });
+
+    it("requires at least one request when patching an announcement", async () => {
+        const f = fixture();
+        f.client.im.v1.chatAnnouncement = { patch: async () => ({ code: 0, data: {} }) };
+        await f.adapter.start();
+        try {
+            await assert.rejects(f.adapter.callApi("oc_chat", "chatAnnouncement.patch", {
+                path: { chat_id: "oc_chat" },
+                data: { revision: "0", requests: [] },
+            }), /data\.requests/);
+        } finally { await f.adapter.stop(); }
+    });
+
+    it("routes docx announcement block writes to the docx API", async () => {
+        const f = fixture();
+        const calls: Array<{ action: string; payload: any }> = [];
+        const native = (action: string) => async (payload: any) => {
+            calls.push({ action, payload });
+            return { code: 0, data: {} };
+        };
+        f.client.docx = {
+            v1: {
+                chatAnnouncementBlock: { list: native("blockList"), batchUpdate: native("blockBatchUpdate") },
+                chatAnnouncementBlockChildren: { create: native("childCreate"), batchDelete: native("childBatchDelete") },
+            },
+        };
+        await f.adapter.start();
+        try {
+            await f.adapter.callApi("oc_chat", "chatAnnouncementBlock.list", {
+                path: { chat_id: "oc_chat" },
+                params: { revision_id: -1 },
+            });
+            await f.adapter.callApi("oc_chat", "chatAnnouncementBlock.batchUpdate", {
+                path: { chat_id: "oc_chat" },
+                data: { requests: [{ block_id: "doxcnA", update_text_elements: { elements: [{ text_run: { content: "x" } }] } }] },
+            });
+            await f.adapter.callApi("oc_chat", "chatAnnouncementBlockChildren.create", {
+                path: { chat_id: "oc_chat", block_id: "doxcnRoot" },
+                data: { children: [{ block_type: 2, text: { elements: [{ text_run: { content: "新块" } }] } }] },
+            });
+            await f.adapter.callApi("oc_chat", "chatAnnouncementBlockChildren.batchDelete", {
+                path: { chat_id: "oc_chat", block_id: "doxcnRoot" },
+                data: { start_index: 0, end_index: 1 },
+            });
+            assert.deepEqual(calls.map(call => call.action), ["blockList", "blockBatchUpdate", "childCreate", "childBatchDelete"]);
+            // docx 块 ID 不是 oc_/om_/ou_ 体系，不应被 ID 校验拦下。
+            assert.equal(calls[2].payload.path.block_id, "doxcnRoot");
+            await assert.rejects(f.adapter.callApi("oc_chat", "chatAnnouncementBlockChildren.batchDelete", {
+                path: { chat_id: "oc_chat", block_id: "doxcnRoot" },
+                data: { start_index: 2, end_index: 2 },
+            }), /end_index/);
+        } finally { await f.adapter.stop(); }
+    });
+
+    it("reports unknown member totals honestly instead of pretending -1 is exact", async () => {
+        const f = fixture();
+        f.client.im.v1.chatMembers = {
+            get: async () => ({
+                code: 0,
+                data: { items: [{ member_id: "ou_a", member_id_type: "open_id", name: "A" }], has_more: false, member_total: -1 },
+            }),
+        };
+        await f.adapter.start();
+        try {
+            const result = await f.adapter.getChatMembers("oc_chat");
+            assert.equal(result.memberTotalIsExact, false);
+            assert.equal(result.memberTotal, 1);
+        } finally { await f.adapter.stop(); }
+    });
+
+    it("returns a normalized chat menu", async () => {
+        const f = fixture();
+        f.client.im.v1.chatMenuTree = {
+            get: async () => ({
+                code: 0,
+                data: {
+                    menu_tree: {
+                        chat_menu_top_levels: [{
+                            chat_menu_top_level_id: "m1",
+                            chat_menu_item: { name: "帮助", action_type: "REDIRECT_LINK", redirect_link: { common_url: "https://example" } },
+                            children: [{
+                                chat_menu_second_level_id: "m1-1",
+                                chat_menu_item: { name: "报名", action_type: "REDIRECT_LINK" },
+                            }],
+                        }],
+                    },
+                },
+            }),
+        };
+        await f.adapter.start();
+        try {
+            const result = await f.adapter.getChatMenu("oc_chat");
+            assert.equal(result.chatId, "feishu:oc_chat");
+            const items = result.items as any[];
+            assert.equal(items[0].name, "帮助");
+            assert.equal(items[0].actionType, "REDIRECT_LINK");
+            // 二级菜单 ID 的官方字段名是 chat_menu_second_level_id，不能读成 chat_menu_item_id。
+            assert.equal(items[0].children[0].menuItemId, "m1-1");
+            assert.equal(items[0].children[0].name, "报名");
         } finally { await f.adapter.stop(); }
     });
 });

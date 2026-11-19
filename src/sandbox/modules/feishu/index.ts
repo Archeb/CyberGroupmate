@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, realpath, writeFile } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 import type { CapabilityRegistryEnv } from "../../capability-registry.js";
-import type { FeishuClient, FeishuMedia, FeishuMessageAck, FeishuSendOptions, FeishuTextOptions } from "./feishu.js";
+import type { FeishuBotInfo, FeishuChatAnnouncement, FeishuChatMembersResult, FeishuChatMenu, FeishuClient, FeishuMedia, FeishuMessageAck, FeishuSearchResult, FeishuSendOptions, FeishuTextOptions } from "./feishu.js";
 import { DEFAULT_BANNED_WORDS, findBannedWords, buildBannedWordWarning } from "../../../core/banned-words.js";
 
 const MAX_DOWNLOAD_BYTES = 100 * 1024 * 1024;
@@ -213,7 +213,18 @@ export function createFeishuClientProxy(
         streamCardText: async (chatId, messageId, elementId, content, options) => callMutation("feishu.streamCardText", chatId, content, [messageId, elementId, content, options]),
         getMessage: async (chatId, messageId) => env.callHost("feishu.getMessage", [canonicalChatId(chatId), messageId]),
         getHistory: async (chatId, options) => env.callHost("feishu.getHistory", [canonicalChatId(chatId), options]) as Promise<{ items: unknown[]; hasMore: boolean; pageToken?: string }>,
+        searchMessages: async (query, options) => env.callHost("feishu.searchMessages", [query, options]) as Promise<FeishuSearchResult>,
         getChat: async chatId => env.callHost("feishu.getChat", [canonicalChatId(chatId)]),
+        getChatMembers: async (chatId, options) => env.callHost("feishu.getChatMembers", [canonicalChatId(chatId), options]) as Promise<FeishuChatMembersResult>,
+        getChatMenu: async chatId => env.callHost("feishu.getChatMenu", [canonicalChatId(chatId)]) as Promise<FeishuChatMenu>,
+        getChatAnnouncement: async chatId => env.callHost("feishu.getChatAnnouncement", [canonicalChatId(chatId)]) as Promise<FeishuChatAnnouncement>,
+        getBotInfo: async () => env.callHost("feishu.getBotInfo", []) as Promise<FeishuBotInfo>,
+        leaveChat: async chatId => {
+            const canonical = canonicalChatId(chatId);
+            const result = await env.callHost("feishu.leaveChat", [canonical]) as { chatId: string; left: boolean };
+            env.emitOutput(`[Feishu] leaveChat ok chat=${canonical}`);
+            return result;
+        },
         callApi: async (chatId, action, payload = {}) => {
             chatId = canonicalChatId(chatId);
             if (action !== "message.forward" && action !== "message.mergeForward") {

@@ -48,6 +48,10 @@ const FEISHU_WRITE_ACTIONS = new Set([
     "chat.update", "chat.delete", "chatMembers.create", "chatMembers.delete", "chatMembers.meJoin",
     "chatManagers.addManagers", "chatManagers.deleteManagers", "chatMenuTree.create", "chatMenuTree.delete",
     "chatMenuTree.sort", "chatMenuItem.patch",
+    "chatModeration.update", "chatAnnouncement.patch",
+    "chatAnnouncementBlock.batchUpdate", "chatAnnouncementBlockChildren.create",
+    "chatAnnouncementBlockChildren.batchDelete",
+    "chatTopNotice.putTopNotice", "chatTopNotice.deleteTopNotice",
 ]);
 
 export interface ManagedEnvPlan {
@@ -141,10 +145,45 @@ function decodeFeishuMediaReadTarget(fileId: unknown): string {
     }
 }
 
+/**
+ * 消息搜索按应用可见范围检索，不像其它读取接口那样自带 chat_id 归属。
+ * 这里把范围收窄到绑定会话：请求了别的会话直接拒绝，其余情况一律改写成绑定会话，
+ * 避免空数组或非数组形式被飞书当作「不加会话过滤」。
+ */
+function scopeFeishuSearchToBoundChat(args: unknown[], boundChatId: string): void {
+    const bound = normalizeFeishuReadChatId(boundChatId);
+    const rawOptions = args[1];
+    if (rawOptions !== undefined && (rawOptions === null || typeof rawOptions !== "object" || Array.isArray(rawOptions))) {
+        throw new Error("Feishu searchMessages options must be an object");
+    }
+    const options = (rawOptions ?? {}) as Record<string, unknown>;
+    const rawFilter = options.filter;
+    if (rawFilter !== undefined && (rawFilter === null || typeof rawFilter !== "object" || Array.isArray(rawFilter))) {
+        throw new Error("Feishu searchMessages filter must be an object");
+    }
+    const filter = (rawFilter ?? {}) as Record<string, unknown>;
+    const requested = filter.chat_ids === undefined ? [] : (Array.isArray(filter.chat_ids) ? filter.chat_ids : [filter.chat_ids]);
+    for (const id of requested) {
+        if (normalizeFeishuReadChatId(id) !== bound) {
+            throw new Error(
+                `[Sandbox privacy] feishu.searchMessages only allows reads from the bound chat (${boundChatId}); ` +
+                "use memory or dispatch for cross-chat access."
+            );
+        }
+    }
+    filter.chat_ids = [bound];
+    if (rawFilter === undefined) options.filter = filter;
+    if (rawOptions === undefined) args[1] = options;
+}
+
 function getFeishuReadTarget(method: string, args: unknown[]): string | undefined {
-    if (method === "feishu.getMessage" || method === "feishu.getHistory" || method === "feishu.getChat") {
+    if (method === "feishu.getMessage" || method === "feishu.getHistory" || method === "feishu.getChat"
+        || method === "feishu.getChatMembers" || method === "feishu.getChatMenu"
+        || method === "feishu.getChatAnnouncement") {
         return normalizeFeishuReadChatId(args[0]);
     }
+    if (method === "feishu.searchMessages") return undefined;
+    if (method === "feishu.getBotInfo") return undefined;
     if (method === "feishu.sendSticker") return decodeFeishuMediaReadTarget(args[1]);
     if (method === "feishu.callApi") {
         const action = String(args[1] ?? "");
@@ -154,6 +193,7 @@ function getFeishuReadTarget(method: string, args: unknown[]): string | undefine
         if ([
             "message.readUsers", "messageReaction.list", "messageReaction.batchQuery", "pin.list",
             "chat.link", "chatMembers.get", "chatMembers.isInChat",
+            "chatModeration.get", "chatAnnouncement.get", "chatAnnouncementBlock.list", "chatMenuTree.get",
         ].includes(action)) return normalizeFeishuReadChatId(args[0]);
         return undefined;
     }
@@ -562,6 +602,8 @@ export function createSandboxHostCallHandler(chatId: string, deps: CreateSandbox
         const adapter = adapters.find((item) => item.canHandle(method));
         if (adapter) {
             if (adapter.platform === "feishu") {
+                // 搜索按应用可见范围检索，不像其它读取接口自带 chat 归属，先收窄到绑定会话。
+                if (method === "feishu.searchMessages") scopeFeishuSearchToBoundChat(args, chatId);
                 const target = getFeishuReadTarget(method, args);
                 if (target !== undefined) {
                     if (isExplicitReadBlocked(target, policy())) {
